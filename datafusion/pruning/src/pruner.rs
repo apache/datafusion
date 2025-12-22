@@ -16,4 +16,3 @@
 // under the License.
 
 use arrow::array::ArrayRef;
-

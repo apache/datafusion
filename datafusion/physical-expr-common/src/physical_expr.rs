@@ -436,26 +436,109 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     // ---------------
     // None means propagation not implemented/supported for this node
     fn propagate_range_stats(
-        child_range_stats: &[RangeStats],
+        &self,
+        _child_range_stats: &[RangeStats],
     ) -> Result<Option<RangeStats>> {
         Ok(None)
     }
 
     fn propagate_null_stats(
-        child_range_stats: &[NullStats],
+        &self,
+        _child_range_stats: &[NullStats],
     ) -> Result<Option<NullStats>> {
         Ok(None)
     }
 
     fn evaluate_pruning(&self) -> Result<PruningIntermediate> {
-        // This will be the default impl for stats propagation nodes (like arithmetic
-        // expressions)
-        // 1. Evaluate pruning for all child
-        // 2. Extract all range_stats from the child, call self's `propagagte_range_stats`
-        //   , and build the output RangeStats
-        // 3. ditto for NullStats
-        // 4. Finally build the PruningIntermediate for current node
-        unimplemented!()
+        // Default impl for stats-propagation nodes (e.g. arithmetic expressions):
+        // 1) Evaluate pruning for all children.
+        // 2) If every child produced range/null stats, propagate them.
+        // 3) If no stats can be propagated, fall back to `Unsupported`.
+        let children = self.children();
+        if children.is_empty() {
+            return Ok(PruningIntermediate::Unsupported);
+        }
+
+        let mut range_complete = true;
+        let mut null_complete = true;
+        let mut child_range_stats = Vec::with_capacity(children.len());
+        let mut child_null_stats = Vec::with_capacity(children.len());
+
+        for child in children {
+            match child.evaluate_pruning()? {
+                PruningIntermediate::IntermediateStats(stats) => {
+                    match stats.range_stats {
+                        Some(range_stats) if range_complete => {
+                            child_range_stats.push(range_stats);
+                        }
+                        _ => {
+                            range_complete = false;
+                        }
+                    }
+
+                    match stats.null_stats {
+                        Some(null_stats) if null_complete => {
+                            child_null_stats.push(null_stats);
+                        }
+                        _ => {
+                            null_complete = false;
+                        }
+                    }
+                }
+                // Without node-specific semantics, we can't combine a final pruning result here.
+                other => return Ok(other),
+            }
+        }
+
+        let range_stats = if range_complete && !child_range_stats.is_empty() {
+            if let Some((first, rest)) = child_range_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.length,
+                        stats.length,
+                        "Range stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_range_stats(&child_range_stats)?
+        } else {
+            None
+        };
+
+        let null_stats = if null_complete && !child_null_stats.is_empty() {
+            if let Some((first, rest)) = child_null_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.length,
+                        stats.length,
+                        "Null stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_null_stats(&child_null_stats)?
+        } else {
+            None
+        };
+
+        if let (Some(range_stats), Some(null_stats)) =
+            (range_stats.as_ref(), null_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                range_stats.length,
+                null_stats.length,
+                "Range and null stats length mismatch for pruning"
+            );
+        }
+
+        match (range_stats, null_stats) {
+            (None, None) => Ok(PruningIntermediate::Unsupported),
+            (range_stats, null_stats) => {
+                Ok(PruningIntermediate::IntermediateStats(ColumnStats {
+                    range_stats,
+                    null_stats,
+                }))
+            }
+        }
     }
 }
 
@@ -464,29 +547,127 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 /// bucket 1 has stat [10,15] -> AlwaysTrue
 /// bucket 2 has stat [0,5] -> AlwaysFalse
 /// bucket 3 has stat [0,10] -> Unknown
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PruningResult {
     AlwaysTrue,
     AlwaysFalse,
     Unknown,
 }
 
+#[derive(Debug, Clone)]
 pub struct RangeStats {
     mins: Option<ArrayRef>,
     maxs: Option<ArrayRef>,
     length: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct NullStats {
     null_counts: Option<ArrayRef>,
     row_counts: Option<ArrayRef>,
     length: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct ColumnStats {
     range_stats: Option<RangeStats>,
     null_stats: Option<NullStats>,
 }
 
+impl RangeStats {
+    pub fn new(
+        mins: Option<ArrayRef>,
+        maxs: Option<ArrayRef>,
+        length: usize,
+    ) -> Result<Self> {
+        if let Some(ref mins) = mins {
+            assert_eq_or_internal_err!(
+                mins.len(),
+                length,
+                "Range mins length mismatch for pruning statistics"
+            );
+        }
+        if let Some(ref maxs) = maxs {
+            assert_eq_or_internal_err!(
+                maxs.len(),
+                length,
+                "Range maxs length mismatch for pruning statistics"
+            );
+        }
+        Ok(Self { mins, maxs, length })
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn mins(&self) -> Option<&ArrayRef> {
+        self.mins.as_ref()
+    }
+
+    pub fn maxs(&self) -> Option<&ArrayRef> {
+        self.maxs.as_ref()
+    }
+}
+
+impl NullStats {
+    pub fn new(
+        null_counts: Option<ArrayRef>,
+        row_counts: Option<ArrayRef>,
+        length: usize,
+    ) -> Result<Self> {
+        if let Some(ref null_counts) = null_counts {
+            assert_eq_or_internal_err!(
+                null_counts.len(),
+                length,
+                "Null counts length mismatch for pruning statistics"
+            );
+        }
+        if let Some(ref row_counts) = row_counts {
+            assert_eq_or_internal_err!(
+                row_counts.len(),
+                length,
+                "Row counts length mismatch for pruning statistics"
+            );
+        }
+        Ok(Self {
+            null_counts,
+            row_counts,
+            length,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.length
+    }
+
+    pub fn null_counts(&self) -> Option<&ArrayRef> {
+        self.null_counts.as_ref()
+    }
+
+    pub fn row_counts(&self) -> Option<&ArrayRef> {
+        self.row_counts.as_ref()
+    }
+}
+
+impl ColumnStats {
+    pub fn new(range_stats: Option<RangeStats>, null_stats: Option<NullStats>) -> Self {
+        Self {
+            range_stats,
+            null_stats,
+        }
+    }
+
+    pub fn range_stats(&self) -> Option<&RangeStats> {
+        self.range_stats.as_ref()
+    }
+
+    pub fn null_stats(&self) -> Option<&NullStats> {
+        self.null_stats.as_ref()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum PruningIntermediate {
     IntermediateStats(ColumnStats),
     IntermediateResult(PruningResult),
