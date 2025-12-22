@@ -27,13 +27,47 @@ use datafusion::{
     functions_window::rank::Rank,
     logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
 };
+use std::any::Any;
 
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use arrow_schema::DataType;
+use datafusion::logical_expr::{ColumnarValue, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use std::sync::Arc;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
-    let udf: Arc<ScalarUDF> = Arc::new(AbsFunc::new().into());
+    let inner = WrappedAbs(Arc::new(AbsFunc::new().into()));
+    let udf: Arc<ScalarUDF> = Arc::new(inner.into());
 
     udf.into()
+}
+
+#[derive(Debug, Hash, Eq, PartialEq)]
+struct WrappedAbs(Arc<ScalarUDF>);
+
+impl ScalarUDFImpl for WrappedAbs {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "ffi_abs"
+    }
+
+    fn signature(&self) -> &Signature {
+        self.0.signature()
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
+        self.0.return_type(arg_types)
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        self.0.invoke_with_args(args)
+    }
 }
 
 pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
@@ -42,10 +76,12 @@ pub(crate) extern "C" fn create_ffi_random_func() -> FFI_ScalarUDF {
     udf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
+pub(crate) extern "C" fn create_ffi_table_func(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_TableFunction {
     let udtf: Arc<dyn TableFunctionImpl> = Arc::new(RangeFunc {});
 
-    FFI_TableFunction::new(udtf, None)
+    FFI_TableFunction::new_with_ffi_codec(udtf, None, codec)
 }
 
 pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
