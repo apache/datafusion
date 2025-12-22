@@ -38,8 +38,8 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_physical_expr::{conjunction, EquivalenceProperties};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -827,6 +827,11 @@ impl FileSource for ParquetSource {
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,
         })
+
+        // TODO Phase 2: Add support for other optimizations:
+        // - File reordering based on min/max statistics
+        // - Detection of exact ordering (return Exact to remove Sort operator)
+        // - Partial sort pushdown for prefix matches
     }
 
     fn with_file_ordering_info(

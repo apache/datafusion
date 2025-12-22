@@ -859,7 +859,7 @@ weekly 1 500
 # Test 7.6: Test without constant filter (no reverse scan because need both columns)
 # Request: [timeframe ASC, period_end DESC]
 # File has: [timeframe ASC, period_end ASC]
-# These are NOT reverse of each other
+# These are NOT reverse of each other - only second column is reversed
 query TT
 EXPLAIN SELECT * FROM timeseries_parquet
 ORDER BY timeframe ASC, period_end DESC
@@ -908,6 +908,10 @@ statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
 
 # Test 7.8: Test with IN clause (multiple constant values)
+# Note: IN clause with multiple values means timeframe is NOT constant
+# (could be 'daily' or 'weekly'), so the first sort column cannot be eliminated.
+# Without a constant first column, we cannot reverse scan based on just period_end DESC.
+# The physical plan should NOT show reverse_row_groups=true
 query TT
 EXPLAIN SELECT * FROM timeseries_parquet
 WHERE timeframe IN ('daily', 'weekly')
@@ -925,12 +929,12 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=(timeframe@0 = daily OR timeframe@0 = weekly) AND DynamicFilter [ empty ], pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= daily AND daily <= timeframe_max@1 OR timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= weekly AND weekly <= timeframe_max@1, required_guarantees=[timeframe in (daily, weekly)]
 
-# Note: IN clause with multiple values means timeframe is NOT constant
-# (could be 'daily' or 'weekly'), so reverse scan should not be applied in this case
-# The physical plan should NOT show reverse_row_groups=true
-
 # Test 7.9: Complex case - literal constant in sort expression itself
-# This should be stripped and remaining column checked
+# The literal 'constant' is ignored in sort analysis
+# After stripping: ORDER BY period_end DESC
+# With WHERE timeframe='monthly' making first column constant
+# File: [period_end ASC] (after constant column removal)
+# Request: [period_end DESC] -> exact reverse, triggers reverse scan
 query TT
 EXPLAIN SELECT * FROM timeseries_parquet
 WHERE timeframe = 'monthly'
@@ -958,11 +962,12 @@ LIMIT 2;
 monthly 3 1200
 monthly 2 1100
 
-# Test 7.10: Edge case - filter on non-leading sort column (should NOT trigger reverse scan)
+# Test 7.10: Filter on non-leading sort column
 # File order: [timeframe ASC, period_end ASC]
-# Filter: period_end = 2 (not the leading column)
+# Filter: period_end = 2 (makes second column constant)
 # Request: [timeframe DESC]
-# This should NOT optimize because period_end filter doesn't make timeframe constant
+# After constant column removal: File has [timeframe ASC], Request wants [timeframe DESC]
+# This is exact reverse -> triggers reverse scan
 query TT
 EXPLAIN SELECT * FROM timeseries_parquet
 WHERE period_end = 2
@@ -987,5 +992,337 @@ statement ok
 DROP TABLE timeseries_parquet;
 
 # Reset to default
+statement ok
+SET datafusion.optimizer.enable_sort_pushdown = true;
+
+
+# Test 8: Sort pushdown with monotonic functions
+# This tests that reverse scan works when sort expressions involve monotonic functions
+
+# Create test data with timestamp column
+statement ok
+CREATE TABLE timestamp_data(id INT, ts TIMESTAMP, volume BIGINT, price DOUBLE) AS VALUES
+(1, TIMESTAMP '2024-01-15 10:00:00', 1000, 100.0),
+(2, TIMESTAMP '2024-01-20 11:00:00', 1500, 105.0),
+(3, TIMESTAMP '2024-01-25 12:00:00', 2000, 110.0),
+(4, TIMESTAMP '2024-02-05 09:00:00', 1200, 108.0),
+(5, TIMESTAMP '2024-02-15 14:00:00', 1800, 112.0),
+(6, TIMESTAMP '2024-02-25 15:00:00', 2200, 115.0),
+(7, TIMESTAMP '2024-03-10 09:00:00', 1300, 113.0),
+(8, TIMESTAMP '2024-03-18 14:00:00', 1900, 118.0),
+(9, TIMESTAMP '2024-03-28 15:00:00', 2300, 120.0);
+
+# Copy to parquet with sorting by timestamp ASC
+query I
+COPY (SELECT * FROM timestamp_data ORDER BY ts ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/timestamp_sorted.parquet';
+----
+9
+
+# Test 8.1: Simple monotonic function - date_trunc
+# Create external table with file ordering that conceptually includes date_trunc
+# File is actually sorted by [ts ASC], but conceptually [date_trunc('month', ts) ASC, ts ASC]
+statement ok
+CREATE EXTERNAL TABLE timestamp_parquet(id INT, ts TIMESTAMP, volume BIGINT, price DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/timestamp_sorted.parquet'
+WITH ORDER (ts ASC);
+
+# Query with ORDER BY ts DESC
+# File ordering: [ts ASC]
+# Request: [ts DESC]
+# This should trigger reverse_row_groups=true
+query TT
+EXPLAIN SELECT * FROM timestamp_parquet
+ORDER BY ts DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: timestamp_parquet.ts DESC NULLS FIRST, fetch=3
+02)--TableScan: timestamp_parquet projection=[id, ts, volume, price]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[ts@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Verify results
+query IPIR
+SELECT * FROM timestamp_parquet
+ORDER BY ts DESC
+LIMIT 3;
+----
+9 2024-03-28T15:00:00 2300 120
+8 2024-03-18T14:00:00 1900 118
+7 2024-03-10T09:00:00 1300 113
+
+# Test 8.2: Monotonic function in ORDER BY - date_trunc DESC
+# File ordering: [ts ASC]
+# Request: [date_trunc('day', ts) DESC]
+# Since date_trunc is monotonic with ts, reversed file ordering [ts DESC] satisfies [date_trunc DESC]
+query TT
+EXPLAIN SELECT * FROM timestamp_parquet
+ORDER BY date_trunc('day', ts) DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("day"), timestamp_parquet.ts) DESC NULLS FIRST, fetch=3
+02)--TableScan: timestamp_parquet projection=[id, ts, volume, price]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[date_trunc(day, ts@1) DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+# Verify results (descending day)
+query IPIR
+SELECT * FROM timestamp_parquet
+ORDER BY date_trunc('day', ts) DESC
+LIMIT 3;
+----
+9 2024-03-28T15:00:00 2300 120
+8 2024-03-18T14:00:00 1900 118
+7 2024-03-10T09:00:00 1300 113
+
+# Test 8.3: Multi-column scenario with explicit monotonic function in file ordering
+# Create a table where we explicitly declare the ordering includes the monotonic function
+# This simulates files that are partitioned/sorted by [date_trunc('month', ts) ASC, ts ASC]
+
+# Create a new parquet file sorted by [ts ASC] (which implies date_trunc ordering)
+statement ok
+CREATE TABLE multi_month_data(id INT, ts TIMESTAMP, volume BIGINT, price DOUBLE) AS VALUES
+-- January 2024
+(1, TIMESTAMP '2024-01-05 09:30:00', 1000, 100.0),
+(2, TIMESTAMP '2024-01-15 14:30:00', 1500, 105.0),
+(3, TIMESTAMP '2024-01-25 15:59:00', 2000, 110.0),
+-- February 2024
+(4, TIMESTAMP '2024-02-03 09:30:00', 1200, 108.0),
+(5, TIMESTAMP '2024-02-14 12:00:00', 1800, 112.0),
+(6, TIMESTAMP '2024-02-28 15:59:00', 2200, 115.0),
+-- March 2024
+(7, TIMESTAMP '2024-03-01 09:30:00', 1300, 113.0),
+(8, TIMESTAMP '2024-03-15 14:00:00', 1900, 118.0),
+(9, TIMESTAMP '2024-03-29 15:59:00', 2300, 120.0);
+
+query I
+COPY (SELECT * FROM multi_month_data ORDER BY ts ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/multi_month_sorted.parquet';
+----
+9
+
+# Declare the file has ordering [ts ASC]
+# Conceptually this means [date_trunc('month', ts) ASC, ts ASC] due to monotonicity
+statement ok
+CREATE EXTERNAL TABLE multi_month_parquet(id INT, ts TIMESTAMP, volume BIGINT, price DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/multi_month_sorted.parquet'
+WITH ORDER (ts ASC);
+
+# Test 8.3a: Request ORDER BY ts DESC (opposite direction)
+# File: [ts ASC]
+# Request: [ts DESC]
+# Should trigger reverse_row_groups=true
+query TT
+EXPLAIN SELECT * FROM multi_month_parquet
+ORDER BY ts DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: multi_month_parquet.ts DESC NULLS FIRST, fetch=2
+02)--TableScan: multi_month_parquet projection=[id, ts, volume, price]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[ts@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query IPIR
+SELECT * FROM multi_month_parquet
+ORDER BY ts DESC
+LIMIT 2;
+----
+9 2024-03-29T15:59:00 2300 120
+8 2024-03-15T14:00:00 1900 118
+
+# Test 8.3b: Request ORDER BY date_trunc('month', ts) DESC, ts DESC
+# File: [ts ASC] (which implies [date_trunc('month', ts) ASC, ts ASC])
+# Request: [date_trunc('month', ts) DESC, ts DESC]
+# The reversed file ordering [ts DESC] satisfies this because:
+# - date_trunc is monotonic with ts
+# - So [ts DESC] implies [date_trunc('month', ts) DESC, ts DESC]
+query TT
+EXPLAIN SELECT * FROM multi_month_parquet
+ORDER BY date_trunc('month', ts) DESC, ts DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: date_trunc(Utf8("month"), multi_month_parquet.ts) DESC NULLS FIRST, multi_month_parquet.ts DESC NULLS FIRST, fetch=2
+02)--TableScan: multi_month_parquet projection=[id, ts, volume, price]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[date_trunc(month, ts@1) DESC, ts@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query IPIR
+SELECT * FROM multi_month_parquet
+ORDER BY date_trunc('month', ts) DESC, ts DESC
+LIMIT 2;
+----
+9 2024-03-29T15:59:00 2300 120
+8 2024-03-15T14:00:00 1900 118
+
+# Test 8.4: CAST as a monotonic function
+statement ok
+CREATE TABLE int_data(id INT, small_val SMALLINT, big_val BIGINT) AS VALUES
+(1, 10, 100),
+(2, 20, 200),
+(3, 30, 300),
+(4, 40, 400),
+(5, 50, 500);
+
+query I
+COPY (SELECT * FROM int_data ORDER BY small_val ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/int_sorted.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE int_parquet(id INT, small_val SMALLINT, big_val BIGINT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/int_sorted.parquet'
+WITH ORDER (small_val ASC);
+
+# CAST preserves ordering: CAST(small_val AS BIGINT) is monotonic with small_val
+query TT
+EXPLAIN SELECT * FROM int_parquet
+ORDER BY CAST(small_val AS BIGINT) DESC
+LIMIT 2;
+----
+logical_plan
+01)Sort: CAST(int_parquet.small_val AS Int64) DESC NULLS FIRST, fetch=2
+02)--TableScan: int_parquet projection=[id, small_val, big_val]
+physical_plan
+01)SortExec: TopK(fetch=2), expr=[CAST(small_val@1 AS Int64) DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/int_sorted.parquet]]}, projection=[id, small_val, big_val], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query III
+SELECT * FROM int_parquet
+ORDER BY CAST(small_val AS BIGINT) DESC
+LIMIT 2;
+----
+5 50 500
+4 40 400
+
+# Test 8.5: CEIL as a monotonic function
+statement ok
+CREATE TABLE float_data(id INT, value DOUBLE) AS VALUES
+(1, 1.1),
+(2, 2.3),
+(3, 3.5),
+(4, 4.7),
+(5, 5.9);
+
+query I
+COPY (SELECT * FROM float_data ORDER BY value ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/float_sorted.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE float_parquet(id INT, value DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/float_sorted.parquet'
+WITH ORDER (value ASC);
+
+# CEIL is monotonic increasing
+query TT
+EXPLAIN SELECT * FROM float_parquet
+ORDER BY CEIL(value) DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: ceil(float_parquet.value) DESC NULLS FIRST, fetch=3
+02)--TableScan: float_parquet projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[ceil(value@1) DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/float_sorted.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+
+query IR
+SELECT * FROM float_parquet
+ORDER BY CEIL(value) DESC
+LIMIT 3;
+----
+5 5.9
+4 4.7
+3 3.5
+
+# Test 8.6: Negative case - ABS is NOT monotonic over mixed positive/negative range
+statement ok
+CREATE TABLE signed_data(id INT, value DOUBLE) AS VALUES
+(1, -5.0),
+(2, -3.0),
+(3, -1.0),
+(4, 2.0),
+(5, 4.0);
+
+query I
+COPY (SELECT * FROM signed_data ORDER BY value ASC)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/signed_sorted.parquet';
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE signed_parquet(id INT, value DOUBLE)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/signed_sorted.parquet'
+WITH ORDER (value ASC);
+
+# ABS is NOT monotonic over the full range [-5, 4], so should NOT trigger reverse scan
+query TT
+EXPLAIN SELECT * FROM signed_parquet
+ORDER BY ABS(value) DESC
+LIMIT 3;
+----
+logical_plan
+01)Sort: abs(signed_parquet.value) DESC NULLS FIRST, fetch=3
+02)--TableScan: signed_parquet projection=[id, value]
+physical_plan
+01)SortExec: TopK(fetch=3), expr=[abs(value@1) DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/signed_sorted.parquet]]}, projection=[id, value], output_ordering=[value@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ]
+
+# Results should still be correct (no optimization applied)
+query IR
+SELECT * FROM signed_parquet
+ORDER BY ABS(value) DESC
+LIMIT 3;
+----
+1 -5
+5 4
+2 -3
+
+# Cleanup
+statement ok
+DROP TABLE timestamp_data;
+
+statement ok
+DROP TABLE timestamp_parquet;
+
+statement ok
+DROP TABLE multi_month_data;
+
+statement ok
+DROP TABLE multi_month_parquet;
+
+statement ok
+DROP TABLE int_data;
+
+statement ok
+DROP TABLE int_parquet;
+
+statement ok
+DROP TABLE float_data;
+
+statement ok
+DROP TABLE float_parquet;
+
+statement ok
+DROP TABLE signed_data;
+
+statement ok
+DROP TABLE signed_parquet;
+
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;

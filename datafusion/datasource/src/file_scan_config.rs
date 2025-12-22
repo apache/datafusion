@@ -868,8 +868,8 @@ impl DataSource for FileScanConfig {
         // 1. Reverse the file ordering
         // 2. Use eq_properties.ordering_satisfy() to check if reversed ordering works
         // 3. Return Inexact/Exact if it can help, Unsupported otherwise
-        let pushdown_result = file_source_with_ordering
-            .try_reverse_output(order, &eq_properties)?;
+        let pushdown_result =
+            file_source_with_ordering.try_reverse_output(order, &eq_properties)?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
