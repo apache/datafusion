@@ -18,19 +18,19 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
-    create_window_expr, schema_add_window_field, BoundedWindowAggExec, WindowAggExec,
+    BoundedWindowAggExec, WindowAggExec, create_window_expr, schema_add_window_field,
 };
-use datafusion::physical_plan::InputOrderMode::{Linear, PartiallySorted, Sorted};
-use datafusion::physical_plan::{collect, InputOrderMode};
+use datafusion::physical_plan::{InputOrderMode, collect};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
@@ -445,14 +445,14 @@ fn get_random_function(
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
     let mut args = args.clone();
-    if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn {
-        if !args.is_empty() {
-            // Do type coercion first argument
-            let a = args[0].clone();
-            let dt = a.return_field(schema.as_ref()).unwrap();
-            let coerced = fields_with_aggregate_udf(&[dt], udf).unwrap();
-            args[0] = cast(a, schema, coerced[0].data_type().clone()).unwrap();
-        }
+    if let WindowFunctionDefinition::AggregateUDF(udf) = window_fn
+        && !args.is_empty()
+    {
+        // Do type coercion first argument
+        let a = args[0].clone();
+        let dt = a.return_field(schema.as_ref()).unwrap();
+        let coerced = fields_with_aggregate_udf(&[dt], udf).unwrap();
+        args[0] = cast(a, schema, coerced[0].data_type().clone()).unwrap();
     }
 
     (window_fn.clone(), args, (*fn_name).to_string())
@@ -569,10 +569,11 @@ fn convert_bound_to_current_row_if_applicable(
 ) {
     match bound {
         WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
-            if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
-                if value == &zero && rng.random_range(0..2) == 0 {
-                    *bound = WindowFrameBound::CurrentRow;
-                }
+            if let Ok(zero) = ScalarValue::new_zero(&value.data_type())
+                && value == &zero
+                && rng.random_range(0..2) == 0
+            {
+                *bound = WindowFrameBound::CurrentRow;
             }
         }
         _ => {}
@@ -644,10 +645,8 @@ async fn run_window_test(
     ) as _;
     // Table is ordered according to ORDER BY a, b, c In linear test we use PARTITION BY b, ORDER BY a
     // For WindowAggExec  to produce correct result it need table to be ordered by b,a. Hence add a sort.
-    if is_linear {
-        if let Some(ordering) = LexOrdering::new(sort_keys) {
-            exec1 = Arc::new(SortExec::new(ordering, exec1)) as _;
-        }
+    if is_linear && let Some(ordering) = LexOrdering::new(sort_keys) {
+        exec1 = Arc::new(SortExec::new(ordering, exec1)) as _;
     }
 
     let extended_schema = schema_add_window_field(&args, &schema, &window_fn, &fn_name)?;
@@ -699,7 +698,9 @@ async fn run_window_test(
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.
-    let err_msg = format!("Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}");
+    let err_msg = format!(
+        "Inconsistent result for window_frame: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, random_seed: {random_seed:?}, search_mode: {search_mode:?}, partition_by_columns:{partition_by_columns:?}, orderby_columns: {orderby_columns:?}"
+    );
     // Below check makes sure that, streaming execution generates more chunks than the bulk execution.
     // Since algorithms and operators works on sliding windows in the streaming execution.
     // However, in the current test setup for some random generated window frame clauses: It is not guaranteed
@@ -731,8 +732,12 @@ async fn run_window_test(
         .enumerate()
     {
         if !usual_line.eq(running_line) {
-            println!("Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}");
-            println!("--------usual_formatted_sorted----------------running_formatted_sorted--------");
+            println!(
+                "Inconsistent result for window_frame at line:{i:?}: {window_frame:?}, window_fn: {window_fn:?}, args:{args:?}, pb_cols:{partition_by_columns:?}, ob_cols:{orderby_columns:?}, search_mode:{search_mode:?}"
+            );
+            println!(
+                "--------usual_formatted_sorted----------------running_formatted_sorted--------"
+            );
             for (line1, line2) in
                 usual_formatted_sorted.iter().zip(running_formatted_sorted)
             {

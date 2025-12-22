@@ -20,20 +20,20 @@
 use crate::{
     execution::{context::SessionState, session_state::SessionStateBuilder},
     object_store::{
-        memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
-        MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
-        PutPayload, PutResult,
+        Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        memory::InMemory, path::Path,
     },
     prelude::SessionContext,
 };
-use futures::{stream::BoxStream, FutureExt};
+use futures::{FutureExt, stream::BoxStream};
 use std::{
     fmt::{Debug, Display, Formatter},
     sync::Arc,
 };
 use tokio::{
     sync::Barrier,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 use url::Url;
 

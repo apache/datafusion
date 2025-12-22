@@ -116,10 +116,12 @@ async fn test_mem_provider() {
     assert!(provider.deregister_table(table_name).unwrap().is_none());
     let test_table = EmptyTable::new(Arc::new(Schema::empty()));
     // register table successfully
-    assert!(provider
-        .register_table(table_name.to_string(), Arc::new(test_table))
-        .unwrap()
-        .is_none());
+    assert!(
+        provider
+            .register_table(table_name.to_string(), Arc::new(test_table))
+            .unwrap()
+            .is_none()
+    );
     assert!(provider.table_exist(table_name));
     let other_table = EmptyTable::new(Arc::new(Schema::empty()));
     let result = provider.register_table(table_name.to_string(), Arc::new(other_table));
