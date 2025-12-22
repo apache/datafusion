@@ -142,16 +142,16 @@ mod tests {
         let frame = ctx.read_json(path, read_options).await.unwrap();
         let results = frame.collect().await.unwrap();
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r###"
-            +-----+------------------+---------------+------+
-            | a   | b                | c             | d    |
-            +-----+------------------+---------------+------+
-            | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
-            | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
-            | 2   | [2.0, , -6.1]    | [false, ]     | text |
-            |     |                  |               |      |
-            +-----+------------------+---------------+------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r"
+        +-----+------------------+---------------+------+
+        | a   | b                | c             | d    |
+        +-----+------------------+---------------+------+
+        | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
+        | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
+        | 2   | [2.0, , -6.1]    | [false, ]     | text |
+        |     |                  |               |      |
+        +-----+------------------+---------------+------+
+        ");}
 
         Ok(())
     }

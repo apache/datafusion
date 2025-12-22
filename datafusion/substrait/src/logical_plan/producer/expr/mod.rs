@@ -37,13 +37,13 @@ pub use window_function::*;
 
 use crate::logical_plan::producer::utils::flatten_names;
 use crate::logical_plan::producer::{
-    to_substrait_named_struct, DefaultSubstraitProducer, SubstraitProducer,
+    DefaultSubstraitProducer, SubstraitProducer, to_substrait_named_struct,
 };
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{internal_err, not_impl_err, DFSchemaRef};
+use datafusion::common::{DFSchemaRef, internal_err, not_impl_err};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::expr::Alias;
 use substrait::proto::expression_reference::ExprType;
 use substrait::proto::{Expression, ExpressionReference, ExtendedExpression};
 use substrait::version;

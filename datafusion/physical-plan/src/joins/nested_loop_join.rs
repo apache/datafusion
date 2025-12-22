@@ -2405,13 +2405,13 @@ pub(crate) mod tests {
         .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b2 | c2 |
-            +----+----+----+----+----+----+
-            | 5  | 5  | 50 | 2  | 2  | 80 |
-            +----+----+----+----+----+----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b2 | c2 |
+        +----+----+----+----+----+----+
+        | 5  | 5  | 50 | 2  | 2  | 80 |
+        +----+----+----+----+----+----+
+        "));
 
         assert_join_metrics!(metrics, 1);
 
@@ -2435,15 +2435,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+----+----+----+
-            | a1 | b1 | c1  | a2 | b2 | c2 |
-            +----+----+-----+----+----+----+
-            | 11 | 8  | 110 |    |    |    |
-            | 5  | 5  | 50  | 2  | 2  | 80 |
-            | 9  | 8  | 90  |    |    |    |
-            +----+----+-----+----+----+----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+----+
+        | a1 | b1 | c1  | a2 | b2 | c2 |
+        +----+----+-----+----+----+----+
+        | 11 | 8  | 110 |    |    |    |
+        | 5  | 5  | 50  | 2  | 2  | 80 |
+        | 9  | 8  | 90  |    |    |    |
+        +----+----+-----+----+----+----+
+        "));
 
         assert_join_metrics!(metrics, 3);
 
@@ -2467,15 +2467,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+----+----+-----+
-            | a1 | b1 | c1 | a2 | b2 | c2  |
-            +----+----+----+----+----+-----+
-            |    |    |    | 10 | 10 | 100 |
-            |    |    |    | 12 | 10 | 40  |
-            | 5  | 5  | 50 | 2  | 2  | 80  |
-            +----+----+----+----+----+-----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+-----+
+        | a1 | b1 | c1 | a2 | b2 | c2  |
+        +----+----+----+----+----+-----+
+        |    |    |    | 10 | 10 | 100 |
+        |    |    |    | 12 | 10 | 40  |
+        | 5  | 5  | 50 | 2  | 2  | 80  |
+        +----+----+----+----+----+-----+
+        "));
 
         assert_join_metrics!(metrics, 3);
 
@@ -2499,17 +2499,17 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+----+----+-----+
-            | a1 | b1 | c1  | a2 | b2 | c2  |
-            +----+----+-----+----+----+-----+
-            |    |    |     | 10 | 10 | 100 |
-            |    |    |     | 12 | 10 | 40  |
-            | 11 | 8  | 110 |    |    |     |
-            | 5  | 5  | 50  | 2  | 2  | 80  |
-            | 9  | 8  | 90  |    |    |     |
-            +----+----+-----+----+----+-----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+----+----+-----+
+        | a1 | b1 | c1  | a2 | b2 | c2  |
+        +----+----+-----+----+----+-----+
+        |    |    |     | 10 | 10 | 100 |
+        |    |    |     | 12 | 10 | 40  |
+        | 11 | 8  | 110 |    |    |     |
+        | 5  | 5  | 50  | 2  | 2  | 80  |
+        | 9  | 8  | 90  |    |    |     |
+        +----+----+-----+----+----+-----+
+        "));
 
         assert_join_metrics!(metrics, 5);
 
@@ -2535,13 +2535,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+
-            | a1 | b1 | c1 |
-            +----+----+----+
-            | 5  | 5  | 50 |
-            +----+----+----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a1 | b1 | c1 |
+        +----+----+----+
+        | 5  | 5  | 50 |
+        +----+----+----+
+        "));
 
         assert_join_metrics!(metrics, 1);
 
@@ -2567,14 +2567,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+
-            | a1 | b1 | c1  |
-            +----+----+-----+
-            | 11 | 8  | 110 |
-            | 9  | 8  | 90  |
-            +----+----+-----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a1 | b1 | c1  |
+        +----+----+-----+
+        | 11 | 8  | 110 |
+        | 9  | 8  | 90  |
+        +----+----+-----+
+        "));
 
         assert_join_metrics!(metrics, 2);
 
@@ -2620,13 +2620,13 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+----+
-            | a2 | b2 | c2 |
-            +----+----+----+
-            | 2  | 2  | 80 |
-            +----+----+----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+
+        | a2 | b2 | c2 |
+        +----+----+----+
+        | 2  | 2  | 80 |
+        +----+----+----+
+        "));
 
         assert_join_metrics!(metrics, 1);
 
@@ -2652,14 +2652,14 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+
-            | a2 | b2 | c2  |
-            +----+----+-----+
-            | 10 | 10 | 100 |
-            | 12 | 10 | 40  |
-            +----+----+-----+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+
+        | a2 | b2 | c2  |
+        +----+----+-----+
+        | 10 | 10 | 100 |
+        | 12 | 10 | 40  |
+        +----+----+-----+
+        "));
 
         assert_join_metrics!(metrics, 2);
 
@@ -2685,15 +2685,15 @@ pub(crate) mod tests {
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+-------+
-            | a1 | b1 | c1  | mark  |
-            +----+----+-----+-------+
-            | 11 | 8  | 110 | false |
-            | 5  | 5  | 50  | true  |
-            | 9  | 8  | 90  | false |
-            +----+----+-----+-------+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a1 | b1 | c1  | mark  |
+        +----+----+-----+-------+
+        | 11 | 8  | 110 | false |
+        | 5  | 5  | 50  | true  |
+        | 9  | 8  | 90  | false |
+        +----+----+-----+-------+
+        "));
 
         assert_join_metrics!(metrics, 3);
 
@@ -2720,15 +2720,15 @@ pub(crate) mod tests {
         .await?;
         assert_eq!(columns, vec!["a2", "b2", "c2", "mark"]);
 
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
-            +----+----+-----+-------+
-            | a2 | b2 | c2  | mark  |
-            +----+----+-----+-------+
-            | 10 | 10 | 100 | false |
-            | 12 | 10 | 40  | false |
-            | 2  | 2  | 80  | true  |
-            +----+----+-----+-------+
-            "#));
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+-----+-------+
+        | a2 | b2 | c2  | mark  |
+        +----+----+-----+-------+
+        | 10 | 10 | 100 | false |
+        | 12 | 10 | 40  | false |
+        | 2  | 2  | 80  | true  |
+        +----+----+-----+-------+
+        "));
 
         assert_join_metrics!(metrics, 3);
 

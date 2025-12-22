@@ -604,8 +604,6 @@ impl PruningPredicate {
         is_always_true(&self.predicate_expr) && self.literal_guarantees.is_empty()
     }
 
-    // this is only used by `parquet` feature right now
-    #[allow(dead_code)]
     pub fn required_columns(&self) -> &RequiredColumns {
         &self.required_columns
     }
@@ -744,8 +742,6 @@ impl RequiredColumns {
     /// * `a > 5 OR a < 10` returns `Some(a)`
     /// * `a > 5 OR b < 10` returns `None`
     /// * `true` returns None
-    #[allow(dead_code)]
-    // this fn is only used by `parquet` feature right now, thus the `allow(dead_code)`
     pub fn single_column(&self) -> Option<&phys_expr::Column> {
         if self.columns.windows(2).all(|w| {
             // check if all columns are the same (ignoring statistics and field)

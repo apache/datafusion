@@ -30,7 +30,6 @@ use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
 };
@@ -80,7 +79,6 @@ pub struct JsonSource {
     table_schema: datafusion_datasource::TableSchema,
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     projection: SplitProjection,
 }
 
@@ -93,7 +91,6 @@ impl JsonSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
         }
     }
 }
@@ -171,20 +168,6 @@ impl FileSource for JsonSource {
 
     fn file_type(&self) -> &str {
         "json"
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 }
 

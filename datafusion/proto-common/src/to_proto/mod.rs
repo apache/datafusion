@@ -976,6 +976,7 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
             truncated_rows: opts.truncated_rows.map_or_else(Vec::new, |h| vec![h as u8]),
+            compression_level: opts.compression_level,
         })
     }
 }
@@ -988,6 +989,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
             schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
+            compression_level: opts.compression_level,
         })
     }
 }

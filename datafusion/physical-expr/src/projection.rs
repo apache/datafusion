@@ -76,7 +76,8 @@ impl std::fmt::Display for ProjectionExpr {
 
 impl ProjectionExpr {
     /// Create a new projection expression
-    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: String) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, alias: impl Into<String>) -> Self {
+        let alias = alias.into();
         Self { expr, alias }
     }
 

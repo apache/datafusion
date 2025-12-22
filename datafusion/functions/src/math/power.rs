@@ -118,33 +118,57 @@ fn pow_decimal_int<T>(base: T, scale: i8, exp: i64) -> Result<T, ArrowError>
 where
     T: From<i32> + ArrowNativeTypeOp,
 {
-    let scale: u32 = scale.try_into().map_err(|_| {
-        ArrowError::NotYetImplemented(format!(
-            "Negative scale is not yet supported value: {scale}"
-        ))
-    })?;
-    if exp == 0 {
-        // Edge case to provide 1 as result (10^s with scale)
-        let result: T = T::from(10).pow_checked(scale).map_err(|_| {
-            ArrowError::ArithmeticOverflow(format!(
-                "Cannot make unscale factor for {scale} and {exp}"
-            ))
-        })?;
-        return Ok(result);
-    }
     let exp: u32 = exp.try_into().map_err(|_| {
         ArrowError::ArithmeticOverflow(format!("Unsupported exp value: {exp}"))
     })?;
+    // Handle edge case for exp == 0
+    // If scale < 0, 10^scale (e.g., 10^-2 = 0.01) becomes 0 in integer arithmetic.
+    if exp == 0 {
+        return if scale >= 0 {
+            T::from(10).pow_checked(scale as u32).map_err(|_| {
+                ArrowError::ArithmeticOverflow(format!(
+                    "Cannot make unscale factor for {scale} and {exp}"
+                ))
+            })
+        } else {
+            Ok(T::from(0))
+        };
+    }
     let powered: T = base.pow_checked(exp).map_err(|_| {
         ArrowError::ArithmeticOverflow(format!("Cannot raise base {base:?} to exp {exp}"))
     })?;
-    let unscale_factor: T = T::from(10).pow_checked(scale * (exp - 1)).map_err(|_| {
-        ArrowError::ArithmeticOverflow(format!(
-            "Cannot make unscale factor for {scale} and {exp}"
-        ))
-    })?;
 
-    powered.div_checked(unscale_factor)
+    // Calculate the scale adjustment: s * (e - 1)
+    // We use i64 to prevent overflow during the intermediate multiplication
+    let mul_exp = (scale as i64).wrapping_mul(exp as i64 - 1);
+
+    if mul_exp == 0 {
+        return Ok(powered);
+    }
+
+    // If mul_exp is positive, we divide (standard case).
+    // If mul_exp is negative, we multiply (negative scale case).
+    if mul_exp > 0 {
+        let div_factor: T = T::from(10).pow_checked(mul_exp as u32).map_err(|_| {
+            ArrowError::ArithmeticOverflow(format!(
+                "Cannot make div factor for {scale} and {exp}"
+            ))
+        })?;
+        powered.div_checked(div_factor)
+    } else {
+        // mul_exp is negative, so we multiply by 10^(-mul_exp)
+        let abs_exp = mul_exp.checked_neg().ok_or_else(|| {
+            ArrowError::ArithmeticOverflow(
+                "Overflow while negating scale exponent".to_string(),
+            )
+        })?;
+        let mul_factor: T = T::from(10).pow_checked(abs_exp as u32).map_err(|_| {
+            ArrowError::ArithmeticOverflow(format!(
+                "Cannot make mul factor for {scale} and {exp}"
+            ))
+        })?;
+        powered.mul_checked(mul_factor)
+    }
 }
 
 /// Binary function to calculate a math power to float exponent
@@ -387,9 +411,6 @@ mod tests {
         assert_eq!(pow_decimal_int(25, 0, 0).unwrap(), i128::from(1));
         assert_eq!(pow_decimal_int(25, 1, 0).unwrap(), i128::from(10));
 
-        assert_eq!(
-            pow_decimal_int(25, -1, 4).unwrap_err().to_string(),
-            "Not yet implemented: Negative scale is not yet supported value: -1"
-        );
+        assert_eq!(pow_decimal_int(25, -1, 4).unwrap(), i128::from(390625000));
     }
 }

@@ -1000,6 +1000,34 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// Partition count threshold for subset satisfaction optimization.
+        ///
+        /// When the current partition count is >= this threshold, DataFusion will
+        /// skip repartitioning if the required partitioning expression is a subset
+        /// of the current partition expression such as Hash(a) satisfies Hash(a, b).
+        ///
+        /// When the current partition count is < this threshold, DataFusion will
+        /// repartition to increase parallelism even when subset satisfaction applies.
+        ///
+        /// Set to 0 to always repartition (disable subset satisfaction optimization).
+        /// Set to a high value to always use subset satisfaction.
+        ///
+        /// Example (subset_repartition_threshold = 4):
+        /// ```text
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
+        ///
+        ///     If current partitions (3) < threshold (4), repartition:
+        ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
+        ///
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction:
+        ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
+        /// ```
+        pub subset_repartition_threshold: usize, default = 4
+
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
         /// using `SortPreservingMergeExec`)
@@ -1079,6 +1107,21 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// Enable sort pushdown optimization.
+        /// When enabled, attempts to push sort requirements down to data sources
+        /// that can natively handle them (e.g., by reversing file/row group read order).
+        ///
+        /// Returns **inexact ordering**: Sort operator is kept for correctness,
+        /// but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N),
+        /// providing significant speedup.
+        ///
+        /// Memory: No additional overhead (only changes read order).
+        ///
+        /// Future: Will add option to detect perfectly sorted data and eliminate Sort completely.
+        ///
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 
@@ -1710,6 +1753,7 @@ config_field!(bool, value => default_config_transform(value.to_lowercase().as_st
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
+config_field!(u32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -2829,6 +2873,14 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
@@ -2951,6 +3003,14 @@ impl CsvOptions {
         self
     }
 
+    /// Set the compression level for the output file.
+    /// The valid range depends on the compression algorithm.
+    /// If not specified, the default level for the algorithm is used.
+    pub fn with_compression_level(mut self, level: u32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2976,6 +3036,14 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
     }
 }
