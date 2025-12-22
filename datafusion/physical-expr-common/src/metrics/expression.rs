@@ -31,7 +31,7 @@ use super::{ExecutionPlanMetricsSet, MetricBuilder, MetricType, ScopedTimerGuard
 /// `a+1` and `pow(a,2)`, respectively.
 ///
 /// The output reads:
-/// `ProjectionExec: expr=[a@0 + 1 as t1.a + Int64(1), power(CAST(a@0 AS Float64), 2) as pow(t1.a,Int64(2))], metrics=[... expr_eval_time_0=9.23ms, expr_eval_time_1=32.35ms...]`
+/// `ProjectionExec: expr=[a@0 + 1 as t1.a + Int64(1), power(CAST(a@0 AS Float64), 2) as pow(t1.a,Int64(2))], metrics=[... expr_0_eval_time=9.23ms, expr_1_eval_time=32.35ms...]`
 #[derive(Debug, Clone)]
 pub struct ExpressionEvaluatorMetrics {
     expression_times: Vec<Time>,
@@ -43,7 +43,7 @@ impl ExpressionEvaluatorMetrics {
     /// # Args
     /// - expression_labels: unique identifier for each metric, so that the metric
     ///   can get aggregated across multiple partitions. It is not the name showed
-    ///   in the `EXPLAIN ANALYZE`, the metric name will be `expr_eval_time_{idx}`
+    ///   in the `EXPLAIN ANALYZE`, the metric name will be `expr_{idx}_eval_time`
     ///   according to the expression order.
     pub fn new<T>(
         metrics: &ExecutionPlanMetricsSet,
@@ -61,7 +61,7 @@ impl ExpressionEvaluatorMetrics {
                     .with_new_label("expr", label.into())
                     .with_type(MetricType::DEV)
                     // Existing PhysicalExpr formatter is a bit verbose, so use simple name
-                    .subset_time(format!("expr_eval_time_{idx}"), partition)
+                    .subset_time(format!("expr_{idx}_eval_time"), partition)
             })
             .collect();
 
