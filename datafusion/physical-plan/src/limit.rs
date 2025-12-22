@@ -35,6 +35,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
 
+use datafusion_physical_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -51,9 +52,9 @@ pub struct GlobalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    order_sensitive: bool,
+    /// If the child plan is a sort node, after the sort node is removed during
+    /// physical optimization, we should add the required ordering to the limit node
+    required_ordering: Option<LexOrdering>,
 }
 
 impl GlobalLimitExec {
@@ -66,7 +67,7 @@ impl GlobalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-            order_sensitive: false,
+            required_ordering: None,
         }
     }
 
@@ -96,16 +97,14 @@ impl GlobalLimitExec {
         )
     }
 
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    pub fn order_sensitive(&self) -> bool {
-        self.order_sensitive
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
     }
 
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    pub fn set_order_sensitive(&mut self, order_sensitive: bool) {
-        self.order_sensitive = order_sensitive;
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 
@@ -239,9 +238,9 @@ pub struct LocalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    order_sensitive: bool,
+    /// If the child plan is a sort node, after the sort node is removed during
+    /// physical optimization, we should add the required ordering to the limit node
+    required_ordering: Option<LexOrdering>,
 }
 
 impl LocalLimitExec {
@@ -253,7 +252,7 @@ impl LocalLimitExec {
             fetch,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
-            order_sensitive: false,
+            required_ordering: None,
         }
     }
 
@@ -278,16 +277,14 @@ impl LocalLimitExec {
         )
     }
 
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    pub fn order_sensitive(&self) -> bool {
-        self.order_sensitive
+    /// Get the required ordering from limit
+    pub fn required_ordering(&self) -> &Option<LexOrdering> {
+        &self.required_ordering
     }
 
-    /// Whether the limit is order-sensitive
-    /// Such as the child plan is a sort node, then the limit is order-sensitive
-    pub fn set_order_sensitive(&mut self, order_sensitive: bool) {
-        self.order_sensitive = order_sensitive;
+    /// Set the required ordering for limit
+    pub fn set_required_ordering(&mut self, required_ordering: Option<LexOrdering>) {
+        self.required_ordering = required_ordering;
     }
 }
 

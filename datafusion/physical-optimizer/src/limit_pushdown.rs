@@ -118,8 +118,8 @@ impl LimitExec {
 
     fn order_sensitive(&self) -> bool {
         match self {
-            Self::Global(global) => global.order_sensitive(),
-            Self::Local(local) => local.order_sensitive(),
+            Self::Global(global) => global.required_ordering().is_some(),
+            Self::Local(local) => local.required_ordering().is_some(),
         }
     }
 }
