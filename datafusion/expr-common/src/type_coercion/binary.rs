@@ -294,6 +294,18 @@ impl<'a> BinaryTypeCoercer<'a> {
             } else if let Some(numeric) = mathematics_numerical_coercion(lhs, rhs) {
                 // Numeric arithmetic, e.g. Int32 + Int32
                 Ok(Signature::uniform(numeric))
+            } else if let Some((lhs, rhs)) = temporal_duration_coercion(lhs, rhs) {
+                // Coerce Duration to match Timestamp's unit, e.g. Timestamp(ms) + Duration(s) → Timestamp(ms) + Duration(ms) 
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal duration operation {} {} {}: {e}", self.lhs , self.op, self.rhs
+                    )
+                })?;
+                Ok(Signature{
+                    lhs,
+                    rhs,
+                    ret,
+                })
             } else {
                 plan_err!(
                     "Cannot coerce arithmetic expression {} {} {} to valid types", self.lhs, self.op, self.rhs
@@ -1822,6 +1834,23 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         (Timestamp(_, _tz), Date32) | (Date32, Timestamp(_, _tz)) => {
             Some(Timestamp(Nanosecond, None))
+        }
+        _ => None,
+    }
+}
+
+fn temporal_duration_coercion(
+    lhs: &DataType,
+    rhs: &DataType,
+) -> Option<(DataType, DataType)> {
+    use arrow::datatypes::DataType::*;
+
+    match (lhs, rhs) {
+        (Timestamp(ts_unit, tz), Duration(_)) => {
+            Some((Timestamp(*ts_unit, tz.clone()), Duration(*ts_unit)))
+        }
+        (Duration(_), Timestamp(ts_unit, tz)) => {
+            Some((Duration(*ts_unit), Timestamp(*ts_unit, tz.clone())))
         }
         _ => None,
     }
