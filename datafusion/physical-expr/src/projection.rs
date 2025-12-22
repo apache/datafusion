@@ -587,37 +587,59 @@ impl ProjectionExprs {
             let expr = &proj_expr.expr;
             let col_stats = if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 std::mem::take(&mut stats.column_statistics[col.index()])
-            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>()
-                && !literal.value().is_null()
-            {
-                // For constant columns (non-null literals), output proper statistics
-                let value = literal.value();
+            } else if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
                 let data_type = expr.data_type(output_schema)?;
-
-                // For constant columns:
-                // - min_value = max_value = the literal value
-                // - distinct_count = 1
-                // - null_count = 0
-                // - byte_size = calculated from data type and num_rows
-                let distinct_count = Precision::Exact(1);
-                let null_count = Precision::Exact(0);
-
-                // Calculate byte_size: for primitive types, use width * num_rows
-                let byte_size = if let Some(byte_width) = data_type.primitive_width() {
-                    stats.num_rows.multiply(&Precision::Exact(byte_width))
+                
+                if literal.value().is_null() {
+                    // For NULL literals (constant NULL columns), output proper statistics
+                    // This enables optimizations like constant column detection and sort elimination
+                    // For constant NULL columns:
+                    // - null_count = num_rows (all rows are NULL)
+                    // - distinct_count = 1 (all NULLs are considered the same)
+                    // - min_value/max_value = Absent (NULLs don't have min/max)
+                    // - byte_size = Absent (NULLs don't take space in most representations)
+                    let null_count = match stats.num_rows {
+                        Precision::Exact(num_rows) => Precision::Exact(num_rows),
+                        _ => Precision::Absent, // Can't determine null_count without exact row count
+                    };
+                    
+                    ColumnStatistics {
+                        min_value: Precision::Absent, // NULLs don't have min/max
+                        max_value: Precision::Absent,
+                        distinct_count: Precision::Exact(1), // All NULLs are considered the same
+                        null_count,
+                        sum_value: Precision::Absent, // Sum doesn't make sense for NULLs
+                        byte_size: Precision::Absent, // NULLs don't take space
+                    }
                 } else {
-                    // For complex types (Utf8, List, etc.), we can't calculate exact size
-                    // without knowing the actual data, so leave it as Absent
-                    Precision::Absent
-                };
+                    // For constant columns (non-null literals), output proper statistics
+                    let value = literal.value();
 
-                ColumnStatistics {
-                    min_value: Precision::Exact(value.clone()),
-                    max_value: Precision::Exact(value.clone()),
-                    distinct_count,
-                    null_count,
-                    sum_value: Precision::Absent, // Sum doesn't make sense for constants
-                    byte_size,
+                    // For constant columns:
+                    // - min_value = max_value = the literal value
+                    // - distinct_count = 1
+                    // - null_count = 0
+                    // - byte_size = calculated from data type and num_rows
+                    let distinct_count = Precision::Exact(1);
+                    let null_count = Precision::Exact(0);
+
+                    // Calculate byte_size: for primitive types, use width * num_rows
+                    let byte_size = if let Some(byte_width) = data_type.primitive_width() {
+                        stats.num_rows.multiply(&Precision::Exact(byte_width))
+                    } else {
+                        // For complex types (Utf8, List, etc.), we can't calculate exact size
+                        // without knowing the actual data, so leave it as Absent
+                        Precision::Absent
+                    };
+
+                    ColumnStatistics {
+                        min_value: Precision::Exact(value.clone()),
+                        max_value: Precision::Exact(value.clone()),
+                        distinct_count,
+                        null_count,
+                        sum_value: Precision::Absent, // Sum doesn't make sense for constants
+                        byte_size,
+                    }
                 }
             } else {
                 // TODO stats: estimate more statistics from expressions
@@ -2675,6 +2697,135 @@ pub(crate) mod tests {
         assert_eq!(
             output_stats.column_statistics[0].byte_size,
             Precision::Exact(40)
+        );
+
+        // Second column (col0) should preserve statistics
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Exact(5)
+        );
+        assert_eq!(
+            output_stats.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_null_literal() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // Projection with NULL literal: SELECT NULL AS null_col, col0 AS num
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Int64(None))),
+                alias: "null_col".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "num".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // Row count should be preserved
+        assert_eq!(output_stats.num_rows, Precision::Exact(5));
+
+        // Should have 2 column statistics
+        assert_eq!(output_stats.column_statistics.len(), 2);
+
+        // First column (NULL literal) should have proper constant NULL statistics
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Absent // NULLs don't have min/max
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Absent // NULLs don't have min/max
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Exact(1) // All NULLs are considered the same
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].null_count,
+            Precision::Exact(5) // All rows are NULL
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].byte_size,
+            Precision::Absent // NULLs don't take space
+        );
+
+        // Second column (col0) should preserve statistics
+        assert_eq!(
+            output_stats.column_statistics[1].distinct_count,
+            Precision::Exact(5)
+        );
+        assert_eq!(
+            output_stats.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(21)))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_with_complex_type_literal() -> Result<()> {
+        let input_stats = get_stats();
+        let input_schema = get_schema();
+
+        // Projection with Utf8 literal (complex type): SELECT 'hello' AS text, col0 AS num
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr {
+                expr: Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
+                alias: "text".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("col0", 0)),
+                alias: "num".to_string(),
+            },
+        ]);
+
+        let output_stats = projection.project_statistics(
+            input_stats,
+            &projection.project_schema(&input_schema)?,
+        )?;
+
+        // Row count should be preserved
+        assert_eq!(output_stats.num_rows, Precision::Exact(5));
+
+        // Should have 2 column statistics
+        assert_eq!(output_stats.column_statistics.len(), 2);
+
+        // First column (Utf8 literal 'hello') should have proper constant statistics
+        // but byte_size should be Absent for complex types
+        assert_eq!(
+            output_stats.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("hello".to_string())))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("hello".to_string())))
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].distinct_count,
+            Precision::Exact(1)
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        // Complex types (Utf8, List, etc.) should have byte_size = Absent
+        // because we can't calculate exact size without knowing the actual data
+        assert_eq!(
+            output_stats.column_statistics[0].byte_size,
+            Precision::Absent
         );
 
         // Second column (col0) should preserve statistics
