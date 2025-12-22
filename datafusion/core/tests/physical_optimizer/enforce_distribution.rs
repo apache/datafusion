@@ -44,6 +44,8 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr::PartitioningSatisfaction;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -52,7 +54,9 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -64,11 +68,12 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, Statistics,
-    displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
+    Statistics, displayable,
 };
 use insta::Settings;
 
@@ -3605,6 +3610,76 @@ async fn test_distribute_sort_memtable() -> Result<()> {
       SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
         DataSourceExec: partitions=3, partition_sizes=[34, 33, 33]
     ");
+
+    Ok(())
+}
+
+#[test]
+fn distribution_satisfaction_exact_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+        vec![col_a, col_b],
+        PartitioningSatisfaction::Exact,
+        false,
+    )
+}
+
+#[test]
+fn distribution_satisfaction_subset_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a)],
+        vec![col_a, col_b],
+        PartitioningSatisfaction::Subset,
+        false,
+    )
+}
+
+#[test]
+fn distribution_satisfaction_superset_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+        vec![col_a],
+        PartitioningSatisfaction::NotSatisfied,
+        true,
+    )
+}
+
+fn assert_hash_satisfaction_alignment(
+    partitioning_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    required_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    expected: PartitioningSatisfaction,
+    expect_err: bool,
+) -> Result<()> {
+    let child: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        parquet_exec(),
+        Partitioning::Hash(partitioning_exprs, 4),
+    )?);
+
+    let requirement = Distribution::HashPartitioned(required_exprs);
+    let satisfaction = distribution_satisfaction(&child, &requirement, true);
+    assert_eq!(satisfaction.satisfaction(), expected);
+
+    let parent: Arc<dyn ExecutionPlan> =
+        Arc::new(OutputRequirementExec::new(child, None, requirement, None));
+    let sanity = SanityCheckPlan::new().optimize(parent, &ConfigOptions::default());
+
+    if expect_err {
+        assert!(sanity.is_err());
+    } else {
+        sanity?;
+    }
 
     Ok(())
 }
