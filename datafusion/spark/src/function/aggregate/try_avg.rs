@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::array::{
+    Array, ArrayRef, Int64Array, IntervalYearMonthArray, PrimitiveArray,
     cast::AsArray,
     types::{Float64Type, Int64Type},
-    Array, ArrayRef, Int64Array, IntervalYearMonthArray, PrimitiveArray,
 };
 use arrow::array::{BooleanArray, Decimal128Array, Float64Array};
 use arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, IntervalUnit, IntervalYearMonthType,
 };
-use datafusion_common::{downcast_value, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, downcast_value, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 
@@ -311,7 +311,7 @@ impl Accumulator for TryAvgAccumulator {
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_avg: type not supported update_batch: {dt:?}"
-                )))
+                )));
             }
         }
         Ok(())
@@ -451,7 +451,7 @@ impl Accumulator for TryAvgAccumulator {
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_avg: type not supported in merge_batch: {dt:?}"
-                )))
+                )));
             }
         }
 
@@ -505,7 +505,7 @@ impl AggregateUDFImpl for SparkTryAvg {
             ref other => {
                 return Err(DataFusionError::Plan(format!(
                     "try_avg: unsupported type: {other:?}"
-                )))
+                )));
             }
         };
 
@@ -555,7 +555,7 @@ impl AggregateUDFImpl for SparkTryAvg {
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "try_avg: unsupported type: {other:?}"
-                )))
+                )));
             }
         };
         Ok(vec![coerced])
@@ -569,8 +569,8 @@ impl AggregateUDFImpl for SparkTryAvg {
 #[cfg(test)]
 mod tests {
     use arrow::array::Int32Array;
-    use datafusion_common::arrow::array::Float64Array;
     use datafusion_common::ScalarValue;
+    use datafusion_common::arrow::array::Float64Array;
     use std::sync::Arc;
 
     use super::*;
