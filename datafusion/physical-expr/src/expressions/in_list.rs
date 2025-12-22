@@ -209,13 +209,45 @@ impl InListExpr {
 
         // Try to create a static filter if all list expressions are constants
         let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array)?),
-            None => None, // Non-constant expressions, fall back to dynamic evaluation
+            Some(in_array)
+                if is_bit_pattern_compatible(&expr_data_type, in_array.data_type()) =>
+            {
+                Some(instantiate_static_filter(in_array)?)
+            }
+            _ => None, // Fall back to dynamic evaluation
         };
 
         Ok(Self::new(expr, list, negated, static_filter))
     }
 }
+
+/// Checks if two data types are compatible for bit-pattern equality comparison.
+///
+/// Optimized filters reinterpret primitive types as their underlying bit patterns
+/// (e.g., reinterpreting Timestamp as i64). This check ensures that such
+/// reinterpretation is valid:
+/// - Timestamps must have the same TimeUnit (timezone is ignored as it's just metadata)
+/// - Decimals must have the same scale
+/// - Strings/Binary must have the same physical representation (e.g., can't mix Utf8 and Utf8View)
+fn is_bit_pattern_compatible(dt1: &DataType, dt2: &DataType) -> bool {
+    match (dt1, dt2) {
+        // Timestamps: bit-compatible if units match (timezones are normalized to UTC)
+        (DataType::Timestamp(u1, _), DataType::Timestamp(u2, _)) => u1 == u2,
+        // Decimals: bit-compatible if scales match
+        (DataType::Decimal128(_, s1), DataType::Decimal128(_, s2)) => s1 == s2,
+        (DataType::Decimal256(_, s1), DataType::Decimal256(_, s2)) => s1 == s2,
+        // Dictionaries: compatible if their values are compatible
+        (DataType::Dictionary(_, v1), DataType::Dictionary(_, v2)) => {
+            is_bit_pattern_compatible(v1.as_ref(), v2.as_ref())
+        }
+        (DataType::Dictionary(_, v), other) | (other, DataType::Dictionary(_, v)) => {
+            is_bit_pattern_compatible(v.as_ref(), other)
+        }
+        // Other types must be exactly equal
+        _ => dt1 == dt2,
+    }
+}
+
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let list = expr_vec_fmt!(self.list);
