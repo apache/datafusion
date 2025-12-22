@@ -152,7 +152,7 @@ pub fn check_plan_sanity(
             }
         }
 
-        let dist_satisfaction = distribution_satisfaction(&child, &dist_req, true);
+        let dist_satisfaction = distribution_satisfaction(child, &dist_req, true);
         if !dist_satisfaction.is_satisfied() {
             let plan_str = get_plan_string(&plan);
             return plan_err!(

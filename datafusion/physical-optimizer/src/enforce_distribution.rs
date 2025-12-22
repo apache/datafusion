@@ -945,7 +945,7 @@ fn add_roundrobin_on_top(
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
     input: DistributionContext,
-    satisfaction: DistributionSatisfactionResult,
+    satisfaction: &DistributionSatisfactionResult,
     n_target: usize,
     allow_subset_satisfy_partitioning: bool,
 ) -> Result<DistributionContext> {
@@ -1323,7 +1323,7 @@ pub fn ensure_distribution(
                     ) {
                         child = add_hash_on_top(
                             child,
-                            satisfaction,
+                            &satisfaction,
                             target_partitions,
                             allow_subset_satisfy_partitioning,
                         )?;
