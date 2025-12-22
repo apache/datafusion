@@ -17,29 +17,21 @@
 
 use std::sync::Arc;
 
-use crate::arrow_wrappers::WrappedSchema;
 use abi_stable::{
     StableAbi,
     std_types::{RString, RVec},
 };
 use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::function::AccumulatorArgs,
-    physical_expr::{PhysicalExpr, PhysicalSortExpr},
-    prelude::SessionContext,
+use datafusion_common::error::DataFusionError;
+use datafusion_expr::function::AccumulatorArgs;
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+
+use crate::{
+    arrow_wrappers::WrappedSchema,
+    physical_expr::{FFI_PhysicalExpr, sort::FFI_PhysicalSortExpr},
+    util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped},
 };
-use datafusion_common::ffi_datafusion_err;
-use datafusion_proto::{
-    physical_plan::{
-        DefaultPhysicalExtensionCodec,
-        from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
-        to_proto::{serialize_physical_exprs, serialize_physical_sort_exprs},
-    },
-    protobuf::PhysicalAggregateExprNode,
-};
-use prost::Message;
 
 /// A stable struct for sharing [`AccumulatorArgs`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding field
@@ -50,42 +42,47 @@ use prost::Message;
 pub struct FFI_AccumulatorArgs {
     return_field: WrappedSchema,
     schema: WrappedSchema,
+    ignore_nulls: bool,
+    order_bys: RVec<FFI_PhysicalSortExpr>,
     is_reversed: bool,
     name: RString,
-    physical_expr_def: RVec<u8>,
+    is_distinct: bool,
+    exprs: RVec<FFI_PhysicalExpr>,
+    expr_fields: RVec<WrappedSchema>,
 }
 
 impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
     type Error = DataFusionError;
-
-    fn try_from(args: AccumulatorArgs) -> Result<Self, Self::Error> {
+    fn try_from(args: AccumulatorArgs) -> Result<Self, DataFusionError> {
         let return_field =
             WrappedSchema(FFI_ArrowSchema::try_from(args.return_field.as_ref())?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
-        let codec = DefaultPhysicalExtensionCodec {};
-        let ordering_req =
-            serialize_physical_sort_exprs(args.order_bys.to_owned(), &codec)?;
+        let order_bys: RVec<_> = args
+            .order_bys
+            .iter()
+            .map(FFI_PhysicalSortExpr::from)
+            .collect();
 
-        let expr = serialize_physical_exprs(args.exprs, &codec)?;
+        let exprs = args
+            .exprs
+            .iter()
+            .map(Arc::clone)
+            .map(FFI_PhysicalExpr::from)
+            .collect();
 
-        let physical_expr_def = PhysicalAggregateExprNode {
-            expr,
-            ordering_req,
-            distinct: args.is_distinct,
-            ignore_nulls: args.ignore_nulls,
-            fun_definition: None,
-            aggregate_function: None,
-            human_display: args.name.to_string(),
-        };
-        let physical_expr_def = physical_expr_def.encode_to_vec().into();
+        let expr_fields = vec_fieldref_to_rvec_wrapped(args.expr_fields)?;
 
         Ok(Self {
             return_field,
             schema,
+            ignore_nulls: args.ignore_nulls,
+            order_bys,
             is_reversed: args.is_reversed,
             name: args.name.into(),
-            physical_expr_def,
+            is_distinct: args.is_distinct,
+            exprs,
+            expr_fields,
         })
     }
 }
@@ -110,43 +107,28 @@ impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
     type Error = DataFusionError;
 
     fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
-        let proto_def = PhysicalAggregateExprNode::decode(
-            value.physical_expr_def.as_ref(),
-        )
-        .map_err(|e| {
-            ffi_datafusion_err!("Failed to decode PhysicalAggregateExprNode: {e}")
-        })?;
-
         let return_field = Arc::new((&value.return_field.0).try_into()?);
         let schema = Schema::try_from(&value.schema.0)?;
 
-        let default_ctx = SessionContext::new();
-        let task_ctx = default_ctx.task_ctx();
-        let codex = DefaultPhysicalExtensionCodec {};
+        let order_bys = value.order_bys.iter().map(PhysicalSortExpr::from).collect();
 
-        let order_bys = parse_physical_sort_exprs(
-            &proto_def.ordering_req,
-            &task_ctx,
-            &schema,
-            &codex,
-        )?;
-
-        let exprs = parse_physical_exprs(&proto_def.expr, &task_ctx, &schema, &codex)?;
-
-        let expr_fields = exprs
+        let exprs = value
+            .exprs
             .iter()
-            .map(|e| e.return_field(&schema))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(<Arc<dyn PhysicalExpr>>::from)
+            .collect();
+
+        let expr_fields = rvec_wrapped_to_vec_fieldref(&value.expr_fields)?;
 
         Ok(Self {
             return_field,
             schema,
             expr_fields,
-            ignore_nulls: proto_def.ignore_nulls,
+            ignore_nulls: value.ignore_nulls,
             order_bys,
             is_reversed: value.is_reversed,
             name: value.name.to_string(),
-            is_distinct: proto_def.distinct,
+            is_distinct: value.is_distinct,
             exprs,
         })
     }
@@ -170,12 +152,13 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         error::Result, logical_expr::function::AccumulatorArgs,
         physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
     };
+
+    use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 
     #[test]
     fn test_round_trip_accumulator_args() -> Result<()> {
@@ -193,7 +176,7 @@ mod tests {
         };
         let orig_str = format!("{orig_args:?}");
 
-        let ffi_args: FFI_AccumulatorArgs = orig_args.try_into()?;
+        let ffi_args = FFI_AccumulatorArgs::try_from(orig_args)?;
         let foreign_args: ForeignAccumulatorArgs = ffi_args.try_into()?;
         let round_trip_args: AccumulatorArgs = (&foreign_args).into();
 

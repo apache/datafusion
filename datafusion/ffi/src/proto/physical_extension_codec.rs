@@ -145,7 +145,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     let plan =
         rresult_return!(codec.try_decode(buf.as_ref(), &inputs, task_ctx.as_ref()));
 
-    RResult::ROk(FFI_ExecutionPlan::new(plan, task_ctx, None))
+    RResult::ROk(FFI_ExecutionPlan::new(plan, None))
 }
 
 unsafe extern "C" fn try_encode_fn_wrapper(
@@ -329,12 +329,9 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let task_ctx = (&self.0.task_ctx_provider).try_into()?;
         let inputs = inputs
             .iter()
-            .map(|plan| {
-                FFI_ExecutionPlan::new(Arc::clone(plan), Arc::clone(&task_ctx), None)
-            })
+            .map(|plan| FFI_ExecutionPlan::new(Arc::clone(plan), None))
             .collect();
 
         let plan =
@@ -345,8 +342,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        let task_ctx = (&self.0.task_ctx_provider).try_into()?;
-        let plan = FFI_ExecutionPlan::new(node, task_ctx, None);
+        let plan = FFI_ExecutionPlan::new(node, None);
         let bytes = df_result!(unsafe { (self.0.try_encode)(&self.0, plan) })?;
 
         buf.extend(bytes);

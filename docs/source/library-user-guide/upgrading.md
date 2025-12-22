@@ -396,6 +396,47 @@ Instead this should now be:
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
 
+When creating any of the following structs, we now require the user to
+provide a `TaskContextProvider` and optionally a `LogicalExtensionCodec`:
+
+- `FFI_CatalogListProvider`
+- `FFI_CatalogProvider`
+- `FFI_SchemaProvider`
+- `FFI_TableProvider`
+- `FFI_TableFunction`
+
+Each of these structs has a `new()` and a `new_with_ffi_codec()` method for
+instantiation. For example, when you previously would write
+
+```rust,ignore
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None);
+```
+
+Now you will need to provide a `TaskContextProvider`. The most common
+implementation of this trait is `SessionContext`.
+
+```rust,ignore
+   let ctx = Arc::new(SessionContext::default());
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None, ctx, None);
+```
+
+The alternative function to create these structures may be more convenient
+if you are doing many of these operations. A `FFI_LogicalExtensionCodec` will
+store the `TaskContextProvider` as well.
+
+```rust,ignore
+   let codec = Arc::new(DefaultLogicalExtensionCodec {});
+   let ctx = Arc::new(SessionContext::default());
+   let ffi_codec = FFI_LogicalExtensionCodec::new(codec, None, ctx);
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new_with_ffi_codec(table, None, ffi_codec);
+```
+
+Additional information about the usage of the `TaskContextProvider` can be
+found in the crate README.
+
 Additionally, the FFI structure for Scalar UDF's no longer contains a
 `return_type` call. This code was not used since the `ForeignScalarUDF`
 struct implements the `return_field_from_args` instead.
@@ -513,16 +554,27 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-### `SchemaAdapterFactory` Fully Removed from Parquet
+### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
 
 Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
 
-- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
-- **Projections** (newly removed in 52.0.0)
+The following symbols have been deprecated and will be removed in the next release:
 
+- `SchemaAdapter` trait
+- `SchemaAdapterFactory` trait
+- `SchemaMapper` trait
+- `SchemaMapping` struct
+- `DefaultSchemaAdapterFactory` struct
+
+These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by `PhysicalExprAdapterFactory`, which rewrites expressions at planning time rather than transforming batches at runtime.
 If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
-
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
+
+**Migration guide:**
+
+If you implemented a custom `SchemaAdapterFactory`, migrate to `PhysicalExprAdapterFactory`.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for a complete implementation.
 
 ## DataFusion `51.0.0`
 
