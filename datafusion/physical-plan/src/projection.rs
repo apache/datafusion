@@ -1004,7 +1004,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::common::collect;
-    
+
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
