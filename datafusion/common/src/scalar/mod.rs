@@ -1797,6 +1797,7 @@ impl ScalarValue {
 
     pub fn new_ten(datatype: &DataType) -> Result<ScalarValue> {
         Ok(match datatype {
+            // Integers and Floats
             DataType::Int8 => ScalarValue::Int8(Some(10)),
             DataType::Int16 => ScalarValue::Int16(Some(10)),
             DataType::Int32 => ScalarValue::Int32(Some(10)),
@@ -1808,54 +1809,101 @@ impl ScalarValue {
             DataType::Float16 => ScalarValue::Float16(Some(f16::from_f32(10.0))),
             DataType::Float32 => ScalarValue::Float32(Some(10.0)),
             DataType::Float64 => ScalarValue::Float64(Some(10.0)),
+
+            // Decimal32
             DataType::Decimal32(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal32Type>(
                     *precision, *scale,
                 )?;
-                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match 10_i32.checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal32(Some(value), *precision, *scale)
+
+                // Case 1: Logic Impossibility (Scale < -1) -> Return NULL (None)
+                if *scale < -1 {
+                    ScalarValue::Decimal32(None, *precision, *scale)
+                } else {
+                    // Case 2: Integer Overflow -> Return Error
+                    match 10_i32.checked_pow((*scale + 1) as u32) {
+                        Some(value) => {
+                            ScalarValue::Decimal32(Some(value), *precision, *scale)
+                        }
+                        None => {
+                            return _internal_err!(
+                                "Decimal32 overflow when creating value 10 with scale {}",
+                                scale
+                            );
+                        }
                     }
-                    None => return _internal_err!("Unsupported scale {scale}"),
                 }
             }
+
+            // Decimal64
             DataType::Decimal64(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal64Type>(
                     *precision, *scale,
                 )?;
-                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i64::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal64(Some(value), *precision, *scale)
+
+                if *scale < -1 {
+                    ScalarValue::Decimal64(None, *precision, *scale)
+                } else {
+                    match i64::from(10).checked_pow((*scale + 1) as u32) {
+                        Some(value) => {
+                            ScalarValue::Decimal64(Some(value), *precision, *scale)
+                        }
+                        None => {
+                            return _internal_err!(
+                                "Decimal64 overflow when creating value 10 with scale {}",
+                                scale
+                            );
+                        }
                     }
-                    None => return _internal_err!("Unsupported scale {scale}"),
                 }
             }
+
+            // Decimal128
             DataType::Decimal128(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal128Type>(
                     *precision, *scale,
                 )?;
-                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i128::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal128(Some(value), *precision, *scale)
+
+                if *scale < -1 {
+                    ScalarValue::Decimal128(None, *precision, *scale)
+                } else {
+                    match i128::from(10).checked_pow((*scale + 1) as u32) {
+                        Some(value) => {
+                            ScalarValue::Decimal128(Some(value), *precision, *scale)
+                        }
+                        None => {
+                            return _internal_err!(
+                                "Decimal128 overflow when creating value 10 with scale {}",
+                                scale
+                            );
+                        }
                     }
-                    None => return _internal_err!("Unsupported scale {scale}"),
                 }
             }
+
+            // Decimal256
             DataType::Decimal256(precision, scale) => {
                 Self::validate_decimal_or_internal_err::<Decimal256Type>(
                     *precision, *scale,
                 )?;
-                assert_or_internal_err!(*scale >= 0, "Negative scale is not supported");
-                match i256::from(10).checked_pow((*scale + 1) as u32) {
-                    Some(value) => {
-                        ScalarValue::Decimal256(Some(value), *precision, *scale)
+
+                if *scale < -1 {
+                    ScalarValue::Decimal256(None, *precision, *scale)
+                } else {
+                    match i256::from(10).checked_pow((*scale + 1) as u32) {
+                        Some(value) => {
+                            ScalarValue::Decimal256(Some(value), *precision, *scale)
+                        }
+                        None => {
+                            return _internal_err!(
+                                "Decimal256 overflow when creating value 10 with scale {}",
+                                scale
+                            );
+                        }
                     }
-                    None => return _internal_err!("Unsupported scale {scale}"),
                 }
             }
+
             _ => {
                 return _not_impl_err!(
                     "Can't create a ten scalar from data_type \"{datatype}\""
@@ -1863,7 +1911,6 @@ impl ScalarValue {
             }
         })
     }
-
     /// return the [`DataType`] of this `ScalarValue`
     pub fn data_type(&self) -> DataType {
         match self {
@@ -5986,8 +6033,19 @@ mod tests {
             ScalarValue::Decimal128(Some(1000), 7, 2)
         );
         // No negative scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal128(5, -1)).is_err());
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal128(5, -1)).unwrap(),
+            ScalarValue::Decimal128(Some(1), 5, -1)
+        );
         // Invalid combination
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal128(5, -2)).unwrap(),
+            ScalarValue::Decimal128(None, 5, -2)
+        );
+
+        // Decimal32 overflow
+        assert!(ScalarValue::new_ten(&DataType::Decimal32(9, 9)).is_err());
+
         assert!(ScalarValue::new_ten(&DataType::Decimal128(0, 2)).is_err());
         assert!(ScalarValue::new_ten(&DataType::Decimal128(5, 7)).is_err());
     }
@@ -6008,8 +6066,18 @@ mod tests {
             ScalarValue::Decimal256(Some(1000.into()), 7, 2)
         );
         // No negative scale
-        assert!(ScalarValue::new_ten(&DataType::Decimal256(5, -1)).is_err());
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal256(5, -1)).unwrap(),
+            ScalarValue::Decimal256(Some(1.into()), 5, -1)
+        );
         // Invalid combination
+        assert_eq!(
+            ScalarValue::new_ten(&DataType::Decimal256(5, -2)).unwrap(),
+            ScalarValue::Decimal256(None, 5, -2)
+        );
+        // Decimal32 overflow
+        assert!(ScalarValue::new_ten(&DataType::Decimal32(9, 9)).is_err());
+
         assert!(ScalarValue::new_ten(&DataType::Decimal256(0, 2)).is_err());
         assert!(ScalarValue::new_ten(&DataType::Decimal256(5, 7)).is_err());
     }
