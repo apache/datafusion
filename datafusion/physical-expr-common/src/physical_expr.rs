@@ -604,7 +604,6 @@ impl RangeStats {
     /// Create range stats for a constant literal across all containers.
     ///
     pub fn new_scalar(value: ScalarValue, length: usize) -> Result<Self> {
-        ScalarValue::iter_to_array(std::iter::repeat(value.clone()).take(length))?;
         Ok(Self::Scalar { value, length })
     }
 

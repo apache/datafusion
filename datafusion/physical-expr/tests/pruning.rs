@@ -17,10 +17,9 @@
 
 mod pruning_utils;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, UInt64Array};
+use arrow::array::{Int32Array, UInt64Array};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{Column, lit};
@@ -94,21 +93,19 @@ fn column_pruning_uses_parquet_stats() {
 
 #[test]
 fn lit_basic() {
-    use datafusion_common::pruning::PruningStatistics;
-
     let lit_expr = lit(5);
     let ctx = Arc::new(PruningContext::new(Arc::new(DummyStats)));
-    let stat = lit_expr.evaluate_pruning(ctx);
+    let stat = lit_expr.evaluate_pruning(ctx).expect("pruning ok");
 
-    if let Ok(pruning_intermediate) = stat
-        && let PruningIntermediate::IntermediateStats(stat) = pruning_intermediate
-        && let ColumnStats {
-            range_stats,
+    match stat {
+        PruningIntermediate::IntermediateStats(ColumnStats {
+            range_stats: Some(RangeStats::Scalar { value, length }),
             null_stats,
-        } = stat
-        && let Some(range_stat) = range_stats
-        && let RangeStats::Scalar { value, length } = range_stat
-    {
-        // assert value is 5
+        }) => {
+            assert_eq!(value, ScalarValue::Int32(Some(5)));
+            assert_eq!(length, 0);
+            assert!(null_stats.is_none());
+        }
+        other => panic!("unexpected pruning result: {other:?}"),
     }
 }
