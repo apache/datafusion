@@ -34,15 +34,15 @@ use arrow::{
 use arrow::array::ArrowNativeTypeOp;
 
 use crate::min_max::{max_udaf, min_udaf};
-use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
     internal_datafusion_err, plan_err, utils::take_function_args,
 };
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, Signature,
-    TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_expr::{
@@ -144,25 +144,15 @@ impl Default for PercentileCont {
 
 impl PercentileCont {
     pub fn new() -> Self {
-        let percentile_coercion = Coercion::new_implicit(
-            TypeSignatureClass::Native(logical_float64()),
-            vec![
-                TypeSignatureClass::Integer,
-                TypeSignatureClass::Float,
-                TypeSignatureClass::Decimal,
-            ],
-            NativeType::Float64,
-        );
+        let mut variants = Vec::with_capacity(NUMERICS.len());
+        // Accept any numeric value paired with a float64 percentile
+        for num in NUMERICS {
+            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+        }
         Self {
-            signature: Signature::coercible(
-                vec![
-                    Coercion::new_exact(TypeSignatureClass::Numeric),
-                    percentile_coercion,
-                ],
-                Volatility::Immutable,
-            )
-            .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
-            .expect("valid parameter names for percentile_cont"),
+            signature: Signature::one_of(variants, Volatility::Immutable)
+                .with_parameter_names(vec!["expr".to_string(), "percentile".to_string()])
+                .expect("valid parameter names for percentile_cont"),
             aliases: vec![String::from("quantile_cont")],
         }
     }

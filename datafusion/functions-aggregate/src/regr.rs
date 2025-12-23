@@ -30,10 +30,10 @@ use datafusion_common::{
 };
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature,
-    TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;
@@ -77,13 +77,7 @@ impl Debug for Regr {
 impl Regr {
     pub fn new(regr_type: RegrType, func_name: &'static str) -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![
-                    Coercion::new_exact(TypeSignatureClass::Numeric),
-                    Coercion::new_exact(TypeSignatureClass::Numeric),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
             regr_type,
             func_name,
         }
@@ -475,11 +469,8 @@ impl AggregateUDFImpl for Regr {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let is_numeric_or_null =
-            |dt: &DataType| dt.is_numeric() || matches!(dt, DataType::Null);
-
-        if !is_numeric_or_null(&arg_types[0]) || !is_numeric_or_null(&arg_types[1]) {
-            return plan_err!("{} requires numeric input types", self.func_name);
+        if !arg_types[0].is_numeric() {
+            return plan_err!("Covariance requires numeric input types");
         }
 
         if matches!(self.regr_type, RegrType::Count) {

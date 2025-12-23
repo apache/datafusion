@@ -30,17 +30,17 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
-use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, Signature,
-    TypeSignature, TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions_aggregate_common::tdigest::{DEFAULT_MAX_SIZE, TDigest};
 use datafusion_macros::user_doc;
@@ -133,30 +133,18 @@ impl Default for ApproxPercentileCont {
 impl ApproxPercentileCont {
     /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new() -> Self {
-        let percentile_coercion = Coercion::new_implicit(
-            TypeSignatureClass::Native(logical_float64()),
-            vec![
-                TypeSignatureClass::Integer,
-                TypeSignatureClass::Float,
-                TypeSignatureClass::Decimal,
-            ],
-            NativeType::Float64,
-        );
-
-        // Value must be numeric (excluding Decimal) as the accumulator currently only
-        // supports integers and floats. Percentile may be any numeric literal that can
-        // be coerced to Float64 (to support parse_float_as_decimal).
-        let mut variants = Vec::with_capacity(4);
-        for value_class in [TypeSignatureClass::Integer, TypeSignatureClass::Float] {
-            variants.push(TypeSignature::Coercible(vec![
-                Coercion::new_exact(value_class.clone()),
-                percentile_coercion.clone(),
-            ]));
-            variants.push(TypeSignature::Coercible(vec![
-                Coercion::new_exact(value_class),
-                percentile_coercion.clone(),
-                Coercion::new_exact(TypeSignatureClass::Integer),
-            ]));
+        let mut variants = Vec::with_capacity(NUMERICS.len() * (INTEGERS.len() + 1));
+        // Accept any numeric value paired with a float64 percentile
+        for num in NUMERICS {
+            variants.push(TypeSignature::Exact(vec![num.clone(), DataType::Float64]));
+            // Additionally accept an integer number of centroids for T-Digest
+            for int in INTEGERS {
+                variants.push(TypeSignature::Exact(vec![
+                    num.clone(),
+                    DataType::Float64,
+                    int.clone(),
+                ]))
+            }
         }
         Self {
             signature: Signature::one_of(variants, Volatility::Immutable),
