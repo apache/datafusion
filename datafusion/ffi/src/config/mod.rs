@@ -15,5 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod extensions;
 pub mod extension_options;
+pub mod extensions;

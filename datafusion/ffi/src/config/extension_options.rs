@@ -23,7 +23,7 @@ use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RStr, RString, RVec, Tuple2};
 use datafusion::error::Result;
 use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
-use datafusion_common::{exec_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_err};
 
 use crate::df_result;
 
@@ -257,7 +257,9 @@ mod tests {
     use datafusion_common::config::{ConfigExtension, ConfigOptions};
     use datafusion_common::extensions_options;
 
-    use crate::config::extension_options::{FFI_ExtensionOptions, ForeignExtensionOptions};
+    use crate::config::extension_options::{
+        FFI_ExtensionOptions, ForeignExtensionOptions,
+    };
 
     // Define a new configuration struct using the `extensions_options` macro
     extensions_options! {
