@@ -495,8 +495,8 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             if let Some((first, rest)) = child_range_stats.split_first() {
                 for stats in rest {
                     assert_eq_or_internal_err!(
-                        first.length,
-                        stats.length,
+                        first.len(),
+                        stats.len(),
                         "Range stats length mismatch between pruning children"
                     );
                 }
@@ -525,7 +525,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             (range_stats.as_ref(), null_stats.as_ref())
         {
             assert_eq_or_internal_err!(
-                range_stats.length,
+                range_stats.len(),
                 null_stats.length,
                 "Range and null stats length mismatch for pruning"
             );
@@ -551,10 +551,18 @@ pub enum PruningResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct RangeStats {
-    mins: Option<ArrayRef>,
-    maxs: Option<ArrayRef>,
-    length: usize,
+pub enum RangeStats {
+    Values {
+        mins: Option<ArrayRef>,
+        maxs: Option<ArrayRef>,
+        length: usize,
+    },
+    /// Represents a uniform literal value across all containers.
+    /// This variant make it easy to compare between literals and normal ranges representing
+    /// each containers' value range.
+    ///
+    /// TODO: remove length -- seems redundant
+    Scalar { value: ScalarValue, length: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -566,8 +574,8 @@ pub struct NullStats {
 
 #[derive(Debug, Clone)]
 pub struct ColumnStats {
-    range_stats: Option<RangeStats>,
-    null_stats: Option<NullStats>,
+    pub range_stats: Option<RangeStats>,
+    pub null_stats: Option<NullStats>,
 }
 
 impl RangeStats {
@@ -590,24 +598,37 @@ impl RangeStats {
                 "Range maxs length mismatch for pruning statistics"
             );
         }
-        Ok(Self { mins, maxs, length })
+        Ok(Self::Values { mins, maxs, length })
+    }
+
+    /// Create range stats for a constant literal across all containers.
+    ///
+    pub fn new_scalar(value: ScalarValue, length: usize) -> Result<Self> {
+        ScalarValue::iter_to_array(std::iter::repeat(value.clone()).take(length))?;
+        Ok(Self::Scalar { value, length })
     }
 
     pub fn len(&self) -> usize {
-        self.length
-    }
-
-    pub fn mins(&self) -> Option<&ArrayRef> {
-        self.mins.as_ref()
-    }
-
-    pub fn maxs(&self) -> Option<&ArrayRef> {
-        self.maxs.as_ref()
+        match self {
+            RangeStats::Values { length, .. } | RangeStats::Scalar { length, .. } => {
+                *length
+            }
+        }
     }
 }
 
-struct PruningContext {
+pub struct PruningContext {
     stats: Arc<dyn PruningStatistics>,
+}
+
+impl PruningContext {
+    pub fn new(stats: Arc<dyn PruningStatistics>) -> Self {
+        Self { stats }
+    }
+
+    pub fn statistics(&self) -> &Arc<dyn PruningStatistics> {
+        &self.stats
+    }
 }
 
 impl NullStats {
@@ -910,9 +931,10 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::physical_expr::PhysicalExpr;
+    use crate::physical_expr::{PhysicalExpr, RangeStats};
     use arrow::array::{Array, BooleanArray, Int64Array, RecordBatch};
     use arrow::datatypes::{DataType, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use std::fmt::{Display, Formatter};
     use std::sync::Arc;
@@ -1092,5 +1114,29 @@ mod test {
             &unsafe { RecordBatch::new_unchecked(Arc::new(Schema::empty()), vec![], 10) },
             &BooleanArray::from(vec![true; 5]),
         );
+    }
+
+    #[test]
+    fn range_stats_scalar_variant() {
+        let stats = RangeStats::new_scalar(ScalarValue::Int64(Some(42)), 3).unwrap();
+        assert_eq!(stats.len(), 3);
+
+        let (mins, maxs) = match &stats {
+            RangeStats::Scalar { value, length } => {
+                let arr = ScalarValue::iter_to_array(
+                    std::iter::repeat(value.clone()).take(*length),
+                )
+                .unwrap();
+                (arr.clone(), arr)
+            }
+            RangeStats::Values { mins, maxs, .. } => {
+                (mins.clone().expect("mins"), maxs.clone().expect("maxs"))
+            }
+        };
+
+        let mins = mins.as_any().downcast_ref::<Int64Array>().unwrap();
+        let maxs = maxs.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(mins, &Int64Array::from(vec![Some(42), Some(42), Some(42)]));
+        assert_eq!(maxs, &Int64Array::from(vec![Some(42), Some(42), Some(42)]));
     }
 }

@@ -2499,6 +2499,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "parking_lot",
+ "parquet",
  "paste",
  "petgraph 0.8.3",
  "rand 0.9.2",

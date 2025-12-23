@@ -68,6 +68,7 @@ datafusion-functions = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
+parquet = { workspace = true }
 
 [[bench]]
 harness = false

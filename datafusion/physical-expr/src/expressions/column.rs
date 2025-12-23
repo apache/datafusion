@@ -28,8 +28,11 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Column as DFColumn, Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::{
+    ColumnStats, NullStats, PruningContext, PruningIntermediate, RangeStats,
+};
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -141,6 +144,35 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    /// Read the column statistics from `PruningContext`, transform the input stat
+    /// to the stats in the internal representation (`PruningIntermediate`)
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        let pruning_column = DFColumn::from_name(self.name());
+        let stats = ctx.statistics();
+        let num_containers = stats.num_containers();
+
+        let min_values = stats.min_values(&pruning_column);
+        let max_values = stats.max_values(&pruning_column);
+        let range_stats = if min_values.is_some() || max_values.is_some() {
+            Some(RangeStats::new(min_values, max_values, num_containers)?)
+        } else {
+            None
+        };
+
+        let null_counts = stats.null_counts(&pruning_column);
+        let row_counts = stats.row_counts(&pruning_column);
+        let null_stats = if null_counts.is_some() || row_counts.is_some() {
+            Some(NullStats::new(null_counts, row_counts, num_containers)?)
+        } else {
+            None
+        };
+
+        Ok(PruningIntermediate::IntermediateStats(ColumnStats::new(
+            range_stats,
+            null_stats,
+        )))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
