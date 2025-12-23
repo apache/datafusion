@@ -1424,8 +1424,8 @@ fn multi_smj_joins() -> Result<()> {
                     // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
                     JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                         assert_plan!(plan_distrib, @r"
-                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
-                          SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                        SortMergeJoinExec: join_type=..., on=[(a@0, c@2)]
+                          SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                             SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                               RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1439,20 +1439,20 @@ fn multi_smj_joins() -> Result<()> {
                         ");
                     }
                     // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
-                    // Since ordering of the left child is not preserved after SortMergeJoin
+                    // Since ordering of the left child is not preserved after SortMergeJoinExec
                     // when mode is Right, RightSemi, RightAnti, Full
-                    // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                    // - We need to add one additional SortExec after SortMergeJoinExec in contrast the test cases
                     //   when mode is Inner, Left, LeftSemi, LeftAnti
                     // Similarly, since partitioning of the left side is not preserved
                     // when mode is Right, RightSemi, RightAnti, Full
-                    // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
+                    // - We need to add one additional Hash Repartition after SortMergeJoinExec in contrast the test
                     //   cases when mode is Inner, Left, LeftSemi, LeftAnti
                     _ => {
                         assert_plan!(plan_distrib, @r"
-                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
+                        SortMergeJoinExec: join_type=..., on=[(a@0, c@2)]
                           SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                             RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=10
-                              SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                              SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                 SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                                   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1474,8 +1474,8 @@ fn multi_smj_joins() -> Result<()> {
                     JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti => {
                         // TODO(wiedld): show different test result if enforce distribution first.
                         assert_plan!(plan_sort, @r"
-                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
-                          SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                        SortMergeJoinExec: join_type=..., on=[(a@0, c@2)]
+                          SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                             RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
                               SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                 DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1489,22 +1489,22 @@ fn multi_smj_joins() -> Result<()> {
                         ");
                     }
                     // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
-                    // Since ordering of the left child is not preserved after SortMergeJoin
+                    // Since ordering of the left child is not preserved after SortMergeJoinExec
                     // when mode is Right, RightSemi, RightAnti, Full
-                    // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
+                    // - We need to add one additional SortExec after SortMergeJoinExec in contrast the test cases
                     //   when mode is Inner, Left, LeftSemi, LeftAnti
                     // Similarly, since partitioning of the left side is not preserved
                     // when mode is Right, RightSemi, RightAnti, Full
                     // - We need to add one additional Hash Repartition and Roundrobin repartition after
-                    //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
+                    //   SortMergeJoinExec in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
                     _ => {
                         // TODO(wiedld): show different test result if enforce distribution first.
                         assert_plan!(plan_sort, @r"
-                        SortMergeJoin: join_type=..., on=[(a@0, c@2)]
+                        SortMergeJoinExec: join_type=..., on=[(a@0, c@2)]
                           RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
                             SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                               CoalescePartitionsExec
-                                SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                   RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1536,8 +1536,8 @@ fn multi_smj_joins() -> Result<()> {
                             JoinType::Inner | JoinType::Right => {
                                 // TODO(wiedld): show different test result if enforce sorting first.
                                 assert_plan!(plan_distrib, @r"
-                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
-                                  SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                SortMergeJoinExec: join_type=..., on=[(b1@6, c@2)]
+                                  SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                     SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                                       RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1554,10 +1554,10 @@ fn multi_smj_joins() -> Result<()> {
                             JoinType::Left | JoinType::Full => {
                                 // TODO(wiedld): show different test result if enforce sorting first.
                                 assert_plan!(plan_distrib, @r"
-                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
+                                SortMergeJoinExec: join_type=..., on=[(b1@6, c@2)]
                                   SortExec: expr=[b1@6 ASC], preserve_partitioning=[true]
                                     RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=10
-                                      SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                      SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                         SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
                                           RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
                                             DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1581,8 +1581,8 @@ fn multi_smj_joins() -> Result<()> {
                             JoinType::Inner | JoinType::Right => {
                                 // TODO(wiedld): show different test result if enforce distribution first.
                                 assert_plan!(plan_sort, @r"
-                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
-                                  SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                SortMergeJoinExec: join_type=..., on=[(b1@6, c@2)]
+                                  SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                     RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
                                       SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1599,11 +1599,11 @@ fn multi_smj_joins() -> Result<()> {
                             JoinType::Left | JoinType::Full => {
                                 // TODO(wiedld): show different test result if enforce distribution first.
                                 assert_plan!(plan_sort, @r"
-                                SortMergeJoin: join_type=..., on=[(b1@6, c@2)]
+                                SortMergeJoinExec: join_type=..., on=[(b1@6, c@2)]
                                   RepartitionExec: partitioning=Hash([b1@6], 10), input_partitions=1, maintains_sort_order=true
                                     SortExec: expr=[b1@6 ASC], preserve_partitioning=[false]
                                       CoalescePartitionsExec
-                                        SortMergeJoin: join_type=..., on=[(a@0, b1@1)]
+                                        SortMergeJoinExec: join_type=..., on=[(a@0, b1@1)]
                                           RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1, maintains_sort_order=true
                                             SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
                                               DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
@@ -1682,7 +1682,7 @@ fn smj_join_key_ordering() -> Result<()> {
     // Only two RepartitionExecs added
     let plan_distrib = test_config.to_plan(join.clone(), &DISTRIB_DISTRIB_SORT);
     assert_plan!(plan_distrib, @r"
-    SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
       SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[true]
         ProjectionExec: expr=[a1@0 as a3, b1@1 as b3]
           ProjectionExec: expr=[a1@1 as a1, b1@0 as b1]
@@ -1703,7 +1703,7 @@ fn smj_join_key_ordering() -> Result<()> {
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
     let plan_sort = test_config.to_plan(join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_sort, @r"
-    SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]
       RepartitionExec: partitioning=Hash([b3@1, a3@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[b3@1 ASC, a3@0 ASC], preserve_partitioning=[false]
           CoalescePartitionsExec

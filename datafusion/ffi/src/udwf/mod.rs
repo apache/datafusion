@@ -24,14 +24,13 @@ use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
-use datafusion::error::Result;
-use datafusion::logical_expr::function::WindowUDFFieldArgs;
-use datafusion::logical_expr::type_coercion::functions::fields_with_window_udf;
-use datafusion::logical_expr::{
+use datafusion_common::{Result, ffi_err};
+use datafusion_expr::function::WindowUDFFieldArgs;
+use datafusion_expr::type_coercion::functions::fields_with_window_udf;
+use datafusion_expr::{
     LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
 };
-use datafusion::physical_expr::PhysicalExpr;
-use datafusion_common::ffi_err;
+use datafusion_physical_expr::PhysicalExpr;
 use partition_evaluator::FFI_PartitionEvaluator;
 use partition_evaluator_args::{
     FFI_PartitionEvaluatorArgs, ForeignPartitionEvaluatorArgs,
@@ -330,7 +329,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
 
     fn partition_evaluator(
         &self,
-        args: datafusion::logical_expr::function::PartitionEvaluatorArgs,
+        args: datafusion_expr::function::PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = unsafe {
             let args = FFI_PartitionEvaluatorArgs::try_from(args)?;
