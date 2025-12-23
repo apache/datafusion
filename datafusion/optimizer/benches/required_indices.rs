@@ -80,13 +80,13 @@ fn bench_required_indices(c: &mut Criterion) {
 
 fn wide_projection_plan(num_exprs: usize) -> Result<(LogicalPlan, DFSchemaRef)> {
     let fields: Vec<Field> = (0..num_exprs)
-        .map(|i| Field::new(format!("c{i}"), DataType::Int32, false))
+        .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
         .collect();
     let schema = Schema::new(fields);
     let df_schema = Arc::new(schema.to_dfschema()?);
 
     let exprs: Vec<Expr> = (0..num_exprs)
-        .map(|i| col(format!("c{i}")) + lit(i as i32))
+        .map(|i| col(format!("col{i}")) + lit(i as i32))
         .collect();
 
     let base = LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
@@ -101,12 +101,12 @@ fn wide_projection_plan(num_exprs: usize) -> Result<(LogicalPlan, DFSchemaRef)> 
 
 fn outer_ref_plan() -> Result<(LogicalPlan, DFSchemaRef)> {
     let fields: Vec<Field> = (0..10)
-        .map(|i| Field::new(format!("c{i}"), DataType::Int32, false))
+        .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
         .collect();
     let schema = Schema::new(fields);
     let df_schema = Arc::new(schema.to_dfschema()?);
 
-    let outer_col = Column::new(None::<TableReference>, "c0");
+    let outer_col = Column::new(None::<TableReference>, "col0");
 
     let subquery_input = LogicalPlan::EmptyRelation(datafusion_expr::EmptyRelation {
         produce_one_row: true,
@@ -233,7 +233,7 @@ fn outer_columns<'a>(
         };
         Ok(TreeNodeRecursion::Continue)
     })
-    .unwrap();
+    .expect("outer reference traversal should not fail");
 }
 
 fn outer_columns_helper_multi<'a, 'b>(

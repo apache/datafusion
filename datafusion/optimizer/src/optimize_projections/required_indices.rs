@@ -113,10 +113,7 @@ impl RequiredIndices {
     fn add_expr(&mut self, input_schema: &DFSchemaRef, expr: &Expr) {
         expr.apply(|expr| {
             match expr {
-                Expr::Column(col) => {
-                    push_column_index(&mut self.indices, input_schema, col);
-                }
-                Expr::OuterReferenceColumn(_, col) => {
+                Expr::Column(col) | Expr::OuterReferenceColumn(_, col) => {
                     push_column_index(&mut self.indices, input_schema, col);
                 }
                 Expr::ScalarSubquery(subquery) => collect_outer_ref_exprs(
@@ -143,7 +140,7 @@ impl RequiredIndices {
     }
 
     /// Adds the indices of the fields referred to by the given expressions
-    /// `within the given schema.
+    /// within the given schema.
     ///
     /// # Parameters
     ///
