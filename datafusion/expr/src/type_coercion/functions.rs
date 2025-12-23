@@ -1367,7 +1367,7 @@ mod tests {
     fn test_coercible_nulls() -> Result<()> {
         fn null_input(coercion: Coercion) -> Result<Vec<DataType>> {
             data_types(
-                "nirei",
+                "field",
                 &[DataType::Null],
                 &Signature::coercible(vec![coercion], Volatility::Immutable),
             )
@@ -1406,7 +1406,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64));
         fn dictionary_input(coercion: Coercion) -> Result<Vec<DataType>> {
             data_types(
-                "nirei",
+                "field",
                 &[DataType::Dictionary(
                     Box::new(DataType::Int8),
                     Box::new(DataType::Int64),
@@ -1450,7 +1450,7 @@ mod tests {
         );
         fn run_end_encoded_input(coercion: Coercion) -> Result<Vec<DataType>> {
             data_types(
-                "nirei",
+                "field",
                 &[DataType::RunEndEncoded(
                     Field::new("run_ends", DataType::Int16, false).into(),
                     Field::new("values", DataType::Int64, true).into(),
