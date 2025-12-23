@@ -352,12 +352,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         }
     }
 
-    pub fn insert(
-        &mut self,
-        hash: u64,
-        id: ID,
-        heap_idx: usize,
-    ) -> usize {
+    pub fn insert(&mut self, hash: u64, id: ID, heap_idx: usize) -> usize {
         let mi = HashTableItem::new(hash, id.clone(), heap_idx);
         let store_idx = if let Some(idx) = self.free_list.pop() {
             self.store[idx] = Some(mi);
