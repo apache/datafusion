@@ -27,6 +27,7 @@ use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -449,14 +450,14 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(None)
     }
 
-    fn evaluate_pruning(&self) -> Result<PruningIntermediate> {
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
         // Default impl for stats-propagation nodes (e.g. arithmetic expressions):
         // 1) Evaluate pruning for all children.
         // 2) If every child produced range/null stats, propagate them.
         // 3) If no stats can be propagated, fall back to `Unsupported`.
         let children = self.children();
         if children.is_empty() {
-            return Ok(PruningIntermediate::Unsupported);
+            return Ok(PruningIntermediate::empty_stats());
         }
 
         let mut range_complete = true;
@@ -465,7 +466,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         let mut child_null_stats = Vec::with_capacity(children.len());
 
         for child in children {
-            match child.evaluate_pruning()? {
+            match child.evaluate_pruning(Arc::clone(&ctx))? {
                 PruningIntermediate::IntermediateStats(stats) => {
                     match stats.range_stats {
                         Some(range_stats) if range_complete => {
@@ -530,15 +531,10 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             );
         }
 
-        match (range_stats, null_stats) {
-            (None, None) => Ok(PruningIntermediate::Unsupported),
-            (range_stats, null_stats) => {
-                Ok(PruningIntermediate::IntermediateStats(ColumnStats {
-                    range_stats,
-                    null_stats,
-                }))
-            }
-        }
+        Ok(PruningIntermediate::IntermediateStats(ColumnStats {
+            range_stats,
+            null_stats,
+        }))
     }
 }
 
@@ -610,6 +606,10 @@ impl RangeStats {
     }
 }
 
+struct PruningContext {
+    stats: Arc<dyn PruningStatistics>,
+}
+
 impl NullStats {
     pub fn new(
         null_counts: Option<ArrayRef>,
@@ -671,7 +671,13 @@ impl ColumnStats {
 pub enum PruningIntermediate {
     IntermediateStats(ColumnStats),
     IntermediateResult(PruningResult),
-    Unsupported,
+}
+
+impl PruningIntermediate {
+    /// Create an `IntermediateStats` variant with no range or null statistics.
+    pub fn empty_stats() -> Self {
+        Self::IntermediateStats(ColumnStats::new(None, None))
+    }
 }
 
 #[deprecated(
