@@ -101,7 +101,6 @@ arrow-flight = { version = "57.1.0", features = [
 ] }
 arrow-ipc = { version = "57.1.0", default-features = false, features = [
     "lz4",
-    "zstd",
 ] }
 arrow-ord = { version = "57.1.0", default-features = false }
 arrow-schema = { version = "57.1.0", default-features = false }
