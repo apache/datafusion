@@ -177,6 +177,8 @@ impl ArrowHashTable for StringHashTable {
             _ => panic!("Unsupported data type"),
         };
 
+        // TODO: avoid double lookup by using entry API
+
         let hash = self.rnd.hash_one(id);
         if let Some(map_idx) = self
             .map
