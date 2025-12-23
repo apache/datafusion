@@ -19,12 +19,14 @@
 
 use std::path::PathBuf;
 
-use arrow::array::{AsArray, PrimitiveArray};
-use arrow::datatypes::{Float64Type, Int32Type};
+use arrow::array::{Array, Float64Array, StringViewArray};
 use datafusion::common::assert_batches_eq;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use futures::StreamExt;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// This example shows how to convert query results into Rust structs by using
 /// the Arrow APIs to convert the results into Rust native types.
@@ -36,68 +38,120 @@ use futures::StreamExt;
 pub async fn deserialize_to_struct() -> Result<()> {
     // Run a query that returns two columns of data
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     ctx.register_parquet(
-        "alltypes_plain",
-        path.to_str().unwrap(),
+        "cars",
+        out_dir.to_str().unwrap(),
         ParquetReadOptions::default(),
     )
     .await?;
 
     let df = ctx
-        .sql("SELECT int_col, double_col FROM alltypes_plain")
+        .sql("SELECT car, speed FROM cars ORDER BY speed LIMIT 50")
         .await?;
 
-    // print out the results showing we have an int32 and a float64 column
+    // print out the results showing we have car and speed columns and a deterministic ordering
     let results = df.clone().collect().await?;
     assert_batches_eq!(
         [
-            "+---------+------------+",
-            "| int_col | double_col |",
-            "+---------+------------+",
-            "| 0       | 0.0        |",
-            "| 1       | 10.1       |",
-            "| 0       | 0.0        |",
-            "| 1       | 10.1       |",
-            "| 0       | 0.0        |",
-            "| 1       | 10.1       |",
-            "| 0       | 0.0        |",
-            "| 1       | 10.1       |",
-            "+---------+------------+",
+            "+-------+-------+",
+            "| car   | speed |",
+            "+-------+-------+",
+            "| red   | 0.0   |",
+            "| red   | 1.0   |",
+            "| green | 2.0   |",
+            "| red   | 3.0   |",
+            "| red   | 7.0   |",
+            "| red   | 7.1   |",
+            "| red   | 7.2   |",
+            "| green | 8.0   |",
+            "| green | 10.0  |",
+            "| green | 10.3  |",
+            "| green | 10.4  |",
+            "| green | 10.5  |",
+            "| green | 11.0  |",
+            "| green | 12.0  |",
+            "| green | 14.0  |",
+            "| green | 15.0  |",
+            "| green | 15.1  |",
+            "| green | 15.2  |",
+            "| red   | 17.0  |",
+            "| red   | 18.0  |",
+            "| red   | 19.0  |",
+            "| red   | 20.0  |",
+            "| red   | 20.3  |",
+            "| red   | 21.4  |",
+            "| red   | 21.5  |",
+            "+-------+-------+",
         ],
         &results
     );
 
     // We will now convert the query results into a Rust struct
     let mut stream = df.execute_stream().await?;
-    let mut list = vec![];
+    let mut list: Vec<Data> = vec![];
 
     // DataFusion produces data in chunks called `RecordBatch`es which are
     // typically 8000 rows each. This loop processes each `RecordBatch` as it is
     // produced by the query plan and adds it to the list
-    while let Some(b) = stream.next().await.transpose()? {
+    while let Some(batch) = stream.next().await.transpose()? {
         // Each `RecordBatch` has one or more columns. Each column is stored as
         // an `ArrayRef`. To interact with data using Rust native types we need to
         // convert these `ArrayRef`s into concrete array types using APIs from
         // the arrow crate.
 
         // In this case, we know that each batch has two columns of the  Arrow
-        // types Int32 and Float64, so first we cast the two columns to the
+        // types StringView and Float64, so first we cast the two columns to the
         // appropriate Arrow PrimitiveArray (this is a fast / zero-copy cast).:
-        let int_col: &PrimitiveArray<Int32Type> = b.column(0).as_primitive();
-        let float_col: &PrimitiveArray<Float64Type> = b.column(1).as_primitive();
+        let car_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("car column must be Utf8View");
+
+        let speed_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("speed column must be Float64");
 
         // With PrimitiveArrays, we can access to the values as native Rust
-        // types i32 and f64, and forming the desired `Data` structs
-        for (i, f) in int_col.values().iter().zip(float_col.values()) {
-            list.push(Data {
-                int_col: *i,
-                double_col: *f,
-            })
+        // types String and f64, and forming the desired `Data` structs
+        for i in 0..batch.num_rows() {
+            let car = if car_col.is_null(i) {
+                None
+            } else {
+                Some(car_col.value(i).to_string())
+            };
+
+            let speed = if speed_col.is_null(i) {
+                None
+            } else {
+                Some(speed_col.value(i))
+            };
+
+            list.push(Data { car, speed });
         }
     }
 
@@ -107,45 +161,220 @@ pub async fn deserialize_to_struct() -> Result<()> {
         res,
         r#"[
     Data {
-        int_col: 0,
-        double_col: 0.0,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            0.0,
+        ),
     },
     Data {
-        int_col: 1,
-        double_col: 10.1,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            1.0,
+        ),
     },
     Data {
-        int_col: 0,
-        double_col: 0.0,
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            2.0,
+        ),
     },
     Data {
-        int_col: 1,
-        double_col: 10.1,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            3.0,
+        ),
     },
     Data {
-        int_col: 0,
-        double_col: 0.0,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            7.0,
+        ),
     },
     Data {
-        int_col: 1,
-        double_col: 10.1,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            7.1,
+        ),
     },
     Data {
-        int_col: 0,
-        double_col: 0.0,
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            7.2,
+        ),
     },
     Data {
-        int_col: 1,
-        double_col: 10.1,
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            8.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            10.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            10.3,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            10.4,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            10.5,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            11.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            12.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            14.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            15.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            15.1,
+        ),
+    },
+    Data {
+        car: Some(
+            "green",
+        ),
+        speed: Some(
+            15.2,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            17.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            18.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            19.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            20.0,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            20.3,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            21.4,
+        ),
+    },
+    Data {
+        car: Some(
+            "red",
+        ),
+        speed: Some(
+            21.5,
+        ),
     },
 ]"#
     );
 
-    // Use the fields in the struct to avoid clippy complaints
-    let int_sum = list.iter().fold(0, |acc, x| acc + x.int_col);
-    let double_sum = list.iter().fold(0.0, |acc, x| acc + x.double_col);
-    assert_eq!(int_sum, 4);
-    assert_eq!(double_sum, 40.4);
+    let speed_green_sum: f64 = list
+        .iter()
+        .filter(|data| data.car.as_deref() == Some("green"))
+        .filter_map(|data| data.speed)
+        .sum();
+    let speed_red_sum: f64 = list
+        .iter()
+        .filter(|data| data.car.as_deref() == Some("red"))
+        .filter_map(|data| data.speed)
+        .sum();
+    assert_eq!(speed_green_sum, 133.5);
+    assert_eq!(speed_red_sum, 162.5);
 
     Ok(())
 }
@@ -153,6 +382,6 @@ pub async fn deserialize_to_struct() -> Result<()> {
 /// This is target struct where we want the query results.
 #[derive(Debug)]
 struct Data {
-    int_col: i32,
-    double_col: f64,
+    car: Option<String>,
+    speed: Option<f64>,
 }

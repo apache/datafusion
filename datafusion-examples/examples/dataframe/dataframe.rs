@@ -17,6 +17,11 @@
 
 //! See `main.rs` for how to run it.
 
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::MemTable;
@@ -28,11 +33,8 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use std::fs::{create_dir_all, File};
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
+use tokio::fs::create_dir_all;
 
 /// This example demonstrates using DataFusion's DataFrame API
 ///
@@ -78,24 +80,41 @@ pub async fn dataframe_example() -> Result<()> {
 /// 2. Show the schema
 /// 3. Select columns and rows
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     // show its schema using 'describe'
     parquet_df.clone().describe().await?.show().await?;
 
     // Select three columns and filter the results
-    // so that only rows where id > 1 are returned
+    // so that only rows where speed > 1 are returned
+    // select car, speed, time from t where speed > 1
     parquet_df
-        .select_columns(&["id", "bool_col", "timestamp_col"])?
-        .filter(col("id").gt(lit(1)))?
+        .select_columns(&["car", "speed", "time"])?
+        .filter(col("speed").gt(lit(1)))?
         .show()
         .await?;
 
@@ -213,15 +232,15 @@ async fn write_out(ctx: &SessionContext) -> Result<()> {
     // Create a single temp root with subdirectories
     let tmp_root = TempDir::new()?;
     let examples_root = tmp_root.path().join("datafusion-examples");
-    create_dir_all(&examples_root)?;
+    create_dir_all(&examples_root).await?;
     let table_dir = examples_root.join("test_table");
     let parquet_dir = examples_root.join("test_parquet");
     let csv_dir = examples_root.join("test_csv");
     let json_dir = examples_root.join("test_json");
-    create_dir_all(&table_dir)?;
-    create_dir_all(&parquet_dir)?;
-    create_dir_all(&csv_dir)?;
-    create_dir_all(&json_dir)?;
+    create_dir_all(&table_dir).await?;
+    create_dir_all(&parquet_dir).await?;
+    create_dir_all(&csv_dir).await?;
+    create_dir_all(&json_dir).await?;
 
     let create_sql = format!(
         "CREATE EXTERNAL TABLE test(tablecol1 varchar)
@@ -301,7 +320,7 @@ async fn where_in_subquery(ctx: &SessionContext) -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(
-                        col("t2.car").gt(lit(ScalarValue::Utf8(Some("red".to_string())))),
+                        col("t2.car").eq(lit(ScalarValue::Utf8(Some("red".to_string())))),
                     )?
                     .aggregate(vec![], vec![max(col("t2.speed"))])?
                     .select(vec![max(col("t2.speed"))])?

@@ -51,16 +51,20 @@
 //! 10:29:40.809  INFO                 main ThreadId(01) tracing: ***** WITH tracer: Non-main tasks DID inherit the `run_instrumented_query` span *****
 //! ```
 
+use std::any::Any;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use std::any::Any;
-use std::path::PathBuf;
-use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 use tracing::{info, instrument, Instrument, Level, Span};
 
 /// Demonstrates the tracing injection feature for the DataFusion runtime
@@ -122,22 +126,36 @@ async fn run_instrumented_query() -> Result<()> {
     info!("Starting query execution");
 
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options =
         ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
-    info!(
-        "Registering table 'alltypes' from {}",
-        path.to_str().unwrap()
-    );
+    info!("Registering table 'cars' from {}", path.to_str().unwrap());
     ctx.register_listing_table(
-        "alltypes",
-        path.to_str().unwrap(),
+        "cars",
+        out_dir.to_str().unwrap(),
         listing_options,
         None,
         None,
@@ -145,7 +163,7 @@ async fn run_instrumented_query() -> Result<()> {
     .await
     .expect("Failed to register table");
 
-    let sql = "SELECT COUNT(*), string_col FROM alltypes GROUP BY string_col";
+    let sql = "SELECT COUNT(*), car, sum(speed) FROM cars GROUP BY car";
     info!(sql, "Executing SQL query");
     let result = ctx.sql(sql).await?.collect().await?;
     info!("Query complete: {} batches returned", result.len());

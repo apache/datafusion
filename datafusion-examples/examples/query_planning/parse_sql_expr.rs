@@ -21,13 +21,18 @@ use std::path::PathBuf;
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
+use datafusion::common::ScalarValue;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::logical_expr::{col, lit};
+use datafusion::prelude::CsvReadOptions;
 use datafusion::sql::unparser::Unparser;
 use datafusion::{
     assert_batches_eq,
     error::Result,
     prelude::{ParquetReadOptions, SessionContext},
 };
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// This example demonstrates the programmatic parsing of SQL expressions using
 /// the DataFusion [`SessionContext::parse_sql_expr`] API or the [`DataFrame::parse_sql_expr`] API.
@@ -72,18 +77,36 @@ fn simple_session_context_parse_sql_expr_demo() -> Result<()> {
 
 /// DataFusion can parse a SQL text to an logical expression using schema at [`DataFrame`].
 async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
-    let sql = "int_col < 5 OR double_col = 8.0";
-    let expr = col("int_col")
-        .lt(lit(5_i64))
-        .or(col("double_col").eq(lit(8.0_f64)));
+    let sql = "car = 'red' OR speed > 1.0";
+    let expr = col("car")
+        .eq(lit(ScalarValue::Utf8(Some("red".to_string()))))
+        .or(col("speed").gt(lit(1.0_f64)));
 
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     let df = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let parsed_expr = df.parse_sql_expr(sql)?;
@@ -95,39 +118,54 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
 
 async fn query_parquet_demo() -> Result<()> {
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     let df = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let df = df
         .clone()
-        .select(vec![
-            df.parse_sql_expr("int_col")?,
-            df.parse_sql_expr("double_col")?,
-        ])?
-        .filter(df.parse_sql_expr("int_col < 5 OR double_col = 8.0")?)?
+        .select(vec![df.parse_sql_expr("car")?, df.parse_sql_expr("speed")?])?
+        .filter(df.parse_sql_expr("car = 'red' OR speed > 1.0")?)?
         .aggregate(
-            vec![df.parse_sql_expr("double_col")?],
-            vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
+            vec![df.parse_sql_expr("car")?],
+            vec![df.parse_sql_expr("SUM(speed) as sum_speed")?],
         )?
         // Directly parsing the SQL text into a sort expression is not supported yet, so
         // construct it programmatically
-        .sort(vec![col("double_col").sort(false, false)])?
+        .sort(vec![col("car").sort(false, false)])?
         .limit(0, Some(1))?;
 
     let result = df.collect().await?;
 
     assert_batches_eq!(
         &[
-            "+------------+-------------+",
-            "| double_col | sum_int_col |",
-            "+------------+-------------+",
-            "| 10.1       | 4           |",
-            "+------------+-------------+",
+            "+-----+--------------------+",
+            "| car | sum_speed          |",
+            "+-----+--------------------+",
+            "| red | 162.49999999999997 |",
+            "+-----+--------------------+"
         ],
         &result
     );
@@ -137,15 +175,33 @@ async fn query_parquet_demo() -> Result<()> {
 
 /// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_demo() -> Result<()> {
-    let sql = "((int_col < 5) OR (double_col = 8))";
+    let sql = "((car = 'red') OR (speed > 1.0))";
 
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     let df = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let parsed_expr = df.parse_sql_expr(sql)?;
@@ -160,7 +216,7 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     // difference in precedence rules between DataFusion and target engines.
     let unparser = Unparser::default().with_pretty(true);
 
-    let pretty = "int_col < 5 OR double_col = 8";
+    let pretty = "car = 'red' OR speed > 1.0";
     let pretty_round_trip_sql = unparser.expr_to_sql(&parsed_expr)?.to_string();
     assert_eq!(pretty, pretty_round_trip_sql);
 

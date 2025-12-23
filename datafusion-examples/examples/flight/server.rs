@@ -17,25 +17,26 @@
 
 //! See `main.rs` for how to run it.
 
-use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arrow_flight::{PollInfo, SchemaAsIpc};
-use datafusion::arrow::error::ArrowError;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
-use futures::stream::BoxStream;
-use tonic::transport::Server;
-use tonic::{Request, Response, Status, Streaming};
-
-use datafusion::prelude::*;
-
+use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
 use arrow_flight::{
     flight_service_server::FlightService, flight_service_server::FlightServiceServer,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
+use arrow_flight::{PollInfo, SchemaAsIpc};
+use datafusion::arrow::error::ArrowError;
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
+use datafusion::prelude::*;
+use futures::stream::BoxStream;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
+use tonic::transport::Server;
+use tonic::{Request, Response, Status, Streaming};
 
 #[derive(Clone)]
 pub struct FlightServiceImpl {}
@@ -86,15 +87,33 @@ impl FlightService for FlightServiceImpl {
                 // create local execution context
                 let ctx = SessionContext::new();
 
+                // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+                // This replaces a static parquet fixture and makes the example self-contained
+                // without requiring DataFusion test files.
                 let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join("data")
-                    .join("parquet")
-                    .join("alltypes_plain.parquet");
+                    .join("csv")
+                    .join("cars.csv");
+                let csv_df = ctx
+                    .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+                    .await
+                    .map_err(|_| Status::internal("Error reading cars.csv"))?;
+                let tmp_source = TempDir::new()?;
+                let out_dir = tmp_source.path().join("parquet_source");
+                create_dir_all(&out_dir).await?;
+                csv_df
+                    .write_parquet(
+                        out_dir.to_str().unwrap(),
+                        DataFrameWriteOptions::default(),
+                        None,
+                    )
+                    .await
+                    .map_err(|_| Status::internal("Error writing to parquet file"))?;
 
                 // register parquet file with the execution context
                 ctx.register_parquet(
-                    "alltypes_plain",
-                    path.to_str().unwrap(),
+                    "cars",
+                    out_dir.to_str().unwrap(),
                     ParquetReadOptions::default(),
                 )
                 .await

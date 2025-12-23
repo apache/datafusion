@@ -17,18 +17,22 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;
-use std::path::PathBuf;
-use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// Examples of various ways to execute queries using SQL
 ///
@@ -113,17 +117,33 @@ async fn query_parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options =
         ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
-    let table_path = format!("file://{}", path.to_str().unwrap());
+    let table_path = format!("file://{}", out_dir.to_str().unwrap());
 
     // First example were we use an absolute path, which requires no additional setup.
     ctx.register_listing_table(
@@ -141,6 +161,7 @@ async fn query_parquet() -> Result<()> {
         .sql(
             "SELECT * \
         FROM my_table \
+        ORDER BY speed \
         LIMIT 1",
         )
         .await?;
@@ -149,20 +170,21 @@ async fn query_parquet() -> Result<()> {
     let results = df.collect().await?;
     assert_batches_eq!(
         [
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "+-----+-------+---------------------+",
+            "| car | speed | time                |",
+            "+-----+-------+---------------------+",
+            "| red | 0.0   | 1996-04-12T12:05:15 |",
+            "+-----+-------+---------------------+",
         ],
-        &results);
+        &results
+    );
 
     // Second example where we change the current working directory and explicitly
     // register a local filesystem object store. This demonstrates how listing tables
     // resolve paths via an ObjectStore, even when using filesystem-backed data.
     let cur_dir = std::env::current_dir()?;
 
-    let test_data_path_parent = path
+    let test_data_path_parent = out_dir
         .parent()
         .ok_or(exec_datafusion_err!("test_data path needs a parent"))?;
 
@@ -178,7 +200,7 @@ async fn query_parquet() -> Result<()> {
     // for the query
     ctx.register_listing_table(
         "relative_table",
-        path.to_str().unwrap(),
+        out_dir.to_str().unwrap(),
         listing_options.clone(),
         None,
         None,
@@ -190,6 +212,7 @@ async fn query_parquet() -> Result<()> {
         .sql(
             "SELECT * \
         FROM relative_table \
+        ORDER BY speed \
         LIMIT 1",
         )
         .await?;
@@ -198,13 +221,14 @@ async fn query_parquet() -> Result<()> {
     let results = df.collect().await?;
     assert_batches_eq!(
         [
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
-            "| 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |",
-            "+----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+",
+            "+-----+-------+---------------------+",
+            "| car | speed | time                |",
+            "+-----+-------+---------------------+",
+            "| red | 0.0   | 1996-04-12T12:05:15 |",
+            "+-----+-------+---------------------+",
         ],
-        &results);
+        &results
+    );
 
     // Reset the current directory
     std::env::set_current_dir(cur_dir)?;

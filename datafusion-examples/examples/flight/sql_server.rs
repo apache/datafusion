@@ -17,6 +17,10 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
@@ -36,15 +40,17 @@ use arrow_flight::{
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
 use dashmap::DashMap;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::logical_expr::LogicalPlan;
-use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion::prelude::{
+    CsvReadOptions, DataFrame, ParquetReadOptions, SessionConfig, SessionContext,
+};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
 use mimalloc::MiMalloc;
 use prost::Message;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -101,15 +107,34 @@ impl FlightSqlServiceImpl {
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::new_with_config(session_config));
 
+        // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+        // This replaces a static parquet fixture and makes the example self-contained
+        // without requiring DataFusion test files.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("data")
-            .join("parquet")
-            .join("alltypes_plain.parquet");
+            .join("csv")
+            .join("cars.csv");
+        let csv_df = ctx
+            .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+            .await
+            .map_err(|e| status!("Error reading cars.csv", e))?;
+        let tmp_source =
+            TempDir::new().map_err(|e| status!("Error creating temp dir", e))?;
+        let out_dir = tmp_source.path().join("parquet_source");
+        create_dir_all(&out_dir).await?;
+        csv_df
+            .write_parquet(
+                out_dir.to_str().unwrap(),
+                DataFrameWriteOptions::default(),
+                None,
+            )
+            .await
+            .map_err(|e| status!("Error writing to parquet", e))?;
 
         // register parquet file with the execution context
         ctx.register_parquet(
-            "alltypes_plain",
-            path.to_str().unwrap(),
+            "cars",
+            out_dir.to_str().unwrap(),
             ParquetReadOptions::default(),
         )
         .await

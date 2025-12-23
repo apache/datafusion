@@ -20,6 +20,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::physical_plan::{FileGroup, ParquetSource};
@@ -30,22 +31,41 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
     execute_stream, visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
 };
+use datafusion::prelude::CsvReadOptions;
 use futures::StreamExt;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`
 pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format));
 
-    let table_path = format!("file://{}", path.to_str().unwrap());
+    let table_path = format!("file://{}", out_dir.to_str().unwrap());
 
     // First example were we use an absolute path, which requires no additional setup.
     let _ = ctx

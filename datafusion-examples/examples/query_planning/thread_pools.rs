@@ -37,16 +37,20 @@
 //!
 //! [Architecture section]: https://docs.rs/datafusion/latest/datafusion/index.html#thread-scheduling-cpu--io-thread-pools-and-tokio-runtimes
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::runtime::JoinSet;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::*;
 use futures::stream::StreamExt;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::http::HttpBuilder;
-use std::path::PathBuf;
-use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 use url::Url;
@@ -71,11 +75,29 @@ pub async fn thread_pools() -> Result<()> {
     // The first two examples read local files. Enabling the URL table feature
     // lets us treat filenames as tables in SQL.
     let ctx = SessionContext::new().enable_url_table();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
-    let sql = format!("SELECT * FROM '{}'", path.to_str().unwrap());
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
+    let sql = format!("SELECT * FROM '{}'", out_dir.to_str().unwrap());
 
     // Run a query on the current runtime. Calling `await` means the future
     // (in this case the `async` function and all spawned work in DataFusion

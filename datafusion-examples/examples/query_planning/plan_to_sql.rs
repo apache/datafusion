@@ -17,7 +17,13 @@
 
 //! See `main.rs` for how to run it.
 
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use datafusion::common::DFSchemaRef;
+use datafusion::common::ScalarValue;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::Statement;
 use datafusion::logical_expr::{
@@ -35,9 +41,8 @@ use datafusion::sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
 use datafusion::sql::unparser::{plan_to_sql, Unparser};
-use std::fmt;
-use std::path::PathBuf;
-use std::sync::Arc;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// This example demonstrates the programmatic construction of SQL strings using
 /// the DataFusion Expr [`Expr`] and LogicalPlan [`LogicalPlan`] API.
@@ -115,22 +120,38 @@ fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
 async fn simple_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     let df = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?
-        .select_columns(&["id", "int_col", "double_col", "date_string_col"])?;
+        .select_columns(&["car", "speed", "time"])?;
 
     // Convert the data frame to a SQL string
     let sql = plan_to_sql(df.logical_plan())?.to_string();
 
     assert_eq!(
         sql,
-        r#"SELECT "?table?".id, "?table?".int_col, "?table?".double_col, "?table?".date_string_col FROM "?table?""#
+        r#"SELECT "?table?".car, "?table?".speed, "?table?"."time" FROM "?table?""#
     );
 
     Ok(())
@@ -141,38 +162,52 @@ async fn simple_plan_to_sql_demo() -> Result<()> {
 async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     // register parquet file with the execution context
     ctx.register_parquet(
-        "alltypes_plain",
-        path.to_str().unwrap(),
+        "cars",
+        out_dir.to_str().unwrap(),
         ParquetReadOptions::default(),
     )
     .await?;
 
     // create a logical plan from a SQL string and then programmatically add new filters
+    // select car, speed, time from cars where speed > 1 and car = 'red'
     let df = ctx
         // Use SQL to read some data from the parquet file
-        .sql(
-            "SELECT int_col, double_col, CAST(date_string_col as VARCHAR) \
-        FROM alltypes_plain",
-        )
+        .sql("SELECT car, speed, time FROM cars")
         .await?
-        // Add id > 1 and tinyint_col < double_col filter
+        // Add speed > 1 and car = 'red' filter
         .filter(
-            col("id")
+            col("speed")
                 .gt(lit(1))
-                .and(col("tinyint_col").lt(col("double_col"))),
+                .and(col("car").eq(lit(ScalarValue::Utf8(Some("red".to_string()))))),
         )?;
 
     let sql = plan_to_sql(df.logical_plan())?.to_string();
     assert_eq!(
         sql,
-        r#"SELECT alltypes_plain.int_col, alltypes_plain.double_col, CAST(alltypes_plain.date_string_col AS VARCHAR) FROM alltypes_plain WHERE ((alltypes_plain.id > 1) AND (alltypes_plain.tinyint_col < alltypes_plain.double_col))"#
+        r#"SELECT cars.car, cars.speed, cars."time" FROM cars WHERE ((cars.speed > 1) AND (cars.car = 'red'))"#
     );
 
     Ok(())
@@ -236,14 +271,32 @@ impl UserDefinedLogicalNodeUnparser for PlanToStatement {
 /// It can be unparse as a statement that reads from the same parquet file.
 async fn unparse_my_logical_plan_as_statement() -> Result<()> {
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     let inner_plan = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?
-        .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
+        .select_columns(&["car", "speed", "time"])?
         .into_unoptimized_plan();
 
     let node = Arc::new(MyLogicalPlan { input: inner_plan });
@@ -254,7 +307,7 @@ async fn unparse_my_logical_plan_as_statement() -> Result<()> {
     let sql = unparser.plan_to_sql(&my_plan)?.to_string();
     assert_eq!(
         sql,
-        r#"SELECT "?table?".id, "?table?".int_col, "?table?".double_col, "?table?".date_string_col FROM "?table?""#
+        r#"SELECT "?table?".car, "?table?".speed, "?table?"."time" FROM "?table?""#
     );
     Ok(())
 }
@@ -289,14 +342,32 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
 /// It can be unparse as a subquery that reads from the same parquet file, with some columns projected.
 async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     let inner_plan = ctx
-        .read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?
-        .select_columns(&["id", "int_col", "double_col", "date_string_col"])?
+        .select_columns(&["car", "speed", "time"])?
         .into_unoptimized_plan();
 
     let node = Arc::new(MyLogicalPlan { input: inner_plan });
@@ -304,8 +375,8 @@ async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let my_plan = LogicalPlan::Extension(Extension { node });
     let plan = LogicalPlanBuilder::from(my_plan)
         .project(vec![
-            col("id").alias("my_id"),
-            col("int_col").alias("my_int"),
+            col("car").alias("my_car"),
+            col("speed").alias("my_speed"),
         ])?
         .build()?;
     let unparser =
@@ -313,8 +384,8 @@ async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let sql = unparser.plan_to_sql(&plan)?.to_string();
     assert_eq!(
         sql,
-        "SELECT \"?table?\".id AS my_id, \"?table?\".int_col AS my_int FROM \
-        (SELECT \"?table?\".id, \"?table?\".int_col, \"?table?\".double_col, \"?table?\".date_string_col FROM \"?table?\")",
+        "SELECT \"?table?\".car AS my_car, \"?table?\".speed AS my_speed FROM \
+        (SELECT \"?table?\".car, \"?table?\".speed, \"?table?\".\"time\" FROM \"?table?\")",
     );
     Ok(())
 }

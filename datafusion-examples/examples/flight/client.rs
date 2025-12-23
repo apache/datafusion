@@ -20,24 +20,45 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tonic::transport::Endpoint;
-
-use datafusion::arrow::datatypes::Schema;
 
 use arrow_flight::flight_descriptor;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::{FlightDescriptor, Ticket};
+use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty;
+use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::prelude::{CsvReadOptions, SessionContext};
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
+use tonic::transport::Endpoint;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
 pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = SessionContext::new();
+
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
-        .join("parquet")
-        .join("alltypes_plain.parquet");
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
 
     // Create Flight client
     let endpoint = Endpoint::new("http://localhost:50051")?;
@@ -48,7 +69,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: Default::default(),
-        path: vec![format!("{}", path.to_str().unwrap())],
+        path: vec![format!("{}", out_dir.to_str().unwrap())],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();
@@ -57,7 +78,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
 
     // Call do_get to execute a SQL query and receive results
     let request = tonic::Request::new(Ticket {
-        ticket: "SELECT id FROM alltypes_plain".into(),
+        ticket: "SELECT car FROM cars".into(),
     });
 
     let mut stream = client.do_get(request).await?.into_inner();
