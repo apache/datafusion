@@ -192,7 +192,7 @@ impl ArrowHashTable for StringHashTable {
 
         // add the new group
         let id = id.map(|id| id.to_string());
-        let map_idx = self.map.insert(hash, id, heap_idx);
+        let map_idx = self.map.insert(hash, &id, heap_idx);
         (map_idx, true)
     }
 }
@@ -269,7 +269,7 @@ where
         let heap_idx = self.map.remove_if_full(replace_idx);
 
         // add the new group
-        let map_idx = self.map.insert(hash, id, heap_idx);
+        let map_idx = self.map.insert(hash, &id, heap_idx);
         (map_idx, true)
     }
 }
@@ -322,7 +322,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         }
     }
 
-    pub fn insert(&mut self, hash: u64, id: ID, heap_idx: usize) -> usize {
+    pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
         let mi = HashTableItem::new(hash, id.clone(), heap_idx);
         let store_idx = if let Some(idx) = self.free_list.pop() {
             self.store[idx] = Some(mi);
@@ -337,7 +337,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             self.map.reserve(self.limit, hasher);
         }
 
-        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == id;
+        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == *id;
         match self.map.entry(hash, eq_fn, hasher) {
             Entry::Occupied(_) => unreachable!("Item should not exist"),
             Entry::Vacant(vacant) => {
@@ -450,7 +450,7 @@ mod tests {
         let mut map = TopKHashTable::<Option<String>>::new(5, 3);
         for (heap_idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
             let hash = heap_idx as u64;
-            let map_idx = map.insert(hash, Some(id.to_string()), heap_idx);
+            let map_idx = map.insert(hash, &Some(id.to_string()), heap_idx);
             let _ = heap_to_map.insert(heap_idx, map_idx);
         }
 
