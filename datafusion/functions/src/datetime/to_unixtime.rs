@@ -107,7 +107,10 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                     validate_data_types(arg_args, "to_unixtime")?;
                 }
                 _ => {
-                    return exec_err\!("to_unixtime function only accepts format arguments with string input, got {} arguments", arg_args.len());
+                    return exec_err!(
+                        "to_unixtime function only accepts format arguments with string input, got {} arguments",
+                        arg_args.len()
+                    );
                 }
             }
         }
