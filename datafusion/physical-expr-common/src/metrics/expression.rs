@@ -41,6 +41,8 @@ impl ExpressionEvaluatorMetrics {
     /// Create metrics for a collection of expressions.
     ///
     /// # Args
+    /// - metrics: see `MetricBuilder` for details.
+    /// - partition: see `MetricBuilder` for details.
     /// - expression_labels: unique identifier for each metric, so that the metric
     ///   can get aggregated across multiple partitions. It is not the name showed
     ///   in the `EXPLAIN ANALYZE`, the metric name will be `expr_{idx}_eval_time`
@@ -69,6 +71,7 @@ impl ExpressionEvaluatorMetrics {
     }
 
     /// Returns a timer guard for the expression at `index`, if present.
+    #[inline]
     pub fn scoped_timer(&self, index: usize) -> Option<ScopedTimerGuard<'_>> {
         self.expression_times.get(index).map(Time::timer)
     }
