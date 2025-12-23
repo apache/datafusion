@@ -56,8 +56,8 @@ struct TopKHashTable<ID: KeyType> {
     map: HashTable<usize>,
     // Store the actual items separately to allow for index-based access
     store: Vec<Option<HashTableItem<ID>>>,
-    // A list of free indexes in the store for reuse
-    free_list: Vec<usize>,
+    // Free index in the store for reuse
+    free_index: Option<usize>,
     // The maximum number of entries allowed
     limit: usize,
 }
@@ -282,7 +282,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         Self {
             map: HashTable::with_capacity(capacity),
             store: Vec::with_capacity(capacity),
-            free_list: Vec::new(),
+            free_index: None,
             limit,
         }
     }
@@ -308,7 +308,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
                 Entry::Occupied(entry) => {
                     let (removed_idx, _) = entry.remove();
                     self.store[removed_idx] = None;
-                    self.free_list.push(removed_idx);
+                    self.free_index = Some(removed_idx);
                 }
                 Entry::Vacant(_) => unreachable!(),
             }
@@ -326,7 +326,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
 
     pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
         let mi = HashTableItem::new(hash, id.clone(), heap_idx);
-        let store_idx = if let Some(idx) = self.free_list.pop() {
+        let store_idx = if let Some(idx) = self.free_index.take() {
             self.store[idx] = Some(mi);
             idx
         } else {
@@ -360,7 +360,7 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
             .collect();
         self.map.clear();
         self.store.clear();
-        self.free_list.clear();
+        self.free_index = None;
         ids
     }
 }
