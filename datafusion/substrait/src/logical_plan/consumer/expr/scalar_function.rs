@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
+use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_err, DFSchema, DataFusionError, ScalarValue,
+    DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
+use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 
@@ -62,9 +62,9 @@ pub async fn from_scalar_function(
     } else if let Some(op) = name_to_op(fn_name) {
         if args.len() < 2 {
             return not_impl_err!(
-                        "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
-                       f.arguments.len()
-                    );
+                "Expect at least two arguments for binary operator {op:?}, the provided number of operators is {:?}",
+                f.arguments.len()
+            );
         }
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
@@ -76,15 +76,14 @@ pub async fn from_scalar_function(
 }
 
 pub fn substrait_fun_name(name: &str) -> &str {
-    let name = match name.rsplit_once(':') {
+    (match name.rsplit_once(':') {
         // Since 0.32.0, Substrait requires the function names to be in a compound format
         // https://substrait.io/extensions/#function-signature-compound-names
         // for example, `add:i8_i8`.
         // On the consumer side, we don't really care about the signature though, just the name.
         Some((name, _)) => name,
         None => name,
-    };
-    name
+    }) as _
 }
 
 pub fn name_to_op(name: &str) -> Option<Operator> {
@@ -271,8 +270,8 @@ impl BuiltinExprBuilder {
                 }
                 _ => {
                     return substrait_err!(
-                    "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
-                )
+                        "Expect Utf8 literal for escape char, but found {escape_char_expr:?}"
+                    );
                 }
             }
         } else {
@@ -292,7 +291,7 @@ impl BuiltinExprBuilder {
         let [a, b] = match args.try_into() {
             Ok(args_arr) => args_arr,
             Err(_) => {
-                return substrait_err!("Expected two arguments for `{fn_name}` expr")
+                return substrait_err!("Expected two arguments for `{fn_name}` expr");
             }
         };
         match fn_name {
@@ -316,7 +315,7 @@ impl BuiltinExprBuilder {
         let [expression, low, high] = match args.try_into() {
             Ok(args_arr) => args_arr,
             Err(_) => {
-                return substrait_err!("Expected three arguments for `{fn_name}` expr")
+                return substrait_err!("Expected three arguments for `{fn_name}` expr");
             }
         };
 

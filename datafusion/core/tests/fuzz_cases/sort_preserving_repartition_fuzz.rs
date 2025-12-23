@@ -20,34 +20,33 @@ mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
+    use arrow::compute::{SortColumn, SortOptions, concat_batches, lexsort};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::physical_plan::{
-        collect,
+        ExecutionPlan, Partitioning, collect,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
         repartition::RepartitionExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec,
         sorts::streaming_merge::StreamingMergeBuilder,
         stream::RecordBatchStreamAdapter,
-        ExecutionPlan, Partitioning,
     };
     use datafusion::prelude::SessionContext;
     use datafusion_common::Result;
     use datafusion_execution::{config::SessionConfig, memory_pool::MemoryConsumer};
+    use datafusion_physical_expr::ConstExpr;
     use datafusion_physical_expr::equivalence::{
         EquivalenceClass, EquivalenceProperties,
     };
-    use datafusion_physical_expr::expressions::{col, Column};
-    use datafusion_physical_expr::ConstExpr;
+    use datafusion_physical_expr::expressions::{Column, col};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use test_utils::add_empty_batches;
 
     use itertools::izip;
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
     fn create_test_schema() -> Result<SchemaRef> {

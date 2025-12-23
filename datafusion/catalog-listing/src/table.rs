@@ -23,16 +23,14 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Constraints, DataFusionError, SchemaExt, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
-use datafusion_datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory,
-};
+#[expect(deprecated)]
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
@@ -194,8 +192,6 @@ pub struct ListingTable {
     constraints: Constraints,
     /// Column default expressions for columns that are not physically present in the data files
     column_defaults: HashMap<String, Expr>,
-    /// Optional [`SchemaAdapterFactory`] for creating schema adapters
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     /// Optional [`PhysicalExprAdapterFactory`] for creating physical expression adapters
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
 }
@@ -238,7 +234,6 @@ impl ListingTable {
             collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
-            schema_adapter_factory: config.schema_adapter_factory,
             expr_adapter_factory: config.expr_adapter_factory,
         };
 
@@ -293,62 +288,42 @@ impl ListingTable {
         self.schema_source
     }
 
-    /// Set the [`SchemaAdapterFactory`] for this [`ListingTable`]
+    /// Deprecated: Set the [`SchemaAdapterFactory`] for this [`ListingTable`]
     ///
-    /// The schema adapter factory is used to create schema adapters that can
-    /// handle schema evolution and type conversions when reading files with
-    /// different schemas than the table schema.
+    /// `SchemaAdapterFactory` has been removed. Use [`ListingTableConfig::with_expr_adapter_factory`]
+    /// and `PhysicalExprAdapterFactory` instead. See `upgrading.md` for more details.
     ///
-    /// # Example: Adding Schema Evolution Support
-    /// ```rust
-    /// # use std::sync::Arc;
-    /// # use datafusion_catalog_listing::{ListingTable, ListingTableConfig, ListingOptions};
-    /// # use datafusion_datasource::ListingTableUrl;
-    /// # use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapter};
-    /// # use datafusion_datasource_parquet::file_format::ParquetFormat;
-    /// # use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-    /// # let table_path = ListingTableUrl::parse("file:///path/to/data").unwrap();
-    /// # let options = ListingOptions::new(Arc::new(ParquetFormat::default()));
-    /// # let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    /// # let config = ListingTableConfig::new(table_path).with_listing_options(options).with_schema(schema);
-    /// # let table = ListingTable::try_new(config).unwrap();
-    /// let table_with_evolution = table
-    ///     .with_schema_adapter_factory(Arc::new(DefaultSchemaAdapterFactory));
-    /// ```
-    /// See [`ListingTableConfig::with_schema_adapter_factory`] for an example of custom SchemaAdapterFactory.
+    /// This method is a no-op and returns `self` unchanged.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use ListingTableConfig::with_expr_adapter_factory and PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
     pub fn with_schema_adapter_factory(
         self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+        _schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Self {
-        Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self
-        }
+        // No-op - just return self unchanged
+        self
     }
 
-    /// Get the [`SchemaAdapterFactory`] for this table
-    pub fn schema_adapter_factory(&self) -> Option<&Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.as_ref()
-    }
-
-    /// Creates a schema adapter for mapping between file and table schemas
+    /// Deprecated: Returns the [`SchemaAdapterFactory`] used by this [`ListingTable`].
     ///
-    /// Uses the configured schema adapter factory if available, otherwise falls back
-    /// to the default implementation.
-    fn create_schema_adapter(&self) -> Box<dyn SchemaAdapter> {
-        let table_schema = self.schema();
-        match &self.schema_adapter_factory {
-            Some(factory) => {
-                factory.create_with_projected_schema(Arc::clone(&table_schema))
-            }
-            None => DefaultSchemaAdapterFactory::from_schema(Arc::clone(&table_schema)),
-        }
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    ///
+    /// Always returns `None`.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
+    pub fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
+        None
     }
 
-    /// Creates a file source and applies schema adapter factory if available
-    fn create_file_source_with_schema_adapter(
-        &self,
-    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
+    /// Creates a file source for this table
+    fn create_file_source(&self) -> Arc<dyn FileSource> {
         let table_schema = TableSchema::new(
             Arc::clone(&self.file_schema),
             self.options
@@ -358,15 +333,7 @@ impl ListingTable {
                 .collect(),
         );
 
-        let mut source = self.options.format.file_source(table_schema);
-        // Apply schema adapter to source if available
-        //
-        // The source will use this SchemaAdapter to adapt data batches as they flow up the plan.
-        // Note: ListingTable also creates a SchemaAdapter in `scan()` but that is only used to adapt collected statistics.
-        if let Some(factory) = &self.schema_adapter_factory {
-            source = source.with_schema_adapter_factory(Arc::clone(factory))?;
-        }
-        Ok(source)
+        self.options.format.file_source(table_schema)
     }
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
@@ -509,7 +476,7 @@ impl TableProvider for ListingTable {
             )))));
         };
 
-        let file_source = self.create_file_source_with_schema_adapter()?;
+        let file_source = self.create_file_source();
 
         // create the execution plan
         let plan = self
@@ -709,25 +676,17 @@ impl ListingTable {
             )
         };
 
-        let (mut file_groups, mut stats) = compute_all_files_statistics(
+        let (file_groups, stats) = compute_all_files_statistics(
             file_groups,
             self.schema(),
             self.options.collect_stat,
             inexact_stats,
         )?;
 
-        let schema_adapter = self.create_schema_adapter();
-        let (schema_mapper, _) = schema_adapter.map_schema(self.file_schema.as_ref())?;
-
-        stats.column_statistics =
-            schema_mapper.map_column_statistics(&stats.column_statistics)?;
-        file_groups.iter_mut().try_for_each(|file_group| {
-            if let Some(stat) = file_group.statistics_mut() {
-                stat.column_statistics =
-                    schema_mapper.map_column_statistics(&stat.column_statistics)?;
-            }
-            Ok::<_, DataFusionError>(())
-        })?;
+        // Note: Statistics already include both file columns and partition columns.
+        // PartitionedFile::with_statistics automatically appends exact partition column
+        // statistics (min=max=partition_value, null_count=0, distinct_count=1) computed
+        // from partition_values.
         Ok(ListFilesResult {
             file_groups,
             statistics: stats,

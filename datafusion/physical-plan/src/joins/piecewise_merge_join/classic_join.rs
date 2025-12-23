@@ -803,7 +803,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -814,7 +814,7 @@ mod tests {
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -854,18 +854,18 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-            +----+----+----+----+----+----+
-            | a1 | b1 | c1 | a2 | b1 | c2 |
-            +----+----+----+----+----+----+
-            | 1  | 3  | 7  | 30 | 4  | 90 |
-            | 2  | 2  | 8  | 30 | 4  | 90 |
-            | 3  | 1  | 9  | 30 | 4  | 90 |
-            | 2  | 2  | 8  | 10 | 3  | 70 |
-            | 3  | 1  | 9  | 10 | 3  | 70 |
-            | 3  | 1  | 9  | 20 | 2  | 80 |
-            +----+----+----+----+----+----+
-        "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 3  | 7  | 30 | 4  | 90 |
+        | 2  | 2  | 8  | 30 | 4  | 90 |
+        | 3  | 1  | 9  | 30 | 4  | 90 |
+        | 2  | 2  | 8  | 10 | 3  | 70 |
+        | 3  | 1  | 9  | 10 | 3  | 70 |
+        | 3  | 1  | 9  | 20 | 2  | 80 |
+        +----+----+----+----+----+----+
+        ");
         Ok(())
     }
 
@@ -905,7 +905,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -918,7 +918,7 @@ mod tests {
         | 2  | 3  | 8  | 10 | 3  | 70 |
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -953,12 +953,12 @@ mod tests {
         );
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -996,7 +996,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Full).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+-----+----+----+-----+
         | a1 | b1 | c1  | a2 | b1 | c2  |
         +----+----+-----+----+----+-----+
@@ -1004,7 +1004,7 @@ mod tests {
         |    |    |     | 10 | 3  | 300 |
         | 1  | 1  | 100 |    |    |     |
         +----+----+-----+----+----+-----+
-        "#);
+        ");
 
         Ok(())
     }
@@ -1045,7 +1045,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Left).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1056,7 +1056,7 @@ mod tests {
         | 3  | 4  | 9  | 10 | 3  | 70 |
         | 1  | 1  | 7  |    |    |    |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1096,7 +1096,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1105,7 +1105,7 @@ mod tests {
         | 3  | 4  | 9  | 20 | 3  | 80 |
         |    |    |    | 10 | 5  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1145,7 +1145,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1155,7 +1155,7 @@ mod tests {
         | 3  | 1  | 9  | 20 | 3  | 80 |
         | 3  | 1  | 9  | 10 | 2  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1196,7 +1196,7 @@ mod tests {
             join_collect(left, right, on, Operator::LtEq, JoinType::Inner).await?;
 
         // Expected grouping follows right.b1 descending (4, 3, 2)
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1206,7 +1206,7 @@ mod tests {
         | 3  | 2  | 9  | 20 | 3  | 80 |
         | 3  | 2  | 9  | 30 | 2  | 90 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
         // Grouped by right in ascending evaluation for > (1,2,3)
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1256,7 +1256,7 @@ mod tests {
         | 3  | 4  | 9  | 30 | 2  | 90 |
         | 3  | 4  | 9  | 10 | 3  | 70 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1290,7 +1290,7 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::LtEq, JoinType::Left).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
@@ -1298,7 +1298,7 @@ mod tests {
         | 1  | 5  | 7  |    |    |    |
         | 2  | 4  | 8  |    |    |    |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1336,14 +1336,14 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::GtEq, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         |    |    |    | 10 | 3  | 70 |
         |    |    |    | 20 | 5  | 80 |
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1365,13 +1365,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+-----+----+----+----+
         | a1 | b1 | c1  | a2 | b1 | c2 |
         +----+----+-----+----+----+----+
         | 42 | 5  | 999 | 30 | 7  | 90 |
         +----+----+-----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1397,12 +1397,12 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Gt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+----+----+----+
         | a1 | b1 | c1 | a2 | b1 | c2 |
         +----+----+----+----+----+----+
         +----+----+----+----+----+----+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1442,13 +1442,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-    +------------+------------+------------+------------+------------+------------+
-    | a1         | b1         | c1         | a2         | b1         | c2         |
-    +------------+------------+------------+------------+------------+------------+
-    | 1970-01-04 | 2022-04-23 | 1970-01-10 | 1970-01-31 | 2022-04-25 | 1970-04-01 |
-    +------------+------------+------------+------------+------------+------------+
-    "#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +------------+------------+------------+------------+------------+------------+
+        | a1         | b1         | c1         | a2         | b1         | c2         |
+        +------------+------------+------------+------------+------------+------------+
+        | 1970-01-04 | 2022-04-23 | 1970-01-10 | 1970-01-31 | 2022-04-25 | 1970-04-01 |
+        +------------+------------+------------+------------+------------+------------+
+        ");
         Ok(())
     }
 
@@ -1488,13 +1488,13 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Inner).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
+        assert_snapshot!(batches_to_string(&batches), @r"
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
         | 1970-01-01T00:00:00.003 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.009 | 1970-01-01T00:00:00.030 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
         +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-        "#);
+        ");
         Ok(())
     }
 
@@ -1532,14 +1532,14 @@ mod tests {
         let (_, batches) =
             join_collect(left, right, on, Operator::Lt, JoinType::Right).await?;
 
-        assert_snapshot!(batches_to_string(&batches), @r#"
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-    | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-    | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
-    |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
-    +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
-"#);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        | a1                      | b1                  | c1                      | a2                      | b1                  | c2                      |
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        | 1970-01-01T00:00:00.002 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.008 | 1970-01-01T00:00:00.020 | 2022-04-25T16:17:21 | 1970-01-01T00:00:00.090 |
+        |                         |                     |                         | 1970-01-01T00:00:00.010 | 2022-04-23T08:44:01 | 1970-01-01T00:00:00.080 |
+        +-------------------------+---------------------+-------------------------+-------------------------+---------------------+-------------------------+
+        ");
         Ok(())
     }
 }
