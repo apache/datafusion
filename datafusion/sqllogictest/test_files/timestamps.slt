@@ -3482,7 +3482,7 @@ select to_unixtime(arrow_cast(1599523200, 'UInt64'));
 1599523200
 
 query I
-select to_unixtime(arrow_cast(1000, 'Float16'));
+select to_unixtime(arrow_cast(1000.12, 'Float16'));
 ----
 1000
 

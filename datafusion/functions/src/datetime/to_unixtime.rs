@@ -101,7 +101,15 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
 
         // validate that any args after the first one are Utf8
         if arg_args.len() > 1 {
-            validate_data_types(arg_args, "to_unixtime")?;
+            // Format arguments only make sense for string inputs
+            match arg_args[0].data_type() {
+                DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
+                    validate_data_types(arg_args, "to_unixtime")?;
+                }
+                _ => {
+                    return exec_err\!("to_unixtime function only accepts format arguments with string input, got {} arguments", arg_args.len());
+                }
+            }
         }
 
         match arg_args[0].data_type() {
