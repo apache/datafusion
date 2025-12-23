@@ -16,4 +16,3 @@
 // under the License.
 
 pub mod extension_options;
-pub mod extensions;

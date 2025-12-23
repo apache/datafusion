@@ -1363,7 +1363,9 @@ impl ConfigOptions {
             return ConfigField::set(self, inner_key, value);
         }
 
-        if !self.extensions.0.contains_key(prefix) && self.extensions.0.contains_key("datafusion_ffi") {
+        if !self.extensions.0.contains_key(prefix)
+            && self.extensions.0.contains_key("datafusion_ffi")
+        {
             inner_key = key;
             prefix = "datafusion_ffi";
         }
@@ -2149,7 +2151,9 @@ impl TableOptions {
             return Ok(());
         }
 
-        if !self.extensions.0.contains_key(prefix) && self.extensions.0.contains_key("datafusion_ffi") {
+        if !self.extensions.0.contains_key(prefix)
+            && self.extensions.0.contains_key("datafusion_ffi")
+        {
             prefix = "datafusion_ffi";
         } else {
             println!("Existing keys {:?}", self.extensions.0.keys());

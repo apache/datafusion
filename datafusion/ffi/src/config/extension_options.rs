@@ -27,17 +27,23 @@ use datafusion_common::{Result, exec_err};
 use crate::df_result;
 
 /// A stable struct for sharing [`ExtensionOptions`] across FFI boundaries.
-/// For an explanation of each field, see the corresponding function
-/// defined in [`ExtensionOptions`].
+///
+/// Unlike other FFI structs in this crate, we do not construct a foreign
+/// variant of this object. This is due to the typical method for interacting
+/// with extension options is by creating a local struct of your concrete type.
+/// To support this methodology use the `to_extension` method instead.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ExtensionOptions {
+    /// Return a deep clone of this [`ExtensionOptions`]
     pub cloned: unsafe extern "C" fn(&Self) -> FFI_ExtensionOptions,
 
+    /// Set the given `key`, `value` pair
     pub set:
         unsafe extern "C" fn(&mut Self, key: RStr, value: RStr) -> RResult<(), RString>,
 
+    /// Returns the [`ConfigEntry`] stored in this [`ExtensionOptions`]
     pub entries: unsafe extern "C" fn(&Self) -> RVec<Tuple2<RString, RString>>,
 
     /// Release the memory of the private data when it is no longer being used.
@@ -47,19 +53,6 @@ pub struct FFI_ExtensionOptions {
     /// A [`ForeignExtensionOptions`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
-
-// TODO(tsaucer) We have a problem in datafusion_common::config::Extension::get
-// which relies on knowing the concrete types of the extensions so that we can
-// use their PREFIX for insertion of configs. We cannot work around this using
-// things like `fn namespace() -> &'static str` because we must be able to do
-// this without having an instance. Instead we will go to an approach of having
-// a concrete FFI_ForeignConfigExtension and add a check into all of the methods
-// in the above `get` (and similar) methods to check to see if we have an FFI
-// configs. If so we get the concrete FFI config and then have a method that will
-// convert from FFI_ForeignExtensionConfig into the concrete type. Somehow our
-// FFI library will need to make this as easy an experience as they are used to
-// so maybe we need to implement something at the `Extensions` level in addition
-// to the ConfigExtension.
 
 unsafe impl Send for FFI_ExtensionOptions {}
 unsafe impl Sync for FFI_ExtensionOptions {}
@@ -147,41 +140,7 @@ impl Drop for FFI_ExtensionOptions {
 
 impl Clone for FFI_ExtensionOptions {
     fn clone(&self) -> Self {
-        unsafe { (self.cloned)(&self) }
-    }
-}
-
-/// This struct is used to access an UDF provided by a foreign
-/// library across a FFI boundary.
-///
-/// The ForeignExtensionOptions is to be used by the caller of the UDF, so it has
-/// no knowledge or access to the private data. All interaction with the UDF
-/// must occur through the functions defined in FFI_ExtensionOptions.
-// #[derive(Debug)]
-// pub struct ForeignExtensionOptions(FFI_ExtensionOptions);
-//
-// unsafe impl Send for ForeignExtensionOptions {}
-// unsafe impl Sync for ForeignExtensionOptions {}
-
-impl FFI_ExtensionOptions {
-    pub fn add_config<C: ConfigExtension>(&mut self, config: &C) -> Result<()> {
-        for entry in config.entries() {
-            if let Some(value) = entry.value {
-                let key = format!("{}.{}", C::PREFIX, entry.key);
-                self.set(key.as_str(), value.as_str())?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn merge(&mut self, other: &FFI_ExtensionOptions) -> Result<()> {
-        for entry in other.entries() {
-            if let Some(value) = entry.value {
-                self.set(entry.key.as_str(), value.as_str())?;
-            }
-        }
-        Ok(())
+        unsafe { (self.cloned)(self) }
     }
 }
 
@@ -199,7 +158,7 @@ impl ExtensionOptions for FFI_ExtensionOptions {
     }
 
     fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        let ffi_options = unsafe { (self.cloned)(&self) };
+        let ffi_options = unsafe { (self.cloned)(self) };
         Box::new(ffi_options)
     }
 
@@ -213,7 +172,7 @@ impl ExtensionOptions for FFI_ExtensionOptions {
 
     fn entries(&self) -> Vec<ConfigEntry> {
         unsafe {
-            (self.entries)(&self)
+            (self.entries)(self)
                 .into_iter()
                 .map(|entry_tuple| ConfigEntry {
                     key: entry_tuple.0.into(),
@@ -226,11 +185,38 @@ impl ExtensionOptions for FFI_ExtensionOptions {
 }
 
 impl FFI_ExtensionOptions {
+    /// Add all of the values in a concrete configuration extension to the
+    /// FFI variant. This is safe to call on either side of the FFI
+    /// boundary.
+    pub fn add_config<C: ConfigExtension>(&mut self, config: &C) -> Result<()> {
+        for entry in config.entries() {
+            if let Some(value) = entry.value {
+                let key = format!("{}.{}", C::PREFIX, entry.key);
+                self.set(key.as_str(), value.as_str())?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Merge another `FFI_ExtensionOptions` configurations into this one.
+    /// This is safe to call on either side of the FFI boundary.
+    pub fn merge(&mut self, other: &FFI_ExtensionOptions) -> Result<()> {
+        for entry in other.entries() {
+            if let Some(value) = entry.value {
+                self.set(entry.key.as_str(), value.as_str())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Create a concrete extension type from the FFI variant.
+    /// This is safe to call on either side of the FFI boundary.
     pub fn to_extension<C: ConfigExtension + Default>(&self) -> Result<C> {
         let mut result = C::default();
 
         unsafe {
-            for entry in (self.entries)(&self) {
+            for entry in (self.entries)(self) {
                 let key = entry.0.as_str();
                 let value = entry.1.as_str();
 
