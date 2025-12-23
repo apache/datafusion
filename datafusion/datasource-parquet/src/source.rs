@@ -782,7 +782,7 @@ impl FileSource for ParquetSource {
             let mut new = eq_properties.clone();
             new.clear_orderings();
 
-            // 反转每个 ordering class 中的排序表达式
+            // Reverse each ordering in the equivalence properties
             let reversed_orderings = eq_properties
                 .oeq_class()
                 .iter()
@@ -798,16 +798,13 @@ impl FileSource for ParquetSource {
             new
         };
 
+        // Check if the reversed ordering satisfies the requested ordering
         if !reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
-        // The reversed ordering satisfies the request - enable reverse row group scanning.
-        // Note: This returns "Inexact" because we only reverse the order of row groups,
-        // not the rows within each row group. A Sort operator may still be needed
-        // upstream for perfect ordering, but this optimization helps with:
-        // - Limit pushdown (get first N results faster)
-        // - Reducing sort cost (partially sorted input)
+        // Return Inexact because we're only reversing row group order,
+        // not guaranteeing perfect row-level ordering
         let new_source = self.clone().with_reverse_row_groups(true);
         Ok(SortOrderPushdownResult::Inexact {
             inner: Arc::new(new_source) as Arc<dyn FileSource>,

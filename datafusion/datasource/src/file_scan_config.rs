@@ -830,25 +830,17 @@ impl DataSource for FileScanConfig {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
         // Delegate to FileSource to check if reverse scanning can satisfy the request.
-        // FileSource will:
-        // 1. Reverse the file ordering
-        // 2. Use eq_properties.ordering_satisfy() to check if reversed ordering works
-        // 3. Return Inexact/Exact if it can help, Unsupported otherwise
         let pushdown_result = self
             .file_source
             .try_reverse_output(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
-                // FileSource guarantees exact ordering.
-                // Rebuild FileScanConfig with reversed file groups.
                 Ok(SortOrderPushdownResult::Exact {
                     inner: self.rebuild_with_source(inner, true)?,
                 })
             }
             SortOrderPushdownResult::Inexact { inner } => {
-                // FileSource provides approximate ordering (e.g., reversed row groups).
-                // A Sort operator will still be needed, but this helps with limit pushdown.
                 Ok(SortOrderPushdownResult::Inexact {
                     inner: self.rebuild_with_source(inner, false)?,
                 })

@@ -181,7 +181,7 @@ pub trait FileSource: Send + Sync {
     /// ```
     ///
     /// # Returns
-    /// * `Exact` - Created a source that guarantees perfect ordering (e.g., file reordering)
+    /// * `Exact` - Created a source that guarantees perfect ordering
     /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
