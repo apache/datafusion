@@ -3676,8 +3676,10 @@ fn single_partition_join_skips_repartition() -> Result<()> {
         optimized,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 16), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=Hash([a@0], 16), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );
 
@@ -3729,11 +3731,12 @@ fn grouped_union_from_single_partition_skips_repartition() -> Result<()> {
     assert_plan!(
         optimized,
         @r"
-    AggregateExec: mode=FinalPartitioned, gby=[group_a@0 as group_a], aggr=[]
-      AggregateExec: mode=Partial, gby=[a@0 as group_a], aggr=[]
-        UnionExec
-          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          EmptyExec
+ AggregateExec: mode=FinalPartitioned, gby=[group_a@0 as group_a], aggr=[]
+   RepartitionExec: partitioning=Hash([group_a@0], 10), input_partitions=1
+     AggregateExec: mode=Partial, gby=[a@0 as group_a], aggr=[]
+       UnionExec
+         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+         EmptyExec
     "
     );
 
