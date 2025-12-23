@@ -27,9 +27,9 @@ use datafusion_common::{
     Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature,
+    TypeSignatureClass, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
@@ -94,7 +94,13 @@ impl CovarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("covar")],
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -113,7 +119,10 @@ impl AggregateUDFImpl for CovarianceSample {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
+        let is_numeric_or_null =
+            |dt: &DataType| dt.is_numeric() || matches!(dt, DataType::Null);
+
+        if !is_numeric_or_null(&arg_types[0]) || !is_numeric_or_null(&arg_types[1]) {
             return plan_err!("Covariance requires numeric input types");
         }
 
@@ -188,7 +197,13 @@ impl Default for CovariancePopulation {
 impl CovariancePopulation {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -207,7 +222,10 @@ impl AggregateUDFImpl for CovariancePopulation {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
+        let is_numeric_or_null =
+            |dt: &DataType| dt.is_numeric() || matches!(dt, DataType::Null);
+
+        if !is_numeric_or_null(&arg_types[0]) || !is_numeric_or_null(&arg_types[1]) {
             return plan_err!("Covariance requires numeric input types");
         }
 

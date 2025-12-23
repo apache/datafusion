@@ -26,7 +26,7 @@ use arrow::array::{
     Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
     downcast_array,
 };
-use arrow::compute::{and, filter, is_not_null};
+use arrow::compute::{and, cast, filter, is_not_null};
 use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
@@ -40,7 +40,8 @@ use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature,
+    TypeSignatureClass, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,
 };
@@ -85,8 +86,11 @@ impl Correlation {
     /// Create a new CORR aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Float64, DataType::Float64],
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                    Coercion::new_exact(TypeSignatureClass::Numeric),
+                ],
                 Volatility::Immutable,
             )
             .with_parameter_names(vec!["y".to_string(), "x".to_string()])
@@ -388,8 +392,22 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         self.sum_xx.resize(total_num_groups, 0.0);
         self.sum_yy.resize(total_num_groups, 0.0);
 
-        let array_x = downcast_array::<Float64Array>(&values[0]);
-        let array_y = downcast_array::<Float64Array>(&values[1]);
+        // Correlation computations use Float64 internally. Cast input arrays so this
+        // GroupsAccumulator can operate on any numeric input types (including Float32
+        // and Decimal) without relying on signature-level coercion.
+        let array_x = if values[0].data_type() == &DataType::Float64 {
+            Arc::clone(&values[0])
+        } else {
+            cast(&values[0], &DataType::Float64)?
+        };
+        let array_y = if values[1].data_type() == &DataType::Float64 {
+            Arc::clone(&values[1])
+        } else {
+            cast(&values[1], &DataType::Float64)?
+        };
+
+        let array_x = downcast_array::<Float64Array>(&array_x);
+        let array_y = downcast_array::<Float64Array>(&array_y);
 
         accumulate_multiple(
             group_indices,

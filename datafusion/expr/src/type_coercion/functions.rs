@@ -673,12 +673,12 @@ fn get_valid_types(
                         default_casted_type.default_cast_for(current_type)?;
                     new_types.push(casted_type);
                 } else {
-                    return internal_err!(
-                        "Expect {} but received NativeType::{}, DataType: {}",
-                        param.desired_type(),
-                        current_native_type,
-                        current_type
-                    );
+                    // No valid coercion for this signature given the current type.
+                    // Return an empty set so the higher-level signature matching
+                    // logic can continue checking other variants (e.g. `OneOf`)
+                    // and/or produce a consistent "Failed to coerce arguments"
+                    // error message.
+                    return Ok(vec![]);
                 }
             }
 

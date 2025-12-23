@@ -754,6 +754,72 @@ select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq
 ----
 0.950438495292
 
+# csv_query_stddev_6_decimal
+query R
+select stddev(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.950438495292
+
+# csv_query_variance_6_decimal
+query R
+select var(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.903333333333
+
+# csv_query_variance_pop_6_decimal
+query R
+select var_pop(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.602222222222
+
+# csv_query_stddev_6_decimal_with_nulls
+query R
+select stddev(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(null as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.950438495292
+
+# csv_query_variance_6_decimal_with_nulls
+query R
+select var(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(null as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.903333333333
+
+# csv_query_variance_pop_6_decimal_with_nulls
+query R
+select var_pop(sq.column1) from (values (cast(1.1 as decimal(10,1))), (cast(null as decimal(10,1))), (cast(2.0 as decimal(10,1))), (cast(3.0 as decimal(10,1)))) as sq
+----
+0.602222222222
+
+# variance_decimal_max_precision
+statement ok
+create table t_decimal_max_precision (c decimal(38, 0)) as values
+  (cast('99999999999999999999999999999999999999' as decimal(38, 0))),
+  (cast('99999999999999999999999999999999999999' as decimal(38, 0))),
+  (cast('99999999999999999999999999999999999999' as decimal(38, 0)));
+
+query RT
+select var_pop(c), arrow_typeof(var_pop(c)) from t_decimal_max_precision;
+----
+0 Float64
+
+query RT
+select stddev_pop(c), arrow_typeof(stddev_pop(c)) from t_decimal_max_precision;
+----
+0 Float64
+
+query RT
+select var(c), arrow_typeof(var(c)) from t_decimal_max_precision;
+----
+0 Float64
+
+query RT
+select stddev(c), arrow_typeof(stddev(c)) from t_decimal_max_precision;
+----
+0 Float64
+
+statement ok
+drop table t_decimal_max_precision;
+
 # csv_query_stddev_7
 query IR
 SELECT c2, stddev_samp(c12) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2
@@ -2084,6 +2150,16 @@ c 122
 d 124
 e 115
 
+# csv_query_approx_percentile_cont_with_weight_decimal_percentile
+query TI
+SELECT c1, approx_percentile_cont_with_weight(1, cast(0.95 as decimal(10,2))) WITHIN GROUP (ORDER BY c3) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
+----
+a 73
+b 68
+c 122
+d 124
+e 115
+
 # csv_query_approx_percentile_cont_with_weight alternate syntax
 query TI
 SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
@@ -2900,6 +2976,78 @@ select corr(c1, c2), arrow_typeof(corr(c1, c2)) from t;
 ----
 1 Float64
 
+# covariance_decimal_1
+statement ok
+create table t_decimal_stats (c1 decimal(10,2), c2 decimal(10,2)) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t_decimal_stats;
+----
+0.666666666667 Float64
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t_decimal_stats;
+----
+1 Float64
+
+query RT rowsort
+select corr(c1, c2), arrow_typeof(corr(c1, c2)) from t_decimal_stats;
+----
+1 Float64
+
+statement ok
+drop table t_decimal_stats;
+
+# covariance_decimal_with_nulls
+statement ok
+create table t_decimal_stats_nulls (f decimal(10,2), b decimal(10,2)) as values
+  (1,       4),
+  (null,   99),
+  (2,       5),
+  (98,   null),
+  (3,       6),
+  (null, null);
+
+query RR
+select covar_samp(f, b), covar_pop(f, b) from t_decimal_stats_nulls;
+----
+1 0.666666666667
+
+query R
+select corr(f, b) from t_decimal_stats_nulls;
+----
+1
+
+statement ok
+drop table t_decimal_stats_nulls;
+
+# covariance_mixed_decimal_float
+statement ok
+create table t_decimal_float_mix (x decimal(10,2), y double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(x, y), arrow_typeof(covar_pop(x, y)) from t_decimal_float_mix;
+----
+0.666666666667 Float64
+
+query RT
+select covar_samp(x, y), arrow_typeof(covar_samp(x, y)) from t_decimal_float_mix;
+----
+1 Float64
+
+query RT rowsort
+select corr(x, y), arrow_typeof(corr(x, y)) from t_decimal_float_mix;
+----
+1 Float64
+
+query RR
+select regr_slope(y, x), regr_intercept(y, x) from t_decimal_float_mix;
+----
+1 3
+
+statement ok
+drop table t_decimal_float_mix;
+
 # correlation with different numeric types (create test data)
 statement ok
 CREATE OR REPLACE TABLE corr_test(
@@ -3566,6 +3714,12 @@ FROM aggregate_test_100
 # Test basic percentile_cont with WITHIN GROUP syntax
 query R
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
+----
+3
+
+# percentile_cont_decimal_percentile
+query R
+SELECT percentile_cont(cast(0.5 as decimal(10,2))) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 ----
 3
 
@@ -6464,6 +6618,22 @@ select
     regr_sxx(column2, column1),
     regr_syy(column2, column1),
     regr_sxy(column2, column1)
+from (values (1,2), (2,4), (3,6));
+----
+2 0 3 1 2 4 2 8 4
+
+# regr_*() decimal input
+query RRIRRRRRR
+select
+    regr_slope(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_intercept(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_count(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_r2(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_avgx(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_avgy(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_sxx(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_syy(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2))),
+    regr_sxy(cast(column2 as decimal(10,2)), cast(column1 as decimal(10,2)))
 from (values (1,2), (2,4), (3,6));
 ----
 2 0 3 1 2 4 2 8 4
