@@ -1,6 +1,6 @@
 # timestamp + duration → timestamp
 # Add an duration to a timestamp
-# timestamp '2001-09-28 01:00' + arrow_cast(12345000000000, 'Duration(Nanosecond)' → 2001-09-29 00:00:00
+# timestamp '2001-09-28 01:00' + arrow_cast(12345000000000, 'Duration(Nanosecond)') → 2001-09-29 00:00:00
 
 query P
 SELECT '2001-09-28T01:00:00'::timestamp + arrow_cast(12345, 'Duration(Second)');
