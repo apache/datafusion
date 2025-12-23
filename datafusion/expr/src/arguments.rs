@@ -19,7 +19,6 @@
 
 use crate::Expr;
 use datafusion_common::{Result, plan_err};
-use std::collections::HashMap;
 
 /// Represents a named function argument with its original case and quote information.
 ///
@@ -109,14 +108,6 @@ fn reorder_named_arguments(
     args: Vec<Expr>,
     arg_names: Vec<Option<ArgumentName>>,
 ) -> Result<Vec<Expr>> {
-    // Build HashMap for O(1) parameter name lookups
-    // Parameter names in signatures are always lowercase
-    let param_index_map: HashMap<String, usize> = param_names
-        .iter()
-        .enumerate()
-        .map(|(idx, name)| (name.to_ascii_lowercase(), idx))
-        .collect();
-
     let positional_count = arg_names.iter().filter(|n| n.is_none()).count();
 
     // Capture args length before consuming the vector
@@ -136,19 +127,22 @@ fn reorder_named_arguments(
 
     for (i, (arg, arg_name)) in args.into_iter().zip(arg_names).enumerate() {
         if let Some(arg_name) = arg_name {
-            // Named argument - match based on SQL identifier rules:
+            // Named argument - find parameter index using linear search
+            // Match based on SQL identifier rules:
             // - Quoted identifiers: case-sensitive (exact match)
-            // - Unquoted identifiers: case-insensitive (normalize to lowercase)
-            let lookup_key = if arg_name.is_quoted {
-                // Quoted: use original case for case-sensitive matching
-                arg_name.value.clone()
-            } else {
-                // Unquoted: normalize to lowercase for case-insensitive matching
-                arg_name.value.to_ascii_lowercase()
-            };
-
-            let param_index =
-                param_index_map.get(&lookup_key).copied().ok_or_else(|| {
+            // - Unquoted identifiers: case-insensitive match
+            let param_index = param_names
+                .iter()
+                .position(|p| {
+                    if arg_name.is_quoted {
+                        // Quoted: exact case match
+                        p == &arg_name.value
+                    } else {
+                        // Unquoted: case-insensitive match
+                        p.eq_ignore_ascii_case(&arg_name.value)
+                    }
+                })
+                .ok_or_else(|| {
                     datafusion_common::plan_datafusion_err!(
                         "Unknown parameter name '{}'. Valid parameters are: [{}]",
                         arg_name.value,
@@ -468,5 +462,213 @@ mod tests {
                 .to_string()
                 .contains("Missing required parameter")
         );
+    }
+
+    #[test]
+    fn test_mixed_case_signature_unquoted_matching() {
+        // Test with mixed-case signature parameters (lowercase, camelCase, UPPERCASE)
+        // This proves case-insensitive matching works for unquoted identifiers
+        let param_names = vec![
+            "prefix".to_string(),   // lowercase
+            "startPos".to_string(), // camelCase
+            "LENGTH".to_string(),   // UPPERCASE
+        ];
+
+        // Test 1: All lowercase unquoted arguments should match
+        let args1 = vec![lit("a"), lit(1), lit(5)];
+        let arg_names1 = vec![
+            Some(ArgumentName {
+                value: "prefix".to_string(),
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "startpos".to_string(), // lowercase version of startPos
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "length".to_string(), // lowercase version of LENGTH
+                is_quoted: false,
+            }),
+        ];
+
+        let result1 =
+            resolve_function_arguments(&param_names, args1, arg_names1).unwrap();
+        assert_eq!(result1.len(), 3);
+        assert_eq!(result1[0], lit("a"));
+        assert_eq!(result1[1], lit(1));
+        assert_eq!(result1[2], lit(5));
+
+        // Test 2: All uppercase unquoted arguments should match
+        let args2 = vec![lit("b"), lit(2), lit(10)];
+        let arg_names2 = vec![
+            Some(ArgumentName {
+                value: "PREFIX".to_string(), // uppercase version of prefix
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "STARTPOS".to_string(), // uppercase version of startPos
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "LENGTH".to_string(), // matches UPPERCASE
+                is_quoted: false,
+            }),
+        ];
+
+        let result2 =
+            resolve_function_arguments(&param_names, args2, arg_names2).unwrap();
+        assert_eq!(result2.len(), 3);
+        assert_eq!(result2[0], lit("b"));
+        assert_eq!(result2[1], lit(2));
+        assert_eq!(result2[2], lit(10));
+
+        // Test 3: Mixed case unquoted arguments should match
+        let args3 = vec![lit("c"), lit(3), lit(15)];
+        let arg_names3 = vec![
+            Some(ArgumentName {
+                value: "Prefix".to_string(), // Title case
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "StartPos".to_string(), // matches camelCase
+                is_quoted: false,
+            }),
+            Some(ArgumentName {
+                value: "Length".to_string(), // Title case
+                is_quoted: false,
+            }),
+        ];
+
+        let result3 =
+            resolve_function_arguments(&param_names, args3, arg_names3).unwrap();
+        assert_eq!(result3.len(), 3);
+        assert_eq!(result3[0], lit("c"));
+        assert_eq!(result3[1], lit(3));
+        assert_eq!(result3[2], lit(15));
+    }
+
+    #[test]
+    fn test_mixed_case_signature_quoted_matching() {
+        // Test that quoted identifiers require exact case match with signature
+        let param_names = vec![
+            "prefix".to_string(),   // lowercase
+            "startPos".to_string(), // camelCase
+            "LENGTH".to_string(),   // UPPERCASE
+        ];
+
+        // Test 1: Quoted with wrong case should fail for "prefix"
+        let args_wrong_prefix = vec![lit("a"), lit(1), lit(5)];
+        let arg_names_wrong_prefix = vec![
+            Some(ArgumentName {
+                value: "PREFIX".to_string(), // Wrong case
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "startPos".to_string(),
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "LENGTH".to_string(),
+                is_quoted: true,
+            }),
+        ];
+
+        let result = resolve_function_arguments(
+            &param_names,
+            args_wrong_prefix,
+            arg_names_wrong_prefix,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter")
+        );
+
+        // Test 2: Quoted with wrong case should fail for "startPos"
+        let args_wrong_startpos = vec![lit("a"), lit(1), lit(5)];
+        let arg_names_wrong_startpos = vec![
+            Some(ArgumentName {
+                value: "prefix".to_string(),
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "STARTPOS".to_string(), // Wrong case
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "LENGTH".to_string(),
+                is_quoted: true,
+            }),
+        ];
+
+        let result2 = resolve_function_arguments(
+            &param_names,
+            args_wrong_startpos,
+            arg_names_wrong_startpos,
+        );
+        assert!(result2.is_err());
+        assert!(
+            result2
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter")
+        );
+
+        // Test 3: Quoted with wrong case should fail for "LENGTH"
+        let args_wrong_length = vec![lit("a"), lit(1), lit(5)];
+        let arg_names_wrong_length = vec![
+            Some(ArgumentName {
+                value: "prefix".to_string(),
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "startPos".to_string(),
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "length".to_string(), // Wrong case
+                is_quoted: true,
+            }),
+        ];
+
+        let result3 = resolve_function_arguments(
+            &param_names,
+            args_wrong_length,
+            arg_names_wrong_length,
+        );
+        assert!(result3.is_err());
+        assert!(
+            result3
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown parameter")
+        );
+
+        // Test 4: Quoted with exact case should succeed
+        let args_correct = vec![lit("a"), lit(1), lit(5)];
+        let arg_names_correct = vec![
+            Some(ArgumentName {
+                value: "prefix".to_string(), // Exact match
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "startPos".to_string(), // Exact match
+                is_quoted: true,
+            }),
+            Some(ArgumentName {
+                value: "LENGTH".to_string(), // Exact match
+                is_quoted: true,
+            }),
+        ];
+
+        let result4 =
+            resolve_function_arguments(&param_names, args_correct, arg_names_correct)
+                .unwrap();
+        assert_eq!(result4.len(), 3);
+        assert_eq!(result4[0], lit("a"));
+        assert_eq!(result4[1], lit(1));
+        assert_eq!(result4[2], lit(5));
     }
 }
