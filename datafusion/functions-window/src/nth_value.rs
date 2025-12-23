@@ -371,6 +371,33 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
+        if self.ignore_nulls {
+            match self.state.kind {
+                // Prune on first non-null output in case of FIRST_VALUE
+                NthValueKind::First => {
+                    if let Some(nulls) = out.nulls() {
+                        if self.state.finalized_result.is_none() {
+                            if let Some(valid_index) = nulls.valid_indices().next() {
+                                let result =
+                                    ScalarValue::try_from_array(out, valid_index)?;
+                                self.state.finalized_result = Some(result);
+                            } else {
+                                // The output is empty or all nulls, ignore
+                            }
+                        }
+                        if state.window_frame_range.start < state.window_frame_range.end {
+                            state.window_frame_range.start =
+                                state.window_frame_range.end - 1;
+                        }
+                        return Ok(());
+                    } else {
+                        // Fall through to the main case because there are no nulls
+                    }
+                }
+                // Do not memoize for other kinds when nulls are ignored
+                NthValueKind::Last | NthValueKind::Nth => return Ok(()),
+            }
+        }
         let mut buffer_size = 1;
         // Decide if we arrived at a final result yet:
         let (is_prunable, is_reverse_direction) = match self.state.kind {
@@ -398,8 +425,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         };
-        // Do not memoize results when nulls are ignored.
-        if is_prunable && !self.ignore_nulls {
+        if is_prunable {
             if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
