@@ -2982,6 +2982,17 @@ Can be a constant, column, or function.</p></li>
 <span class="o">|</span><span class="w"> </span><span class="mi">2023</span><span class="o">-</span><span class="mi">01</span><span class="o">-</span><span class="mi">03</span><span class="n">T03</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mi">00</span><span class="w"> </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">---------------------+</span>
 <span class="mi">2</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+
+<span class="c1">-- Bin the time into 15 minute intervals starting at 1 min</span>
+<span class="o">&gt;</span><span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="n">date_bin</span><span class="p">(</span><span class="nb">interval</span><span class="w"> </span><span class="s1">&#39;15 minutes&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">time</span><span class="p">,</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="s1">&#39;00:01:00&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">bin</span>
+<span class="k">FROM</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="k">TIME</span><span class="w"> </span><span class="s1">&#39;02:18:18&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="k">TIME</span><span class="w"> </span><span class="s1">&#39;19:00:03&#39;</span><span class="p">)</span><span class="w">  </span><span class="n">t</span><span class="p">(</span><span class="k">time</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">bin</span><span class="w">      </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">02</span><span class="p">:</span><span class="mi">16</span><span class="p">:</span><span class="mi">00</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">18</span><span class="p">:</span><span class="mi">46</span><span class="p">:</span><span class="mi">00</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------+</span>
+<span class="mi">2</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
 </pre></div>
 </div>
 </section>

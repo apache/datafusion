@@ -2488,6 +2488,17 @@ FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
 | 2023-01-03T03:00:00 |
 +---------------------+
 2 row(s) fetched.
+
+-- Bin the time into 15 minute intervals starting at 1 min
+>  SELECT date_bin(interval '15 minutes', time, TIME '00:01:00') as bin
+FROM VALUES (TIME '02:18:18'), (TIME '19:00:03')  t(time);
++----------+
+| bin      |
++----------+
+| 02:16:00 |
+| 18:46:00 |
++----------+
+2 row(s) fetched.
 ```
 
 ### `date_format`
