@@ -133,17 +133,15 @@ physical_plan
 01)FilterExec: c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# This one doesn't pass due to a ParseError
-#External error: task 20233 panicked with message "called `Result::unwrap()` on an `Err` value: ParseError { kind: InvalidLine(\"explain select c from t1 where extract (year from c) is not distinct from 2024\"), loc: Location { file: \"test_files/udf_preimage.slt\", line: 144, upper: None } }"
-#
-#explain select c from t1 where extract (year from c) is not distinct from 2024
-#----
-#logical_plan
-#01)Filter: t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
-#02)--TableScan: t1 projection=[c1_date32]
-#physical_plan
-#01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
-#02)--DataSourceExec: partitions=1, partition_sizes=[1]
+query TT
+explain select c from t1 where extract (year from c) is not distinct from 2024
+----
+logical_plan
+01)Filter: t1.c >= Date32("2024-01-01") AND t1.c < Date32("2025-01-01")
+02)--TableScan: t1 projection=[c]
+physical_plan
+01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select c from t1 where extract (year from c) is distinct from 2024
@@ -487,17 +485,15 @@ physical_plan
 01)FilterExec: c5_ts_nano@0 < 1735689600000000000
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# This one doesn't pass due to a ParseError
-#External error: task 20343 panicked with message "called `Result::unwrap()` on an `Err` value: ParseError { kind: InvalidLine(\"explain select c1_date32 from t2 where extract(year from c1_date32) is not distinct from 2024\"), loc: Location { file: \"test_files/udf_preimage.slt\", line: 162, upper: None } }"
-#
-#explain select c1_date32 from t2 where extract (year from c1_date32) is not distinct from 2024
-#----
-#logical_plan
-#01)Filter: t2.c1_date32 >= Date32("2024-01-01") AND t2.c1_date32 < Date32("2025-01-01")
-#02)--TableScan: t2 projection=[c1_date32]
-#physical_plan
-#01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
-#02)--DataSourceExec: partitions=1, partition_sizes=[1]
+query TT
+explain select c1_date32 from t2 where extract (year from c1_date32) is not distinct from 2024
+----
+logical_plan
+01)Filter: t2.c1_date32 >= Date32("2024-01-01") AND t2.c1_date32 < Date32("2025-01-01")
+02)--TableScan: t2 projection=[c1_date32]
+physical_plan
+01)FilterExec: c1_date32@0 >= 2024-01-01 AND c1_date32@0 < 2025-01-01
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 explain select c1_date32 from t2 where extract (year from c1_date32) is distinct from 2024

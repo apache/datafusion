@@ -466,13 +466,70 @@ fn test_preimage_date_part_timestamp_nano_lt_swap() {
 }
 
 #[test]
+fn test_preimage_date_part_date32_is_not_distinct_from() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) is not distinct from 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01 (the null handling part is dropped since rhs is not null)
+    let expr_lt = Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr_fn::date_part(lit("year"), col("date32"))),
+        op: Operator::IsNotDistinctFrom,
+        right: Box::new(lit(2024i32)),
+    });
+    let expected = and(
+        col("date32").gt_eq(lit(ScalarValue::Date32(Some(19723)))),
+        col("date32").lt(lit(ScalarValue::Date32(Some(20089)))),
+    );
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+// Should not simplify - interval can't be calculated
+fn test_preimage_date_part_date32_is_not_distinct_from_null() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) is not distinct from Null -> unchanged
+    let expr_lt = Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr_fn::date_part(lit("year"), col("date32"))),
+        op: Operator::IsNotDistinctFrom,
+        right: Box::new(lit(ScalarValue::Null)),
+    });
+    assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt)
+}
+
+#[test]
+fn test_preimage_date_part_date64_is_distinct_from() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) is distinct from 2024 -> c1 < 2024-01-01 OR c1 >= 2025-01-01 or c1 is NULL
+    let expr_lt = Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr_fn::date_part(lit("year"), col("date64"))),
+        op: Operator::IsDistinctFrom,
+        right: Box::new(lit(2024i32)),
+    });
+    let expected = col("date64")
+        .lt(lit(ScalarValue::Date64(Some(19723 * 86_400_000))))
+        .or(col("date64").gt_eq(lit(ScalarValue::Date64(Some(20089 * 86_400_000)))))
+        .or(col("date64").is_null());
+    assert_eq!(optimize_test(expr_lt, &schema), expected)
+}
+
+#[test]
+// Should not simplify - interval can't be calculated
+fn test_preimage_date_part_date64_is_distinct_from_null() {
+    let schema = expr_test_schema();
+    // date_part(c1, DatePart::Year) is distinct from 2024 -> c1 < 2024-01-01 OR c1 >= unchanged
+    let expr_lt = Expr::BinaryExpr(BinaryExpr {
+        left: Box::new(expr_fn::date_part(lit("year"), col("date64"))),
+        op: Operator::IsDistinctFrom,
+        right: Box::new(lit(ScalarValue::Null)),
+    });
+    assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt)
+}
+
+#[test]
 // Should not simplify
 fn test_preimage_date_part_not_year_date32_eq() {
     let schema = expr_test_schema();
     // date_part(c1, DatePart::Year) = 2024 -> c1 >= 2024-01-01 AND c1 < 2025-01-01
     let expr_lt = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
-    let expected = expr_fn::date_part(lit("month"), col("date32")).eq(lit(1i32));
-    assert_eq!(optimize_test(expr_lt, &schema), expected)
+    assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt)
 }
 
 fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
@@ -487,12 +544,12 @@ fn expr_test_schema() -> DFSchemaRef {
     Arc::new(
         DFSchema::from_unqualified_fields(
             vec![
-                Field::new("date32", DataType::Date32, false),
-                Field::new("date64", DataType::Date64, false),
-                Field::new("ts_nano_none", timestamp_nano_none_type(), false),
-                Field::new("ts_nano_utc", timestamp_nano_utc_type(), false),
-                Field::new("ts_sec_est", timestamp_sec_est_type(), false),
-                Field::new("ts_mic_pt", timestamp_mic_pt_type(), false),
+                Field::new("date32", DataType::Date32, true),
+                Field::new("date64", DataType::Date64, true),
+                Field::new("ts_nano_none", timestamp_nano_none_type(), true),
+                Field::new("ts_nano_utc", timestamp_nano_utc_type(), true),
+                Field::new("ts_sec_est", timestamp_sec_est_type(), true),
+                Field::new("ts_mic_pt", timestamp_mic_pt_type(), true),
             ]
             .into(),
             HashMap::new(),
