@@ -57,19 +57,20 @@ use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
     Array, ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray,
-    BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
-    Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
-    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
-    DurationSecondArray, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
-    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
-    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
-    PrimitiveArray, Scalar, StringArray, StringViewArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array, UnionArray, new_empty_array, new_null_array,
+    BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
+    Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
+    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    FixedSizeBinaryBuilder, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
+    GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array,
+    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
+    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
+    StringViewArray, StringViewBuilder, StructArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
+    new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -3027,7 +3028,13 @@ impl ScalarValue {
             },
             ScalarValue::Utf8View(e) => match e {
                 Some(value) => {
-                    Arc::new(StringViewArray::from_iter_values(repeat_n(value, size)))
+                    let mut builder =
+                        StringViewBuilder::with_capacity(size).with_deduplicate_strings();
+                    for _ in 0..size {
+                        builder.append_value(value);
+                    }
+                    let array = builder.finish();
+                    Arc::new(array)
                 }
                 None => new_null_array(&DataType::Utf8View, size),
             },
@@ -3042,9 +3049,15 @@ impl ScalarValue {
                 None => new_null_array(&DataType::Binary, size),
             },
             ScalarValue::BinaryView(e) => match e {
-                Some(value) => Arc::new(
-                    repeat_n(Some(value.as_slice()), size).collect::<BinaryViewArray>(),
-                ),
+                Some(value) => {
+                    let mut builder =
+                        BinaryViewBuilder::with_capacity(size).with_deduplicate_strings();
+                    for _ in 0..size {
+                        builder.append_value(value);
+                    }
+                    let array = builder.finish();
+                    Arc::new(array)
+                }
                 None => new_null_array(&DataType::BinaryView, size),
             },
             ScalarValue::FixedSizeBinary(s, e) => match e {
@@ -9230,6 +9243,27 @@ mod tests {
             }
             _ => panic!("Expected TimestampMillisecond with timezone"),
         }
+    }
+
+    #[test]
+    fn test_views_minimize_memory() {
+        let value = "this string is longer than 12 bytes".to_string();
+
+        let scalar = ScalarValue::Utf8View(Some(value.clone()));
+        let array = scalar.to_array_of_size(10).unwrap();
+        let array = array.as_string_view();
+        let buffers = array.data_buffers();
+        assert_eq!(1, buffers.len());
+        // Ensure we only have a single copy of the value string
+        assert_eq!(value.len(), buffers[0].len());
+
+        // Same but for BinaryView
+        let scalar = ScalarValue::BinaryView(Some(value.bytes().collect()));
+        let array = scalar.to_array_of_size(10).unwrap();
+        let array = array.as_binary_view();
+        let buffers = array.data_buffers();
+        assert_eq!(1, buffers.len());
+        assert_eq!(value.len(), buffers[0].len());
     }
 
     #[test]
