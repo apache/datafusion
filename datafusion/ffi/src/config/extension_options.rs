@@ -32,6 +32,11 @@ use crate::df_result;
 /// variant of this object. This is due to the typical method for interacting
 /// with extension options is by creating a local struct of your concrete type.
 /// To support this methodology use the `to_extension` method instead.
+///
+/// When using [`FFI_ExtensionOptions`] with multiple extensions, all extension
+/// values are stored on a single [`FFI_ExtensionOptions`] object. The keys
+/// are stored with the full path prefix to avoid overwriting values when using
+/// multiple extensions.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
