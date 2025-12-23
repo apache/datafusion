@@ -3879,9 +3879,8 @@ async fn repartition_between_chained_aggregates() -> Result<()> {
 
     // The optimizer should either keep the stream single-partitioned via the
     // sort-preserving merge, or insert a repartition between the two aggregates
-    // so that the second grouping sees a consistent hash distribution. Either
-    // path protects against the panic that was previously reported for this
-    // plan shape.
+    // so that the second grouping sees a consistent hash distribution.
+    // This test is similar to the reproducer case in #18989
     let plan_display = displayable(physical_plan.as_ref()).indent(true).to_string();
     let has_repartition =
         plan_display.contains("RepartitionExec: partitioning=Hash([ts@0], 2)");
