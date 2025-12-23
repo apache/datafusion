@@ -15,25 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction,
-    udwf::FFI_WindowUDF,
-};
-use datafusion::{
-    catalog::TableFunctionImpl,
-    functions::math::{abs::AbsFunc, random::RandomFunc},
-    functions_aggregate::{stddev::Stddev, sum::Sum},
-    functions_table::generate_series::RangeFunc,
-    functions_window::rank::Rank,
-    logical_expr::{AggregateUDF, ScalarUDF, WindowUDF},
-};
 use std::any::Any;
+use std::sync::Arc;
+
+use arrow_schema::DataType;
+use datafusion_catalog::TableFunctionImpl;
+use datafusion_expr::{
+    AggregateUDF, ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    WindowUDF,
+};
+use datafusion_functions::math::abs::AbsFunc;
+use datafusion_functions::math::random::RandomFunc;
+use datafusion_functions_aggregate::stddev::Stddev;
+use datafusion_functions_aggregate::sum::Sum;
+use datafusion_functions_table::generate_series::RangeFunc;
+use datafusion_functions_window::rank::Rank;
 
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
-use arrow_schema::DataType;
-use datafusion::logical_expr::{ColumnarValue, Signature};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
-use std::sync::Arc;
+use crate::udaf::FFI_AggregateUDF;
+use crate::udf::FFI_ScalarUDF;
+use crate::udtf::FFI_TableFunction;
+use crate::udwf::FFI_WindowUDF;
 
 pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
     let inner = WrappedAbs(Arc::new(AbsFunc::new().into()));
@@ -100,7 +102,7 @@ pub(crate) extern "C" fn create_ffi_rank_func() -> FFI_WindowUDF {
     let udwf: Arc<WindowUDF> = Arc::new(
         Rank::new(
             "rank_demo".to_string(),
-            datafusion::functions_window::rank::RankType::Basic,
+            datafusion_functions_window::rank::RankType::Basic,
         )
         .into(),
     );

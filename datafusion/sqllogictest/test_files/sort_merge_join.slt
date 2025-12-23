@@ -37,7 +37,7 @@ logical_plan
 02)--TableScan: t1 projection=[a, b]
 03)--TableScan: t2 projection=[a, b]
 physical_plan
-01)SortMergeJoin: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
+01)SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
 02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
