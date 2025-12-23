@@ -1875,7 +1875,8 @@ fn temporal_math_coercion(
         ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
         (
             Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
-            | Float32 | Float64, Interval(_)
+            | Float32 | Float64,
+            Interval(_),
         ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
         _ => None,
     }
@@ -1896,7 +1897,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         }
         (Date64, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
         | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date64) => {
-            Some(Date32)
+            Some(Date64)
         }
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
         (Date32, Time32(_)) | (Time32(_), Date32) => Some(Timestamp(Nanosecond, None)),

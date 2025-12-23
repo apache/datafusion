@@ -4,6 +4,8 @@
 # interval '1 day' * 21 → 21 days
 # interval '1 hour' * 3.5 → 03:30:00
 
+# these currently do not work - https://github.com/apache/arrow-rs/issues/9030
+
 query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
 SELECT interval '1 second' * 900
 

@@ -26,6 +26,7 @@ use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -360,7 +361,10 @@ impl<'a> TypeCoercionRewriter<'a> {
                 let expr = Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(expr),
                     Operator::Multiply,
-                    Box::new(Expr::Literal(ScalarValue::Int64(Some(86400)), None)),
+                    Box::new(Expr::Literal(
+                        ScalarValue::Int64(Some(SECONDS_IN_DAY)),
+                        None,
+                    )),
                 ));
                 // cast to duration
                 let expr =
@@ -423,7 +427,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                     Time64(TimeUnit::Nanosecond) => {
                         Expr::Cast(Cast::new(Box::new(expr), Int64))
                     }
-                    _ => unreachable!(),
+                    t => return internal_err!("Unexpected time data type {t}"),
                 };
 
                 Expr::Cast(Cast::new(Box::new(expr), Duration(TimeUnit::Nanosecond)))
