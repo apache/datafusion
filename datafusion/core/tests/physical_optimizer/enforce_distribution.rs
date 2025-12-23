@@ -3717,7 +3717,7 @@ fn single_partition_window_partition_skips_repartition() -> Result<()> {
 }
 
 #[test]
-fn grouped_union_from_single_partition_skips_repartition() -> Result<()> {
+fn grouped_union_from_single_partition_requires_repartition() -> Result<()> {
     let union = union_exec(vec![
         parquet_exec(),
         Arc::new(EmptyExec::new(schema()).with_partitions(0)),
