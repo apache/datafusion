@@ -54,8 +54,11 @@ pub struct HashTableItem<ID: KeyType> {
 /// 3. Tracks indexes to allow corresponding heap to refer to entries by index vs hash
 struct TopKHashTable<ID: KeyType> {
     map: HashTable<usize>,
+    // Store the actual items separately to allow for index-based access
     store: Vec<Option<HashTableItem<ID>>>,
+    // A list of free indexes in the store for reuse
     free_list: Vec<usize>,
+    // The maximum number of entries allowed
     limit: usize,
 }
 
@@ -63,11 +66,9 @@ struct TopKHashTable<ID: KeyType> {
 pub trait ArrowHashTable {
     fn set_batch(&mut self, ids: ArrayRef);
     fn len(&self) -> usize;
-    //  Soundness: the caller must provide valid indexes
     fn update_heap_idx(&mut self, mapper: &[(usize, usize)]);
     fn heap_idx_at(&self, map_idx: usize) -> usize;
     fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef;
-
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool);
 }
 
