@@ -21,9 +21,8 @@ use std::ffi::c_void;
 
 use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RStr, RString, RVec, Tuple2};
-use datafusion::error::Result;
 use datafusion_common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
-use datafusion_common::{DataFusionError, exec_err};
+use datafusion_common::{Result, exec_err};
 
 use crate::df_result;
 
@@ -71,15 +70,15 @@ pub struct ExtensionOptionsPrivateData {
 
 impl FFI_ExtensionOptions {
     #[inline]
-    unsafe fn inner_mut(&mut self) -> &mut HashMap<String, String> {
+    fn inner_mut(&mut self) -> &mut HashMap<String, String> {
         let private_data = self.private_data as *mut ExtensionOptionsPrivateData;
-        &mut (*private_data).options
+        unsafe { &mut (*private_data).options }
     }
 
     #[inline]
-    unsafe fn inner(&self) -> &HashMap<String, String> {
+    fn inner(&self) -> &HashMap<String, String> {
         let private_data = self.private_data as *const ExtensionOptionsPrivateData;
-        &(*private_data).options
+        unsafe { &(*private_data).options }
     }
 }
 
@@ -114,8 +113,9 @@ unsafe extern "C" fn entries_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(options: &mut FFI_ExtensionOptions) {
-    let private_data =
-        Box::from_raw(options.private_data as *mut ExtensionOptionsPrivateData);
+    let private_data = unsafe {
+        Box::from_raw(options.private_data as *mut ExtensionOptionsPrivateData)
+    };
     drop(private_data);
 }
 
@@ -145,44 +145,25 @@ impl Drop for FFI_ExtensionOptions {
     }
 }
 
+impl Clone for FFI_ExtensionOptions {
+    fn clone(&self) -> Self {
+        unsafe { (self.cloned)(&self) }
+    }
+}
+
 /// This struct is used to access an UDF provided by a foreign
 /// library across a FFI boundary.
 ///
 /// The ForeignExtensionOptions is to be used by the caller of the UDF, so it has
 /// no knowledge or access to the private data. All interaction with the UDF
 /// must occur through the functions defined in FFI_ExtensionOptions.
-#[derive(Debug)]
-pub struct ForeignExtensionOptions(FFI_ExtensionOptions);
-
-unsafe impl Send for ForeignExtensionOptions {}
-unsafe impl Sync for ForeignExtensionOptions {}
-
-// impl<T : ConfigExtension + Default> TryFrom<FFI_ExtensionOptions> for T {
-//     type Error = DataFusionError;
+// #[derive(Debug)]
+// pub struct ForeignExtensionOptions(FFI_ExtensionOptions);
 //
-//     fn try_from(options: &FFI_ExtensionOptions) -> Result<Self, Self::Error> {
-//         let mut config = T::default();
-//
-//         let mut found = false;
-//         unsafe {
-//             for entry_tuple in (options.entries)(&options).into_iter() {
-//                 if let ROption::RSome(value) = entry_tuple.1 {
-//                     if let Some((namespace, key)) = entry_tuple.0.as_str().split_once('.')
-//                     {
-//                         if namespace == T::PREFIX {
-//                             found = true;
-//                             config.set(key, value.as_str())?;
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//
-//         Ok(config)
-//     }
-// }
+// unsafe impl Send for ForeignExtensionOptions {}
+// unsafe impl Sync for ForeignExtensionOptions {}
 
-impl ForeignExtensionOptions {
+impl FFI_ExtensionOptions {
     pub fn add_config<C: ConfigExtension>(&mut self, config: &C) -> Result<()> {
         for entry in config.entries() {
             if let Some(value) = entry.value {
@@ -193,13 +174,22 @@ impl ForeignExtensionOptions {
 
         Ok(())
     }
+
+    pub fn merge(&mut self, other: &FFI_ExtensionOptions) -> Result<()> {
+        for entry in other.entries() {
+            if let Some(value) = entry.value {
+                self.set(entry.key.as_str(), value.as_str())?;
+            }
+        }
+        Ok(())
+    }
 }
 
-impl ConfigExtension for ForeignExtensionOptions {
+impl ConfigExtension for FFI_ExtensionOptions {
     const PREFIX: &'static str = "datafusion_ffi";
 }
 
-impl ExtensionOptions for ForeignExtensionOptions {
+impl ExtensionOptions for FFI_ExtensionOptions {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -209,23 +199,21 @@ impl ExtensionOptions for ForeignExtensionOptions {
     }
 
     fn cloned(&self) -> Box<dyn ExtensionOptions> {
-        let ffi_options = unsafe { (self.0.cloned)(&self.0) };
-        let foreign_options = ForeignExtensionOptions(ffi_options);
-        Box::new(foreign_options)
+        let ffi_options = unsafe { (self.cloned)(&self) };
+        Box::new(ffi_options)
     }
 
     fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        println!("Setting {key} = {value}");
         if key.split_once('.').is_none() {
             return exec_err!("Unable to set FFI config value without namespace set");
         };
 
-        df_result!(unsafe { (self.0.set)(&mut self.0, key.into(), value.into()) })
+        df_result!(unsafe { (self.set)(self, key.into(), value.into()) })
     }
 
     fn entries(&self) -> Vec<ConfigEntry> {
         unsafe {
-            (self.0.entries)(&self.0)
+            (self.entries)(&self)
                 .into_iter()
                 .map(|entry_tuple| ConfigEntry {
                     key: entry_tuple.0.into(),
@@ -237,18 +225,24 @@ impl ExtensionOptions for ForeignExtensionOptions {
     }
 }
 
-// TODO: Maybe get rid of ForeignExtensionOptions?
-impl<C: ConfigExtension + Default> TryFrom<&ForeignExtensionOptions> for C {
-    type Error = DataFusionError;
-    fn try_from(options: &ForeignExtensionOptions) -> Result<Self> {
+impl FFI_ExtensionOptions {
+    pub fn to_extension<C: ConfigExtension + Default>(&self) -> Result<C> {
         let mut result = C::default();
-        for entry in options.entries() {
-            if let Some(value) = entry.value {
-                result.set(entry.key.as_str(), value.as_str())?;
+
+        unsafe {
+            for entry in (self.entries)(&self) {
+                let key = entry.0.as_str();
+                let value = entry.1.as_str();
+
+                if let Some((prefix, inner_key)) = key.split_once('.')
+                    && prefix == C::PREFIX
+                {
+                    result.set(inner_key, value)?;
+                }
             }
         }
 
-        result
+        Ok(result)
     }
 }
 
@@ -257,9 +251,7 @@ mod tests {
     use datafusion_common::config::{ConfigExtension, ConfigOptions};
     use datafusion_common::extensions_options;
 
-    use crate::config::extension_options::{
-        FFI_ExtensionOptions, ForeignExtensionOptions,
-    };
+    use crate::config::extension_options::FFI_ExtensionOptions;
 
     // Define a new configuration struct using the `extensions_options` macro
     extensions_options! {
@@ -281,26 +273,23 @@ mod tests {
     fn round_trip_ffi_extension_options() {
         // set up config struct and register extension
         let mut config = ConfigOptions::default();
-        let mut foreign_options =
-            ForeignExtensionOptions(FFI_ExtensionOptions::default());
-        foreign_options.add_config(&MyConfig::default()).unwrap();
+        let mut ffi_options = FFI_ExtensionOptions::default();
+        ffi_options.add_config(&MyConfig::default()).unwrap();
 
-        config.extensions.insert(foreign_options);
-        // config.extensions.insert(MyConfig::default());
+        config.extensions.insert(ffi_options);
 
         // overwrite config default
         config.set("my_config.baz_count", "42").unwrap();
 
         // check config state
-        let my_config = config.extensions.get::<MyConfig>().unwrap();
-        assert!(my_config.foo_to_bar,);
-        assert_eq!(my_config.baz_count, 42,);
+        let returned_ffi_config =
+            config.extensions.get::<FFI_ExtensionOptions>().unwrap();
+        let my_config: MyConfig = returned_ffi_config.to_extension().unwrap();
 
-        // let boxed_config = Box::new(MyConfig::default()) as Box<dyn ExtensionOptions>;
-        // let mut ffi_config = FFI_ExtensionOptions::from(boxed_config);
-        // ffi_config.library_marker_id = crate::mock_foreign_marker_id;
-        // let foreign_config: Box<dyn ExtensionOptions> = ffi_config.into();
-        //
-        // config.extensions.insert(foreign_config);
+        // check default value
+        assert!(my_config.foo_to_bar);
+
+        // check overwritten value
+        assert_eq!(my_config.baz_count, 42);
     }
 }

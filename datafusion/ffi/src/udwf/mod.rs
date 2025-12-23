@@ -399,7 +399,6 @@ impl From<&FFI_SortOptions> for SortOptions {
 mod tests {
     use std::sync::Arc;
 
-    use crate::tests::create_record_batch;
     use crate::udwf::{FFI_WindowUDF, ForeignWindowUDF};
     use arrow::array::{ArrayRef, RecordBatch, create_array};
     use datafusion::functions_window::lead_lag::{WindowShift, lag_udwf};

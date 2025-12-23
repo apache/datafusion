@@ -1340,12 +1340,12 @@ impl ConfigOptions {
 
     /// Set a configuration option
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, key)) = key.split_once('.') else {
+        let Some((mut prefix, mut inner_key)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
         if prefix == "datafusion" {
-            if key == "optimizer.enable_dynamic_filter_pushdown" {
+            if inner_key == "optimizer.enable_dynamic_filter_pushdown" {
                 let bool_value = value.parse::<bool>().map_err(|e| {
                     DataFusionError::Configuration(format!(
                         "Failed to parse '{value}' as bool: {e}",
@@ -1360,13 +1360,18 @@ impl ConfigOptions {
                 }
                 return Ok(());
             }
-            return ConfigField::set(self, key, value);
+            return ConfigField::set(self, inner_key, value);
+        }
+
+        if !self.extensions.0.contains_key(prefix) && self.extensions.0.contains_key("datafusion_ffi") {
+            inner_key = key;
+            prefix = "datafusion_ffi";
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
             return _config_err!("Could not find config namespace \"{prefix}\"");
         };
-        e.0.set(key, value)
+        e.0.set(inner_key, value)
     }
 
     /// Create new [`ConfigOptions`], taking values from environment variables
@@ -1613,6 +1618,7 @@ impl Extensions {
 
     /// Retrieves the extension of the given type if any
     pub fn get_mut<T: ConfigExtension>(&mut self) -> Option<&mut T> {
+        println!("extensions trying get_mut on prefix {}", T::PREFIX);
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
@@ -2131,7 +2137,7 @@ impl TableOptions {
     ///
     /// A result indicating success or failure in setting the configuration option.
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
-        let Some((prefix, _)) = key.split_once('.') else {
+        let Some((mut prefix, _)) = key.split_once('.') else {
             return _config_err!("could not find config namespace for key \"{key}\"");
         };
 
@@ -2141,6 +2147,12 @@ impl TableOptions {
 
         if prefix == "execution" {
             return Ok(());
+        }
+
+        if !self.extensions.0.contains_key(prefix) && self.extensions.0.contains_key("datafusion_ffi") {
+            prefix = "datafusion_ffi";
+        } else {
+            println!("Existing keys {:?}", self.extensions.0.keys());
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
