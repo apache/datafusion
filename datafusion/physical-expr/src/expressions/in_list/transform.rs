@@ -71,9 +71,13 @@ where
         handle_dictionary!(self, v, negated);
 
         let data = v.to_data();
-        let values: &[D::Native] = data.buffers()[0].typed_data();
+        let buffer = ScalarBuffer::<D::Native>::new(
+            data.buffers()[0].clone(),
+            data.offset(),
+            data.len(),
+        );
 
-        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+        Ok(self.inner.contains_slice(&buffer, data.nulls(), negated))
     }
 }
 
@@ -91,9 +95,13 @@ impl<C: BitmapFilterConfig> StaticFilter for ReinterpretedBitmap<C> {
         handle_dictionary!(self, v, negated);
 
         let data = v.to_data();
-        let values: &[C::Native] = data.buffers()[0].typed_data();
+        let buffer = ScalarBuffer::<C::Native>::new(
+            data.buffers()[0].clone(),
+            data.offset(),
+            data.len(),
+        );
 
-        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+        Ok(self.inner.contains_slice(&buffer, data.nulls(), negated))
     }
 }
 
@@ -115,9 +123,13 @@ where
         handle_dictionary!(self, v, negated);
 
         let data = v.to_data();
-        let values: &[T::Native] = data.buffers()[0].typed_data();
+        let buffer = ScalarBuffer::<T::Native>::new(
+            data.buffers()[0].clone(),
+            data.offset(),
+            data.len(),
+        );
 
-        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+        Ok(self.inner.contains_slice(&buffer, data.nulls(), negated))
     }
 }
 
@@ -152,8 +164,12 @@ impl StaticFilter for Utf8ViewHashFilter {
 /// ignoring any metadata like timezones or precision/scale.
 #[inline]
 fn reinterpret_any_primitive_to<T: ArrowPrimitiveType>(array: &dyn Array) -> ArrayRef {
-    let values = array.to_data().buffers()[0].clone();
-    let buffer: ScalarBuffer<T::Native> = values.into();
+    let data = array.to_data();
+    let buffer = ScalarBuffer::<T::Native>::new(
+        data.buffers()[0].clone(),
+        data.offset(),
+        data.len(),
+    );
     Arc::new(PrimitiveArray::<T>::new(buffer, array.nulls().cloned()))
 }
 
