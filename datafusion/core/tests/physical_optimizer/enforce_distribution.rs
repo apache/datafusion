@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     bounded_window_exec_with_partition, check_integrity, coalesce_partitions_exec,
-    parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec, schema, sort_exec,
-    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    memory_exec, parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec,
+    schema, sort_exec, sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
 };
 
@@ -37,16 +37,16 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr::PartitioningSatisfaction;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
+use datafusion_physical_expr::{Distribution, Partitioning, physical_exprs_equal};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -66,17 +66,16 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::windows::BoundedWindowAggExec;
 use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlanProperties, Partitioning, PlanProperties,
-    Statistics, displayable,
+    DisplayAs, DisplayFormatType, ExecutionPlanProperties, PlanProperties, Statistics,
+    displayable,
 };
 use insta::Settings;
 
@@ -1110,6 +1109,94 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     );
     let plan_sort = test_config.to_plan(filter_top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
+
+    Ok(())
+}
+
+#[test]
+fn enforce_distribution_repartitions_superset_hash_keys() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("region", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+    ]));
+    let left = memory_exec(&schema);
+    let right = memory_exec(&schema);
+
+    let left_superset = Arc::new(RepartitionExec::try_new(
+        Arc::clone(&left),
+        Partitioning::Hash(
+            vec![
+                Arc::new(Column::new_with_schema("region", &schema).unwrap()),
+                Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
+            ],
+            4,
+        ),
+    )?);
+
+    let right_partitioned = Arc::new(RepartitionExec::try_new(
+        right,
+        Partitioning::Hash(
+            vec![Arc::new(Column::new_with_schema("ts", &schema).unwrap())],
+            4,
+        ),
+    )?);
+
+    let on: JoinOn = vec![(
+        Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
+        Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
+    )];
+
+    let join = Arc::new(HashJoinExec::try_new(
+        left_superset,
+        right_partitioned,
+        on,
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::Partitioned,
+        NullEquality::NullEqualsNothing,
+    )?);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 4;
+
+    let optimized = EnforceDistribution::new().optimize(join, &config)?;
+    let join = optimized
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .expect("expected hash join");
+
+    // The optimizer should recognize that the left side has a superset partitioning
+    // (partition on both "region" and "ts") when the join only requires "ts".
+    // The optimizer should replace the superset repartition with one that matches
+    // the join requirement exactly (just "ts").
+    let repartition = join
+        .left()
+        .as_any()
+        .downcast_ref::<RepartitionExec>()
+        .expect("left side should be repartitioned");
+
+    match repartition.partitioning() {
+        Partitioning::Hash(exprs, partitions) => {
+            assert_eq!(*partitions, 4);
+            let expected =
+                vec![Arc::new(Column::new_with_schema("ts", &schema).unwrap()) as _];
+            assert!(
+                physical_exprs_equal(exprs, &expected),
+                "expected repartitioning on [ts]"
+            );
+        }
+        other => panic!("expected hash repartitioning, got {other:?}"),
+    }
+
+    // The optimizer should have removed the unnecessary superset repartition
+    // and directly partitioned the source on the required keys.
+    // This is a better optimization than keeping the superset.
+    let input = repartition.input();
+    assert!(
+        input.as_any().downcast_ref::<RepartitionExec>().is_none(),
+        "optimizer should remove the superset repartition, not stack another on top"
+    );
 
     Ok(())
 }
