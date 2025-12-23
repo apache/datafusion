@@ -125,9 +125,26 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        // zero-arg form is a deterministic non-null scalar; any call with args
-        // can emit NULL on overflow or non-finite seconds, so mark those nullable.
-        let nullable = !args.arg_fields.is_empty();
+        let has_non_finite_secs = args
+            .scalar_arguments
+            .get(6)
+            .and_then(|arg| {
+                arg.map(|scalar| match scalar {
+                    ScalarValue::Float64(Some(v)) => !v.is_finite(),
+                    ScalarValue::Float32(Some(v)) => !v.is_finite(),
+                    _ => false,
+                })
+            })
+            .unwrap_or(false);
+
+        let nullable = if args.arg_fields.is_empty() {
+            // zero-arg form is a deterministic non-null scalar
+            false
+        } else {
+            // nullable if any input is nullable OR has non-finite seconds
+            has_non_finite_secs || args.arg_fields.iter().any(|f| f.is_nullable())
+        };
+
         Ok(Arc::new(Field::new(
             self.name(),
             Interval(MonthDayNano),
@@ -311,7 +328,8 @@ mod tests {
         );
         assert_eq!(field.data_type(), &Interval(MonthDayNano));
 
-        // all inputs non-nullable -> still nullable output due to overflow cases
+        // all inputs non-nullable -> non-nullable output (static analysis)
+        // Note: overflow can still produce NULL at runtime
         let non_nullable_fields: Vec<FieldRef> = vec![
             Field::new("y", DataType::Int32, false).into(),
             Field::new("m", DataType::Int32, false).into(),
@@ -321,7 +339,10 @@ mod tests {
             arg_fields: &non_nullable_fields,
             scalar_arguments: &scalar_arguments,
         })?;
-        assert!(field.is_nullable(), "result should be nullable");
+        assert!(
+            !field.is_nullable(),
+            "non-nullable inputs should yield non-nullable output"
+        );
 
         // any nullable input -> nullable output
         let nullable_fields: Vec<FieldRef> = vec![
@@ -336,6 +357,35 @@ mod tests {
         assert!(
             field.is_nullable(),
             "nullable input should yield nullable output"
+        );
+
+        // non-finite secs scalar should force nullable even if fields are non-nullable
+        let all_non_nullable_fields: Vec<FieldRef> = vec![
+            Field::new("y", DataType::Int32, false).into(),
+            Field::new("m", DataType::Int32, false).into(),
+            Field::new("w", DataType::Int32, false).into(),
+            Field::new("d", DataType::Int32, false).into(),
+            Field::new("h", DataType::Int32, false).into(),
+            Field::new("mi", DataType::Int32, false).into(),
+            Field::new("s", DataType::Float64, false).into(),
+        ];
+        let scalar_values = [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(ScalarValue::Float64(Some(f64::NAN))),
+        ];
+        let scalar_refs = scalar_values.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
+        let field = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &all_non_nullable_fields,
+            scalar_arguments: &scalar_refs,
+        })?;
+        assert!(
+            field.is_nullable(),
+            "non-finite secs should force nullable output"
         );
 
         Ok(())
