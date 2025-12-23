@@ -145,7 +145,8 @@ impl Clone for FFI_ExtensionOptions {
 }
 
 impl ConfigExtension for FFI_ExtensionOptions {
-    const PREFIX: &'static str = "datafusion_ffi";
+    const PREFIX: &'static str =
+        datafusion_common::config::DATAFUSION_FFI_CONFIG_NAMESPACE;
 }
 
 impl ExtensionOptions for FFI_ExtensionOptions {

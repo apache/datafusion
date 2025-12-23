@@ -1326,6 +1326,8 @@ impl ConfigField for ConfigOptions {
     }
 }
 
+pub const DATAFUSION_FFI_CONFIG_NAMESPACE: &str = "datafusion_ffi";
+
 impl ConfigOptions {
     /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
@@ -1364,10 +1366,13 @@ impl ConfigOptions {
         }
 
         if !self.extensions.0.contains_key(prefix)
-            && self.extensions.0.contains_key("datafusion_ffi")
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
         {
             inner_key = key;
-            prefix = "datafusion_ffi";
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
@@ -1620,7 +1625,6 @@ impl Extensions {
 
     /// Retrieves the extension of the given type if any
     pub fn get_mut<T: ConfigExtension>(&mut self) -> Option<&mut T> {
-        println!("extensions trying get_mut on prefix {}", T::PREFIX);
         let e = self.0.get_mut(T::PREFIX)?;
         e.0.as_any_mut().downcast_mut()
     }
@@ -2152,11 +2156,12 @@ impl TableOptions {
         }
 
         if !self.extensions.0.contains_key(prefix)
-            && self.extensions.0.contains_key("datafusion_ffi")
+            && self
+                .extensions
+                .0
+                .contains_key(DATAFUSION_FFI_CONFIG_NAMESPACE)
         {
-            prefix = "datafusion_ffi";
-        } else {
-            println!("Existing keys {:?}", self.extensions.0.keys());
+            prefix = DATAFUSION_FFI_CONFIG_NAMESPACE;
         }
 
         let Some(e) = self.extensions.0.get_mut(prefix) else {
