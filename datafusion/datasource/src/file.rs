@@ -223,24 +223,6 @@ pub trait FileSource: Send + Sync {
         Ok(None)
     }
 
-    /// Set the file ordering information
-    ///
-    /// This allows the file source to know how the files are sorted,
-    /// enabling it to make informed decisions about sort pushdown.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `not_impl_err!`. FileSource implementations that support
-    /// sort optimization should override this method.
-    fn with_file_ordering_info(
-        &self,
-        _ordering: Option<LexOrdering>,
-    ) -> Result<Arc<dyn FileSource>> {
-        // Default: clone self without modification
-        // ParquetSource will override this
-        not_impl_err!("with_file_ordering_info not implemented for this FileSource")
-    }
-
     /// Deprecated: Set optional schema adapter factory.
     ///
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.

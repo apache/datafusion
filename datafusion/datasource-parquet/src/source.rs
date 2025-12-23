@@ -54,7 +54,7 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
@@ -288,9 +288,6 @@ pub struct ParquetSource {
     pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
-    /// The ordering of data within the files
-    /// This is set by FileScanConfig when it knows the file ordering
-    file_ordering: Option<LexOrdering>,
     /// If true, read files in reverse order and reverse row groups within files.
     /// But it's not guaranteed that rows within row groups are in reverse order,
     /// so we still need to sort them after reading, so the reverse scan is inexact.
@@ -320,7 +317,6 @@ impl ParquetSource {
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
-            file_ordering: None,
             reverse_row_groups: false,
         }
     }
@@ -394,12 +390,6 @@ impl ParquetSource {
     /// Defaults to false.
     pub fn with_pushdown_filters(mut self, pushdown_filters: bool) -> Self {
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
-        self
-    }
-
-    /// If set, indicates the ordering of data within the files being read.
-    pub fn with_file_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
-        self.file_ordering = ordering;
         self
     }
 
@@ -771,25 +761,9 @@ impl FileSource for ParquetSource {
         order: &[PhysicalSortExpr],
         eq_properties: &EquivalenceProperties,
     ) -> datafusion_common::Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
-        let file_ordering = match &self.file_ordering {
-            Some(ordering) => ordering,
-            None => return Ok(SortOrderPushdownResult::Unsupported),
-        };
-
         if order.is_empty() {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
-
-        // Create the reversed file ordering by flipping sort directions.
-        // This handles complex orderings including monotonic functions.
-        //
-        // Example:
-        // File ordering: [extract_year_month(ws) DESC, ws DESC]
-        // Reversed:      [extract_year_month(ws) ASC, ws ASC]
-        let reversed_file_ordering: Vec<PhysicalSortExpr> = file_ordering
-            .iter()
-            .map(|expr| expr.clone().reverse())
-            .collect();
 
         // Build new equivalence properties with the reversed ordering.
         // This allows us to check if the reversed ordering satisfies the request
@@ -804,16 +778,27 @@ impl FileSource for ParquetSource {
         // 3. Requested: [ws ASC]
         // 4. Through extract_year_month's monotonicity property, the reversed
         //    ordering satisfies [ws ASC] even though it has additional prefix
-        let mut reversed_eq_properties = eq_properties.clone();
-        reversed_eq_properties.clear_orderings();
-        reversed_eq_properties.add_ordering(reversed_file_ordering.clone());
+        let reversed_eq_properties = {
+            let mut new = eq_properties.clone();
+            new.clear_orderings();
 
-        // Check if the reversed file ordering satisfies the requested ordering.
-        // This uses ordering_satisfy which internally:
-        // - Normalizes both orderings (removes constants)
-        // - Checks monotonic functions
-        // - Handles prefix matching
-        if !reversed_eq_properties.ordering_satisfy(order.to_vec())? {
+            // 反转每个 ordering class 中的排序表达式
+            let reversed_orderings = eq_properties
+                .oeq_class()
+                .iter()
+                .map(|ordering| {
+                    ordering
+                        .iter()
+                        .map(|expr| expr.reverse())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+
+            new.add_orderings(reversed_orderings);
+            new
+        };
+
+        if !reversed_eq_properties.ordering_satisfy(order.iter().cloned())? {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
 
@@ -832,13 +817,6 @@ impl FileSource for ParquetSource {
         // - File reordering based on min/max statistics
         // - Detection of exact ordering (return Exact to remove Sort operator)
         // - Partial sort pushdown for prefix matches
-    }
-
-    fn with_file_ordering_info(
-        &self,
-        ordering: Option<LexOrdering>,
-    ) -> datafusion_common::Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(self.clone().with_file_ordering(ordering)))
     }
 }
 

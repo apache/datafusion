@@ -829,47 +829,14 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        let file_ordering = self.output_ordering.first().cloned();
-
-        if file_ordering.is_none() {
-            return Ok(SortOrderPushdownResult::Unsupported);
-        }
-
-        // Build equivalence properties which include:
-        // - Orderings from file schema
-        // - Constant columns from filters (e.g., ticker = 'AAPL')
-        // - Equivalence relationships
-        let eq_properties = self.eq_properties();
-
-        // First check if the requested ordering is already satisfied in the forward direction.
-        // ordering_satisfy internally:
-        // - Normalizes the ordering (removes constant columns)
-        // - Checks monotonic functions
-        // - Handles prefix matching
-        //
-        // This handles cases where:
-        // - Exact match: [a ASC] requested, [a ASC, b DESC] available
-        // - Through monotonicity: [ws DESC] requested, [extract_year_month(ws) DESC, ws DESC] available
-        // - Through constants: [a ASC] requested, but 'a' is constant (from WHERE a = 5)
-        if eq_properties.ordering_satisfy(order.to_vec())? {
-            // Already satisfied - no optimization needed
-            return Ok(SortOrderPushdownResult::Unsupported);
-        }
-
-        // Provide the file ordering to FileSource so it has context
-        // about what ordering the files naturally provide.
-        let file_source_with_ordering = self
-            .file_source
-            .with_file_ordering_info(file_ordering)
-            .unwrap_or_else(|_| Arc::clone(&self.file_source));
-
         // Delegate to FileSource to check if reverse scanning can satisfy the request.
         // FileSource will:
         // 1. Reverse the file ordering
         // 2. Use eq_properties.ordering_satisfy() to check if reversed ordering works
         // 3. Return Inexact/Exact if it can help, Unsupported otherwise
-        let pushdown_result =
-            file_source_with_ordering.try_reverse_output(order, &eq_properties)?;
+        let pushdown_result = self
+            .file_source
+            .try_reverse_output(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
