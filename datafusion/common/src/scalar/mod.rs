@@ -1342,6 +1342,7 @@ impl ScalarValue {
     pub fn new_pi_upper(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             // TODO: half::f16 doesn't seem to have equivalent
+            // https://github.com/apache/datafusion/issues/19465
             DataType::Float32 => Ok(ScalarValue::from(consts::PI_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::PI_UPPER_F64)),
             _ => {
@@ -1354,6 +1355,7 @@ impl ScalarValue {
     pub fn new_negative_pi_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             // TODO: half::f16 doesn't seem to have equivalent
+            // https://github.com/apache/datafusion/issues/19465
             DataType::Float32 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::NEGATIVE_PI_LOWER_F64)),
             _ => {
@@ -1366,6 +1368,7 @@ impl ScalarValue {
     pub fn new_frac_pi_2_upper(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             // TODO: half::f16 doesn't seem to have equivalent
+            // https://github.com/apache/datafusion/issues/19465
             DataType::Float32 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F32)),
             DataType::Float64 => Ok(ScalarValue::from(consts::FRAC_PI_2_UPPER_F64)),
             _ => {
@@ -1378,6 +1381,7 @@ impl ScalarValue {
     pub fn new_neg_frac_pi_2_lower(datatype: &DataType) -> Result<ScalarValue> {
         match datatype {
             // TODO: half::f16 doesn't seem to have equivalent
+            // https://github.com/apache/datafusion/issues/19465
             DataType::Float32 => {
                 Ok(ScalarValue::from(consts::NEGATIVE_FRAC_PI_2_LOWER_F32))
             }
