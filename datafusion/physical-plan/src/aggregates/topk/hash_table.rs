@@ -262,6 +262,7 @@ where
         };
 
         let hash: u64 = id.hash(&self.rnd);
+        // TODO: avoid double lookup by using entry API
         if let Some(map_idx) = self.map.find(hash, |mi| id == *mi) {
             return (map_idx, false);
         }
