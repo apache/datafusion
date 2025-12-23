@@ -576,6 +576,9 @@ impl CsvFormat {
                         if records_read > 0 {
                             // at least 1 data row read, record the inferred datatype
                             possibilities.insert(field.data_type().clone());
+                        } else if records_to_read == 0 {
+                            // schema inference is disabled, use Utf8 as default
+                            possibilities.insert(DataType::Utf8);
                         }
                         (field.name().clone(), possibilities)
                     })
@@ -599,6 +602,7 @@ impl CsvFormat {
                         possibilities.insert(field.data_type().clone());
                     },
                 );
+
 
                 // Handle files with different numbers of columns by extending the schema
                 if fields.len() > column_type_possibilities.len() {
@@ -884,5 +888,66 @@ mod tests {
 
         // Should default to Utf8 for conflicting types
         assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
+    }
+
+    use datafusion_session::Session;
+    use datafusion_common::config::{ConfigOptions, TableOptions};
+    use datafusion_common::{DFSchema, Result};
+    use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use crate::CsvFormat;
+    use futures::stream;
+    use bytes::Bytes;
+
+    struct MockSession;
+
+    #[async_trait::async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str { unimplemented!() }
+        fn config(&self) -> &SessionConfig { unimplemented!() }
+        async fn create_physical_plan(&self, _: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> { unimplemented!() }
+        fn create_physical_expr(&self, _: Expr, _: &DFSchema) -> Result<Arc<dyn PhysicalExpr>> { unimplemented!() }
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> { unimplemented!() }
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> { unimplemented!() }
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> { unimplemented!() }
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> { unimplemented!() }
+        fn execution_props(&self) -> &ExecutionProps { unimplemented!() }
+        fn as_any(&self) -> &dyn Any { unimplemented!() }
+        fn table_options(&self) -> &TableOptions { unimplemented!() }
+        fn table_options_mut(&mut self) -> &mut TableOptions { unimplemented!() }
+        fn task_ctx(&self) -> Arc<TaskContext> { unimplemented!() }
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_zero_limit() {
+        // Verify that setting schema_infer_max_records to 0 results in Utf8 columns
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(0);
+        
+        // Mock stream with one chunk (header + 1 row to be safe, though 0 lines read)
+        // With schema_infer_max_rec=0, it should read 0 lines.
+        let data = "col1,col2\n1,2\n";
+        let stream = stream::iter(vec![Ok(Bytes::from(data))]);
+        
+        let session = MockSession;
+        
+        let (schema, records_read) = csv_format.infer_schema_from_stream(
+            &session, 
+            0, // records_to_read = 0
+            stream
+        ).await.expect("infer_schema failed");
+        
+        assert_eq!(records_read, 0);
+        assert_eq!(schema.fields().len(), 2);
+        assert_eq!(*schema.field(0).data_type(), DataType::Utf8);
+        assert_eq!(*schema.field(1).data_type(), DataType::Utf8);
     }
 }
