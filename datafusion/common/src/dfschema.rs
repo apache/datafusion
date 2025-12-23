@@ -2070,7 +2070,7 @@ mod tests {
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
         let output = schema.tree_string();
-        insta::assert_snapshot!(output, @r###"root"###);
+        insta::assert_snapshot!(output, @"root");
     }
 
     #[test]

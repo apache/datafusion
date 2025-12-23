@@ -96,7 +96,9 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
         .await?;
 
     // Show information from the dataframe
-    println!("\n\n===============================================================================");
+    println!(
+        "\n\n==============================================================================="
+    );
     println!("Encrypted Parquet DataFrame:");
     query_dataframe(&encrypted_parquet_df).await?;
 

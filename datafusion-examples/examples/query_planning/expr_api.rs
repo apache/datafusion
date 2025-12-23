@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, Int32Array, Int8Array};
+use arrow::array::{BooleanArray, Int8Array, Int32Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -37,7 +37,7 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
+use datafusion::physical_expr::{AnalysisContext, ExprBoundaries, analyze};
 use datafusion::prelude::*;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
@@ -344,9 +344,11 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
     //
     // (a' - b' + 1) / (a - b)
     // (10000 - 5000 + 1) / (10000 - 1)
-    assert!(analysis
-        .selectivity
-        .is_some_and(|selectivity| (0.5..=0.6).contains(&selectivity)));
+    assert!(
+        analysis
+            .selectivity
+            .is_some_and(|selectivity| (0.5..=0.6).contains(&selectivity))
+    );
 
     Ok(())
 }
@@ -417,9 +419,11 @@ fn boundary_analysis_in_conjunctions_demo() -> Result<()> {
     //
     // Granted a column such as age will more likely follow a Normal distribution
     // as such our selectivity estimation will not be as good as it can.
-    assert!(analysis
-        .selectivity
-        .is_some_and(|selectivity| (0.1..=0.2).contains(&selectivity)));
+    assert!(
+        analysis
+            .selectivity
+            .is_some_and(|selectivity| (0.1..=0.2).contains(&selectivity))
+    );
 
     // The above example was a good way to look at how we can derive better
     // interval and get a lower selectivity during boundary analysis.
@@ -535,10 +539,11 @@ fn type_coercion_demo() -> Result<()> {
     let physical_expr =
         datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
-    assert!(e
-        .find_root()
-        .to_string()
-        .contains("Invalid comparison operation: Int8 > Int32"));
+    assert!(
+        e.find_root()
+            .to_string()
+            .contains("Invalid comparison operation: Int8 > Int32")
+    );
 
     // 1. Type coercion with `SessionContext::create_physical_expr` which implicitly applies type coercion before constructing the physical expr.
     let physical_expr =

@@ -86,9 +86,11 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 
+use super::partitioned_hash_eval::SeededRandomState;
+
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-pub(crate) const HASH_JOIN_SEED: RandomState =
-    RandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+pub(crate) const HASH_JOIN_SEED: SeededRandomState =
+    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
@@ -334,8 +336,8 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
-    /// Shared the `RandomState` for the hashing algorithm
-    random_state: RandomState,
+    /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
+    random_state: SeededRandomState,
     /// Partitioning mode to use
     pub mode: PartitionMode,
     /// Execution metrics
@@ -930,7 +932,7 @@ impl ExecutionPlan for HashJoinExec {
                     MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
 
                 Ok(collect_left_input(
-                    self.random_state.clone(),
+                    self.random_state.random_state().clone(),
                     left_stream,
                     on_left.clone(),
                     join_metrics.clone(),
@@ -958,7 +960,7 @@ impl ExecutionPlan for HashJoinExec {
                         .register(context.memory_pool());
 
                 OnceFut::new(collect_left_input(
-                    self.random_state.clone(),
+                    self.random_state.random_state().clone(),
                     left_stream,
                     on_left.clone(),
                     join_metrics.clone(),
@@ -1041,7 +1043,7 @@ impl ExecutionPlan for HashJoinExec {
             self.filter.clone(),
             self.join_type,
             right_stream,
-            self.random_state.clone(),
+            self.random_state.random_state().clone(),
             join_metrics,
             column_indices_after_projection,
             self.null_equality,
@@ -1779,15 +1781,15 @@ mod tests {
 
         allow_duplicates! {
             // Inner join output is expected to preserve both inputs order
-            assert_snapshot!(batches_to_string(&batches), @r#"
-                +----+----+----+----+----+----+
-                | a1 | b1 | c1 | a2 | b1 | c2 |
-                +----+----+----+----+----+----+
-                | 1  | 4  | 7  | 10 | 4  | 70 |
-                | 2  | 5  | 8  | 20 | 5  | 80 |
-                | 3  | 5  | 9  | 20 | 5  | 80 |
-                +----+----+----+----+----+----+
-                "#);
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1827,15 +1829,15 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
-                +----+----+----+----+----+----+
-                | a1 | b1 | c1 | a2 | b1 | c2 |
-                +----+----+----+----+----+----+
-                | 1  | 4  | 7  | 10 | 4  | 70 |
-                | 2  | 5  | 8  | 20 | 5  | 80 |
-                | 3  | 5  | 9  | 20 | 5  | 80 |
-                +----+----+----+----+----+----+
-                "#);
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 2  | 5  | 8  | 20 | 5  | 80 |
+            | 3  | 5  | 9  | 20 | 5  | 80 |
+            +----+----+----+----+----+----+
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1875,7 +1877,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -1883,7 +1885,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 5  | 9  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -1923,7 +1925,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -1932,7 +1934,7 @@ mod tests {
             | 0  | 4  | 6  | 10 | 4  | 70 |
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 4);
@@ -2000,7 +2002,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b2 | c1 | a1 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2008,7 +2010,7 @@ mod tests {
             | 2  | 2  | 8  | 2  | 2  | 80 |
             | 2  | 2  | 9  | 2  | 2  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2085,7 +2087,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b2 | c1 | a1 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2093,7 +2095,7 @@ mod tests {
             | 2  | 2  | 8  | 2  | 2  | 80 |
             | 2  | 2  | 9  | 2  | 2  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2144,7 +2146,7 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2153,7 +2155,7 @@ mod tests {
             | 0  | 4  | 6  | 10 | 4  | 70 |
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 4);
@@ -2226,13 +2228,13 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
             | 1  | 4  | 7  | 10 | 4  | 70 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         // second part
@@ -2256,14 +2258,14 @@ mod tests {
 
         // Inner join output is expected to preserve both inputs order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
             | 2  | 5  | 8  | 30 | 5  | 90 |
             | 3  | 5  | 9  | 30 | 5  | 90 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2314,7 +2316,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2324,7 +2326,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2364,7 +2366,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2376,7 +2378,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2412,7 +2414,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2420,7 +2422,7 @@ mod tests {
             | 2  | 5  | 8  |    |    |    |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2456,7 +2458,7 @@ mod tests {
         let batches = common::collect(stream).await.unwrap();
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -2464,7 +2466,7 @@ mod tests {
             | 2  | 5  | 8  |    |    |    |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
     }
 
@@ -2500,7 +2502,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2508,7 +2510,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2548,7 +2550,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -2556,7 +2558,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -2612,7 +2614,7 @@ mod tests {
 
         // ignore the order
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -2620,7 +2622,7 @@ mod tests {
             | 13 | 10 | 130 |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2713,13 +2715,13 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
             | 13 | 10 | 130 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2754,7 +2756,7 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -2762,7 +2764,7 @@ mod tests {
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2817,7 +2819,7 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -2825,7 +2827,7 @@ mod tests {
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
@@ -2854,14 +2856,14 @@ mod tests {
 
         // RightSemi join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
             | 12 | 10 | 40  |
             | 10 | 10 | 100 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -2894,7 +2896,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+
             | a1 | b1 | c1 |
             +----+----+----+
@@ -2903,7 +2905,7 @@ mod tests {
             | 5  | 5  | 50 |
             | 7  | 7  | 70 |
             +----+----+----+
-                "#);
+            ");
         }
         Ok(())
     }
@@ -2954,7 +2956,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -2965,7 +2967,7 @@ mod tests {
             | 7  | 7  | 70  |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 13
@@ -2997,7 +2999,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+-----+
             | a1 | b1 | c1  |
             +----+----+-----+
@@ -3008,7 +3010,7 @@ mod tests {
             | 7  | 7  | 70  |
             | 9  | 8  | 90  |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3041,7 +3043,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -3049,7 +3051,7 @@ mod tests {
             | 2  | 2  | 80  |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
         Ok(())
     }
@@ -3102,7 +3104,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -3112,7 +3114,7 @@ mod tests {
             | 10 | 10 | 100 |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and right_table.b2!=8
@@ -3149,7 +3151,7 @@ mod tests {
 
         // RightAnti join output is expected to preserve right input order
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +----+----+-----+
             | a2 | b2 | c2  |
             +----+----+-----+
@@ -3158,7 +3160,7 @@ mod tests {
             | 2  | 2  | 80  |
             | 4  | 4  | 120 |
             +----+----+-----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3196,7 +3198,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -3204,7 +3206,7 @@ mod tests {
             | 1  | 4  | 7  | 10 | 4  | 70 |
             | 2  | 5  | 8  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3244,7 +3246,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b1 | c2 |
             +----+----+----+----+----+----+
@@ -3252,7 +3254,7 @@ mod tests {
             | 1  | 4  | 7  | 10 | 4  | 70 |
             | 2  | 5  | 8  | 20 | 5  | 80 |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3294,7 +3296,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+----+----+----+
             | a1 | b1 | c1 | a2 | b2 | c2 |
             +----+----+----+----+----+----+
@@ -3303,7 +3305,7 @@ mod tests {
             | 2  | 5  | 8  | 20 | 5  | 80 |
             | 3  | 7  | 9  |    |    |    |
             +----+----+----+----+----+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3341,7 +3343,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+-------+
             | a1 | b1 | c1 | mark  |
             +----+----+----+-------+
@@ -3349,7 +3351,7 @@ mod tests {
             | 2  | 5  | 8  | true  |
             | 3  | 7  | 9  | false |
             +----+----+----+-------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3389,7 +3391,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "mark"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +----+----+----+-------+
             | a1 | b1 | c1 | mark  |
             +----+----+----+-------+
@@ -3397,7 +3399,7 @@ mod tests {
             | 2  | 5  | 8  | true  |
             | 3  | 7  | 9  | false |
             +----+----+----+-------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -3661,14 +3663,14 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+----+
             | a | b | c | a  | b | c  |
             +---+---+---+----+---+----+
             | 1 | 4 | 7 | 10 | 1 | 70 |
             | 2 | 5 | 8 | 20 | 2 | 80 |
             +---+---+---+----+---+----+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3738,14 +3740,14 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
             | 2 | 7 | 9 | 10 | 2 | 7 |
             | 2 | 7 | 9 | 20 | 2 | 5 |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3787,7 +3789,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
@@ -3797,7 +3799,7 @@ mod tests {
             | 2 | 7 | 9 | 20 | 2 | 5 |
             | 2 | 8 | 1 |    |   |   |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -3839,7 +3841,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +---+---+---+----+---+---+
             | a | b | c | a  | b | c |
             +---+---+---+----+---+---+
@@ -3848,7 +3850,7 @@ mod tests {
             | 2 | 7 | 9 | 10 | 2 | 7 |
             | 2 | 7 | 9 | 20 | 2 | 5 |
             +---+---+---+----+---+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -4094,7 +4096,7 @@ mod tests {
         let batches = common::collect(stream).await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
             +------------+---+------------+---+
             | date       | n | date       | n |
             +------------+---+------------+---+
@@ -4102,7 +4104,7 @@ mod tests {
             | 2022-04-26 | 2 | 2022-04-26 | 5 |
             | 2022-04-27 | 3 | 2022-04-27 | 6 |
             +------------+---+------------+---+
-                "#);
+            ");
         }
 
         Ok(())
@@ -4504,7 +4506,7 @@ mod tests {
         assert_eq!(columns, vec!["n1", "n2"]);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&batches), @r#"
+            assert_snapshot!(batches_to_string(&batches), @r"
             +--------+--------+
             | n1     | n2     |
             +--------+--------+
@@ -4512,7 +4514,7 @@ mod tests {
             | {a: 1} | {a: 1} |
             | {a: 2} | {a: 2} |
             +--------+--------+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 3);
@@ -4543,13 +4545,13 @@ mod tests {
         .await?;
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_sort_string(&batches_null_eq), @r#"
+            assert_snapshot!(batches_to_sort_string(&batches_null_eq), @r"
             +----+----+
             | n1 | n2 |
             +----+----+
             |    |    |
             +----+----+
-                "#);
+            ");
         }
 
         assert_join_metrics!(metrics, 1);

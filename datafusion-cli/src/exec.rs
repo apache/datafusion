@@ -35,19 +35,19 @@ use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
-use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
+use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
-use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
+use std::io::prelude::*;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -168,7 +168,10 @@ pub async fn exec_from_repl(
                         }
                     }
                 } else {
-                    eprintln!("'\\{}' is not a valid command, you can use '\\?' to see all commands", &line[1..]);
+                    eprintln!(
+                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
+                        &line[1..]
+                    );
                 }
             }
             Ok(line) => {
@@ -334,7 +337,9 @@ impl StatementExecutor {
                 if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
                     && self.statement_for_retry.is_some() =>
             {
-                warn!("S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration.");
+                warn!(
+                    "S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration."
+                );
                 let plan =
                     create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
                         .await?;
@@ -699,8 +704,7 @@ mod tests {
     #[tokio::test]
     async fn create_object_store_table_gcs() -> Result<()> {
         let service_account_path = "fake_service_account_path";
-        let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
+        let service_account_key = "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
@@ -713,7 +717,9 @@ mod tests {
         assert!(err.to_string().contains("os error 2"));
 
         // for service_account_key
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'"
+        );
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err()
@@ -748,8 +754,9 @@ mod tests {
         let location = "path/to/file.cvs";
 
         // Test with format options
-        let sql =
-            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')"
+        );
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())

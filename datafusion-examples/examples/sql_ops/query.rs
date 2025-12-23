@@ -27,7 +27,6 @@ use datafusion::common::{assert_batches_eq, exec_datafusion_err};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
 use object_store::local::LocalFileSystem;

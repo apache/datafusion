@@ -19,7 +19,7 @@
 //! and schema information.
 
 use crate::{
-    apply_file_schema_type_coercions, coerce_int96_to_resolution, ObjectStoreFetch,
+    ObjectStoreFetch, apply_file_schema_type_coercions, coerce_int96_to_resolution,
 };
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::compute::and;
@@ -124,8 +124,8 @@ impl<'a> DFParquetMetadata<'a> {
         let cache_metadata =
             !cfg!(feature = "parquet_encryption") || decryption_properties.is_none();
 
-        if cache_metadata {
-            if let Some(parquet_metadata) = file_metadata_cache
+        if cache_metadata
+            && let Some(parquet_metadata) = file_metadata_cache
                 .as_ref()
                 .and_then(|file_metadata_cache| file_metadata_cache.get(object_meta))
                 .and_then(|file_metadata| {
@@ -136,9 +136,8 @@ impl<'a> DFParquetMetadata<'a> {
                             Arc::clone(cached_parquet_metadata.parquet_metadata())
                         })
                 })
-            {
-                return Ok(parquet_metadata);
-            }
+        {
+            return Ok(parquet_metadata);
         }
 
         let mut reader =
@@ -162,13 +161,11 @@ impl<'a> DFParquetMetadata<'a> {
                 .map_err(DataFusionError::from)?,
         );
 
-        if cache_metadata {
-            if let Some(file_metadata_cache) = file_metadata_cache {
-                file_metadata_cache.put(
-                    object_meta,
-                    Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
-                );
-            }
+        if cache_metadata && let Some(file_metadata_cache) = file_metadata_cache {
+            file_metadata_cache.put(
+                object_meta,
+                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+            );
         }
 
         Ok(metadata)

@@ -23,7 +23,7 @@ use std::{any::Any, borrow::Cow};
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{internal_err, Constraints};
+use datafusion_common::{Constraints, internal_err};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 
 /// Implements [`TableSource`] for a [`TableProvider`]

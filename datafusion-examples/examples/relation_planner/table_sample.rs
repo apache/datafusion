@@ -99,32 +99,32 @@ use futures::{
     ready,
     stream::{Stream, StreamExt},
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
 use datafusion::{
     execution::{
-        context::QueryPlanner, RecordBatchStream, SendableRecordBatchStream,
-        SessionState, SessionStateBuilder, TaskContext,
+        RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
+        TaskContext, context::QueryPlanner,
     },
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
         DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+        metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput},
     },
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner},
     prelude::*,
 };
 use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, plan_err, DFSchemaRef,
-    DataFusionError, Result, Statistics,
+    DFSchemaRef, DataFusionError, Result, Statistics, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
     logical_plan::{Extension, LogicalPlan, LogicalPlanBuilder},
     planner::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_sql::sqlparser::ast::{
     self, TableFactor, TableSampleMethod, TableSampleUnit,
@@ -341,15 +341,14 @@ impl RelationPlanner for TableSamplePlanner {
         };
 
         // Validate sampling method
-        if let Some(method) = &sample.name {
-            if *method != TableSampleMethod::Bernoulli
-                && *method != TableSampleMethod::Row
-            {
-                return not_impl_err!(
-                    "Sampling method {} is not supported (only BERNOULLI and ROW)",
-                    method
-                );
-            }
+        if let Some(method) = &sample.name
+            && *method != TableSampleMethod::Bernoulli
+            && *method != TableSampleMethod::Row
+        {
+            return not_impl_err!(
+                "Sampling method {} is not supported (only BERNOULLI and ROW)",
+                method
+            );
         }
 
         // Offset sampling (ClickHouse-style) not supported

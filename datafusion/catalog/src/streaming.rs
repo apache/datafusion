@@ -24,11 +24,11 @@ use crate::Session;
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{plan_err, DFSchema, Result};
+use datafusion_common::{DFSchema, Result, plan_err};
 use datafusion_expr::{Expr, SortExpr, TableType};
-use datafusion_physical_expr::{create_physical_sort_exprs, LexOrdering};
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_expr::{LexOrdering, create_physical_sort_exprs};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 
 use async_trait::async_trait;
 use log::debug;

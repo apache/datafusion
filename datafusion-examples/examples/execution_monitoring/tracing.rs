@@ -79,7 +79,9 @@ pub async fn tracing() -> Result<()> {
     // Run query WITHOUT tracer injection.
     info!("***** RUNNING WITHOUT INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITHOUT tracer: `tokio-runtime-worker` tasks did NOT inherit the `run_instrumented_query` span *****"
+    );
 
     // Inject custom tracer so tasks run in the current span.
     info!("Injecting custom tracer...");
@@ -88,7 +90,9 @@ pub async fn tracing() -> Result<()> {
     // Run query WITH tracer injection.
     info!("***** RUNNING WITH INJECTED TRACER *****");
     run_instrumented_query().await?;
-    info!("***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****");
+    info!(
+        "***** WITH tracer: `tokio-runtime-worker` tasks DID inherit the `run_instrumented_query` span *****"
+    );
 
     Ok(())
 }

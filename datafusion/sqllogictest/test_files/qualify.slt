@@ -320,16 +320,14 @@ physical_plan
 03)----ProjectionExec: expr=[dept@0 as dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
 04)------WindowAggExec: wdw=[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(14, 6), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 05)--------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[true]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=4
-08)--------------FilterExec: sum(users.salary)@2 > Some(2000000),20,2, projection=[dept@0, salary@1]
-09)----------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept, salary@1 as salary], aggr=[sum(users.salary)]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------RepartitionExec: partitioning=Hash([dept@0, salary@1], 4), input_partitions=4
-12)----------------------AggregateExec: mode=Partial, gby=[dept@1 as dept, salary@0 as salary], aggr=[sum(users.salary)]
-13)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-14)--------------------------FilterExec: salary@0 > Some(500000),10,2
-15)----------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=4
+07)------------FilterExec: sum(users.salary)@2 > Some(2000000),20,2, projection=[dept@0, salary@1]
+08)--------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept, salary@1 as salary], aggr=[sum(users.salary)]
+09)----------------RepartitionExec: partitioning=Hash([dept@0, salary@1], 4), input_partitions=4
+10)------------------AggregateExec: mode=Partial, gby=[dept@1 as dept, salary@0 as salary], aggr=[sum(users.salary)]
+11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------FilterExec: salary@0 > Some(500000),10,2
+13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # plan with aggregate function
 query TT
@@ -356,10 +354,9 @@ physical_plan
 07)------------SortPreservingMergeExec: [sum(users.salary)@1 DESC]
 08)--------------SortExec: expr=[sum(users.salary)@1 DESC], preserve_partitioning=[true]
 09)----------------AggregateExec: mode=FinalPartitioned, gby=[dept@0 as dept], aggr=[sum(users.salary)]
-10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=1
-12)----------------------AggregateExec: mode=Partial, gby=[dept@1 as dept], aggr=[sum(users.salary)]
-13)------------------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)------------------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=1
+11)--------------------AggregateExec: mode=Partial, gby=[dept@1 as dept], aggr=[sum(users.salary)]
+12)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Clean up
 statement ok

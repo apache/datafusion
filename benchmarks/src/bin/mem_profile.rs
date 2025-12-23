@@ -199,21 +199,18 @@ fn run_query(args: &[String], results: &mut Vec<QueryResult>) -> Result<()> {
 
     // Look for lines that contain execution time / memory stats
     while let Some(line) = iter.next() {
-        if let Some((query, duration_ms)) = parse_query_time(line) {
-            if let Some(next_line) = iter.peek() {
-                if let Some((peak_rss, peak_commit, page_faults)) =
-                    parse_vm_line(next_line)
-                {
-                    results.push(QueryResult {
-                        query,
-                        duration_ms,
-                        peak_rss,
-                        peak_commit,
-                        page_faults,
-                    });
-                    break;
-                }
-            }
+        if let Some((query, duration_ms)) = parse_query_time(line)
+            && let Some(next_line) = iter.peek()
+            && let Some((peak_rss, peak_commit, page_faults)) = parse_vm_line(next_line)
+        {
+            results.push(QueryResult {
+                query,
+                duration_ms,
+                peak_rss,
+                peak_commit,
+                page_faults,
+            });
+            break;
         }
     }
 
