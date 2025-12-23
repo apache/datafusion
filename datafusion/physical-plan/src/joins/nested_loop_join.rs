@@ -550,17 +550,22 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
         let join_columns = Vec::new();
-        estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = match partition {
+            Some(partition) => self.right.partition_statistics(Some(partition))?,
+            None => self.right.partition_statistics(None)?,
+        };
+
+        let stats = estimate_join_statistics(
+            left_stats,
+            right_stats,
             &join_columns,
             &self.join_type,
-            &self.schema(),
-        )
+            &self.join_schema,
+        )?;
+
+        Ok(stats.project(self.projection.as_ref()))
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
