@@ -211,6 +211,11 @@ impl CsvFormat {
 
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    ///
+    /// # Behavior when set to 0
+    ///
+    /// When `max_rec` is set to 0, schema inference is disabled and all fields
+    /// will be inferred as `Utf8` (string) type, regardless of their actual content.
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
         self.options.schema_infer_max_rec = Some(max_rec);
         self
@@ -629,6 +634,17 @@ impl CsvFormat {
     }
 }
 
+/// Builds a schema from column names and their possible data types.
+///
+/// # Arguments
+///
+/// * `names` - Vector of column names
+/// * `types` - Vector of possible data types for each column (as HashSets)
+/// * `disable_inference` - When true, forces all columns with no inferred types to be Utf8.
+///   This should be set to true when `schema_infer_max_rec` is explicitly
+///   set to 0, indicating the user wants to skip type inference and treat
+///   all fields as strings. When false, columns with no inferred types
+///   will be set to Null, allowing schema merging to work properly.
 fn build_schema_helper(
     names: Vec<String>,
     types: Vec<HashSet<DataType>>,

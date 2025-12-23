@@ -2451,7 +2451,6 @@ date_bin(interval, expression, origin-timestamp)
 - **interval**: Bin interval.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin-timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
-
   - nanoseconds
   - microseconds
   - milliseconds
@@ -2505,7 +2504,6 @@ date_part(part, expression)
 #### Arguments
 
 - **part**: Part of the date to return. The following date parts are supported:
-
   - year
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
@@ -2545,7 +2543,6 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
-
   - year / YEAR
   - quarter / QUARTER
   - month / MONTH
