@@ -292,8 +292,9 @@ physical_plan
 02)--FilterExec: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@0 > 1
 03)----ProjectionExec: expr=[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]
 04)------BoundedWindowAggExec: wdw=[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-05)--------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[false]
-06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--------SortExec: expr=[dept@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([dept@0], 4), input_partitions=1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # plan with window function and group by
 query TT

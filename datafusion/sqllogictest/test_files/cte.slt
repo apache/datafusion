@@ -910,8 +910,10 @@ logical_plan
 05)------TableScan: person projection=[id]
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
-02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+05)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement count 0
 drop table person;

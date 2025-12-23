@@ -404,9 +404,9 @@ logical_plan
 02)--TableScan: t1000 projection=[i]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[i@0 as i], aggr=[]
-02)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=1
+02)--RepartitionExec: partitioning=Hash([i@0], 4), input_partitions=4
 03)----AggregateExec: mode=Partial, gby=[i@0 as i], aggr=[]
-04)------DataSourceExec: partitions=1
+04)------DataSourceExec: partitions=4
 
 statement ok
 set datafusion.explain.show_sizes = true;
