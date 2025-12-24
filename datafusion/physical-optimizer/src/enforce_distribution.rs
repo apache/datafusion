@@ -40,7 +40,8 @@ use datafusion_expr::logical_plan::JoinType;
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, PhysicalExprRef, physical_exprs_equal,
+    EquivalenceProperties, PartitioningSatisfaction, PhysicalExpr, PhysicalExprRef,
+    physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -831,6 +832,63 @@ fn new_join_conditions(
         .collect()
 }
 
+#[derive(Debug, Clone)]
+pub struct DistributionSatisfactionResult {
+    requirement: Distribution,
+    output_partitioning: Partitioning,
+    satisfaction: PartitioningSatisfaction,
+}
+
+impl DistributionSatisfactionResult {
+    pub fn is_satisfied(&self) -> bool {
+        self.satisfaction.is_satisfied()
+    }
+
+    pub fn satisfaction(&self) -> PartitioningSatisfaction {
+        self.satisfaction
+    }
+
+    pub fn output_partitioning(&self) -> &Partitioning {
+        &self.output_partitioning
+    }
+
+    pub fn required_distribution(&self) -> &Distribution {
+        &self.requirement
+    }
+
+    pub fn requires_repartition(
+        &self,
+        allow_subset: bool,
+        target_partitions: usize,
+    ) -> bool {
+        (match self.satisfaction {
+            PartitioningSatisfaction::Exact => false,
+            PartitioningSatisfaction::Subset => !allow_subset,
+            PartitioningSatisfaction::NotSatisfied => true,
+        }) || (!allow_subset
+            && target_partitions > self.output_partitioning.partition_count())
+    }
+}
+
+pub fn distribution_satisfaction(
+    plan: &Arc<dyn ExecutionPlan>,
+    requirement: &Distribution,
+    allow_subset: bool,
+) -> DistributionSatisfactionResult {
+    let output_partitioning = plan.output_partitioning().clone();
+    let satisfaction = output_partitioning.satisfaction(
+        requirement,
+        plan.equivalence_properties(),
+        allow_subset,
+    );
+
+    DistributionSatisfactionResult {
+        requirement: requirement.clone(),
+        output_partitioning,
+        satisfaction,
+    }
+}
+
 /// Adds RoundRobin repartition operator to the plan increase parallelism.
 ///
 /// # Arguments
@@ -890,7 +948,7 @@ fn add_roundrobin_on_top(
 /// distribution is satisfied by adding a Hash repartition.
 fn add_hash_on_top(
     input: DistributionContext,
-    hash_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    satisfaction: &DistributionSatisfactionResult,
     n_target: usize,
     allow_subset_satisfy_partitioning: bool,
 ) -> Result<DistributionContext> {
@@ -900,22 +958,11 @@ fn add_hash_on_top(
         return Ok(input);
     }
 
-    let dist = Distribution::HashPartitioned(hash_exprs);
-    let satisfaction = input.plan.output_partitioning().satisfaction(
-        &dist,
-        input.plan.equivalence_properties(),
-        allow_subset_satisfy_partitioning,
-    );
-
     // Add hash repartitioning when:
     // - When subset satisfaction is enabled (current >= threshold): only repartition if not satisfied
     // - When below threshold (current < threshold): repartition if expressions don't match OR to increase parallelism
-    let needs_repartition = if allow_subset_satisfy_partitioning {
-        !satisfaction.is_satisfied()
-    } else {
-        !satisfaction.is_satisfied()
-            || n_target > input.plan.output_partitioning().partition_count()
-    };
+    let needs_repartition =
+        satisfaction.requires_repartition(allow_subset_satisfy_partitioning, n_target);
 
     if needs_repartition {
         // When there is an existing ordering, we preserve ordering during
@@ -925,7 +972,10 @@ fn add_hash_on_top(
         //   requirements.
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
-        let partitioning = dist.create_partitioning(n_target);
+        let partitioning = satisfaction
+            .required_distribution()
+            .clone()
+            .create_partitioning(n_target);
         let repartition =
             RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
                 .with_preserve_order();
@@ -1070,94 +1120,37 @@ struct RepartitionRequirementStatus {
     /// Designates whether round robin partitioning is beneficial according to
     /// the statistical information we have on the number of rows.
     roundrobin_beneficial_stats: bool,
-    /// Designates whether hash partitioning is necessary.
-    hash_necessary: bool,
 }
 
-/// Calculates the `RepartitionRequirementStatus` for each children to generate
+/// Calculates the `RepartitionRequirementStatus` for each child to generate
 /// consistent and sensible (in terms of performance) distribution requirements.
-/// As an example, a hash join's left (build) child might produce
-///
-/// ```text
-/// RepartitionRequirementStatus {
-///     ..,
-///     hash_necessary: true
-/// }
-/// ```
-///
-/// while its right (probe) child might have very few rows and produce:
-///
-/// ```text
-/// RepartitionRequirementStatus {
-///     ..,
-///     hash_necessary: false
-/// }
-/// ```
-///
-/// These statuses are not consistent as all children should agree on hash
-/// partitioning. This function aligns the statuses to generate consistent
-/// hash partitions for each children. After alignment, the right child's
-/// status would turn into:
-///
-/// ```text
-/// RepartitionRequirementStatus {
-///     ..,
-///     hash_necessary: true
-/// }
-/// ```
 fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
     should_use_estimates: bool,
 ) -> Result<Vec<RepartitionRequirementStatus>> {
-    let mut needs_alignment = false;
     let children = plan.children();
     let rr_beneficial = plan.benefits_from_input_partitioning();
     let requirements = plan.required_input_distribution();
-    let mut repartition_status_flags = vec![];
-    for (child, requirement, roundrobin_beneficial) in
-        izip!(children.into_iter(), requirements, rr_beneficial)
-    {
-        // Decide whether adding a round robin is beneficial depending on
-        // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match child.partition_statistics(None)?.num_rows
-        {
-            Precision::Exact(n_rows) => n_rows > batch_size,
-            Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
-            Precision::Absent => true,
-        };
-        let is_hash = matches!(requirement, Distribution::HashPartitioned(_));
-        // Hash re-partitioning is necessary when the input has more than one
-        // partitions:
-        let multi_partitions = child.output_partitioning().partition_count() > 1;
-        let roundrobin_sensible = roundrobin_beneficial && roundrobin_beneficial_stats;
-        needs_alignment |= is_hash && (multi_partitions || roundrobin_sensible);
-        repartition_status_flags.push((
-            is_hash,
-            RepartitionRequirementStatus {
+    izip!(children.into_iter(), requirements, rr_beneficial)
+        .map(|(child, requirement, roundrobin_beneficial)| {
+            // Decide whether adding a round robin is beneficial depending on
+            // the statistical information we have on the number of rows:
+            let roundrobin_beneficial_stats =
+                match child.partition_statistics(None)?.num_rows {
+                    Precision::Exact(n_rows) => n_rows > batch_size,
+                    Precision::Inexact(n_rows) => {
+                        !should_use_estimates || (n_rows > batch_size)
+                    }
+                    Precision::Absent => true,
+                };
+            Ok(RepartitionRequirementStatus {
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary: is_hash && multi_partitions,
-            },
-        ));
-    }
-    // Align hash necessary flags for hash partitions to generate consistent
-    // hash partitions at each children:
-    if needs_alignment {
-        // When there is at least one hash requirement that is necessary or
-        // beneficial according to statistics, make all children require hash
-        // repartitioning:
-        for (is_hash, status) in &mut repartition_status_flags {
-            if *is_hash {
-                status.hash_necessary = true;
-            }
-        }
-    }
-    Ok(repartition_status_flags
-        .into_iter()
-        .map(|(_, status)| status)
-        .collect())
+            })
+        })
+        .collect()
 }
 
 /// This function checks whether we need to add additional data exchange
@@ -1281,7 +1274,6 @@ pub fn ensure_distribution(
                 requirement,
                 roundrobin_beneficial,
                 roundrobin_beneficial_stats,
-                hash_necessary,
             },
         )| {
             let increases_partition_count =
@@ -1321,13 +1313,19 @@ pub fn ensure_distribution(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child);
                 }
-                Distribution::HashPartitioned(exprs) => {
-                    // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
-                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
-                    if hash_necessary {
+                Distribution::HashPartitioned(_) => {
+                    let satisfaction = distribution_satisfaction(
+                        &child.plan,
+                        &requirement,
+                        allow_subset_satisfy_partitioning,
+                    );
+                    if satisfaction.requires_repartition(
+                        allow_subset_satisfy_partitioning,
+                        target_partitions,
+                    ) {
                         child = add_hash_on_top(
                             child,
-                            exprs.to_vec(),
+                            &satisfaction,
                             target_partitions,
                             allow_subset_satisfy_partitioning,
                         )?;

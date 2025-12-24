@@ -44,7 +44,9 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
+use datafusion_physical_expr::PartitioningSatisfaction;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
+use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -52,7 +54,9 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
+use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -64,6 +68,7 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{
@@ -3609,6 +3614,76 @@ async fn test_distribute_sort_memtable() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn distribution_satisfaction_exact_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+        vec![col_a, col_b],
+        PartitioningSatisfaction::Exact,
+        false,
+    )
+}
+
+#[test]
+fn distribution_satisfaction_subset_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a)],
+        vec![col_a, col_b],
+        PartitioningSatisfaction::Subset,
+        false,
+    )
+}
+
+#[test]
+fn distribution_satisfaction_superset_hash_matches_sanity_check() -> Result<()> {
+    let schema = schema();
+    let col_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("a", &schema)?);
+    let col_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new_with_schema("b", &schema)?);
+
+    assert_hash_satisfaction_alignment(
+        vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+        vec![col_a],
+        PartitioningSatisfaction::NotSatisfied,
+        true,
+    )
+}
+
+fn assert_hash_satisfaction_alignment(
+    partitioning_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    required_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    expected: PartitioningSatisfaction,
+    expect_err: bool,
+) -> Result<()> {
+    let child: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        parquet_exec(),
+        Partitioning::Hash(partitioning_exprs, 4),
+    )?);
+
+    let requirement = Distribution::HashPartitioned(required_exprs);
+    let satisfaction = distribution_satisfaction(&child, &requirement, true);
+    assert_eq!(satisfaction.satisfaction(), expected);
+
+    let parent: Arc<dyn ExecutionPlan> =
+        Arc::new(OutputRequirementExec::new(child, None, requirement, None));
+    let sanity = SanityCheckPlan::new().optimize(parent, &ConfigOptions::default());
+
+    if expect_err {
+        assert!(sanity.is_err());
+    } else {
+        sanity?;
+    }
+
+    Ok(())
+}
+
 /// Create a [`MemTable`] with 100 batches of 8192 rows each, in 1 partition
 fn create_memtable() -> Result<MemTable> {
     let mut batches = Vec::with_capacity(100);
@@ -3672,6 +3747,67 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
         Some(5),
         "Fetch value was not preserved after transformation"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn repartition_between_chained_aggregates() -> Result<()> {
+    // Regression test for issue #18989: Sanity Check Failure in Multi-Partitioned Tables
+    // with Aggregations. This test ensures the optimizer properly handles chained aggregations
+    // with different grouping keys (first aggregation groups by [ts, region], second by [ts] only).
+    // The plan: Sort -> Aggregate(ts, region) -> Sort -> Aggregate(ts).
+    // The optimizer must either insert a repartition between aggregates or maintain a single
+    // partition stream to avoid distribution requirement mismatches.
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_expr::col;
+    use datafusion_functions_aggregate::expr_fn::count;
+    use datafusion_physical_plan::{collect, displayable};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("ts", DataType::Int64, true),
+        Field::new("region", DataType::Utf8, true),
+        Field::new("value", DataType::Int64, true),
+    ]));
+    let empty_batch = RecordBatch::new_empty(schema.clone());
+    let partitions = vec![vec![empty_batch.clone()], vec![empty_batch]];
+    let mem_table = MemTable::try_new(schema, partitions)?;
+
+    let config = SessionConfig::new().with_target_partitions(2);
+    let ctx = SessionContext::new_with_config(config);
+    ctx.register_table("metrics", Arc::new(mem_table))?;
+
+    let df = ctx
+        .table("metrics")
+        .await?
+        .sort(vec![
+            col("ts").sort(true, true),
+            col("region").sort(true, true),
+        ])?
+        .aggregate(vec![col("ts"), col("region")], vec![count(col("value"))])?
+        .sort(vec![
+            col("ts").sort(true, true),
+            col("region").sort(true, true),
+        ])?
+        .aggregate(vec![col("ts")], vec![count(col("region"))])?;
+
+    let physical_plan = df.create_physical_plan().await?;
+
+    // The optimizer should either keep the stream single-partitioned via the
+    // sort-preserving merge, or insert a repartition between the two aggregates
+    // so that the second grouping sees a consistent hash distribution.
+    let plan_display = displayable(physical_plan.as_ref()).indent(true).to_string();
+    let has_repartition =
+        plan_display.contains("RepartitionExec: partitioning=Hash([ts@0], 2)");
+    assert!(
+        has_repartition || plan_display.contains("SortPreservingMergeExec"),
+        "Expected either a repartition between aggregates or a sort-preserving merge chain"
+    );
+
+    // Execute the optimized plan to ensure the empty, multi-partition pipeline does not panic.
+    let batches = collect(physical_plan, ctx.task_ctx()).await?;
+    assert!(batches.is_empty());
 
     Ok(())
 }

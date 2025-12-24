@@ -1204,12 +1204,21 @@ physical_plan
 09)│          c1@0 ASC         ││          c1@0 ASC         │
 10)└─────────────┬─────────────┘└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-12)│       DataSourceExec      ││       DataSourceExec      │
+12)│      RepartitionExec      ││      RepartitionExec      │
 13)│    --------------------   ││    --------------------   │
-14)│        bytes: 5932        ││        bytes: 5932        │
-15)│       format: memory      ││       format: memory      │
-16)│          rows: 1          ││          rows: 1          │
-17)└───────────────────────────┘└───────────────────────────┘
+14)│ partition_count(in->out): ││ partition_count(in->out): │
+15)│           1 -> 4          ││           1 -> 4          │
+16)│                           ││                           │
+17)│    partitioning_scheme:   ││    partitioning_scheme:   │
+18)│      Hash([c1@0], 4)      ││      Hash([c1@0], 4)      │
+19)└─────────────┬─────────────┘└─────────────┬─────────────┘
+20)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+21)│       DataSourceExec      ││       DataSourceExec      │
+22)│    --------------------   ││    --------------------   │
+23)│        bytes: 5932        ││        bytes: 5932        │
+24)│       format: memory      ││       format: memory      │
+25)│          rows: 1          ││          rows: 1          │
+26)└───────────────────────────┘└───────────────────────────┘
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = true;

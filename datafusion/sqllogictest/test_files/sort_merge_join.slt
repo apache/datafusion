@@ -38,10 +38,12 @@ logical_plan
 03)--TableScan: t2 projection=[a, b]
 physical_plan
 01)SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0)], filter=CAST(b@1 AS Int64) * 50 <= CAST(b@0 AS Int64)
-02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)--SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-05)----DataSourceExec: partitions=1, partition_sizes=[1]
+02)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+06)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+07)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # inner join with join filter
 query TITI rowsort
@@ -918,14 +920,14 @@ statement ok
 CREATE TABLE t3(x int) AS VALUES (1);
 
 query IIIII
-SELECT * FROM t2 RIGHT JOIN t1 on t1.a = t2.a AND t1.b < t2.b
+SELECT * FROM t2 RIGHT JOIN t1 on t1.a = t2.a AND t1.b < t2.b order by 1, 4, 5
 ----
-NULL NULL NULL 1 100
 2 250 3001 2 200
+NULL NULL NULL 1 100
 NULL NULL NULL 3 300
 
 query IIIII
-SELECT * FROM t1 LEFT JOIN t2 on t1.a = t2.a AND t1.b < t2.b
+SELECT * FROM t1 LEFT JOIN t2 on t1.a = t2.a AND t1.b < t2.b order by 1
 ----
 1 100 NULL NULL NULL
 2 200 2 250 3001

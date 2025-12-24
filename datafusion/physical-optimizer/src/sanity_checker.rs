@@ -35,6 +35,7 @@ use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
 use crate::PhysicalOptimizerRule;
+use crate::enforce_distribution::distribution_satisfaction;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
 
@@ -151,18 +152,15 @@ pub fn check_plan_sanity(
             }
         }
 
-        if !child
-            .output_partitioning()
-            .satisfaction(&dist_req, child_eq_props, true)
-            .is_satisfied()
-        {
+        let dist_satisfaction = distribution_satisfaction(child, &dist_req, true);
+        if !dist_satisfaction.is_satisfied() {
             let plan_str = get_plan_string(&plan);
             return plan_err!(
                 "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
                 plan_str,
                 dist_req,
                 idx,
-                child.output_partitioning()
+                dist_satisfaction.output_partitioning()
             );
         }
     }
