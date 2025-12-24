@@ -148,22 +148,10 @@ impl ExprPlanner for FieldAccessPlanner {
 
         match field_access {
             // expr["field"] => get_field(expr, "field")
-            // If expr is already a get_field call, merge to: get_field(base, field1, field2, ...)
+            // Nested accesses like expr["a"]["b"] create nested get_field calls,
+            // which are then merged by the SimplifyExpressions optimizer pass via
+            // the GetFieldFunc::simplify() method.
             GetFieldAccess::NamedStructField { name } => {
-                // Check if expr is already a get_field call - if so, merge field names
-                if let Expr::ScalarFunction(ScalarFunction { func, args }) = expr {
-                    if func.name() == "get_field" {
-                        // Merge: get_field(base, f1, f2) + f3 => get_field(base, f1, f2, f3)
-                        let mut new_args = args;
-                        new_args.push(Expr::Literal(name, None));
-                        return Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                            ScalarFunction::new_udf(get_field_inner(), new_args),
-                        )));
-                    }
-                    // Not a get_field, reconstruct and proceed normally
-                    let expr = Expr::ScalarFunction(ScalarFunction { func, args });
-                    return Ok(PlannerResult::Planned(get_field(expr, name)));
-                }
                 Ok(PlannerResult::Planned(get_field(expr, name)))
             }
             // expr[idx] ==> array_element(expr, idx)
