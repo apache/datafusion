@@ -46,7 +46,6 @@ use prost::Message;
 /// defined in [`AccumulatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_AccumulatorArgs {
     return_field: WrappedSchema,
     schema: WrappedSchema,

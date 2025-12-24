@@ -46,7 +46,6 @@ use prost::Message;
 /// defined in [`PartitionEvaluatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PartitionEvaluatorArgs {
     input_exprs: RVec<RVec<u8>>,
     input_fields: RVec<WrappedSchema>,

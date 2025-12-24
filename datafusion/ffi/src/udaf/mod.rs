@@ -61,7 +61,6 @@ mod groups_accumulator;
 /// A stable struct for sharing a [`AggregateUDF`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `name` of a [`AggregateUDF`]
     pub name: RString,
@@ -100,7 +99,6 @@ pub struct FFI_AggregateUDF {
         -> FFIResult<FFI_Accumulator>,
 
     /// FFI equivalent to [`AggregateUDF::state_fields`]
-    #[allow(clippy::type_complexity)]
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         name: &RStr,
@@ -585,7 +583,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,

@@ -35,7 +35,6 @@ use prost::Message;
 /// defined in [`PartitionEvaluator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PartitionEvaluator {
     pub evaluate_all: unsafe extern "C" fn(
         evaluator: &mut Self,

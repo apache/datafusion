@@ -35,7 +35,6 @@ use datafusion::error::Result;
 /// A stable struct for sharing [`CatalogProvider`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_CatalogProvider {
     pub schema_names: unsafe extern "C" fn(provider: &Self) -> RVec<RString>,
 

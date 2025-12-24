@@ -25,7 +25,6 @@ use datafusion_expr::interval_arithmetic::Interval;
 /// are passed as Arrow arrays of length 1.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_Interval {
     lower: WrappedArray,
     upper: WrappedArray,

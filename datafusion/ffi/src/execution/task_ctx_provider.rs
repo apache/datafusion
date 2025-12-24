@@ -33,7 +33,6 @@ use crate::{df_result, rresult};
 /// additional information.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_TaskContextProvider {
     /// Retrieve the current [`TaskContext`] provided the provider has not
     /// gone out of scope. This function will return an error if the weakly

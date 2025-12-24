@@ -47,7 +47,6 @@ use crate::{arrow_wrappers::WrappedSchema, df_result, rresult_return};
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PlanProperties {
     /// The output partitioning is a [`Partitioning`] protobuf message serialized
     /// into bytes to pass across the FFI boundary.
@@ -240,7 +239,6 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
 /// FFI safe version of [`Boundedness`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
 pub enum FFI_Boundedness {
     Bounded,
@@ -275,7 +273,6 @@ impl From<FFI_Boundedness> for Boundedness {
 
 /// FFI safe version of [`EmissionType`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
 pub enum FFI_EmissionType {
     Incremental,
