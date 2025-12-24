@@ -89,7 +89,8 @@ impl ScalarUDFImpl for SparkMod {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        return_field_for_binary_op(self.name(), args)
+        let data_type = args.arg_fields[0].data_type().clone();
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -97,7 +98,7 @@ impl ScalarUDFImpl for SparkMod {
     }
 }
 
-/// SparkMod implements the Spark-compatible modulo function
+/// SparkPMod implements the Spark-compatible modulo function
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkPmod {
     signature: Signature,
@@ -135,20 +136,13 @@ impl ScalarUDFImpl for SparkPmod {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        return_field_for_binary_op(self.name(), args)
+        let data_type = args.arg_fields[0].data_type().clone();
+        Ok(Arc::new(Field::new(self.name(), data_type, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         spark_pmod(&args.args)
     }
-}
-
-fn return_field_for_binary_op(name: &str, args: ReturnFieldArgs) -> Result<FieldRef> {
-    // The mod function output is nullable only in the case that the input is nullable
-    // (notably, a mod 0 returns an error, not null). Thus this check is sufficient.
-    let any_nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    let data_type = args.arg_fields[0].data_type().clone();
-    Ok(Arc::new(Field::new(name, data_type, any_nullable)))
 }
 
 #[cfg(test)]
@@ -620,7 +614,6 @@ mod test {
     fn test_mod_return_field_nullability() {
         let mod_func = SparkMod::new();
 
-        // Non-nullable inputs -> non-nullable output.
         let args = ReturnFieldArgs {
             arg_fields: &[
                 Arc::new(Field::new("a", DataType::Int32, false)),
@@ -629,13 +622,22 @@ mod test {
             scalar_arguments: &[],
         };
         let field = mod_func.return_field_from_args(args).unwrap();
-        assert!(!field.is_nullable());
+        assert!(field.is_nullable());
 
-        // Nullable input -> nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = mod_func.return_field_from_args(args).unwrap();
+        assert!(field.is_nullable());
+
         let args = ReturnFieldArgs {
             arg_fields: &[
                 Arc::new(Field::new("a", DataType::Int32, true)),
-                Arc::new(Field::new("b", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
             ],
             scalar_arguments: &[],
         };
@@ -654,7 +656,6 @@ mod test {
     fn test_pmod_return_field_nullability() {
         let pmod_func = SparkPmod::new();
 
-        // Non-nullable inputs -> non-nullable output.
         let args = ReturnFieldArgs {
             arg_fields: &[
                 Arc::new(Field::new("a", DataType::Int32, false)),
@@ -663,13 +664,22 @@ mod test {
             scalar_arguments: &[],
         };
         let field = pmod_func.return_field_from_args(args).unwrap();
-        assert!(!field.is_nullable());
+        assert!(field.is_nullable());
 
-        // Nullable input -> nullable output.
+        let args = ReturnFieldArgs {
+            arg_fields: &[
+                Arc::new(Field::new("a", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
+            ],
+            scalar_arguments: &[],
+        };
+        let field = pmod_func.return_field_from_args(args).unwrap();
+        assert!(field.is_nullable());
+
         let args = ReturnFieldArgs {
             arg_fields: &[
                 Arc::new(Field::new("a", DataType::Int32, true)),
-                Arc::new(Field::new("b", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
             ],
             scalar_arguments: &[],
         };
