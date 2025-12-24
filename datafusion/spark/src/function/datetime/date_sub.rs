@@ -147,7 +147,6 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_sub_nullability_non_nullable_args() {

@@ -150,7 +150,6 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {
