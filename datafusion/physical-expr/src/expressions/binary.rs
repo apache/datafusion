@@ -1045,8 +1045,10 @@ impl BinaryExpr {
 
         let mut range_complete = true;
         let mut null_complete = true;
+        let mut set_complete = true;
         let mut child_range_stats = Vec::with_capacity(children.len());
         let mut child_null_stats = Vec::with_capacity(children.len());
+        let mut child_set_stats = Vec::with_capacity(children.len());
 
         for child in children {
             match child.evaluate_pruning(Arc::clone(&ctx))? {
@@ -1066,6 +1068,15 @@ impl BinaryExpr {
                         }
                         _ => {
                             null_complete = false;
+                        }
+                    }
+
+                    match stats.set_stats {
+                        Some(set_stats) if set_complete => {
+                            child_set_stats.push(set_stats);
+                        }
+                        _ => {
+                            set_complete = false;
                         }
                     }
                 }
@@ -1103,6 +1114,21 @@ impl BinaryExpr {
             None
         };
 
+        let set_stats = if set_complete && !child_set_stats.is_empty() {
+            if let Some((first, rest)) = child_set_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Set stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_set_stats(&child_set_stats)?
+        } else {
+            None
+        };
+
         if let (Some(range_stats), Some(null_stats)) =
             (range_stats.as_ref(), null_stats.as_ref())
         {
@@ -1113,10 +1139,30 @@ impl BinaryExpr {
             );
         }
 
+        if let (Some(range_stats), Some(set_stats)) =
+            (range_stats.as_ref(), set_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                range_stats.len(),
+                set_stats.len(),
+                "Range and set stats length mismatch for pruning"
+            );
+        }
+
+        if let (Some(null_stats), Some(set_stats)) =
+            (null_stats.as_ref(), set_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                null_stats.len(),
+                set_stats.len(),
+                "Null and set stats length mismatch for pruning"
+            );
+        }
+
         Ok(PruningIntermediate::IntermediateStats(ColumnStats {
             range_stats,
             null_stats,
-            set_stats: None,
+            set_stats,
         }))
     }
 }

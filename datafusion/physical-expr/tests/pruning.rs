@@ -24,9 +24,12 @@ mod test {
     use arrow::array::{ArrayRef, BooleanArray, Int32Array, Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::pruning::PruningStatistics;
     use datafusion_expr::Operator;
+    use datafusion_functions::string;
     use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
         BinaryExpr, Column, in_list, is_null, lit,
     };
@@ -447,6 +450,80 @@ mod test {
         match expr.evaluate_pruning(ctx).unwrap() {
             PruningIntermediate::IntermediateResult(results) => {
                 assert_eq!(results, vec![PruningResult::AlwaysFalse])
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_list_prunes_upper_with_set_stats() {
+        let mins = ScalarValue::iter_to_array(vec![
+            ScalarValue::Utf8(Some("electronic".to_string())),
+            ScalarValue::Utf8(Some("chair".to_string())),
+            ScalarValue::Utf8(Some("book".to_string())),
+        ])
+        .unwrap();
+        let maxs = ScalarValue::iter_to_array(vec![
+            ScalarValue::Utf8(Some("electronic".to_string())),
+            ScalarValue::Utf8(Some("chair".to_string())),
+            ScalarValue::Utf8(Some("pencil".to_string())),
+        ])
+        .unwrap();
+        let null_counts = ScalarValue::iter_to_array(vec![
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::UInt64(Some(0)),
+            ScalarValue::UInt64(Some(0)),
+        ])
+        .unwrap();
+
+        let mut set_true = HashSet::new();
+        set_true.insert(ScalarValue::Utf8(Some("electronic".to_string())));
+
+        let mut set_false = HashSet::new();
+        set_false.insert(ScalarValue::Utf8(Some("chair".to_string())));
+
+        let mut set_unknown = HashSet::new();
+        set_unknown.insert(ScalarValue::Utf8(Some("book".to_string())));
+        set_unknown.insert(ScalarValue::Utf8(Some("pencil".to_string())));
+
+        let stats = Arc::new(MockPruningStatistics::new_with_sets(
+            "c",
+            mins,
+            maxs,
+            null_counts,
+            None,
+            Some(vec![Some(set_true), Some(set_false), Some(set_unknown)]),
+        ));
+
+        let ctx = Arc::new(PruningContext::new(stats));
+        let schema = Schema::new(vec![Field::new("c", DataType::Utf8, true)]);
+        let upper_udf = string::upper();
+        let upper_expr = ScalarFunctionExpr::try_new(
+            upper_udf,
+            vec![Arc::new(Column::new("c", 0)) as Arc<dyn PhysicalExpr>],
+            &schema,
+            Arc::new(ConfigOptions::new()),
+        )
+        .unwrap();
+
+        let expr = in_list(
+            Arc::new(upper_expr),
+            vec![lit("ELECTRONIC"), lit("BOOK")],
+            &false,
+            &schema,
+        )
+        .unwrap();
+
+        match expr.evaluate_pruning(ctx).unwrap() {
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(
+                    results,
+                    vec![
+                        PruningResult::AlwaysTrue,
+                        PruningResult::AlwaysFalse,
+                        PruningResult::Unknown
+                    ]
+                );
             }
             other => panic!("unexpected result: {other:?}"),
         }

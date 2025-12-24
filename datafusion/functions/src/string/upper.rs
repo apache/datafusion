@@ -18,14 +18,15 @@
 use crate::string::common::to_upper;
 use crate::utils::utf8_to_str_type;
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
 use datafusion_common::types::logical_string;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, SetStats,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::collections::HashSet;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -86,6 +87,50 @@ impl ScalarUDFImpl for UpperFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         to_upper(&args.args, "upper")
+    }
+
+    /// For input stat, capitalize the set statistics.
+    /// 
+    /// Example:
+    /// Input expression `c` has set stat `{'foo', 'bar'}`
+    /// This function `upper(c)` will propagate the set stat to `{'FOO', 'BAR'}`
+    fn propagate_set_stats(
+        &self,
+        child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        if child_set_stats.len() != 1 {
+            return Ok(None);
+        }
+
+        let input_sets = &child_set_stats[0];
+        let mut upper_sets = Vec::with_capacity(input_sets.len());
+
+        for values in input_sets.value_sets() {
+            let Some(values) = values else {
+                upper_sets.push(None);
+                continue;
+            };
+
+            let mut upper_values = HashSet::with_capacity(values.len());
+            for value in values {
+                let upper_value = match value {
+                    ScalarValue::Utf8(v) => {
+                        ScalarValue::Utf8(v.as_ref().map(|s| s.to_uppercase()))
+                    }
+                    ScalarValue::LargeUtf8(v) => {
+                        ScalarValue::LargeUtf8(v.as_ref().map(|s| s.to_uppercase()))
+                    }
+                    ScalarValue::Utf8View(v) => {
+                        ScalarValue::Utf8View(v.as_ref().map(|s| s.to_uppercase()))
+                    }
+                    _ => return Ok(None),
+                };
+                upper_values.insert(upper_value);
+            }
+            upper_sets.push(Some(upper_values));
+        }
+
+        SetStats::new(upper_sets, input_sets.len()).map(Some)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

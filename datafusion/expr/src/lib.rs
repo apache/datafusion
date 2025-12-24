@@ -96,6 +96,7 @@ pub use datafusion_expr_common::signature::{
     TIMEZONE_WILDCARD, TypeSignature, TypeSignatureClass, Volatility,
 };
 pub use datafusion_expr_common::type_coercion::binary;
+pub use datafusion_physical_expr_common::physical_expr::SetStats;
 pub use expr::{
     Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
     Sort as SortExpr, TryCast, WindowFunctionDefinition,

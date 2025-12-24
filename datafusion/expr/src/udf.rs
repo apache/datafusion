@@ -22,7 +22,7 @@ use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
-use crate::{ColumnarValue, Documentation, Expr, Signature};
+use crate::{ColumnarValue, Documentation, Expr, SetStats, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -319,6 +319,14 @@ impl ScalarUDF {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.inner.propagate_constraints(interval, inputs)
+    }
+
+    /// Propagate set statistics through this function.
+    pub fn propagate_set_stats(
+        &self,
+        child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        self.inner.propagate_set_stats(child_set_stats)
     }
 
     /// Calculates the [`SortProperties`] of this function based on its
@@ -785,6 +793,17 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(Some(vec![]))
     }
 
+    /// Propagate set statistics from children through this function.
+    ///
+    /// Returns `Ok(None)` by default, indicating the function does not support
+    /// set-stat based pruning.
+    fn propagate_set_stats(
+        &self,
+        _child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        Ok(None)
+    }
+
     /// Calculates the [`SortProperties`] of this function based on its children's properties.
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
         if !self.preserves_lex_ordering(inputs)? {
@@ -947,6 +966,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.inner.propagate_constraints(interval, inputs)
+    }
+
+    fn propagate_set_stats(
+        &self,
+        child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        self.inner.propagate_set_stats(child_set_stats)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

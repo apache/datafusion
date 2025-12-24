@@ -48,6 +48,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
     expr_vec_fmt,
 };
+use datafusion_physical_expr_common::physical_expr::SetStats;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -334,6 +335,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         self.fun.propagate_constraints(interval, children)
+    }
+
+    fn propagate_set_stats(
+        &self,
+        child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        self.fun.propagate_set_stats(child_set_stats)
     }
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
