@@ -359,16 +359,16 @@ impl PhysicalExpr for BinaryExpr {
                         ]));
                     }
                     _ => {
-                        return Ok(PruningIntermediate::IntermediateResult(
-                            vec![PruningResult::Unknown],
-                        ));
+                        return Ok(PruningIntermediate::IntermediateResult(vec![
+                            PruningResult::Unknown,
+                        ]));
                     }
                 }
             }
             _ => {
-                return Ok(PruningIntermediate::IntermediateResult(
-                    vec![PruningResult::Unknown],
-                ));
+                return Ok(PruningIntermediate::IntermediateResult(vec![
+                    PruningResult::Unknown,
+                ]));
             }
         };
 
@@ -1116,6 +1116,7 @@ impl BinaryExpr {
         Ok(PruningIntermediate::IntermediateStats(ColumnStats {
             range_stats,
             null_stats,
+            set_stats: None,
         }))
     }
 }

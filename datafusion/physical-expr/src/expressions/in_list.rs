@@ -18,6 +18,7 @@
 //! Implementation of `InList` expressions: [`InListExpr`]
 
 use std::any::Any;
+use std::collections::HashSet as StdHashSet;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -37,6 +38,9 @@ use datafusion_common::{
     exec_err,
 };
 use datafusion_expr::{ColumnarValue, expr_vec_fmt};
+use datafusion_physical_expr_common::physical_expr::{
+    PruningContext, PruningIntermediate, PruningResult, RangeStats,
+};
 
 use ahash::RandomState;
 use datafusion_common::HashMap;
@@ -682,6 +686,29 @@ impl InListExpr {
 
         Ok(Self::new(expr, list, negated, static_filter))
     }
+
+    fn list_value_set(
+        &self,
+        ctx: &Arc<PruningContext>,
+    ) -> Result<Option<StdHashSet<ScalarValue>>> {
+        let mut values = StdHashSet::new();
+        for expr in &self.list {
+            match expr.evaluate_pruning(Arc::clone(ctx))? {
+                PruningIntermediate::IntermediateStats(stats) => {
+                    match stats.range_stats {
+                        Some(RangeStats::Scalar { value, .. }) => {
+                            if !value.is_null() {
+                                values.insert(value);
+                            }
+                        }
+                        _ => return Ok(None),
+                    }
+                }
+                _ => return Ok(None),
+            }
+        }
+        Ok(Some(values))
+    }
 }
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -826,6 +853,61 @@ impl PhysicalExpr for InListExpr {
             }
         };
         Ok(ColumnarValue::Array(Arc::new(r)))
+    }
+
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        let left = self.expr.evaluate_pruning(Arc::clone(&ctx))?;
+        let stats = match left {
+            PruningIntermediate::IntermediateStats(stats) => stats,
+            _ => unreachable!("Input must have IntermediateStats type"),
+        };
+
+        let container_len = stats
+            .set_stats()
+            .map(|s| s.len())
+            .or_else(|| stats.range_stats().map(|s| s.len()))
+            .or_else(|| stats.null_stats().map(|s| s.len()))
+            .unwrap_or(1);
+
+        let Some(list_values) = self.list_value_set(&ctx)? else {
+            return Ok(PruningIntermediate::IntermediateResult(vec![
+                PruningResult::Unknown;
+                container_len
+            ]));
+        };
+
+        let Some(set_stats) = stats.set_stats() else {
+            return Ok(PruningIntermediate::IntermediateResult(vec![
+                PruningResult::Unknown;
+                container_len
+            ]));
+        };
+
+        let mut results = Vec::with_capacity(set_stats.len());
+        for container_values in set_stats.value_sets() {
+            let res = match container_values {
+                None => PruningResult::Unknown,
+                Some(values) => match values.is_empty()
+                    || values.iter().any(|v| v.is_null())
+                {
+                    true => PruningResult::Unknown,
+                    false => {
+                        let is_subset = values.iter().all(|v| list_values.contains(v));
+                        let is_disjoint = values.iter().all(|v| !list_values.contains(v));
+                        match (is_subset, is_disjoint, self.negated) {
+                            (true, _, false) => PruningResult::AlwaysTrue,
+                            (true, _, true) => PruningResult::AlwaysFalse,
+                            (_, true, false) => PruningResult::AlwaysFalse,
+                            (_, true, true) => PruningResult::AlwaysTrue,
+                            _ => PruningResult::Unknown,
+                        }
+                    }
+                },
+            };
+            results.push(res);
+        }
+
+        Ok(PruningIntermediate::IntermediateResult(results))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

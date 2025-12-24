@@ -18,14 +18,18 @@
 mod pruning_utils;
 
 mod test {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
-    use arrow::array::{Int32Array, Int64Array, UInt64Array};
-    use arrow::datatypes::DataType;
+    use arrow::array::{ArrayRef, BooleanArray, Int32Array, Int64Array, UInt64Array};
+    use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_common::ScalarValue;
+    use datafusion_common::pruning::PruningStatistics;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, is_null, lit};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, Column, in_list, is_null, lit,
+    };
     use datafusion_physical_expr_common::physical_expr::{
         ColumnStats, PruningContext, PruningIntermediate, PruningResult, RangeStats,
     };
@@ -95,6 +99,81 @@ mod test {
     }
 
     #[test]
+    fn column_set_stats_present() {
+        let mins =
+            ScalarValue::iter_to_array(vec![ScalarValue::Utf8(Some("foo".to_string()))])
+                .unwrap();
+        let maxs =
+            ScalarValue::iter_to_array(vec![ScalarValue::Utf8(Some("foo".to_string()))])
+                .unwrap();
+        let null_counts =
+            ScalarValue::iter_to_array(vec![ScalarValue::UInt64(Some(0))]).unwrap();
+        let row_counts =
+            ScalarValue::iter_to_array(vec![ScalarValue::UInt64(Some(1))]).unwrap();
+
+        let mut set = HashSet::new();
+        set.insert(ScalarValue::Utf8(Some("foo".to_string())));
+        set.insert(ScalarValue::Utf8(Some("bar".to_string())));
+
+        let pruning_stats = Arc::new(MockPruningStatistics::new_with_sets(
+            "c",
+            mins,
+            maxs,
+            null_counts,
+            Some(row_counts),
+            Some(vec![Some(set.clone())]),
+        ));
+
+        let context = Arc::new(PruningContext::new(pruning_stats));
+        let column_expr = Column::new("c", 0);
+
+        match column_expr.evaluate_pruning(context).unwrap() {
+            PruningIntermediate::IntermediateStats(stats) => {
+                let set_stats = stats.set_stats().expect("set stats");
+                assert_eq!(set_stats.len(), 1);
+                let container_set = set_stats.value_sets()[0]
+                    .as_ref()
+                    .expect("value set present");
+                assert_eq!(container_set, &set);
+            }
+            other => panic!("expected stats, got {other:?}"),
+        }
+    }
+
+    #[derive(Clone)]
+    struct LenOnlyStats(usize);
+
+    impl PruningStatistics for LenOnlyStats {
+        fn min_values(&self, _: &datafusion_common::Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn max_values(&self, _: &datafusion_common::Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn num_containers(&self) -> usize {
+            self.0
+        }
+
+        fn null_counts(&self, _: &datafusion_common::Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn row_counts(&self, _: &datafusion_common::Column) -> Option<ArrayRef> {
+            None
+        }
+
+        fn contained(
+            &self,
+            _: &datafusion_common::Column,
+            _: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            None
+        }
+    }
+
+    #[test]
     fn lit_basic() {
         let lit_expr = lit(5);
         let ctx = Arc::new(PruningContext::new(Arc::new(DummyStats)));
@@ -104,10 +183,33 @@ mod test {
             PruningIntermediate::IntermediateStats(ColumnStats {
                 range_stats: Some(RangeStats::Scalar { value, length }),
                 null_stats,
+                set_stats,
             }) => {
                 assert_eq!(value, ScalarValue::Int32(Some(5)));
                 assert_eq!(length, 0);
                 assert!(null_stats.is_none());
+                let set_stats = set_stats.expect("set stats");
+                assert_eq!(set_stats.len(), 0);
+            }
+            other => panic!("unexpected pruning result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn literal_set_stats_present() {
+        let lit_expr = lit("foo");
+        let ctx = Arc::new(PruningContext::new(Arc::new(LenOnlyStats(2))));
+        let stat = lit_expr.evaluate_pruning(ctx).expect("pruning ok");
+
+        match stat {
+            PruningIntermediate::IntermediateStats(ColumnStats { set_stats, .. }) => {
+                let set_stats = set_stats.expect("set stats");
+                assert_eq!(set_stats.len(), 2);
+                for values in set_stats.value_sets() {
+                    let set = values.as_ref().expect("value set");
+                    assert_eq!(set.len(), 1);
+                    assert!(set.contains(&ScalarValue::Utf8(Some("foo".to_string()))));
+                }
             }
             other => panic!("unexpected pruning result: {other:?}"),
         }
@@ -245,6 +347,7 @@ mod test {
                         length,
                     }),
                 null_stats,
+                set_stats,
             }) => {
                 assert_eq!(length, 1);
                 let min_scalar =
@@ -256,6 +359,7 @@ mod test {
                 assert_eq!(min_scalar, ScalarValue::Int64(Some(70)));
                 assert_eq!(max_scalar, ScalarValue::Int64(Some(140)));
                 assert!(null_stats.is_none());
+                assert!(set_stats.is_none());
             }
             other => panic!("unexpected pruning result: {other:?}"),
         }
@@ -282,6 +386,63 @@ mod test {
         ));
         let ctx = Arc::new(PruningContext::new(stats));
         let expr = is_null(Arc::new(Column::new("b", 0))).unwrap();
+
+        match expr.evaluate_pruning(ctx).unwrap() {
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_list_literal_set_prunes() {
+        let ctx = Arc::new(PruningContext::new(Arc::new(LenOnlyStats(1))));
+        let schema = Schema::new(Vec::<FieldRef>::new());
+        let expr =
+            in_list(lit("foo"), vec![lit("foo"), lit("bar")], &false, &schema).unwrap();
+
+        match expr.evaluate_pruning(ctx).unwrap() {
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysTrue])
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_list_prunes_with_set_stats() {
+        let mins =
+            ScalarValue::iter_to_array(vec![ScalarValue::Utf8(Some("foo".to_string()))])
+                .unwrap();
+        let maxs =
+            ScalarValue::iter_to_array(vec![ScalarValue::Utf8(Some("foo".to_string()))])
+                .unwrap();
+        let null_counts =
+            ScalarValue::iter_to_array(vec![ScalarValue::UInt64(Some(0))]).unwrap();
+
+        let mut value_set = HashSet::new();
+        value_set.insert(ScalarValue::Utf8(Some("foo".to_string())));
+        value_set.insert(ScalarValue::Utf8(Some("bar".to_string())));
+
+        let stats = Arc::new(MockPruningStatistics::new_with_sets(
+            "c",
+            mins,
+            maxs,
+            null_counts,
+            None,
+            Some(vec![Some(value_set)]),
+        ));
+
+        let ctx = Arc::new(PruningContext::new(stats));
+        let schema = Schema::new(vec![Field::new("c", DataType::Utf8, true)]);
+        let expr = in_list(
+            Arc::new(Column::new("c", 0)),
+            vec![lit("toy"), lit("book")],
+            &false,
+            &schema,
+        )
+        .unwrap();
 
         match expr.evaluate_pruning(ctx).unwrap() {
             PruningIntermediate::IntermediateResult(results) => {

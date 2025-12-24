@@ -31,7 +31,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column as DFColumn, Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullStats, PruningContext, PruningIntermediate, RangeStats,
+    ColumnStats, NullStats, PruningContext, PruningIntermediate, RangeStats, SetStats,
 };
 
 /// Represents the column at a given index in a RecordBatch
@@ -169,10 +169,14 @@ impl PhysicalExpr for Column {
             None
         };
 
-        Ok(PruningIntermediate::IntermediateStats(ColumnStats::new(
-            range_stats,
-            null_stats,
-        )))
+        let set_stats = stats
+            .value_sets(&pruning_column)
+            .map(|sets| SetStats::new(sets, num_containers))
+            .transpose()?;
+
+        Ok(PruningIntermediate::IntermediateStats(
+            ColumnStats::new_with_set_stats(range_stats, null_stats, set_stats),
+        ))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -55,6 +55,7 @@ pub struct MockPruningStatistics {
     null_counts: ArrayRef,
     row_counts: Option<ArrayRef>,
     num_containers: usize,
+    value_sets: Option<Vec<Option<HashSet<ScalarValue>>>>,
 }
 
 impl MockPruningStatistics {
@@ -65,7 +66,32 @@ impl MockPruningStatistics {
         null_counts: ArrayRef,
         row_counts: Option<ArrayRef>,
     ) -> Self {
+        Self::new_with_sets(
+            column,
+            min_values,
+            max_values,
+            null_counts,
+            row_counts,
+            None,
+        )
+    }
+
+    pub fn new_with_sets(
+        column: impl Into<String>,
+        min_values: ArrayRef,
+        max_values: ArrayRef,
+        null_counts: ArrayRef,
+        row_counts: Option<ArrayRef>,
+        value_sets: Option<Vec<Option<HashSet<ScalarValue>>>>,
+    ) -> Self {
         let num_containers = min_values.len();
+        if let Some(value_sets) = value_sets.as_ref() {
+            assert_eq!(
+                value_sets.len(),
+                num_containers,
+                "value sets must match container count"
+            );
+        }
         Self {
             column: column.into(),
             min_values,
@@ -73,6 +99,7 @@ impl MockPruningStatistics {
             null_counts,
             row_counts,
             num_containers,
+            value_sets,
         }
     }
 
@@ -126,6 +153,14 @@ impl PruningStatistics for MockPruningStatistics {
         (column.name == self.column)
             .then(|| self.row_counts.as_ref().map(Arc::clone))
             .flatten()
+    }
+
+    fn value_sets(&self, column: &Column) -> Option<Vec<Option<HashSet<ScalarValue>>>> {
+        if column.name == self.column {
+            self.value_sets.clone()
+        } else {
+            None
+        }
     }
 
     fn contained(&self, _: &Column, _: &HashSet<ScalarValue>) -> Option<BooleanArray> {

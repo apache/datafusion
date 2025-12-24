@@ -18,6 +18,7 @@
 //! Literal expressions for physical operations
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -35,7 +36,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, PruningContext, PruningIntermediate, RangeStats,
+    ColumnStats, PruningContext, PruningIntermediate, RangeStats, SetStats,
 };
 
 /// Represents a literal value
@@ -118,10 +119,18 @@ impl PhysicalExpr for Literal {
     fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
         let length = ctx.statistics().num_containers();
         let range = RangeStats::new_scalar(self.value.clone(), length)?;
-        Ok(PruningIntermediate::IntermediateStats(ColumnStats::new(
-            Some(range),
-            None,
-        )))
+        let set_stats = if self.value.is_null() {
+            None
+        } else {
+            let mut set = HashSet::new();
+            set.insert(self.value.clone());
+            let sets = vec![Some(set); length];
+            Some(SetStats::new(sets, length)?)
+        };
+
+        Ok(PruningIntermediate::IntermediateStats(
+            ColumnStats::new_with_set_stats(Some(range), None, set_stats),
+        ))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {

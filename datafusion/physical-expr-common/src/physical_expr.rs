@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -534,6 +535,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(PruningIntermediate::IntermediateStats(ColumnStats {
             range_stats,
             null_stats,
+            set_stats: None,
         }))
     }
 }
@@ -573,9 +575,15 @@ pub struct NullStats {
 }
 
 #[derive(Debug, Clone)]
+pub struct SetStats {
+    sets: Vec<Option<HashSet<ScalarValue>>>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ColumnStats {
     pub range_stats: Option<RangeStats>,
     pub null_stats: Option<NullStats>,
+    pub set_stats: Option<SetStats>,
 }
 
 impl RangeStats {
@@ -670,11 +678,39 @@ impl NullStats {
     }
 }
 
+impl SetStats {
+    pub fn new(sets: Vec<Option<HashSet<ScalarValue>>>, length: usize) -> Result<Self> {
+        assert_eq_or_internal_err!(
+            sets.len(),
+            length,
+            "Set stats length mismatch for pruning statistics"
+        );
+        Ok(Self { sets })
+    }
+
+    pub fn len(&self) -> usize {
+        self.sets.len()
+    }
+
+    pub fn value_sets(&self) -> &[Option<HashSet<ScalarValue>>] {
+        &self.sets
+    }
+}
+
 impl ColumnStats {
     pub fn new(range_stats: Option<RangeStats>, null_stats: Option<NullStats>) -> Self {
+        Self::new_with_set_stats(range_stats, null_stats, None)
+    }
+
+    pub fn new_with_set_stats(
+        range_stats: Option<RangeStats>,
+        null_stats: Option<NullStats>,
+        set_stats: Option<SetStats>,
+    ) -> Self {
         Self {
             range_stats,
             null_stats,
+            set_stats,
         }
     }
 
@@ -684,6 +720,10 @@ impl ColumnStats {
 
     pub fn null_stats(&self) -> Option<&NullStats> {
         self.null_stats.as_ref()
+    }
+
+    pub fn set_stats(&self) -> Option<&SetStats> {
+        self.set_stats.as_ref()
     }
 }
 

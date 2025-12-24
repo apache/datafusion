@@ -27,7 +27,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    PruningContext, PruningIntermediate, PruningResult,
+    PruningContext, PruningIntermediate,
 };
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
