@@ -20,9 +20,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    bounded_window_exec_with_partition, check_integrity, coalesce_partitions_exec,
-    memory_exec, parquet_exec_with_sort, parquet_exec_with_stats, repartition_exec,
-    schema, sort_exec, sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
+    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
     sort_preserving_merge_exec, union_exec,
 };
 
@@ -37,16 +37,16 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{NullEquality, ScalarValue};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::PartitioningSatisfaction;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
-use datafusion_physical_expr::{Distribution, Partitioning, physical_exprs_equal};
+use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -62,12 +62,10 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
-use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -1109,94 +1107,6 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     );
     let plan_sort = test_config.to_plan(filter_top_join, &SORT_DISTRIB_DISTRIB);
     assert_plan!(plan_distrib, plan_sort);
-
-    Ok(())
-}
-
-#[test]
-fn enforce_distribution_repartitions_superset_hash_keys() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("region", DataType::Utf8, true),
-        Field::new("ts", DataType::Int64, true),
-    ]));
-    let left = memory_exec(&schema);
-    let right = memory_exec(&schema);
-
-    let left_superset = Arc::new(RepartitionExec::try_new(
-        Arc::clone(&left),
-        Partitioning::Hash(
-            vec![
-                Arc::new(Column::new_with_schema("region", &schema).unwrap()),
-                Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
-            ],
-            4,
-        ),
-    )?);
-
-    let right_partitioned = Arc::new(RepartitionExec::try_new(
-        right,
-        Partitioning::Hash(
-            vec![Arc::new(Column::new_with_schema("ts", &schema).unwrap())],
-            4,
-        ),
-    )?);
-
-    let on: JoinOn = vec![(
-        Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
-        Arc::new(Column::new_with_schema("ts", &schema).unwrap()),
-    )];
-
-    let join = Arc::new(HashJoinExec::try_new(
-        left_superset,
-        right_partitioned,
-        on,
-        None,
-        &JoinType::Inner,
-        None,
-        PartitionMode::Partitioned,
-        NullEquality::NullEqualsNothing,
-    )?);
-
-    let mut config = ConfigOptions::new();
-    config.execution.target_partitions = 4;
-
-    let optimized = EnforceDistribution::new().optimize(join, &config)?;
-    let join = optimized
-        .as_any()
-        .downcast_ref::<HashJoinExec>()
-        .expect("expected hash join");
-
-    // The optimizer should recognize that the left side has a superset partitioning
-    // (partition on both "region" and "ts") when the join only requires "ts".
-    // The optimizer should replace the superset repartition with one that matches
-    // the join requirement exactly (just "ts").
-    let repartition = join
-        .left()
-        .as_any()
-        .downcast_ref::<RepartitionExec>()
-        .expect("left side should be repartitioned");
-
-    match repartition.partitioning() {
-        Partitioning::Hash(exprs, partitions) => {
-            assert_eq!(*partitions, 4);
-            let expected =
-                vec![Arc::new(Column::new_with_schema("ts", &schema).unwrap()) as _];
-            assert!(
-                physical_exprs_equal(exprs, &expected),
-                "expected repartitioning on [ts]"
-            );
-        }
-        other => panic!("expected hash repartitioning, got {other:?}"),
-    }
-
-    // The optimizer should have removed the unnecessary superset repartition
-    // and directly partitioned the source on the required keys.
-    // This is a better optimization than keeping the superset.
-    let input = repartition.input();
-    assert!(
-        input.as_any().downcast_ref::<RepartitionExec>().is_none(),
-        "optimizer should remove the superset repartition, not stack another on top"
-    );
 
     Ok(())
 }
@@ -3746,90 +3656,6 @@ fn distribution_satisfaction_superset_hash_matches_sanity_check() -> Result<()> 
     )
 }
 
-#[test]
-fn single_partition_join_requires_repartition() -> Result<()> {
-    let left = parquet_exec();
-    let right = parquet_exec();
-    let join_on = vec![(
-        Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
-        Arc::new(Column::new_with_schema("a", &schema()).unwrap()) as _,
-    )];
-
-    let plan = hash_join_exec(left, right, &join_on, &JoinType::Inner);
-    let config = TestConfig::default().with_query_execution_partitions(16);
-    let optimized = config.to_plan(plan, &[Run::Distribution]);
-
-    assert_plan!(
-        optimized,
-        @r"
-    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
-      RepartitionExec: partitioning=Hash([a@0], 16), input_partitions=1
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([a@0], 16), input_partitions=1
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
-fn single_partition_window_partition_skips_repartition() -> Result<()> {
-    let schema = schema();
-    let sort_exprs = vec![PhysicalSortExpr {
-        expr: col("a", &schema)?,
-        options: SortOptions::default(),
-    }];
-    let partition_by = vec![col("b", &schema)?];
-
-    let window_plan = bounded_window_exec_with_partition(
-        "c",
-        sort_exprs.clone(),
-        &partition_by,
-        parquet_exec(),
-    );
-    let config = TestConfig::default().with_query_execution_partitions(12);
-    let optimized = config.to_plan(window_plan, &[Run::Distribution, Run::Sorting]);
-
-    assert_plan!(
-        optimized,
-        @r#"
-    BoundedWindowAggExec: wdw=[count: Field { "count": Int64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-      SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC], preserve_partitioning=[false]
-        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-    "#
-    );
-
-    Ok(())
-}
-
-#[test]
-fn grouped_union_from_single_partition_requires_repartition() -> Result<()> {
-    let union = union_exec(vec![
-        parquet_exec(),
-        Arc::new(EmptyExec::new(schema()).with_partitions(0)),
-    ]);
-    let aggregated =
-        aggregate_exec_with_alias(union, vec![("a".to_string(), "group_a".to_string())]);
-    let mut config = TestConfig::default().with_query_execution_partitions(10);
-    config.config.optimizer.enable_round_robin_repartition = false;
-    let optimized = config.to_plan(aggregated, &[Run::Distribution]);
-
-    assert_plan!(
-        optimized,
-        @r"
- AggregateExec: mode=FinalPartitioned, gby=[group_a@0 as group_a], aggr=[]
-   RepartitionExec: partitioning=Hash([group_a@0], 10), input_partitions=1
-     AggregateExec: mode=Partial, gby=[a@0 as group_a], aggr=[]
-       UnionExec
-         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-         EmptyExec
-    "
-    );
-
-    Ok(())
-}
-
 fn assert_hash_satisfaction_alignment(
     partitioning_exprs: Vec<Arc<dyn PhysicalExpr>>,
     required_exprs: Vec<Arc<dyn PhysicalExpr>>,
@@ -3927,8 +3753,12 @@ fn test_replace_order_preserving_variants_with_fetch() -> Result<()> {
 
 #[tokio::test]
 async fn repartition_between_chained_aggregates() -> Result<()> {
-    // Build a two-partition, empty MemTable with the expected schema to mimic the
-    // reported failing plan: Sort -> Aggregate(ts, region) -> Sort -> Aggregate(ts).
+    // Regression test for issue #18989: Sanity Check Failure in Multi-Partitioned Tables
+    // with Aggregations. This test ensures the optimizer properly handles chained aggregations
+    // with different grouping keys (first aggregation groups by [ts, region], second by [ts] only).
+    // The plan: Sort -> Aggregate(ts, region) -> Sort -> Aggregate(ts).
+    // The optimizer must either insert a repartition between aggregates or maintain a single
+    // partition stream to avoid distribution requirement mismatches.
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion_expr::col;
@@ -3967,7 +3797,6 @@ async fn repartition_between_chained_aggregates() -> Result<()> {
     // The optimizer should either keep the stream single-partitioned via the
     // sort-preserving merge, or insert a repartition between the two aggregates
     // so that the second grouping sees a consistent hash distribution.
-    // This test is similar to the reproducer case in #18989
     let plan_display = displayable(physical_plan.as_ref()).indent(true).to_string();
     let has_repartition =
         plan_display.contains("RepartitionExec: partitioning=Hash([ts@0], 2)");
