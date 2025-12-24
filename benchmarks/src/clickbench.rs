@@ -19,7 +19,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
@@ -156,7 +156,9 @@ impl RunOpt {
                 .any(|opt| opt.contains("prefer_existing_sort=true"));
 
             if !has_prefer_sort {
-                println!("ℹ️  Consider using -c datafusion.optimizer.prefer_existing_sort=true");
+                println!(
+                    "ℹ️  Consider using -c datafusion.optimizer.prefer_existing_sort=true"
+                );
                 println!("ℹ️  to optimize queries while maintaining parallelism");
             }
         }

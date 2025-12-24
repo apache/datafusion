@@ -349,7 +349,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
     }
 
     // Virtual table supports standard SQL operations (projection, filter, aggregation).
@@ -369,7 +370,8 @@ mod tests {
         +--------+
         | 20     |
         | 30     |
-        +--------+");
+        +--------+
+        ");
 
         let aggregated = execute_sql_to_string(
             &ctx,
@@ -383,7 +385,8 @@ mod tests {
         | count | total | average |
         +-------+-------+---------+
         | 3     | 6     | 2.0     |
-        +-------+-------+---------+");
+        +-------+-------+---------+
+        ");
     }
 
     // Multiple planners can coexist and each handles its own virtual table.
@@ -401,7 +404,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
 
         let result2 = execute_sql_to_string(&ctx, "SELECT * FROM colors").await;
         assert_snapshot!(result2, @r"
@@ -411,7 +415,8 @@ mod tests {
         | red   |
         | green |
         | blue  |
-        +-------+");
+        +-------+
+        ");
     }
 
     // Last registered planner for the same table name takes precedence (LIFO).
@@ -431,7 +436,8 @@ mod tests {
         | 1      |
         | 2      |
         | 3      |
-        +--------+");
+        +--------+
+        ");
     }
 
     // Pass-through planner delegates to the catalog without changing behavior.
@@ -447,7 +453,8 @@ mod tests {
         | value |
         +-------+
         | 42    |
-        +-------+");
+        +-------+
+        ");
     }
 
     // Catalog is used when no planner claims the relation.
@@ -465,7 +472,8 @@ mod tests {
         +----+-------+
         | 1  | Alice |
         | 2  | Bob   |
-        +----+-------+");
+        +----+-------+
+        ");
     }
 
     // Planners can block specific constructs and surface custom error messages.
@@ -513,6 +521,7 @@ mod tests {
         | 1      | green |
         | 2      | red   |
         | 2      | green |
-        +--------+-------+");
+        +--------+-------+
+        ");
     }
 }

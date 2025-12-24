@@ -175,18 +175,17 @@ GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 -2117946883 d 1 0 0 0
 -2098805236 c 1 0 0 0
 
-# FIXME: add bool_and(v3) column when issue fixed
-# ISSUE https://github.com/apache/datafusion/issues/11846
-query TBBB rowsort
-select v1, bool_or(v2), bool_and(v2), bool_or(v3)
+# Regression test for https://github.com/apache/datafusion/issues/11846
+query TBBBB rowsort
+select v1, bool_or(v2), bool_and(v2), bool_or(v3), bool_and(v3)
 from aggregate_test_100_bool
 group by v1
 ----
-a true false true
-b true false true
-c true false false
-d true false false
-e true false NULL
+a true false true true
+b true false true true
+c true false false false
+d true false false false
+e true false NULL NULL
 
 query TBBB rowsort
 select v1,

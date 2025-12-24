@@ -631,6 +631,7 @@ impl protobuf::PhysicalPlanNode {
             has_header: Some(scan.has_header),
             delimiter: str_to_byte(&scan.delimiter, "delimiter")?,
             quote: str_to_byte(&scan.quote, "quote")?,
+            newlines_in_values: Some(scan.newlines_in_values),
             ..Default::default()
         };
         let source = Arc::new(
@@ -646,7 +647,6 @@ impl protobuf::PhysicalPlanNode {
             extension_codec,
             source,
         )?)
-        .with_newlines_in_values(scan.newlines_in_values)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
         .build();
         Ok(DataSourceExec::from_data_source(conf))
@@ -2631,7 +2631,7 @@ impl protobuf::PhysicalPlanNode {
                             } else {
                                 None
                             },
-                            newlines_in_values: maybe_csv.newlines_in_values(),
+                            newlines_in_values: csv_config.newlines_in_values(),
                             truncate_rows: csv_config.truncate_rows(),
                         },
                     )),

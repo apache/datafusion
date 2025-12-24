@@ -25,28 +25,27 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-use crate::table_provider::FFI_TableProvider;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{Session, TableProvider},
-    error::Result,
-    execution::RecordBatchStream,
-    physical_expr::EquivalenceProperties,
-    physical_plan::{ExecutionPlan, Partitioning},
-    prelude::Expr,
-};
-use datafusion_common::exec_err;
+use datafusion_catalog::TableProvider;
+use datafusion_common::{Result, exec_err};
+use datafusion_execution::RecordBatchStream;
+use datafusion_expr::Expr;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_session::Session;
 use futures::Stream;
-use tokio::{
-    runtime::Handle,
-    sync::{broadcast, mpsc},
-};
+use tokio::runtime::Handle;
+use tokio::sync::{broadcast, mpsc};
 
 use super::create_record_batch;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::table_provider::FFI_TableProvider;
 
 #[derive(Debug)]
 pub struct AsyncTableProvider {
@@ -135,8 +134,8 @@ impl TableProvider for AsyncTableProvider {
         super::create_test_schema()
     }
 
-    fn table_type(&self) -> datafusion::logical_expr::TableType {
-        datafusion::logical_expr::TableType::Base
+    fn table_type(&self) -> datafusion_expr::TableType {
+        datafusion_expr::TableType::Base
     }
 
     async fn scan(
@@ -163,7 +162,7 @@ impl Drop for AsyncTableProvider {
 
 #[derive(Debug)]
 struct AsyncTestExecutionPlan {
-    properties: datafusion::physical_plan::PlanProperties,
+    properties: datafusion_physical_plan::PlanProperties,
     batch_request: mpsc::Sender<bool>,
     batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
 }
@@ -174,11 +173,11 @@ impl AsyncTestExecutionPlan {
         batch_receiver: broadcast::Receiver<Option<RecordBatch>>,
     ) -> Self {
         Self {
-            properties: datafusion::physical_plan::PlanProperties::new(
+            properties: datafusion_physical_plan::PlanProperties::new(
                 EquivalenceProperties::new(super::create_test_schema()),
                 Partitioning::UnknownPartitioning(3),
-                datafusion::physical_plan::execution_plan::EmissionType::Incremental,
-                datafusion::physical_plan::execution_plan::Boundedness::Bounded,
+                datafusion_physical_plan::execution_plan::EmissionType::Incremental,
+                datafusion_physical_plan::execution_plan::Boundedness::Bounded,
             ),
             batch_request,
             batch_receiver,
@@ -195,7 +194,7 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &datafusion_physical_plan::PlanProperties {
         &self.properties
     }
 
@@ -213,8 +212,8 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
     fn execute(
         &self,
         _partition: usize,
-        _context: Arc<datafusion::execution::TaskContext>,
-    ) -> Result<datafusion::execution::SendableRecordBatchStream> {
+        _context: Arc<datafusion_execution::TaskContext>,
+    ) -> Result<datafusion_execution::SendableRecordBatchStream> {
         Ok(Box::pin(AsyncTestRecordBatchStream {
             batch_request: self.batch_request.clone(),
             batch_receiver: self.batch_receiver.resubscribe(),
@@ -222,10 +221,10 @@ impl ExecutionPlan for AsyncTestExecutionPlan {
     }
 }
 
-impl datafusion::physical_plan::DisplayAs for AsyncTestExecutionPlan {
+impl datafusion_physical_plan::DisplayAs for AsyncTestExecutionPlan {
     fn fmt_as(
         &self,
-        _t: datafusion::physical_plan::DisplayFormatType,
+        _t: datafusion_physical_plan::DisplayFormatType,
         _f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         // Do nothing, just a test
@@ -277,7 +276,14 @@ impl Stream for AsyncTestRecordBatchStream {
     }
 }
 
-pub(crate) fn create_async_table_provider() -> FFI_TableProvider {
+pub(crate) fn create_async_table_provider(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_TableProvider {
     let (table_provider, tokio_rt) = start_async_provider();
-    FFI_TableProvider::new(Arc::new(table_provider), true, Some(tokio_rt))
+    FFI_TableProvider::new_with_ffi_codec(
+        Arc::new(table_provider),
+        true,
+        Some(tokio_rt),
+        codec,
+    )
 }

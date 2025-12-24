@@ -932,7 +932,6 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
             .with_projection_indices(Some(vec![0, 1]))?
             .with_file_group(FileGroup::new(vec![file_group]))
-            .with_newlines_in_values(false)
             .build();
 
     roundtrip_test(DataSourceExec::from_data_source(scan_config))
@@ -2371,4 +2370,37 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
 
     Ok(())
+}
+
+#[test]
+fn roundtrip_hash_expr() -> Result<()> {
+    use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // Create a HashExpr with test columns and seeds
+    let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
+        on_columns,
+        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        "test_hash".to_string(),
+    ));
+
+    // Wrap in a filter by comparing hash value to a literal
+    // hash_expr > 0 is always boolean
+    let filter_expr = binary(hash_expr, Operator::Gt, lit(0u64), &schema)?;
+    let filter = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?);
+
+    // Confirm that the debug string contains the random state seeds
+    assert!(
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        "Debug string missing seeds: {filter:?}"
+    );
+    roundtrip_test(filter)
 }
