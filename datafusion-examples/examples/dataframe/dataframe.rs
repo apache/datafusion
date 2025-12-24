@@ -33,7 +33,7 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 use tokio::fs::create_dir_all;
 
 /// This example demonstrates using DataFusion's DataFrame API

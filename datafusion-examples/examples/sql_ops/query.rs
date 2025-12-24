@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{UInt64Array, UInt8Array};
+use datafusion::arrow::array::{UInt8Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};

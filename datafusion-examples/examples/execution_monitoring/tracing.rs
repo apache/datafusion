@@ -61,11 +61,11 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use tempfile::TempDir;
 use tokio::fs::create_dir_all;
-use tracing::{info, instrument, Instrument, Level, Span};
+use tracing::{Instrument, Level, Span, info, instrument};
 
 /// Demonstrates the tracing injection feature for the DataFusion runtime
 pub async fn tracing() -> Result<()> {
