@@ -29,7 +29,9 @@ use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
+use datafusion_common::{
+    Result, ScalarValue, assert_eq_or_internal_err, internal_err, not_impl_err,
+};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -40,6 +42,10 @@ use datafusion_expr::statistics::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
+use datafusion_physical_expr_common::physical_expr::{
+    ColumnStats, PruningContext, PruningIntermediate, PruningResult, RangeStats,
+};
+use std::cmp::Ordering;
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -295,6 +301,141 @@ impl PhysicalExpr for BinaryExpr {
         );
         self.evaluate_with_resolved_args(left, &left_data_type, right, &right_data_type)
             .map(ColumnarValue::Array)
+    }
+
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        use Operator::*;
+        let is_cmp = matches!(self.op, Eq | NotEq | Lt | LtEq | Gt | GtEq);
+        if !is_cmp {
+            return self.default_pruning(ctx);
+        }
+
+        let left = self.left.evaluate_pruning(Arc::clone(&ctx))?;
+        let right = self.right.evaluate_pruning(ctx)?;
+
+        let (left_stats, right_stats) = match (left, right) {
+            (
+                PruningIntermediate::IntermediateStats(ls),
+                PruningIntermediate::IntermediateStats(rs),
+            ) => (ls, rs),
+            (other, PruningIntermediate::IntermediateStats(_))
+            | (PruningIntermediate::IntermediateStats(_), other) => return Ok(other),
+            (l, r) => {
+                return Ok(if matches!(l, PruningIntermediate::IntermediateResult(_)) {
+                    l
+                } else {
+                    r
+                });
+            }
+        };
+
+        let l_range = range_bounds(left_stats.range_stats.as_ref());
+        let r_range = range_bounds(right_stats.range_stats.as_ref());
+
+        let (l_range, r_range) = match (l_range, r_range) {
+            (Some(l), Some(r)) if l.len() == r.len() && !l.is_empty() => (l, r),
+            (Some(l), Some(r)) if l.is_empty() && r.is_empty() => {
+                match (
+                    left_stats.range_stats.as_ref(),
+                    right_stats.range_stats.as_ref(),
+                ) {
+                    (
+                        Some(RangeStats::Scalar { value: lv, .. }),
+                        Some(RangeStats::Scalar { value: rv, .. }),
+                    ) => {
+                        let res = compare_ranges(
+                            &self.op,
+                            &(Some(lv.clone()), Some(lv.clone())),
+                            &(Some(rv.clone()), Some(rv.clone())),
+                        )
+                        .unwrap_or(false);
+                        let pruning = if res {
+                            PruningResult::AlwaysTrue
+                        } else {
+                            PruningResult::AlwaysFalse
+                        };
+                        return Ok(PruningIntermediate::IntermediateResult(pruning));
+                    }
+                    _ => {
+                        return Ok(PruningIntermediate::IntermediateResult(
+                            PruningResult::Unknown,
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Ok(PruningIntermediate::IntermediateResult(
+                    PruningResult::Unknown,
+                ));
+            }
+        };
+
+        let mut all_true = true;
+        let mut all_false = true;
+
+        for (l, r) in l_range.into_iter().zip(r_range.into_iter()) {
+            let Some(result) = compare_ranges(&self.op, &l, &r) else {
+                all_true = false;
+                all_false = false;
+                break;
+            };
+            if result {
+                all_false = false;
+            } else {
+                all_true = false;
+            }
+        }
+
+        let res = if all_true {
+            PruningResult::AlwaysTrue
+        } else if all_false {
+            PruningResult::AlwaysFalse
+        } else {
+            PruningResult::Unknown
+        };
+        Ok(PruningIntermediate::IntermediateResult(res))
+    }
+
+    fn propagate_range_stats(
+        &self,
+        child_range_stats: &[RangeStats],
+    ) -> Result<Option<RangeStats>> {
+        use Operator::Multiply;
+
+        match self.op {
+            Multiply => match (&child_range_stats[0], &child_range_stats[1]) {
+                (
+                    RangeStats::Values {
+                        mins: Some(mins),
+                        maxs: Some(maxs),
+                        length,
+                    },
+                    RangeStats::Scalar { value: scalar, .. },
+                ) => multiply_range_by_scalar(mins, maxs, *length, scalar),
+                (
+                    RangeStats::Scalar {
+                        value: scalar,
+                        length,
+                    },
+                    RangeStats::Values {
+                        mins: Some(mins),
+                        maxs: Some(maxs),
+                        ..
+                    },
+                ) => multiply_range_by_scalar(mins, maxs, *length, scalar),
+                _ => unimplemented!(
+                    "Range propagation for * operator on children {:?} and {:?} has not been implemented yet",
+                    child_range_stats[0],
+                    child_range_stats[1]
+                ),
+            },
+            _ => {
+                unimplemented!(
+                    "Range propagation for {} has not been implemented",
+                    self.op
+                )
+            }
+        }
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -744,6 +885,250 @@ fn check_short_circuit<'a>(
 
     // If we can't short-circuit, indicate that normal evaluation should continue
     ShortCircuitStrategy::None
+}
+
+fn multiply_range_by_scalar(
+    mins: &ArrayRef,
+    maxs: &ArrayRef,
+    length: usize,
+    scalar: &ScalarValue,
+) -> Result<Option<RangeStats>> {
+    let result_type = BinaryTypeCoercer::new(
+        mins.data_type(),
+        &Operator::Multiply,
+        &scalar.data_type(),
+    )
+    .get_result_type()?;
+
+    let mins = match cast(mins.as_ref(), &result_type) {
+        Ok(arr) => arr,
+        Err(_) => return Ok(None),
+    };
+    let maxs = match cast(maxs.as_ref(), &result_type) {
+        Ok(arr) => arr,
+        Err(_) => return Ok(None),
+    };
+    let scalar = scalar.cast_to(&result_type)?;
+
+    let mut out_mins = Vec::with_capacity(length);
+    let mut out_maxs = Vec::with_capacity(length);
+
+    for idx in 0..length {
+        let min = ScalarValue::try_from_array(mins.as_ref(), idx)?;
+        let max = ScalarValue::try_from_array(maxs.as_ref(), idx)?;
+
+        let p1 = min.mul_checked(&scalar)?;
+        let p2 = max.mul_checked(&scalar)?;
+
+        let (low, high) = match p1.partial_cmp(&p2) {
+            Some(Ordering::Greater) => (p2, p1),
+            Some(_) => (p1, p2),
+            None => return Ok(None),
+        };
+        out_mins.push(low);
+        out_maxs.push(high);
+    }
+
+    let mins = ScalarValue::iter_to_array(out_mins.into_iter())?;
+    let maxs = ScalarValue::iter_to_array(out_maxs.into_iter())?;
+    RangeStats::new(Some(mins), Some(maxs), length).map(Some)
+}
+
+fn range_bounds(
+    stats: Option<&RangeStats>,
+) -> Option<Vec<(Option<ScalarValue>, Option<ScalarValue>)>> {
+    match stats? {
+        RangeStats::Values { mins, maxs, length } => {
+            let mins = mins.as_ref()?;
+            let maxs = maxs.as_ref()?;
+            let mut out = Vec::with_capacity(*length);
+            for i in 0..*length {
+                let min = ScalarValue::try_from_array(mins, i).ok();
+                let max = ScalarValue::try_from_array(maxs, i).ok();
+                out.push((min, max));
+            }
+            Some(out)
+        }
+        RangeStats::Scalar { value, length } => Some(
+            (0..*length)
+                .map(|_| (Some(value.clone()), Some(value.clone())))
+                .collect(),
+        ),
+    }
+}
+
+fn compare_ranges(
+    op: &Operator,
+    left: &(Option<ScalarValue>, Option<ScalarValue>),
+    right: &(Option<ScalarValue>, Option<ScalarValue>),
+) -> Option<bool> {
+    use Operator::*;
+    let (lmin, lmax) = left;
+    let (rmin, rmax) = right;
+
+    let ord_lmin_rmax = lmin
+        .as_ref()
+        .zip(rmax.as_ref())
+        .and_then(|(l, r)| l.partial_cmp(r));
+    let ord_lmax_rmin = lmax
+        .as_ref()
+        .zip(rmin.as_ref())
+        .and_then(|(l, r)| l.partial_cmp(r));
+
+    match op {
+        Gt => {
+            if matches!(ord_lmin_rmax, Some(Ordering::Greater)) {
+                Some(true)
+            } else if matches!(ord_lmax_rmin, Some(Ordering::Less | Ordering::Equal)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        GtEq => {
+            if matches!(ord_lmin_rmax, Some(Ordering::Greater | Ordering::Equal)) {
+                Some(true)
+            } else if matches!(ord_lmax_rmin, Some(Ordering::Less)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Lt => {
+            if matches!(ord_lmax_rmin, Some(Ordering::Less)) {
+                Some(true)
+            } else if matches!(ord_lmin_rmax, Some(Ordering::Greater | Ordering::Equal)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        LtEq => {
+            if matches!(ord_lmax_rmin, Some(Ordering::Less | Ordering::Equal)) {
+                Some(true)
+            } else if matches!(ord_lmin_rmax, Some(Ordering::Greater)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Eq => {
+            if let (Some(lmin), Some(lmax), Some(rmin), Some(rmax)) =
+                (lmin.as_ref(), lmax.as_ref(), rmin.as_ref(), rmax.as_ref())
+            {
+                if lmin == lmax && rmin == rmax && lmin == rmin {
+                    return Some(true);
+                }
+                if matches!(lmax.partial_cmp(rmin), Some(Ordering::Less))
+                    || matches!(rmax.partial_cmp(lmin), Some(Ordering::Less))
+                {
+                    return Some(false);
+                }
+            }
+            None
+        }
+        NotEq => {
+            if let (Some(lmin), Some(lmax), Some(rmin), Some(rmax)) =
+                (lmin.as_ref(), lmax.as_ref(), rmin.as_ref(), rmax.as_ref())
+            {
+                if lmin == lmax && rmin == rmax && lmin == rmin {
+                    return Some(false);
+                }
+                if matches!(lmax.partial_cmp(rmin), Some(Ordering::Less))
+                    || matches!(rmax.partial_cmp(lmin), Some(Ordering::Less))
+                {
+                    return Some(true);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+impl BinaryExpr {
+    #[allow(dead_code)]
+    fn default_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        let children = self.children();
+        if children.is_empty() {
+            return Ok(PruningIntermediate::empty_stats());
+        }
+
+        let mut range_complete = true;
+        let mut null_complete = true;
+        let mut child_range_stats = Vec::with_capacity(children.len());
+        let mut child_null_stats = Vec::with_capacity(children.len());
+
+        for child in children {
+            match child.evaluate_pruning(Arc::clone(&ctx))? {
+                PruningIntermediate::IntermediateStats(stats) => {
+                    match stats.range_stats {
+                        Some(range_stats) if range_complete => {
+                            child_range_stats.push(range_stats);
+                        }
+                        _ => {
+                            range_complete = false;
+                        }
+                    }
+
+                    match stats.null_stats {
+                        Some(null_stats) if null_complete => {
+                            child_null_stats.push(null_stats);
+                        }
+                        _ => {
+                            null_complete = false;
+                        }
+                    }
+                }
+                other => return Ok(other),
+            }
+        }
+
+        let range_stats = if range_complete && !child_range_stats.is_empty() {
+            if let Some((first, rest)) = child_range_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Range stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_range_stats(&child_range_stats)?
+        } else {
+            None
+        };
+
+        let null_stats = if null_complete && !child_null_stats.is_empty() {
+            if let Some((first, rest)) = child_null_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Null stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_null_stats(&child_null_stats)?
+        } else {
+            None
+        };
+
+        if let (Some(range_stats), Some(null_stats)) =
+            (range_stats.as_ref(), null_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                range_stats.len(),
+                null_stats.len(),
+                "Range and null stats length mismatch for pruning"
+            );
+        }
+
+        Ok(PruningIntermediate::IntermediateStats(ColumnStats {
+            range_stats,
+            null_stats,
+        }))
+    }
 }
 
 /// Creates a new boolean array based on the evaluation of the right expression,

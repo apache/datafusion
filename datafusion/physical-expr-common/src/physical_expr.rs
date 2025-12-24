@@ -1114,28 +1114,4 @@ mod test {
             &BooleanArray::from(vec![true; 5]),
         );
     }
-
-    #[test]
-    fn range_stats_scalar_variant() {
-        let stats = RangeStats::new_scalar(ScalarValue::Int64(Some(42)), 3).unwrap();
-        assert_eq!(stats.len(), 3);
-
-        let (mins, maxs) = match &stats {
-            RangeStats::Scalar { value, length } => {
-                let arr = ScalarValue::iter_to_array(
-                    std::iter::repeat(value.clone()).take(*length),
-                )
-                .unwrap();
-                (arr.clone(), arr)
-            }
-            RangeStats::Values { mins, maxs, .. } => {
-                (mins.clone().expect("mins"), maxs.clone().expect("maxs"))
-            }
-        };
-
-        let mins = mins.as_any().downcast_ref::<Int64Array>().unwrap();
-        let maxs = maxs.as_any().downcast_ref::<Int64Array>().unwrap();
-        assert_eq!(mins, &Int64Array::from(vec![Some(42), Some(42), Some(42)]));
-        assert_eq!(maxs, &Int64Array::from(vec![Some(42), Some(42), Some(42)]));
-    }
 }
