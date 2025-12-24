@@ -53,7 +53,7 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AggregateUDF, Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
     Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -338,6 +338,24 @@ impl<'a> TypeCoercionRewriter<'a> {
     ) -> Result<Expr, DataFusionError> {
         use DataType::*;
 
+        fn cast(expr: Expr, target_type: DataType) -> Expr {
+            Expr::Cast(Cast::new(Box::new(expr), target_type))
+        }
+
+        fn time_to_nanos_scale(
+            left_current_type: &DataType,
+        ) -> Result<i64, DataFusionError> {
+            let scale = match left_current_type {
+                Time32(TimeUnit::Second) => 1_000_000_000,
+                Time32(TimeUnit::Millisecond) => 1_000_000,
+                Time64(TimeUnit::Microsecond) => 1_000,
+                Time64(TimeUnit::Nanosecond) => 1,
+                t => return internal_err!("Unexpected time data type {t}"),
+            };
+
+            Ok(scale)
+        }
+
         let e = match (
             &op,
             &left_current_type,
@@ -352,29 +370,16 @@ impl<'a> TypeCoercionRewriter<'a> {
                 Date32 | Date64,
             ) => {
                 // cast to i64 first
-                let expr = if *left_current_type == Int64 {
-                    expr
-                } else {
-                    Expr::Cast(Cast::new(Box::new(expr), Int64))
+                let expr = match *left_current_type {
+                    Int64 => expr,
+                    _ => cast(expr, Int64),
                 };
                 // next, multiply by 86400 to get seconds
-                let expr = Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr),
-                    Operator::Multiply,
-                    Box::new(Expr::Literal(
-                        ScalarValue::Int64(Some(SECONDS_IN_DAY)),
-                        None,
-                    )),
-                ));
+                let expr = expr * lit(ScalarValue::from(SECONDS_IN_DAY));
                 // cast to duration
-                let expr =
-                    Expr::Cast(Cast::new(Box::new(expr), Duration(TimeUnit::Second)));
-
+                let expr = cast(expr, Duration(TimeUnit::Second));
                 // finally cast to interval
-                Expr::Cast(Cast::new(
-                    Box::new(expr),
-                    Interval(IntervalUnit::MonthDayNano),
-                ))
+                cast(expr, Interval(IntervalUnit::MonthDayNano))
             }
             // These might seem to be a bit convoluted, however for arrow to do date + time arithmetic
             // date must be cast to Timestamp(Nanosecond) and time cast to Duration(Nanosecond)
@@ -390,47 +395,9 @@ impl<'a> TypeCoercionRewriter<'a> {
                 Duration(TimeUnit::Nanosecond),
                 Timestamp(TimeUnit::Nanosecond, None),
             ) => {
-                let expr = match left_current_type {
-                    Time32(TimeUnit::Second) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000_000_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time32(TimeUnit::Millisecond) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time64(TimeUnit::Microsecond) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time64(TimeUnit::Nanosecond) => {
-                        Expr::Cast(Cast::new(Box::new(expr), Int64))
-                    }
-                    t => return internal_err!("Unexpected time data type {t}"),
-                };
-
-                Expr::Cast(Cast::new(Box::new(expr), Duration(TimeUnit::Nanosecond)))
+                let scale = time_to_nanos_scale(left_current_type)?;
+                let expr = cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)));
+                cast(expr, Duration(TimeUnit::Nanosecond))
             }
             // Similar to above, for arrow to do time - time we need to convert to an interval.
             // To do that we first need to cast to an Int64, convert that to nanoseconds based
@@ -443,53 +410,13 @@ impl<'a> TypeCoercionRewriter<'a> {
                 Interval(IntervalUnit::MonthDayNano),
                 Interval(IntervalUnit::MonthDayNano),
             ) => {
-                let expr = match left_current_type {
-                    Time32(TimeUnit::Second) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000_000_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time32(TimeUnit::Millisecond) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time64(TimeUnit::Microsecond) => {
-                        let ex = Expr::Cast(Cast::new(Box::new(expr), Int64));
-                        Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(ex),
-                            Operator::Multiply,
-                            Box::new(Expr::Literal(
-                                ScalarValue::Int64(Some(1_000)),
-                                None,
-                            )),
-                        ))
-                    }
-                    Time64(TimeUnit::Nanosecond) => {
-                        Expr::Cast(Cast::new(Box::new(expr), Int64))
-                    }
-                    _ => unreachable!(),
-                };
-
-                let expr =
-                    Expr::Cast(Cast::new(Box::new(expr), Duration(TimeUnit::Nanosecond)));
+                let scale = time_to_nanos_scale(left_current_type)?;
+                // cast to int64, convert to nanoseconds
+                let expr = cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)));
+                // cast to duration
+                let expr = cast(expr, Duration(TimeUnit::Nanosecond));
                 // finally cast to interval
-                Expr::Cast(Cast::new(
-                    Box::new(expr),
-                    Interval(IntervalUnit::MonthDayNano),
-                ))
+                cast(expr, Interval(IntervalUnit::MonthDayNano))
             }
             _ => {
                 return plan_err!(
