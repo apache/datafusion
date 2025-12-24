@@ -5751,43 +5751,52 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <section id="get-field">
 <h3><code class="docutils literal notranslate"><span class="pre">get_field</span></code><a class="headerlink" href="#get-field" title="Link to this heading">#</a></h3>
 <p>Returns a field within a map or a struct with the given key.
+Supports nested field access by providing multiple field names.
 Note: most users invoke <code class="docutils literal notranslate"><span class="pre">get_field</span></code> indirectly via field access
 syntax such as <code class="docutils literal notranslate"><span class="pre">my_struct_col['field_name']</span></code> which results in a call to
-<code class="docutils literal notranslate"><span class="pre">get_field(my_struct_col,</span> <span class="pre">'field_name')</span></code>.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">get_field</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
+<code class="docutils literal notranslate"><span class="pre">get_field(my_struct_col,</span> <span class="pre">'field_name')</span></code>.
+Nested access like <code class="docutils literal notranslate"><span class="pre">my_struct['a']['b']</span></code> is optimized to a single call:
+<code class="docutils literal notranslate"><span class="pre">get_field(my_struct,</span> <span class="pre">'a',</span> <span class="pre">'b')</span></code>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">get_field</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">field_name</span><span class="p">[,</span><span class="w"> </span><span class="n">field_name2</span><span class="p">,</span><span class="w"> </span><span class="p">...])</span>
 </pre></div>
 </div>
 <section id="id360">
 <h4>Arguments<a class="headerlink" href="#id360" title="Link to this heading">#</a></h4>
 <ul class="simple">
-<li><p><strong>expression1</strong>: The map or struct to retrieve a field for.</p></li>
-<li><p><strong>expression2</strong>: The field name in the map or struct to retrieve data for. Must evaluate to a string.</p></li>
+<li><p><strong>expression</strong>: The map or struct to retrieve a field from.</p></li>
+<li><p><strong>field_name</strong>: The field name(s) to access, in order for nested access. Must evaluate to strings.</p></li>
 </ul>
 </section>
 <section id="id361">
 <h4>Example<a class="headerlink" href="#id361" title="Link to this heading">#</a></h4>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="p">(</span><span class="n">idx</span><span class="w"> </span><span class="nb">varchar</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="w"> </span><span class="nb">varchar</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;data&#39;</span><span class="p">,</span><span class="s1">&#39;fusion&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;apache&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;arrow&#39;</span><span class="p">);</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">c</span><span class="p">;</span>
-<span class="o">+</span><span class="c1">-------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="k">c</span><span class="p">.</span><span class="n">idx</span><span class="p">,</span><span class="k">c</span><span class="p">.</span><span class="n">v</span><span class="p">)</span><span class="w">       </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="k">data</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="n">fusion</span><span class="err">}</span><span class="w">  </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">c0</span><span class="p">:</span><span class="w"> </span><span class="n">apache</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">:</span><span class="w"> </span><span class="n">arrow</span><span class="err">}</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-------------------------+</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">get_field</span><span class="p">((</span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">),</span><span class="w"> </span><span class="s1">&#39;c0&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">idx</span><span class="p">,</span><span class="n">t</span><span class="p">.</span><span class="n">v</span><span class="p">)[</span><span class="n">c0</span><span class="p">]</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="k">data</span><span class="w">                  </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">apache</span><span class="w">                </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
-<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">get_field</span><span class="p">((</span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="p">),</span><span class="w"> </span><span class="s1">&#39;c1&#39;</span><span class="p">);</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">t</span><span class="p">.</span><span class="n">idx</span><span class="p">,</span><span class="n">t</span><span class="p">.</span><span class="n">v</span><span class="p">)[</span><span class="n">c1</span><span class="p">]</span><span class="w"> </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
-<span class="o">|</span><span class="w"> </span><span class="n">fusion</span><span class="w">                </span><span class="o">|</span>
-<span class="o">|</span><span class="w"> </span><span class="n">arrow</span><span class="w">                 </span><span class="o">|</span>
-<span class="o">+</span><span class="c1">-----------------------+</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="c1">-- Access a field from a struct column</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">test</span><span class="p">(</span><span class="w"> </span><span class="n">struct_col</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">values</span>
+<span class="w">    </span><span class="p">(</span><span class="err">{</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;Alice&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="err">}</span><span class="p">),</span>
+<span class="w">    </span><span class="p">(</span><span class="err">{</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;Bob&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="p">:</span><span class="w"> </span><span class="mi">25</span><span class="err">}</span><span class="p">);</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct_col</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">test</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">struct_col</span><span class="w">                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="n">Alice</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="err">}</span><span class="w">      </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="n">Bob</span><span class="p">,</span><span class="w"> </span><span class="n">age</span><span class="p">:</span><span class="w"> </span><span class="mi">25</span><span class="err">}</span><span class="w">        </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct_col</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">test</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">name</span><span class="w">  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Alice</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Bob</span><span class="w">   </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="c1">-- Nested field access with multiple arguments</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">test</span><span class="p">(</span><span class="n">struct_col</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">values</span>
+<span class="w">    </span><span class="p">(</span><span class="err">{</span><span class="k">outer</span><span class="p">:</span><span class="w"> </span><span class="err">{</span><span class="n">inner_val</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="err">}}</span><span class="p">);</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct_col</span><span class="p">[</span><span class="s1">&#39;outer&#39;</span><span class="p">][</span><span class="s1">&#39;inner_val&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">result</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">test</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">result</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">42</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------+</span>
 </pre></div>
 </div>
 </section>
