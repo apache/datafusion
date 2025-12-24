@@ -76,7 +76,7 @@ pub mod config;
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
-pub struct FFI_SessionRef {
+pub(crate) struct FFI_SessionRef {
     session_id: unsafe extern "C" fn(&Self) -> RStr,
 
     config: unsafe extern "C" fn(&Self) -> FFI_SessionConfig,
@@ -177,9 +177,7 @@ unsafe extern "C" fn create_physical_plan_fn_wrapper(
 
             let physical_plan = session.create_physical_plan(&logical_plan).await;
 
-            rresult!(
-                physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, task_ctx, runtime))
-            )
+            rresult!(physical_plan.map(|plan| FFI_ExecutionPlan::new(plan, runtime)))
         }
         .into_ffi()
     }
@@ -558,12 +556,13 @@ impl Session for ForeignSession {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_expr::col;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_ffi_session() -> Result<(), DataFusionError> {

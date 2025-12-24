@@ -15,27 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, ffi::c_void, sync::Arc};
+use std::any::Any;
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RResult, RString, RVec},
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
 use async_ffi::{FfiFuture, FutureExt};
 use async_trait::async_trait;
-use datafusion::{
-    catalog::{SchemaProvider, TableProvider},
-    error::DataFusionError,
+use datafusion_catalog::{SchemaProvider, TableProvider};
+use datafusion_common::error::{DataFusionError, Result};
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
-
+use crate::execution::FFI_TaskContextProvider;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::table_provider::{FFI_TableProvider, ForeignTableProvider};
 use crate::util::FFIResult;
-use datafusion::error::Result;
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing [`SchemaProvider`] across FFI boundaries.
 #[repr(C)]
@@ -66,6 +65,8 @@ pub struct FFI_SchemaProvider {
         -> FFIResult<ROption<FFI_TableProvider>>,
 
     pub table_exist: unsafe extern "C" fn(provider: &Self, name: RString) -> bool,
+
+    pub logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the execution plan. This should
     /// only need to be called by the receiver of the plan.
@@ -128,11 +129,14 @@ unsafe extern "C" fn table_fn_wrapper(
 ) -> FfiFuture<FFIResult<ROption<FFI_TableProvider>>> {
     unsafe {
         let runtime = provider.runtime();
+        let logical_codec = provider.logical_codec.clone();
         let provider = Arc::clone(provider.inner());
 
         async move {
             let table = rresult_return!(provider.table(name.as_str()).await)
-                .map(|t| FFI_TableProvider::new(t, true, runtime))
+                .map(|t| {
+                    FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
+                })
                 .into();
 
             RResult::ROk(table)
@@ -148,12 +152,15 @@ unsafe extern "C" fn register_table_fn_wrapper(
 ) -> FFIResult<ROption<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
+        let logical_codec = provider.logical_codec.clone();
         let provider = provider.inner();
 
         let table = Arc::new(ForeignTableProvider(table));
 
         let returned_table = rresult_return!(provider.register_table(name.into(), table))
-            .map(|t| FFI_TableProvider::new(t, true, runtime));
+            .map(|t| {
+                FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
+            });
 
         RResult::ROk(returned_table.into())
     }
@@ -165,10 +172,13 @@ unsafe extern "C" fn deregister_table_fn_wrapper(
 ) -> FFIResult<ROption<FFI_TableProvider>> {
     unsafe {
         let runtime = provider.runtime();
+        let logical_codec = provider.logical_codec.clone();
         let provider = provider.inner();
 
         let returned_table = rresult_return!(provider.deregister_table(name.as_str()))
-            .map(|t| FFI_TableProvider::new(t, true, runtime));
+            .map(|t| {
+                FFI_TableProvider::new_with_ffi_codec(t, true, runtime, logical_codec)
+            });
 
         RResult::ROk(returned_table.into())
     }
@@ -206,14 +216,15 @@ unsafe extern "C" fn clone_fn_wrapper(
         FFI_SchemaProvider {
             owner_name: provider.owner_name.clone(),
             table_names: table_names_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            version: super::version,
-            private_data,
             table: table_fn_wrapper,
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            logical_codec: provider.logical_codec.clone(),
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data,
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -230,6 +241,24 @@ impl FFI_SchemaProvider {
     pub fn new(
         provider: Arc<dyn SchemaProvider + Send>,
         runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
+        let logical_codec =
+            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            logical_codec,
+            runtime.clone(),
+            task_ctx_provider.clone(),
+        );
+        Self::new_with_ffi_codec(provider, runtime, logical_codec)
+    }
+
+    pub fn new_with_ffi_codec(
+        provider: Arc<dyn SchemaProvider + Send>,
+        runtime: Option<Handle>,
+        logical_codec: FFI_LogicalExtensionCodec,
     ) -> Self {
         let owner_name = provider.owner_name().map(|s| s.into()).into();
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
@@ -237,14 +266,15 @@ impl FFI_SchemaProvider {
         Self {
             owner_name,
             table_names: table_names_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            version: super::version,
-            private_data: Box::into_raw(private_data) as *mut c_void,
             table: table_fn_wrapper,
             register_table: register_table_fn_wrapper,
             deregister_table: deregister_table_fn_wrapper,
             table_exist: table_exist_fn_wrapper,
+            logical_codec,
+            clone: clone_fn_wrapper,
+            release: release_fn_wrapper,
+            version: super::version,
+            private_data: Box::into_raw(private_data) as *mut c_void,
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -319,7 +349,12 @@ impl SchemaProvider for ForeignSchemaProvider {
         unsafe {
             let ffi_table = match table.as_any().downcast_ref::<ForeignTableProvider>() {
                 Some(t) => t.0.clone(),
-                None => FFI_TableProvider::new(table, true, None),
+                None => FFI_TableProvider::new_with_ffi_codec(
+                    table,
+                    true,
+                    None,
+                    self.0.logical_codec.clone(),
+                ),
             };
 
             let returned_provider: Option<FFI_TableProvider> =
@@ -348,9 +383,11 @@ impl SchemaProvider for ForeignSchemaProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::datatypes::Schema;
-    use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
+    use datafusion::catalog::MemorySchemaProvider;
+    use datafusion::datasource::empty::EmptyTable;
+
+    use super::*;
 
     fn empty_table() -> Arc<dyn TableProvider> {
         Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
@@ -367,7 +404,10 @@ mod tests {
                 .is_none()
         );
 
-        let mut ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+
+        let mut ffi_schema_provider =
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
         ffi_schema_provider.library_marker_id = crate::mock_foreign_marker_id;
 
         let foreign_schema_provider: Arc<dyn SchemaProvider + Send> =
@@ -418,7 +458,9 @@ mod tests {
     fn test_ffi_schema_provider_local_bypass() {
         let schema_provider = Arc::new(MemorySchemaProvider::new());
 
-        let mut ffi_schema = FFI_SchemaProvider::new(schema_provider, None);
+        let (_ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        let mut ffi_schema =
+            FFI_SchemaProvider::new(schema_provider, None, task_ctx_provider, None);
 
         // Verify local libraries can be downcast to their original
         let foreign_schema: Arc<dyn SchemaProvider + Send> = (&ffi_schema).into();

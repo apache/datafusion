@@ -221,11 +221,8 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
 /// Test demonstrating how to implement a custom PhysicalExprAdapterFactory
 /// that fills missing columns with non-null default values.
 ///
-/// This is the recommended migration path for users who previously used
-/// SchemaAdapterFactory to fill missing columns with default values.
-/// Instead of transforming batches after reading (SchemaAdapter::map_batch),
-/// the PhysicalExprAdapterFactory rewrites expressions to use literals for
-/// missing columns, achieving the same result more efficiently.
+/// PhysicalExprAdapterFactory rewrites expressions to use literals for
+/// missing columns, handling schema evolution efficiently at planning time.
 #[tokio::test]
 async fn test_physical_expr_adapter_with_non_null_defaults() {
     // File only has c1 column
@@ -319,6 +316,151 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
     let expected = [
         "++",
         "++",
+    ];
+    assert_batches_eq!(expected, &batches);
+}
+
+/// Test demonstrating that a single PhysicalExprAdapterFactory instance can be
+/// reused across multiple ListingTable instances.
+///
+/// This addresses the concern: "This is important for ListingTable. A test for
+/// ListingTable would add assurance that the functionality is retained [i.e. we
+/// can re-use a PhysicalExprAdapterFactory]"
+#[tokio::test]
+async fn test_physical_expr_adapter_factory_reuse_across_tables() {
+    // Create two different parquet files with different schemas
+    // File 1: has column c1 only
+    let batch1 = record_batch!(("c1", Int32, [1, 2, 3])).unwrap();
+    // File 2: has column c1 only but different data
+    let batch2 = record_batch!(("c1", Int32, [10, 20, 30])).unwrap();
+
+    let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    let store_url = ObjectStoreUrl::parse("memory://").unwrap();
+
+    // Write files to different paths
+    write_parquet(batch1, store.clone(), "table1/data.parquet").await;
+    write_parquet(batch2, store.clone(), "table2/data.parquet").await;
+
+    // Table schema has additional columns that don't exist in files
+    let table_schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, false),
+        Field::new("c2", DataType::Utf8, true), // missing from files
+    ]));
+
+    let mut cfg = SessionConfig::new()
+        .with_collect_statistics(false)
+        .with_parquet_pruning(false);
+    cfg.options_mut().execution.parquet.pushdown_filters = true;
+    let ctx = SessionContext::new_with_config(cfg);
+    ctx.register_object_store(store_url.as_ref(), Arc::clone(&store));
+
+    // Create ONE factory instance wrapped in Arc - this will be REUSED
+    let factory: Arc<dyn PhysicalExprAdapterFactory> =
+        Arc::new(CustomPhysicalExprAdapterFactory);
+
+    // Create ListingTable 1 using the shared factory
+    let listing_table_config1 =
+        ListingTableConfig::new(ListingTableUrl::parse("memory:///table1/").unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema.clone())
+            .with_expr_adapter_factory(Arc::clone(&factory)); // Clone the Arc, not create new factory
+
+    let table1 = ListingTable::try_new(listing_table_config1).unwrap();
+    ctx.register_table("t1", Arc::new(table1)).unwrap();
+
+    // Create ListingTable 2 using the SAME factory instance
+    let listing_table_config2 =
+        ListingTableConfig::new(ListingTableUrl::parse("memory:///table2/").unwrap())
+            .infer_options(&ctx.state())
+            .await
+            .unwrap()
+            .with_schema(table_schema.clone())
+            .with_expr_adapter_factory(Arc::clone(&factory)); // Reuse same factory
+
+    let table2 = ListingTable::try_new(listing_table_config2).unwrap();
+    ctx.register_table("t2", Arc::new(table2)).unwrap();
+
+    // Verify table 1 works correctly with the shared factory
+    // CustomPhysicalExprAdapterFactory fills missing Utf8 columns with 'b'
+    let batches = ctx
+        .sql("SELECT c1, c2 FROM t1 ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | b  |",
+        "| 2  | b  |",
+        "| 3  | b  |",
+        "+----+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // Verify table 2 also works correctly with the SAME shared factory
+    let batches = ctx
+        .sql("SELECT c1, c2 FROM t2 ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    let expected = [
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 10 | b  |",
+        "| 20 | b  |",
+        "| 30 | b  |",
+        "+----+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    // Verify predicates work on both tables with the shared factory
+    let batches = ctx
+        .sql("SELECT c1 FROM t1 WHERE c2 = 'b' ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 1  |",
+        "| 2  |",
+        "| 3  |",
+        "+----+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    let batches = ctx
+        .sql("SELECT c1 FROM t2 WHERE c2 = 'b' ORDER BY c1")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    #[rustfmt::skip]
+    let expected = [
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| 10 |",
+        "| 20 |",
+        "| 30 |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &batches);
 }

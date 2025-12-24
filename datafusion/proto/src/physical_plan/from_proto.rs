@@ -48,6 +48,7 @@ use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
     NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
+use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
@@ -399,6 +400,20 @@ pub fn parse_physical_expr(
                 codec,
             )?,
         )),
+        ExprType::HashExpr(hash_expr) => {
+            let on_columns =
+                parse_physical_exprs(&hash_expr.on_columns, ctx, input_schema, codec)?;
+            Arc::new(HashExpr::new(
+                on_columns,
+                SeededRandomState::with_seeds(
+                    hash_expr.seed0,
+                    hash_expr.seed1,
+                    hash_expr.seed2,
+                    hash_expr.seed3,
+                ),
+                hash_expr.description.clone(),
+            ))
+        }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs
