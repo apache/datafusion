@@ -185,6 +185,9 @@ sysinfo = "0.37.2"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
+[build-dependencies]
+toml = "0.9"
+
 [package.metadata.cargo-machete]
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 

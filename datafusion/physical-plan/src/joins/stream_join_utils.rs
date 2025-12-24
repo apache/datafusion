@@ -40,6 +40,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{HashSet, JoinSide, Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
@@ -676,6 +677,7 @@ pub fn record_visited_indices<T: ArrowPrimitiveType>(
     }
 }
 
+#[metric_doc]
 #[derive(Debug)]
 pub struct StreamJoinSideMetrics {
     /// Number of batches consumed by this operator
@@ -685,6 +687,7 @@ pub struct StreamJoinSideMetrics {
 }
 
 /// Metrics for HashJoinExec
+#[metric_doc]
 #[derive(Debug)]
 pub struct StreamJoinMetrics {
     /// Number of left batches/rows consumed by this operator

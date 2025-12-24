@@ -46,6 +46,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 
 use async_trait::async_trait;
@@ -76,6 +77,7 @@ struct JoinLeftData {
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
+#[metric_doc(BuildProbeJoinMetrics)]
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory

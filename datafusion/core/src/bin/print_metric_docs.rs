@@ -18,8 +18,6 @@
 //! Print metrics documentation collected via `DocumentedMetrics`/`DocumentedExec`.
 //! Called from doc generation scripts to refresh `docs/source/user-guide/metrics.md`.
 
-use std::collections::HashSet;
-
 use datafusion_expr::metric_doc_sections::{
     ExecDoc, MetricDoc, MetricDocPosition, exec_docs, metric_docs,
 };
@@ -40,20 +38,17 @@ fn main() -> std::io::Result<()> {
         .filter(|m| m.position == MetricDocPosition::Common)
         .collect();
 
-    // Collect names of common metric types for filtering embedded fields
-    let common_metric_names: HashSet<&str> = common.iter().map(|m| m.name).collect();
-
     if !common.is_empty() {
         content.push_str("## Common Metrics\n\n");
         for metric in common {
-            render_metric_doc(&mut content, metric, 3, &common_metric_names);
+            render_metric_doc(&mut content, metric, 3);
         }
     }
 
     if !execs.is_empty() {
         content.push_str("## Operator-specific Metrics\n\n");
         for exec in execs {
-            render_exec_doc(&mut content, exec, &common_metric_names);
+            render_exec_doc(&mut content, exec);
         }
     }
 
@@ -61,11 +56,7 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn render_exec_doc(
-    out: &mut String,
-    exec: &ExecDoc,
-    common_metric_names: &HashSet<&str>,
-) {
+fn render_exec_doc(out: &mut String, exec: &ExecDoc) {
     out.push_str(&heading(3, exec.name));
     out.push_str("\n\n");
 
@@ -86,20 +77,17 @@ fn render_exec_doc(
     metrics.sort_by(|a, b| a.name.cmp(b.name));
 
     if metrics.is_empty() {
-        out.push_str("_No operator-specific metrics documented._\n\n");
+        out.push_str(
+            "_No operator-specific metrics documented (see Common Metrics)._\n\n",
+        );
     } else {
         for metric in metrics {
-            render_metric_doc(out, metric, 4, common_metric_names);
+            render_metric_doc(out, metric, 4);
         }
     }
 }
 
-fn render_metric_doc(
-    out: &mut String,
-    metric: &MetricDoc,
-    heading_level: usize,
-    common_metric_names: &HashSet<&str>,
-) {
+fn render_metric_doc(out: &mut String, metric: &MetricDoc, heading_level: usize) {
     out.push_str(&heading(heading_level, metric.name));
     out.push_str("\n\n");
 
@@ -110,21 +98,9 @@ fn render_metric_doc(
         out.push_str("\n\n");
     }
 
-    // Filter out fields whose type is a common metric (documented separately)
-    let fields: Vec<_> = metric
-        .fields
-        .iter()
-        .filter(|field| !common_metric_names.contains(field.type_name))
-        .collect();
-
-    if fields.is_empty() {
-        out.push_str("_No metrics documented._\n\n");
-        return;
-    }
-
     out.push_str("| Metric | Description |\n");
     out.push_str("| --- | --- |\n");
-    for field in fields {
+    for field in metric.fields {
         out.push_str(&format!("| {} | {} |\n", field.name, sanitize(field.doc)));
     }
     out.push('\n');

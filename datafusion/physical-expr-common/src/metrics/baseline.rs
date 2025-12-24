@@ -180,6 +180,7 @@ impl Drop for BaselineMetrics {
 
 /// Helper for creating and tracking spill-related metrics for
 /// each operator
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct SpillMetrics {
     /// count of spills during the execution of the operator
@@ -204,6 +205,7 @@ impl SpillMetrics {
 }
 
 /// Metrics for tracking batch splitting activity
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split

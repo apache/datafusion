@@ -19,6 +19,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
+use toml::value::Table;
 
 fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
@@ -34,10 +35,13 @@ fn main() {
 
     // Read Cargo.toml to check dependencies
     let cargo_toml_path = Path::new(&core_crate_dir).join("Cargo.toml");
-    let mut cargo_toml_content = String::new();
-    if let Ok(mut file) = fs::File::open(&cargo_toml_path) {
-        file.read_to_string(&mut cargo_toml_content).unwrap();
-    }
+    let cargo_toml_content =
+        fs::read_to_string(&cargo_toml_path).expect("core Cargo.toml must be readable");
+    let cargo_manifest: toml::Value =
+        toml::from_str(&cargo_toml_content).expect("core Cargo.toml must be valid TOML");
+    let dependencies = manifest_table(&cargo_manifest, "dependencies");
+    let dev_dependencies = manifest_table(&cargo_manifest, "dev-dependencies");
+    let features = manifest_table(&cargo_manifest, "features");
 
     if let Ok(entries) = fs::read_dir(datafusion_dir) {
         for entry in entries.flatten() {
@@ -53,11 +57,9 @@ fn main() {
                         continue;
                     }
 
-                    // Skip if not a dependency in Cargo.toml
-                    // This is a rough check
-                    if !cargo_toml_content.contains(&format!("{crate_name} ="))
-                        && !cargo_toml_content.contains(&format!("\"{crate_name}\""))
-                    {
+                    let is_dependency = dependencies.contains_key(&crate_name)
+                        || dev_dependencies.contains_key(&crate_name);
+                    if !is_dependency {
                         continue;
                     }
 
@@ -81,12 +83,9 @@ fn main() {
     for krate in crates_with_metrics {
         let krate_snake = krate.replace("-", "_");
 
-        let is_optional = cargo_toml_content
-            .lines()
-            .any(|line| line.contains(&krate) && line.contains("optional = true"));
-
-        if is_optional {
-            writeln!(f, "    #[cfg(feature = \"{krate_snake}\")]").unwrap();
+        if is_optional_dependency(&dependencies, &krate) {
+            let feature = dependency_feature(&features, &krate);
+            writeln!(f, "    #[cfg(feature = \"{feature}\")]").unwrap();
         }
 
         writeln!(f, "    {{").unwrap();
@@ -98,6 +97,39 @@ fn main() {
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
+}
+
+fn manifest_table(manifest: &toml::Value, key: &str) -> Table {
+    manifest
+        .get(key)
+        .and_then(|value| value.as_table())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn is_optional_dependency(dependencies: &Table, crate_name: &str) -> bool {
+    dependencies
+        .get(crate_name)
+        .and_then(|dep| dep.as_table())
+        .and_then(|dep| dep.get("optional"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn dependency_feature(features: &Table, crate_name: &str) -> String {
+    let dep_feature = format!("dep:{crate_name}");
+    for (feature, deps) in features {
+        if let Some(array) = deps.as_array() {
+            for dep in array {
+                if let Some(dep_str) = dep.as_str()
+                    && (dep_str == crate_name || dep_str == dep_feature)
+                {
+                    return feature.clone();
+                }
+            }
+        }
+    }
+    crate_name.to_string()
 }
 
 fn has_metric_doc(dir: &Path) -> bool {
