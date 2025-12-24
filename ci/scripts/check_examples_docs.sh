@@ -22,6 +22,10 @@ set -euo pipefail
 EXAMPLES_DIR="datafusion-examples/examples"
 README="datafusion-examples/README.md"
 
+# ffi examples are skipped because they were not part of the recent example
+# consolidation work and do not follow the new grouping and execution pattern.
+# They are not documented in the README using the new structure, so including
+# them here would cause false CI failures.
 SKIP_LIST=("ffi")
 
 missing=0
