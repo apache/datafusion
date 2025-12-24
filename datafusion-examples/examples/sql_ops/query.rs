@@ -23,6 +23,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{UInt8Array, UInt64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::MemTable;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
