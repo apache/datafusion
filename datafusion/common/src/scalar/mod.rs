@@ -2989,6 +2989,8 @@ impl ScalarValue {
                 Some(value) => {
                     let mut builder =
                         StringViewBuilder::with_capacity(size).with_deduplicate_strings();
+                    // Replace with upstream arrow-rs code when available:
+                    // https://github.com/apache/arrow-rs/issues/9034
                     for _ in 0..size {
                         builder.append_value(value);
                     }
