@@ -86,12 +86,7 @@ impl ScalarUDFImpl for SparkSha1 {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|scalar| scalar.is_some_and(|s| s.is_null()));
-
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
     }
 
@@ -146,7 +141,6 @@ fn spark_sha1(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_sha1_nullability() -> Result<()> {
@@ -166,15 +160,6 @@ mod tests {
         let out = func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[Arc::clone(&nullable)],
             scalar_arguments: &[None],
-        })?;
-        assert!(out.is_nullable());
-        assert_eq!(out.data_type(), &DataType::Utf8);
-
-        // Null scalar argument also makes output nullable
-        let null_scalar = ScalarValue::Binary(None);
-        let out = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[Arc::clone(&non_nullable)],
-            scalar_arguments: &[Some(&null_scalar)],
         })?;
         assert!(out.is_nullable());
         assert_eq!(out.data_type(), &DataType::Utf8);
