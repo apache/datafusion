@@ -25,7 +25,7 @@ mod test {
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
+    use datafusion_physical_expr::expressions::{BinaryExpr, Column, is_null, lit};
     use datafusion_physical_expr_common::physical_expr::{
         ColumnStats, PruningContext, PruningIntermediate, PruningResult, RangeStats,
     };
@@ -143,7 +143,9 @@ mod test {
         let ctx = Arc::new(PruningContext::new(Arc::new(DummyStats)));
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
-            PruningIntermediate::IntermediateResult(PruningResult::AlwaysTrue) => {}
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysTrue])
+            }
             other => panic!("unexpected result: {other:?}"),
         }
     }
@@ -160,7 +162,9 @@ mod test {
         let expr = BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Lt, lit(5));
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
-            PruningIntermediate::IntermediateResult(PruningResult::AlwaysFalse) => {}
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysFalse; 2])
+            }
             other => panic!("unexpected result: {other:?}"),
         }
     }
@@ -183,7 +187,9 @@ mod test {
         let expr = BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Gt, lit(5));
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
-            PruningIntermediate::IntermediateResult(PruningResult::AlwaysTrue) => {}
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysTrue; 2])
+            }
             other => panic!("unexpected result: {other:?}"),
         }
 
@@ -200,7 +206,12 @@ mod test {
         let ctx = Arc::new(PruningContext::new(stats));
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
-            PruningIntermediate::IntermediateResult(PruningResult::Unknown) => {}
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(
+                    results,
+                    vec![PruningResult::Unknown, PruningResult::AlwaysFalse]
+                )
+            }
             other => panic!("unexpected result: {other:?}"),
         }
     }
@@ -254,7 +265,28 @@ mod test {
 
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
-            PruningIntermediate::IntermediateResult(PruningResult::AlwaysFalse) => {}
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn is_null_prunes_when_no_nulls() {
+        let stats = Arc::new(MockPruningStatistics::from_scalar(
+            "b",
+            ScalarValue::Int32(Some(1)),
+            1,
+            3,
+        ));
+        let ctx = Arc::new(PruningContext::new(stats));
+        let expr = is_null(Arc::new(Column::new("b", 0))).unwrap();
+
+        match expr.evaluate_pruning(ctx).unwrap() {
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+            }
             other => panic!("unexpected result: {other:?}"),
         }
     }

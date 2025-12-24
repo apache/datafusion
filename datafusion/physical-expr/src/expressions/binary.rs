@@ -354,46 +354,35 @@ impl PhysicalExpr for BinaryExpr {
                         } else {
                             PruningResult::AlwaysFalse
                         };
-                        return Ok(PruningIntermediate::IntermediateResult(pruning));
+                        return Ok(PruningIntermediate::IntermediateResult(vec![
+                            pruning,
+                        ]));
                     }
                     _ => {
                         return Ok(PruningIntermediate::IntermediateResult(
-                            PruningResult::Unknown,
+                            vec![PruningResult::Unknown],
                         ));
                     }
                 }
             }
             _ => {
                 return Ok(PruningIntermediate::IntermediateResult(
-                    PruningResult::Unknown,
+                    vec![PruningResult::Unknown],
                 ));
             }
         };
 
-        let mut all_true = true;
-        let mut all_false = true;
-
+        let mut results = Vec::with_capacity(l_range.len());
         for (l, r) in l_range.into_iter().zip(r_range.into_iter()) {
-            let Some(result) = compare_ranges(&self.op, &l, &r) else {
-                all_true = false;
-                all_false = false;
-                break;
+            let res = match compare_ranges(&self.op, &l, &r) {
+                Some(true) => PruningResult::AlwaysTrue,
+                Some(false) => PruningResult::AlwaysFalse,
+                None => PruningResult::Unknown,
             };
-            if result {
-                all_false = false;
-            } else {
-                all_true = false;
-            }
+            results.push(res);
         }
 
-        let res = if all_true {
-            PruningResult::AlwaysTrue
-        } else if all_false {
-            PruningResult::AlwaysFalse
-        } else {
-            PruningResult::Unknown
-        };
-        Ok(PruningIntermediate::IntermediateResult(res))
+        Ok(PruningIntermediate::IntermediateResult(results))
     }
 
     fn propagate_range_stats(

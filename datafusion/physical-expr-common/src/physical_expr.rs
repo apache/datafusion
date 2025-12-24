@@ -687,10 +687,11 @@ impl ColumnStats {
     }
 }
 
+// TODO: should include length (container count)
 #[derive(Debug, Clone)]
 pub enum PruningIntermediate {
     IntermediateStats(ColumnStats),
-    IntermediateResult(PruningResult),
+    IntermediateResult(Vec<PruningResult>),
 }
 
 impl PruningIntermediate {
