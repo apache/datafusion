@@ -1314,7 +1314,6 @@ pub fn ensure_distribution(
                     child = add_merge_on_top(child);
                 }
                 Distribution::HashPartitioned(_) => {
-                    // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
                     let satisfaction = distribution_satisfaction(
                         &child.plan,
                         &requirement,

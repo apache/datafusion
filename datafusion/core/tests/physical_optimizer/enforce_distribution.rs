@@ -3747,7 +3747,7 @@ fn distribution_satisfaction_superset_hash_matches_sanity_check() -> Result<()> 
 }
 
 #[test]
-fn single_partition_join_skips_repartition() -> Result<()> {
+fn single_partition_join_requires_repartition() -> Result<()> {
     let left = parquet_exec();
     let right = parquet_exec();
     let join_on = vec![(
