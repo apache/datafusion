@@ -73,19 +73,14 @@ async fn explain_analyze_baseline_metrics() {
     );
 
     {
-        let expected_batch_count_after_repartition =
-            if cfg!(not(feature = "force_hash_collisions")) {
-                "output_batches=1"
-            } else {
-                "output_batches=1"
-            };
-
+        // Final aggregate uses CoalescePartitionsExec which merges to single partition
+        // so output_batches is always 1 regardless of force_hash_collisions feature
         assert_metrics!(
             &formatted,
             "AggregateExec: mode=Final, gby=[c1@0 as c1]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            "output_batches=1"
         );
 
         assert_metrics!(
@@ -93,7 +88,7 @@ async fn explain_analyze_baseline_metrics() {
             "ProjectionExec: expr=[]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            "output_batches=1"
         );
     }
 
