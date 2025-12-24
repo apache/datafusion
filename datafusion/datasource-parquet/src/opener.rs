@@ -1018,6 +1018,7 @@ mod test {
         coerce_int96: Option<arrow::datatypes::TimeUnit>,
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
+        preserve_order: bool,
     }
 
     impl ParquetOpenerBuilder {
@@ -1043,6 +1044,7 @@ mod test {
                 coerce_int96: None,
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
+                preserve_order: false,
             }
         }
 
@@ -1150,6 +1152,7 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                preserve_order: self.preserve_order,
             }
         }
     }

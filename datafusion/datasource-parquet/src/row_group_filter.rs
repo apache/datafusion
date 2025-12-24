@@ -48,7 +48,7 @@ use parquet::{
 pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
-    /// which row groups are fully contained within the pruning predicate
+    /// Row groups where ALL rows are known to match the pruning predicate
     is_fully_matched: Vec<bool>,
 }
 

@@ -157,12 +157,12 @@ impl RowGroupPruningTest {
         );
         let bloom_filter_metrics = output.row_groups_bloom_filter();
         assert_eq!(
-            bloom_filter_metrics.map(|(_pruned, matched, _)| matched),
+            bloom_filter_metrics.as_ref().map(|pm| pm.total_matched()),
             self.expected_row_group_matched_by_bloom_filter,
             "mismatched row_groups_matched_bloom_filter",
         );
         assert_eq!(
-            bloom_filter_metrics.map(|(pruned, _matched, _)| pruned),
+            bloom_filter_metrics.map(|pm| pm.total_pruned()),
             self.expected_row_group_pruned_by_bloom_filter,
             "mismatched row_groups_pruned_bloom_filter",
         );
