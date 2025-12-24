@@ -55,7 +55,7 @@ use std::any::Any;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use datafusion::common::runtime::{set_join_set_tracer, JoinSetTracer};
+use datafusion::common::runtime::{JoinSetTracer, set_join_set_tracer};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
