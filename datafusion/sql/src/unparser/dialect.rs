@@ -226,32 +226,23 @@ pub trait Dialect: Send + Sync {
     /// - Testing row existence without retrieving column data
     /// - Performance optimization when only row counts or existence checks are needed
     ///
-    /// # Supported Databases
-    ///
-    /// - **PostgreSQL**: Fully supported. Returns rows with zero columns.
-    ///
-    /// # Unsupported Databases
-    ///
-    /// Most other SQL databases require at least one column in the SELECT list:
-    /// - MySQL
-    /// - SQLite
-    /// - SQL Server
-    /// - Oracle
-    /// - DuckDB
-    ///
-    /// For these databases, the unparser falls back to `SELECT 1 FROM table`.
-    ///
     /// # Default
     ///
-    /// Returns `false` for maximum compatibility across SQL dialects.
+    /// Returns `false` for maximum compatibility across SQL dialects. When `false`,
+    /// the unparser falls back to `SELECT 1 FROM table`.
+    ///
+    /// # Implementation Note
+    ///
+    /// Specific dialects should override this method to return `true` if they support
+    /// the empty select list syntax (e.g., PostgreSQL).
     ///
     /// # Example SQL Output
     ///
     /// ```sql
-    /// -- When supported (PostgreSQL/DataFusion):
+    /// -- When supported:
     /// SELECT FROM users WHERE active = true;
     ///
-    /// -- Fallback for other databases:
+    /// -- Fallback when unsupported:
     /// SELECT 1 FROM users WHERE active = true;
     /// ```
     fn supports_empty_select_list(&self) -> bool {

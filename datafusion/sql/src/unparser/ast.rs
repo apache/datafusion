@@ -144,6 +144,7 @@ pub struct SelectBuilder {
     /// This field uses `Option` to distinguish between three distinct states:
     /// - `None`: No projection has been set (not yet initialized)
     /// - `Some(vec![])`: Empty projection explicitly set (generates `SELECT FROM ...` or `SELECT 1 FROM ...`)
+    /// - `Some(vec![SelectItem::Wildcard(...)])`: Wildcard projection (generates `SELECT * FROM ...`)
     /// - `Some(vec![...])`: Non-empty projection with specific columns/expressions
     ///
     /// Use `projection()` to set this field and `already_projected()` to check if it has been set.
