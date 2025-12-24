@@ -125,23 +125,25 @@ impl ScalarUDFImpl for SparkMakeInterval {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let has_non_finite_secs = args
-            .scalar_arguments
-            .get(6)
-            .and_then(|arg| {
-                arg.map(|scalar| match scalar {
-                    ScalarValue::Float64(Some(v)) => !v.is_finite(),
-                    ScalarValue::Float32(Some(v)) => !v.is_finite(),
-                    _ => false,
+        // Only check for non-finite seconds when all 7 args are present
+        let has_non_finite_secs = if args.arg_fields.len() == 7 {
+            args.scalar_arguments
+                .get(6)
+                .and_then(|arg| {
+                    arg.map(|scalar| match scalar {
+                        ScalarValue::Float64(Some(v)) => !v.is_finite(),
+                        ScalarValue::Float32(Some(v)) => !v.is_finite(),
+                        _ => false,
+                    })
                 })
-            })
-            .unwrap_or(false);
+                .unwrap_or(false)
+        } else {
+            false
+        };
 
         let nullable = if args.arg_fields.is_empty() {
-            // zero-arg form is a deterministic non-null scalar
             false
         } else {
-            // nullable if any input is nullable OR has non-finite seconds
             has_non_finite_secs || args.arg_fields.iter().any(|f| f.is_nullable())
         };
 
