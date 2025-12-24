@@ -88,11 +88,12 @@ use std::{
     task::{Context, Poll},
 };
 
+use arrow::datatypes::{Float64Type, Int64Type};
 use arrow::{
     array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt32Array},
     compute,
 };
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::SchemaRef;
 use futures::{
     ready,
     stream::{Stream, StreamExt},
@@ -416,12 +417,8 @@ impl RelationPlanner for TableSamplePlanner {
         match quantity.unit {
             // TABLESAMPLE (N ROWS) - exact row limit
             Some(TableSampleUnit::Rows) => {
-                let rows = parse_sql_literal::<i64>(
-                    &quantity.value,
-                    &DataType::Int64,
-                    schema,
-                    context,
-                )?;
+                let rows: i64 =
+                    parse_sql_literal::<Int64Type>(&quantity.value, schema, context)?;
                 if rows < 0 {
                     return plan_err!("row count must be non-negative, got {}", rows);
                 }
@@ -433,12 +430,8 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
             Some(TableSampleUnit::Percent) => {
-                let percent = parse_sql_literal::<f64>(
-                    &quantity.value,
-                    &DataType::Float64,
-                    schema,
-                    context,
-                )?;
+                let percent: f64 =
+                    parse_sql_literal::<Float64Type>(&quantity.value, schema, context)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
@@ -446,12 +439,8 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
             None => {
-                let value = parse_sql_literal::<f64>(
-                    &quantity.value,
-                    &DataType::Float64,
-                    schema,
-                    context,
-                )?;
+                let value =
+                    parse_sql_literal::<Float64Type>(&quantity.value, schema, context)?;
                 if value < 0.0 {
                     return plan_err!("sample value must be non-negative, got {}", value);
                 }

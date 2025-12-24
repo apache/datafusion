@@ -22,7 +22,7 @@
 //! in a planning (not an execution) phase, they need to be reduced to literals of a given type.
 
 use crate::simplify_expressions::ExprSimplifier;
-use arrow::datatypes::DataType;
+use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::{
     DFSchemaRef, DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
@@ -33,14 +33,14 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::sqlparser::ast;
 use std::sync::Arc;
 
-/// Parse and simplifies a SQL expression to a numeric literal of a given type `T`.
+/// Parse and simplifies a SQL expression to a numeric literal,
+/// corresponding to an arrow primitive type `T` (for example, Float64Type).
 ///
 /// This function simplifies and coerces the expression, then extracts the underlying
 /// native type using `TryFrom<ScalarValue>`.
 ///
 /// # Arguments
 /// * `expr` - A logical AST expression
-/// * `target_type` - Arrow type to cast the literal to
 /// * `schema` - Schema reference for expression planning
 /// * `context` - `RelationPlannerContext` context
 ///
@@ -49,20 +49,20 @@ use std::sync::Arc;
 ///
 /// # Example
 /// ```ignore
-/// let value: f64 = parse_sql_literal(&expr, &DataType::Float64, &schema, &mut relPlannerContext)?;
+/// let value: f64 = parse_sql_literal::<Float64Type>(&expr, &schema, &mut relPlannerContext)?;
 /// ```
 pub fn parse_sql_literal<T>(
     expr: &ast::Expr,
-    target_type: &DataType,
     schema: &DFSchemaRef,
     context: &mut dyn RelationPlannerContext,
-) -> Result<T>
+) -> Result<T::Native>
 where
-    T: TryFrom<ScalarValue, Error = DataFusionError>,
+    T: ArrowPrimitiveType,
+    <T as ArrowPrimitiveType>::Native: TryFrom<ScalarValue, Error = DataFusionError>,
 {
     match context.sql_to_expr(expr.clone(), &Arc::clone(schema)) {
         Ok(logical_expr) => {
-            log::debug!("Parsing expr {logical_expr:?} to type {target_type}");
+            log::debug!("Parsing expr {:?} to type {}", logical_expr, T::DATA_TYPE);
 
             let execution_props = ExecutionProps::new();
             let simplifier = ExprSimplifier::new(
@@ -80,10 +80,10 @@ where
                 Expr::Literal(scalar_value, _) => {
                     // It is a literal - proceed to the underlying value
                     // Cast to the target type if needed
-                    let casted_scalar = scalar_value.cast_to(target_type)?;
+                    let casted_scalar = scalar_value.cast_to(&T::DATA_TYPE)?;
 
                     // Extract the native type
-                    T::try_from(casted_scalar).map_err(|err| {
+                    T::Native::try_from(casted_scalar).map_err(|err| {
                         plan_datafusion_err!(
                             "Cannot extract {} from scalar value: {err}",
                             std::any::type_name::<T>()
@@ -106,7 +106,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Float64Type, Int64Type};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DFSchema, TableReference, not_impl_err};
     use datafusion_expr::planner::ContextProvider;
@@ -187,7 +187,7 @@ mod tests {
         };
         let sql_to_rel = SqlToRel::new(&context);
         let mut planner_context = PlannerContext::new();
-        let mut sqltorel_context =
+        let mut sql_context =
             SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
         let dialect = GenericDialect {};
 
@@ -198,12 +198,8 @@ mod tests {
                 .parse_expr()
                 .unwrap();
 
-            let result: Result<f64> = parse_sql_literal(
-                &ast_expr,
-                &DataType::Float64,
-                &schema,
-                &mut sqltorel_context,
-            );
+            let result: Result<f64> =
+                parse_sql_literal::<Float64Type>(&ast_expr, &schema, &mut sql_context);
 
             match result {
                 Ok(value) => {
@@ -225,7 +221,7 @@ mod tests {
         };
         let sql_to_rel = SqlToRel::new(&context);
         let mut planner_context = PlannerContext::new();
-        let mut sqltorel_context =
+        let mut sql_context =
             SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
         let dialect = GenericDialect {};
 
@@ -236,12 +232,8 @@ mod tests {
             .parse_expr()
             .unwrap();
 
-        let result: Result<i64> = parse_sql_literal(
-            &ast_expr,
-            &DataType::Int64,
-            &schema,
-            &mut sqltorel_context,
-        );
+        let result: Result<i64> =
+            parse_sql_literal::<Int64Type>(&ast_expr, &schema, &mut sql_context);
 
         match result {
             Ok(value) => {
