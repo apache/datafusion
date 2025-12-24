@@ -11,11 +11,19 @@ SELECT interval '1 second' * 900
 
 
 query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT 900 * interval '1 second'
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
 SELECT interval '1 day' * 21
 
 
 query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
 SELECT interval '1 hour' * 3.5
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT 3.5 * interval '1 hour'
 
 
 query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)

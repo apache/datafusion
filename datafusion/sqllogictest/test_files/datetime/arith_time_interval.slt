@@ -23,6 +23,31 @@ SELECT '22:00'::time + interval '3 hours'
 ----
 25 hours
 
+query ?
+SELECT interval '3 hours' + '22:00'::time
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time32(Second)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time32(Millisecond)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time64(Microsecond)') + interval '3 hours'
+----
+25 hours
+
+query ?
+SELECT arrow_cast('22:00', 'Time64(Nanosecond)') + interval '3 hours'
+----
+25 hours
+
 # postgresql behavior
 #
 # time - interval → time

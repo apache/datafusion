@@ -342,10 +342,11 @@ impl<'a> TypeCoercionRewriter<'a> {
             Expr::Cast(Cast::new(Box::new(expr), target_type))
         }
 
-        fn time_to_nanos_scale(
-            left_current_type: &DataType,
-        ) -> Result<i64, DataFusionError> {
-            let scale = match left_current_type {
+        fn time_to_nanos(
+            expr: Expr,
+            expr_type: &DataType,
+        ) -> Result<Expr, DataFusionError> {
+            let scale = match expr_type {
                 Time32(TimeUnit::Second) => 1_000_000_000,
                 Time32(TimeUnit::Millisecond) => 1_000_000,
                 Time64(TimeUnit::Microsecond) => 1_000,
@@ -353,7 +354,21 @@ impl<'a> TypeCoercionRewriter<'a> {
                 t => return internal_err!("Unexpected time data type {t}"),
             };
 
-            Ok(scale)
+            let expr = match expr_type {
+                Time32(TimeUnit::Second) => {
+                    cast(cast(expr, Int32), Int64) * lit(ScalarValue::Int64(Some(scale)))
+                }
+                Time32(TimeUnit::Millisecond) => {
+                    cast(cast(expr, Int32), Int64) * lit(ScalarValue::Int64(Some(scale)))
+                }
+                Time64(TimeUnit::Microsecond) => {
+                    cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)))
+                }
+                Time64(TimeUnit::Nanosecond) => cast(expr, Int64),
+                _ => unreachable!(),
+            };
+
+            Ok(expr)
         }
 
         let e = match (
@@ -395,8 +410,9 @@ impl<'a> TypeCoercionRewriter<'a> {
                 Duration(TimeUnit::Nanosecond),
                 Timestamp(TimeUnit::Nanosecond, None),
             ) => {
-                let scale = time_to_nanos_scale(left_current_type)?;
-                let expr = cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)));
+                // cast to int64, convert to nanoseconds
+                let expr = time_to_nanos(expr, left_current_type)?;
+                // cast to duration
                 cast(expr, Duration(TimeUnit::Nanosecond))
             }
             // Similar to above, for arrow to do time - time we need to convert to an interval.
@@ -410,9 +426,8 @@ impl<'a> TypeCoercionRewriter<'a> {
                 Interval(IntervalUnit::MonthDayNano),
                 Interval(IntervalUnit::MonthDayNano),
             ) => {
-                let scale = time_to_nanos_scale(left_current_type)?;
                 // cast to int64, convert to nanoseconds
-                let expr = cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)));
+                let expr = time_to_nanos(expr, left_current_type)?;
                 // cast to duration
                 let expr = cast(expr, Duration(TimeUnit::Nanosecond));
                 // finally cast to interval

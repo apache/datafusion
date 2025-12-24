@@ -22,6 +22,86 @@ SELECT '2001-09-28'::date - '03:00'::time
 ----
 2001-09-27T21:00:00
 
+query P
+SELECT arrow_cast('2001-09-28', 'Date32') + arrow_cast('03:00', 'Time32(Second)')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date32') + arrow_cast('03:00', 'Time32(Millisecond)')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date32') + arrow_cast('03:00', 'Time64(Microsecond)')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date32') + arrow_cast('03:00', 'Time64(Nanosecond)')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date64') + arrow_cast('03:00', 'Time32(Second)')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date64') + arrow_cast('03:00:00.123', 'Time32(Millisecond)')
+----
+2001-09-28T03:00:00.123
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date64') + arrow_cast('03:00:00.123456', 'Time64(Microsecond)')
+----
+2001-09-28T03:00:00.123456
+
+query P
+SELECT arrow_cast('2001-09-28', 'Date64') + arrow_cast('03:00:00.001234567', 'Time64(Nanosecond)')
+----
+2001-09-28T03:00:00.001234567
+
+query P
+SELECT arrow_cast('03:00', 'Time32(Second)') + arrow_cast('2001-09-28', 'Date32')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('03:00', 'Time32(Millisecond)') + arrow_cast('2001-09-28', 'Date32')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('03:00', 'Time64(Microsecond)') + arrow_cast('2001-09-28', 'Date32')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('03:00', 'Time64(Nanosecond)') + arrow_cast('2001-09-28', 'Date32')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('03:00', 'Time32(Second)') + arrow_cast('2001-09-28', 'Date64')
+----
+2001-09-28T03:00:00
+
+query P
+SELECT arrow_cast('03:00:00.123', 'Time32(Millisecond)') + arrow_cast('2001-09-28', 'Date64')
+----
+2001-09-28T03:00:00.123
+
+query P
+SELECT arrow_cast('03:00:00.123456', 'Time64(Microsecond)') + arrow_cast('2001-09-28', 'Date64')
+----
+2001-09-28T03:00:00.123456
+
+query P
+SELECT arrow_cast('03:00:00.001234567', 'Time64(Nanosecond)') + arrow_cast('2001-09-28', 'Date64')
+----
+2001-09-28T03:00:00.001234567
+
 query error Invalid arithmetic operation
 SELECT '03:00'::time - '2001-09-28'::date
 

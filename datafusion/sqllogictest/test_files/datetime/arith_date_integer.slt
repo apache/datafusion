@@ -22,6 +22,36 @@ SELECT arrow_cast('2001-09-28', 'Date64') + 7
 ----
 2001-10-05T00:00:00
 
+query D
+SELECT 7::smallint + '2001-09-28'::date
+----
+2001-10-05
+
+query D
+SELECT 7::smallint unsigned + '2001-09-28'::date
+----
+2001-10-05
+
+query D
+SELECT 7::int unsigned + '2001-09-28'::date
+----
+2001-10-05
+
+query D
+SELECT 7::bigint + '2001-09-28'::date
+----
+2001-10-05
+
+query D
+SELECT 7::bigint unsigned + '2001-09-28'::date
+----
+2001-10-05
+
+query D
+SELECT 7 + arrow_cast('2001-09-28', 'Date64')
+----
+2001-10-05T00:00:00
+
 query T
 SELECT arrow_typeof(arrow_cast('2001-09-28', 'Date64') + 7)
 ----
@@ -35,6 +65,11 @@ query D
 SELECT '2001-10-01'::date - 7
 ----
 2001-09-24
+
+query D
+SELECT arrow_cast('2001-10-01', 'Date64') - 7
+----
+2001-09-24T00:00:00
 
 query T
 SELECT arrow_typeof('2001-10-01'::date - 7)
