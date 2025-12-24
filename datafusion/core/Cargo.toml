@@ -87,6 +87,7 @@ recursive_protection = [
     "datafusion-expr/recursive_protection",
     "datafusion-optimizer/recursive_protection",
     "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-physical-expr/recursive_protection",
     "datafusion-sql/recursive_protection",
     "sqlparser/recursive-protection",
 ]
@@ -157,7 +158,7 @@ sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.18", features = ["v4", "js"] }
+uuid = { version = "1.19", features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -240,6 +241,10 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "range_and_generate_series"
+
+[[bench]]
+harness = false
 name = "sql_planner"
 
 [[bench]]
@@ -270,3 +275,8 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "preserve_file_partitioning"
+required-features = ["parquet"]

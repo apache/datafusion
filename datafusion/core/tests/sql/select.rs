@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 
 use super::*;
-use datafusion_common::{metadata::ScalarAndMetadata, ParamValues, ScalarValue};
+use datafusion_common::{ParamValues, ScalarValue, metadata::ScalarAndMetadata};
 use insta::assert_snapshot;
 
 #[tokio::test]

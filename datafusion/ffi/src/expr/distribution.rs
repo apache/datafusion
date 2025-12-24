@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedArray;
-use crate::expr::interval::FFI_Interval;
 use abi_stable::StableAbi;
 use datafusion_common::DataFusionError;
 use datafusion_expr::statistics::{
     BernoulliDistribution, Distribution, ExponentialDistribution, GaussianDistribution,
     GenericDistribution, UniformDistribution,
 };
+
+use crate::arrow_wrappers::WrappedArray;
+use crate::expr::interval::FFI_Interval;
 
 /// A stable struct for sharing [`Distribution`] across FFI boundaries.
 /// See ['Distribution'] for the meaning of each variant.

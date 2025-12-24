@@ -19,12 +19,12 @@
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{
-    make_array, Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData,
+    Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData, make_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{cast::as_map_array, exec_err, Result};
+use datafusion_common::{Result, cast::as_map_array, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

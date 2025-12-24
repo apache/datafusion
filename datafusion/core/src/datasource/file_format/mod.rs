@@ -39,9 +39,9 @@ pub(crate) mod test_util {
     use arrow_schema::SchemaRef;
     use datafusion_catalog::Session;
     use datafusion_common::Result;
-    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::TableSchema;
-    use datafusion_datasource::{file_format::FileFormat, PartitionedFile};
+    use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+    use datafusion_datasource::{PartitionedFile, file_format::FileFormat};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use std::sync::Arc;
 
@@ -73,15 +73,17 @@ pub(crate) mod test_util {
             .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
 
-        let file_groups = vec![vec![PartitionedFile {
-            object_meta: meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        }]
-        .into()];
+        let file_groups = vec![
+            vec![PartitionedFile {
+                object_meta: meta,
+                partition_values: vec![],
+                range: None,
+                statistics: None,
+                extensions: None,
+                metadata_size_hint: None,
+            }]
+            .into(),
+        ];
 
         let exec = format
             .create_physical_plan(
@@ -133,7 +135,10 @@ mod tests {
             .write_parquet(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'"
+        );
         Ok(())
     }
 }

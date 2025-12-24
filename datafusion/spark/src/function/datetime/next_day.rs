@@ -18,12 +18,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, ArrayRef, AsArray, Date32Array, StringArrayType};
-use arrow::datatypes::{DataType, Date32Type};
+use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType, new_null_array};
+use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Duration, Weekday};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
@@ -63,7 +64,13 @@ impl ScalarUDFImpl for SparkNextDay {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Date32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // Spark marks next_day as always nullable because invalid day_of_week values
+        // can yield NULL even when inputs are non-null.
+        Ok(Arc::new(Field::new(self.name(), DataType::Date32, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -78,7 +85,12 @@ impl ScalarUDFImpl for SparkNextDay {
         match (date, day_of_week) {
             (ColumnarValue::Scalar(date), ColumnarValue::Scalar(day_of_week)) => {
                 match (date, day_of_week) {
-                    (ScalarValue::Date32(days), ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
+                    (
+                        ScalarValue::Date32(days),
+                        ScalarValue::Utf8(day_of_week)
+                        | ScalarValue::LargeUtf8(day_of_week)
+                        | ScalarValue::Utf8View(day_of_week),
+                    ) => {
                         if let Some(days) = days {
                             if let Some(day_of_week) = day_of_week {
                                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(
@@ -93,25 +105,39 @@ impl ScalarUDFImpl for SparkNextDay {
                             Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
                         }
                     }
-                    _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
+                    _ => exec_err!(
+                        "Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"
+                    ),
                 }
             }
             (ColumnarValue::Array(date_array), ColumnarValue::Scalar(day_of_week)) => {
                 match (date_array.data_type(), day_of_week) {
-                    (DataType::Date32, ScalarValue::Utf8(day_of_week) | ScalarValue::LargeUtf8(day_of_week) | ScalarValue::Utf8View(day_of_week)) => {
+                    (
+                        DataType::Date32,
+                        ScalarValue::Utf8(day_of_week)
+                        | ScalarValue::LargeUtf8(day_of_week)
+                        | ScalarValue::Utf8View(day_of_week),
+                    ) => {
                         if let Some(day_of_week) = day_of_week {
                             let result: Date32Array = date_array
                                 .as_primitive::<Date32Type>()
-                                .unary_opt(|days| spark_next_day(days, day_of_week.as_str()))
+                                .unary_opt(|days| {
+                                    spark_next_day(days, day_of_week.as_str())
+                                })
                                 .with_data_type(DataType::Date32);
                             Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                         } else {
                             // TODO: if spark.sql.ansi.enabled is false,
                             //  returns NULL instead of an error for a malformed dayOfWeek.
-                            Ok(ColumnarValue::Array(Arc::new(new_null_array(&DataType::Date32, date_array.len()))))
+                            Ok(ColumnarValue::Array(Arc::new(new_null_array(
+                                &DataType::Date32,
+                                date_array.len(),
+                            ))))
                         }
                     }
-                    _ => exec_err!("Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"),
+                    _ => exec_err!(
+                        "Spark `next_day` function: first arg must be date, second arg must be string. Got {args:?}"
+                    ),
                 }
             }
             (
@@ -143,7 +169,9 @@ impl ScalarUDFImpl for SparkNextDay {
                                 process_next_day_arrays(date_array, day_of_week_array)
                             }
                             other => {
-                                exec_err!("Spark `next_day` function: second arg must be string. Got {other:?}")
+                                exec_err!(
+                                    "Spark `next_day` function: second arg must be string. Got {other:?}"
+                                )
                             }
                         }
                     }
@@ -222,5 +250,42 @@ fn spark_next_day(days: i32, day_of_week: &str) -> Option<i32> {
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn return_type_is_not_used() {
+        let func = SparkNextDay::new();
+        let err = func
+            .return_type(&[DataType::Date32, DataType::Utf8])
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("return_field_from_args should be used instead")
+        );
+    }
+
+    #[test]
+    fn next_day_is_always_nullable() {
+        let func = SparkNextDay::new();
+        let date_field: FieldRef =
+            Arc::new(Field::new("start_date", DataType::Date32, false));
+        let day_field: FieldRef =
+            Arc::new(Field::new("day_of_week", DataType::Utf8, false));
+
+        let field = func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&date_field), Arc::clone(&day_field)],
+                scalar_arguments: &[None, None],
+            })
+            .unwrap();
+
+        assert_eq!(field.data_type(), &DataType::Date32);
+        assert!(field.is_nullable());
     }
 }

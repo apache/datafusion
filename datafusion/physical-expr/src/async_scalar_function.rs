@@ -19,11 +19,11 @@ use crate::ScalarFunctionExpr;
 use arrow::array::RecordBatch;
 use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, not_impl_err};
-use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr::ScalarFunctionArgs;
+use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
@@ -99,12 +99,11 @@ impl AsyncFuncExpr {
 
     /// Return the ideal batch size for this function
     pub fn ideal_batch_size(&self) -> Result<Option<usize>> {
-        if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            if let Some(udf) =
+        if let Some(expr) = self.func.as_any().downcast_ref::<ScalarFunctionExpr>()
+            && let Some(udf) =
                 expr.fun().inner().as_any().downcast_ref::<AsyncScalarUDF>()
-            {
-                return Ok(udf.ideal_batch_size());
-            }
+        {
+            return Ok(udf.ideal_batch_size());
         }
         not_impl_err!("Can't get ideal_batch_size from {:?}", self.func)
     }

@@ -965,6 +965,19 @@ config_namespace! {
         /// record tables provided to the MemTable on creation.
         pub repartition_file_scans: bool, default = true
 
+        /// Minimum number of distinct partition values required to group files by their
+        /// Hive partition column values (enabling Hash partitioning declaration).
+        ///
+        /// How the option is used:
+        ///     - preserve_file_partitions=0: Disable it.
+        ///     - preserve_file_partitions=1: Always enable it.
+        ///     - preserve_file_partitions=N, actual file partitions=M: Only enable when M >= N.
+        ///     This threshold preserves I/O parallelism when file partitioning is below it.
+        ///
+        /// Note: This may reduce parallelism, rooting from the I/O level, if the number of distinct
+        /// partitions is less than the target_partitions.
+        pub preserve_file_partitions: usize, default = 0
+
         /// Should DataFusion repartition data using the partitions keys to execute window
         /// functions in parallel using the provided `target_partitions` level
         pub repartition_windows: bool, default = true
@@ -986,6 +999,34 @@ config_namespace! {
         ///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         /// ```
         pub repartition_sorts: bool, default = true
+
+        /// Partition count threshold for subset satisfaction optimization.
+        ///
+        /// When the current partition count is >= this threshold, DataFusion will
+        /// skip repartitioning if the required partitioning expression is a subset
+        /// of the current partition expression such as Hash(a) satisfies Hash(a, b).
+        ///
+        /// When the current partition count is < this threshold, DataFusion will
+        /// repartition to increase parallelism even when subset satisfaction applies.
+        ///
+        /// Set to 0 to always repartition (disable subset satisfaction optimization).
+        /// Set to a high value to always use subset satisfaction.
+        ///
+        /// Example (subset_repartition_threshold = 4):
+        /// ```text
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
+        ///
+        ///     If current partitions (3) < threshold (4), repartition:
+        ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
+        ///
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction:
+        ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
+        /// ```
+        pub subset_repartition_threshold: usize, default = 4
 
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
@@ -1024,6 +1065,36 @@ config_namespace! {
         /// will be collected into a single partition
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
+        /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides larger than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// InList pushdown can be more efficient for small build sides because it can result in better
+        /// statistics pruning as well as use any bloom filters present on the scan side.
+        /// InList expressions are also more transparent and easier to serialize over the network in distributed uses of DataFusion.
+        /// On the other hand InList pushdown requires making a copy of the data and thus adds some overhead to the build side and uses more memory.
+        ///
+        /// This setting is per-partition, so we may end up using `hash_join_inlist_pushdown_max_size` * `target_partitions` memory.
+        ///
+        /// The default is 128kB per partition.
+        /// This should allow point lookup joins (e.g. joining on a unique primary key) to use InList pushdown in most cases
+        /// but avoids excessive memory usage or overhead for larger joins.
+        pub hash_join_inlist_pushdown_max_size: usize, default = 128 * 1024
+
+        /// Maximum number of distinct values (rows) in the build side of a hash join to be pushed down as an InList expression for dynamic filtering.
+        /// Build sides with more rows than this will use hash table lookups instead.
+        /// Set to 0 to always use hash table lookups.
+        ///
+        /// This provides an additional limit beyond `hash_join_inlist_pushdown_max_size` to prevent
+        /// very large IN lists that might not provide much benefit over hash table lookups.
+        ///
+        /// This uses the deduplicated row count once the build side has been evaluated.
+        ///
+        /// The default is 150 values per partition.
+        /// This is inspired by Trino's `max-filter-keys-per-column` setting.
+        /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
+        pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).
@@ -1036,6 +1107,21 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// Enable sort pushdown optimization.
+        /// When enabled, attempts to push sort requirements down to data sources
+        /// that can natively handle them (e.g., by reversing file/row group read order).
+        ///
+        /// Returns **inexact ordering**: Sort operator is kept for correctness,
+        /// but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N),
+        /// providing significant speedup.
+        ///
+        /// Memory: No additional overhead (only changes read order).
+        ///
+        /// Future: Will add option to detect perfectly sorted data and eliminate Sort completely.
+        ///
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 
@@ -1667,6 +1753,7 @@ config_field!(bool, value => default_config_transform(value.to_lowercase().as_st
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
+config_field!(u32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -2786,6 +2873,14 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
@@ -2908,6 +3003,14 @@ impl CsvOptions {
         self
     }
 
+    /// Set the compression level for the output file.
+    /// The valid range depends on the compression algorithm.
+    /// If not specified, the default level for the algorithm is used.
+    pub fn with_compression_level(mut self, level: u32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2933,6 +3036,14 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
     }
 }

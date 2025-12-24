@@ -71,7 +71,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
@@ -110,7 +110,7 @@ bytes = "1.11"
 bzip2 = "0.6.1"
 chrono = { version = "0.4.42", default-features = false }
 criterion = "0.8"
-ctor = "0.6.1"
+ctor = "0.6.3"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "51.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "51.0.0" }
@@ -159,7 +159,7 @@ half = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.14.5", features = ["raw"] }
 hex = { version = "0.4.3" }
 indexmap = "2.12.1"
-insta = { version = "1.43.2", features = ["glob", "filters"] }
+insta = { version = "1.45.0", features = ["glob", "filters"] }
 itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
@@ -182,6 +182,8 @@ regex = "1.12"
 rstest = "0.26.1"
 serde_json = "1"
 sqlparser = { version = "0.59.0", default-features = false, features = ["std", "visitor"] }
+strum = "0.27.2"
+strum_macros = "0.27.2"
 tempfile = "3"
 testcontainers = { version = "0.25.2", features = ["default"] }
 testcontainers-modules = { version = "0.13" }
