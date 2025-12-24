@@ -1087,20 +1087,4 @@ mod tests {
         );
         Ok(())
     }
-
-    #[test]
-    fn test_evaluate_stable_expressions_disabled() -> Result<()> {
-        // When evaluate_stable_expressions is false, stable functions should NOT be simplified
-        use datafusion_common::config::ConfigOptions;
-
-        let mut config_options = ConfigOptions::default();
-        config_options.optimizer.evaluate_stable_expressions = false;
-
-        // Verify the config is set correctly
-        assert!(
-            !config_options.optimizer.evaluate_stable_expressions,
-            "evaluate_stable_expressions should be false when explicitly disabled"
-        );
-        Ok(())
-    }
 }
