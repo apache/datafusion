@@ -77,13 +77,6 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        if args.arg_fields.is_empty() {
-            return internal_err!(
-                "abs takes exactly 1 argument, but got: {}",
-                args.arg_fields.len()
-            );
-        }
-
         let input_field = &args.arg_fields[0];
         let out_dt = input_field.data_type().clone();
         let mut out_nullable = input_field.is_nullable();
