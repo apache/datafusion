@@ -49,10 +49,10 @@ use datafusion_macros::user_doc;
     `get_field(my_struct, 'a', 'b')`."#,
     syntax_example = "get_field(expression, field_name[, field_name2, ...])",
     sql_example = r#"```sql
-> -- Basic struct field access
-> create table test (struct_col) as values
-    (struct('Alice' as name, 30 as age)),
-    (struct('Bob' as name, 25 as age));
+> -- Access a field from a struct column
+> create table test( struct_col) as values
+    ({name: 'Alice', age: 30}),
+    ({name: 'Bob', age: 25});
 > select struct_col from test;
 +-----------------------------+
 | struct_col                  |
@@ -60,7 +60,7 @@ use datafusion_macros::user_doc;
 | {name: Alice, age: 30}      |
 | {name: Bob, age: 25}        |
 +-----------------------------+
-> select get_field(struct_col, 'name') as name from test;
+> select struct_col['name'] as name from test;
 +-------+
 | name  |
 +-------+
@@ -69,11 +69,9 @@ use datafusion_macros::user_doc;
 +-------+
 
 > -- Nested field access with multiple arguments
-> select get_field(
-    struct(struct(42 as inner_val) as outer),
-    'outer',
-    'inner_val'
-  ) as result;
+> create table test(struct_col) as values
+    ({outer: {inner_val: 42}});
+> select struct_col['outer']['inner_val'] as result from test;
 +--------+
 | result |
 +--------+
