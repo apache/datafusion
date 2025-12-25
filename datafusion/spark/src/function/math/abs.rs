@@ -79,17 +79,7 @@ impl ScalarUDFImpl for SparkAbs {
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let input_field = &args.arg_fields[0];
         let out_dt = input_field.data_type().clone();
-        let mut out_nullable = input_field.is_nullable();
-
-        // If any scalar argument is explicitly null, output must be nullable
-        let scalar_null_present = args
-            .scalar_arguments
-            .iter()
-            .any(|opt_s| opt_s.is_some_and(|sv| sv.is_null()));
-
-        if scalar_null_present {
-            out_nullable = true;
-        }
+        let out_nullable = input_field.is_nullable();
 
         Ok(Arc::new(Field::new(self.name(), out_dt, out_nullable)))
     }
@@ -454,35 +444,5 @@ mod tests {
 
         assert!(out_f64_null.is_nullable());
         assert_eq!(out_f64_null.data_type(), &DataType::Float64);
-    }
-
-    #[test]
-    fn test_abs_nullability_with_null_scalar() -> Result<()> {
-        use arrow::datatypes::{DataType, Field};
-        use datafusion_expr::ReturnFieldArgs;
-        use std::sync::Arc;
-
-        let func = SparkAbs::new();
-
-        // Non-nullable field with non-null scalar argument -> non-nullable result
-        let non_nullable: FieldRef = Arc::new(Field::new("col", DataType::Int32, false));
-        let non_null_scalar = ScalarValue::Int32(Some(1));
-        let out = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[Arc::clone(&non_nullable)],
-            scalar_arguments: &[Some(&non_null_scalar)],
-        })?;
-        assert!(!out.is_nullable());
-        assert_eq!(out.data_type(), &DataType::Int32);
-
-        // Non-nullable field with null scalar argument -> nullable result
-        let null_scalar = ScalarValue::Int32(None);
-        let out_with_null_scalar = func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[Arc::clone(&non_nullable)],
-            scalar_arguments: &[Some(&null_scalar)],
-        })?;
-        assert!(out_with_null_scalar.is_nullable());
-        assert_eq!(out_with_null_scalar.data_type(), &DataType::Int32);
-
-        Ok(())
     }
 }
