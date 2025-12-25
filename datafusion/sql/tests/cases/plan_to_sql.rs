@@ -1234,6 +1234,84 @@ fn test_table_scan_with_empty_projection_in_plan_to_sql_3() {
     );
 }
 
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_postgres() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql_default_dialect() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_empty_projection_and_none_projection_helper(
+        table_name,
+        schema,
+        Some(vec![]),
+    );
+    let unparser = Unparser::new(&UnparserDefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table""#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_and_filter_postgres() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_filter_and_fetch(
+        Some(table_name),
+        &schema,
+        Some(vec![]),
+        vec![col("id").gt(lit(10))],
+        None,
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT FROM "table" WHERE ("table"."id" > 10)"#
+    );
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_and_filter_default_dialect() {
+    let schema = test_schema();
+    let table_name = "table";
+    let plan = table_scan_with_filter_and_fetch(
+        Some(table_name),
+        &schema,
+        Some(vec![]),
+        vec![col("id").gt(lit(10))],
+        None,
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    let unparser = Unparser::new(&UnparserDefaultDialect {});
+    let sql = unparser.plan_to_sql(&plan).unwrap();
+    assert_snapshot!(
+        sql,
+        @r#"SELECT 1 FROM "table" WHERE ("table".id > 10)"#
+    );
+}
+
 fn table_scan_with_empty_projection_and_none_projection_helper(
     table_name: &str,
     table_schema: Schema,
