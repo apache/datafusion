@@ -50,7 +50,7 @@ impl TreeNodeRewriter for PhysicalColumnRewriter {
             if let Some(new_column) = self.column_map.get(column) {
                 // jump to prevent rewriting the new sub-expression again
                 return Ok(Transformed::new(
-                    new_column.clone(),
+                    Arc::clone(new_column),
                     true,
                     TreeNodeRecursion::Jump,
                 ));
