@@ -242,9 +242,9 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
 pub fn have_unknown_columns(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut found = false;
     expr.apply(|e| {
-        if let Some(_) = e.as_any().downcast_ref::<UnKnownColumn>() {
+        if e.as_any().downcast_ref::<UnKnownColumn>().is_some() {
             found = true;
-            return Ok(TreeNodeRecursion::Stop);
+            Ok(TreeNodeRecursion::Stop)
         } else {
             Ok(TreeNodeRecursion::Continue)
         }
