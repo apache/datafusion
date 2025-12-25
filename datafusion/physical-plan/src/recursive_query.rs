@@ -194,14 +194,14 @@ impl ExecutionPlan for RecursiveQueryExec {
         }
 
         let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         Ok(Box::pin(RecursiveQueryStream::new(
             context,
             Arc::clone(&self.work_table),
             Arc::clone(&self.recursive_term),
             static_stream,
             self.is_distinct,
-            baseline_metrics,
+            &self.metrics,
+            partition
         )?))
     }
 
@@ -287,14 +287,17 @@ impl RecursiveQueryStream {
         recursive_term: Arc<dyn ExecutionPlan>,
         static_stream: SendableRecordBatchStream,
         is_distinct: bool,
-        baseline_metrics: BaselineMetrics,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
     ) -> Result<Self> {
         let schema = static_stream.schema();
         let reservation =
             MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
         let distinct_deduplicator = is_distinct
-            .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context))
+            .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context, metrics, partition))
             .transpose()?;
+        let baseline_metrics = BaselineMetrics::new(metrics, partition);
+
         Ok(Self {
             task_context,
             work_table,
@@ -455,8 +458,10 @@ struct DistinctDeduplicator {
 }
 
 impl DistinctDeduplicator {
-    fn new(schema: SchemaRef, task_context: &TaskContext) -> Result<Self> {
-        let group_values = new_group_values(schema, &GroupOrdering::None)?;
+    fn new(schema: SchemaRef, task_context: &TaskContext,
+           metrics: &ExecutionPlanMetricsSet,
+           partition: usize,) -> Result<Self> {
+        let group_values = new_group_values(schema, &GroupOrdering::None, metrics, partition)?;
         let reservation = MemoryConsumer::new("RecursiveQueryHashTable")
             .register(task_context.memory_pool());
         Ok(Self {
