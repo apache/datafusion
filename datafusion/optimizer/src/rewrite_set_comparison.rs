@@ -20,9 +20,8 @@
 //! that capture SQL three-valued logic.
 
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::ExprSchema;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{DFSchema, Result, ScalarValue, plan_datafusion_err};
+use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
@@ -91,10 +90,12 @@ fn build_set_comparison_subquery(
     } = set_comparison;
 
     let left_expr = to_outer_reference(*expr, outer_schema)?;
-    let right_expr = subquery
-        .subquery
-        .head_output_expr()?
-        .ok_or_else(|| plan_datafusion_err!("single expression required."))?;
+    let subquery_schema = subquery.subquery.schema();
+    if subquery_schema.fields().is_empty() {
+        return plan_err!("single expression required.");
+    }
+    // avoid `head_output_expr` for aggr/window plan, it will gives group-by expr if exists
+    let right_expr = Expr::Column(Column::from(subquery_schema.qualified_field(0)));
 
     let comparison = Expr::BinaryExpr(expr::BinaryExpr::new(
         Box::new(left_expr),

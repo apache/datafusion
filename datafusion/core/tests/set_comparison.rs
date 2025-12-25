@@ -56,6 +56,24 @@ async fn set_comparison_any() -> Result<()> {
 }
 
 #[tokio::test]
+async fn set_comparison_any_aggregate_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", build_table(&[1, 7])?)?;
+    ctx.register_batch("s", build_table(&[1, 2, 3])?)?;
+
+    let df = ctx
+        .sql(
+            "select v from t where v > any(select sum(v) from s group by v % 2) order by v",
+        )
+        .await?;
+    let results = df.collect().await?;
+
+    assert_batches_eq!(&["+---+", "| v |", "+---+", "| 7 |", "+---+",], &results);
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_comparison_all_empty() -> Result<()> {
     let ctx = SessionContext::new();
 
