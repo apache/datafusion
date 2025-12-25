@@ -1540,8 +1540,7 @@ mod tests {
             &ConfigOptions::default(),
         )?;
 
-        // Should NOT be converted to "a + 1 > 10" because we don't support inverting complex expressions yet.
-        // It should result in UnKnownColumn.
+        // expand to `a + 1 > 10`
         let pushed_filters = &description.parent_filters()[0];
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
         assert_eq!(format!("{}", pushed_filters[0].predicate), "a@0 + 1 > 10");
@@ -1585,9 +1584,11 @@ mod tests {
 
         let pushed_filters = &description.parent_filters()[0];
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
-        let output_filter_str = format!("{}", pushed_filters[0].predicate);
         // The column shouldn't be found in the alias map, so it should become UnKnownColumn
-        assert!(output_filter_str.contains("unknown_col"));
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            "unknown_col > 5"
+        );
 
         Ok(())
     }
