@@ -86,7 +86,9 @@ impl ScalarUDFImpl for FormatStringFunc {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         match args.arg_fields[0].data_type() {
-            DataType::Null => Ok(Arc::clone(&args.arg_fields[0])),
+            DataType::Null => {
+                Ok(Arc::new(Field::new("format_string", DataType::Utf8, true)))
+            }
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
                 Ok(Arc::clone(&args.arg_fields[0]))
             }
