@@ -227,7 +227,9 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             CharacterLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé"))))],
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("josé")
+            )))],
             internal_err!(
                 "function character_length requires compilation with feature flag: unicode_expressions."
             ),

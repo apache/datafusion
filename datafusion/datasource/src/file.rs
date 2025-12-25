@@ -25,15 +25,18 @@ use std::sync::Arc;
 use crate::file_groups::FileGroupPartitioner;
 use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
+#[expect(deprecated)]
 use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_plan::DisplayFormatType;
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_physical_plan::DisplayFormatType;
 
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use object_store::ObjectStore;
 
 /// Helper function to convert any type implementing FileSource to Arc&lt;dyn FileSource&gt;
@@ -84,6 +87,21 @@ pub trait FileSource: Send + Sync {
         Ok(())
     }
 
+    /// Returns whether this file source supports repartitioning files by byte ranges.
+    ///
+    /// When this returns `true`, files can be split into multiple partitions
+    /// based on byte offsets for parallel reading.
+    ///
+    /// When this returns `false`, files cannot be repartitioned (e.g., CSV files
+    /// with `newlines_in_values` enabled cannot be split because record boundaries
+    /// cannot be determined by byte offset alone).
+    ///
+    /// The default implementation returns `true`. File sources that cannot support
+    /// repartitioning should override this method.
+    fn supports_repartitioning(&self) -> bool {
+        true
+    }
+
     /// If supported by the [`FileSource`], redistribute files across partitions
     /// according to their size. Allows custom file formats to implement their
     /// own repartitioning logic.
@@ -97,7 +115,8 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> Result<Option<FileScanConfig>> {
-        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+        if config.file_compression_type.is_compressed() || !self.supports_repartitioning()
+        {
             return Ok(None);
         }
 
@@ -129,6 +148,21 @@ pub trait FileSource: Send + Sync {
         ))
     }
 
+    /// Try to create a new FileSource that can produce data in the specified sort order.
+    ///
+    /// # Returns
+    /// * `Exact` - Created a source that guarantees perfect ordering
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Unsupported` - Cannot optimize for this ordering
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_reverse_output(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
     /// Try to push down a projection into a this FileSource.
     ///
     /// `FileSource` implementations that support projection pushdown should
@@ -158,28 +192,51 @@ pub trait FileSource: Send + Sync {
         Ok(None)
     }
 
-    /// Set optional schema adapter factory.
+    /// Set the file ordering information
     ///
-    /// [`SchemaAdapterFactory`] allows user to specify how fields from the
-    /// file get mapped to that of the table schema.  If you implement this
-    /// method, you should also implement [`schema_adapter_factory`].
+    /// This allows the file source to know how the files are sorted,
+    /// enabling it to make informed decisions about sort pushdown.
     ///
-    /// The default implementation returns a not implemented error.
+    /// # Default Implementation
     ///
-    /// [`schema_adapter_factory`]: Self::schema_adapter_factory
+    /// Returns `not_impl_err!`. FileSource implementations that support
+    /// sort optimization should override this method.
+    fn with_file_ordering_info(
+        &self,
+        _ordering: Option<LexOrdering>,
+    ) -> Result<Arc<dyn FileSource>> {
+        // Default: clone self without modification
+        // ParquetSource will override this
+        not_impl_err!("with_file_ordering_info not implemented for this FileSource")
+    }
+
+    /// Deprecated: Set optional schema adapter factory.
+    ///
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
     fn with_schema_adapter_factory(
         &self,
         _factory: Arc<dyn SchemaAdapterFactory>,
     ) -> Result<Arc<dyn FileSource>> {
         not_impl_err!(
-            "FileSource {} does not support schema adapter factory",
-            self.file_type()
+            "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
         )
     }
 
-    /// Returns the current schema adapter factory if set
+    /// Deprecated: Returns the current schema adapter factory if set.
     ///
-    /// Default implementation returns `None`.
+    /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
+    /// See `upgrading.md` for more details.
+    #[deprecated(
+        since = "52.0.0",
+        note = "SchemaAdapterFactory has been removed. Use PhysicalExprAdapterFactory instead. See upgrading.md for more details."
+    )]
+    #[expect(deprecated)]
     fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
         None
     }

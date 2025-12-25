@@ -50,8 +50,8 @@ use datafusion_physical_plan::{
     collect, displayable, ExecutionPlan, Partitioning,
 };
 
-use object_store::memory::InMemory;
 use object_store::ObjectStore;
+use object_store::memory::InMemory;
 use rstest::rstest;
 use url::Url;
 
@@ -138,7 +138,8 @@ impl ReplaceTest {
             assert!(
                 res.is_ok(),
                 "Some errors occurred while executing the optimized physical plan: {:?}\nPlan: {}",
-                res.unwrap_err(), optimized_plan_string
+                res.unwrap_err(),
+                optimized_plan_string
             );
         }
 
@@ -1248,7 +1249,10 @@ fn test_plan_with_order_preserving_variants_preserves_fetch() -> Result<()> {
         )],
     );
     let res = plan_with_order_preserving_variants(requirements, false, true, Some(15));
-    assert_contains!(res.unwrap_err().to_string(), "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]");
+    assert_contains!(
+        res.unwrap_err().to_string(),
+        "CoalescePartitionsExec fetch [10] should be greater than or equal to SortExec fetch [15]"
+    );
 
     // Test sort is without fetch, expected to get the fetch value from the coalesced
     let requirements = OrderPreservationContext::new(

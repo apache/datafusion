@@ -23,8 +23,8 @@ use std::fmt::{self, Debug};
 use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -94,6 +94,12 @@ use hashbrown::HashTable;
 ///
 /// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
 /// `JoinHashMapType`.
+///
+/// ## Note on use of this trait as a public API
+/// This is currently a public trait but is mainly intended for internal use within DataFusion.
+/// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
+/// rather than deep equality of contents, as deep equality would be expensive and in our usage
+/// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
@@ -114,10 +120,15 @@ pub trait JoinHashMapType: Send + Sync {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>);
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset>;
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
+
+    /// Returns the number of entries in the join hash map.
+    fn len(&self) -> usize;
 }
 
 pub struct JoinHashMapU32 {
@@ -171,18 +182,26 @@ impl JoinHashMapType for JoinHashMapU32 {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset> {
         get_matched_indices_with_limit_offset::<u32>(
             &self.map,
             &self.next,
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
     }
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -237,18 +256,26 @@ impl JoinHashMapType for JoinHashMapU64 {
         hash_values: &[u64],
         limit: usize,
         offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<JoinHashMapOffset> {
         get_matched_indices_with_limit_offset::<u64>(
             &self.map,
             &self.next,
             hash_values,
             limit,
             offset,
+            input_indices,
+            match_indices,
         )
     }
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -388,14 +415,17 @@ pub fn get_matched_indices_with_limit_offset<T>(
     hash_values: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
-) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>)
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+) -> Option<JoinHashMapOffset>
 where
     T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
     <T as TryFrom<usize>>::Error: Debug,
     T: ArrowNativeType,
 {
-    let mut input_indices = Vec::with_capacity(limit);
-    let mut match_indices = Vec::with_capacity(limit);
+    // Clear the buffer before producing new results
+    input_indices.clear();
+    match_indices.clear();
     let one = T::try_from(1).unwrap();
 
     // Check if hashmap consists of unique values
@@ -409,12 +439,11 @@ where
                 match_indices.push((*idx - one).into());
             }
         }
-        let next_off = if end == hash_values.len() {
+        return if end == hash_values.len() {
             None
         } else {
             Some((end, None))
         };
-        return (input_indices, match_indices, next_off);
     }
 
     let mut remaining_output = limit;
@@ -436,11 +465,11 @@ where
                 idx,
                 next_idx,
                 &mut remaining_output,
-                &mut input_indices,
-                &mut match_indices,
+                input_indices,
+                match_indices,
                 is_last,
             ) {
-                return (input_indices, match_indices, Some(next_offset));
+                return Some(next_offset);
             }
             idx + 1
         }
@@ -457,13 +486,13 @@ where
                 row_idx,
                 idx,
                 &mut remaining_output,
-                &mut input_indices,
-                &mut match_indices,
+                input_indices,
+                match_indices,
                 is_last,
             ) {
-                return (input_indices, match_indices, Some(next_offset));
+                return Some(next_offset);
             }
         }
     }
-    (input_indices, match_indices, None)
+    None
 }

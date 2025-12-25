@@ -22,21 +22,23 @@
 use std::collections::HashMap;
 
 use datafusion_common::{NullEquality, TableReference, UnnestOptions};
+use datafusion_expr::WriteOp;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
     Like, NullTreatment, Placeholder, ScalarFunction, Unnest,
 };
-use datafusion_expr::WriteOp;
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
-    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    Expr, JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition, logical_plan::PlanType,
+    logical_plan::StringifiedPlan,
 };
 
 use crate::protobuf::RecursionUnnestOption;
 use crate::protobuf::{
-    self,
+    self, AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode,
+    LogicalExprList, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    PlaceholderNode, RollupNode, ToProtoError as Error,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
@@ -44,9 +46,6 @@ use crate::protobuf::{
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
         PhysicalPlanError,
     },
-    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
-    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
-    ToProtoError as Error,
 };
 
 use super::LogicalExtensionCodec;
@@ -307,16 +306,16 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(window_fun) => {
             let expr::WindowFunction {
-                ref fun,
+                fun,
                 params:
                     expr::WindowFunctionParams {
-                        ref args,
-                        ref partition_by,
-                        ref order_by,
-                        ref window_frame,
-                        ref null_treatment,
-                        ref distinct,
-                        ref filter,
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                        distinct,
+                        filter,
                     },
             } = window_fun.as_ref();
             let mut buf = Vec::new();
@@ -361,14 +360,14 @@ pub fn serialize_expr(
             }
         }
         Expr::AggregateFunction(expr::AggregateFunction {
-            ref func,
+            func,
             params:
                 AggregateFunctionParams {
-                    ref args,
-                    ref distinct,
-                    ref filter,
-                    ref order_by,
-                    ref null_treatment,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
                 },
         }) => {
             let mut buf = Vec::new();
@@ -395,7 +394,7 @@ pub fn serialize_expr(
         Expr::ScalarVariable(_, _) => {
             return Err(Error::General(
                 "Proto serialization error: Scalar Variable not supported".to_string(),
-            ))
+            ));
         }
         Expr::ScalarFunction(ScalarFunction { func, args }) => {
             let mut buf = Vec::new();

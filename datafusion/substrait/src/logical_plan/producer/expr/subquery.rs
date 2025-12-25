@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::logical_plan::producer::SubstraitProducer;
-use datafusion::common::{substrait_err, DFSchemaRef};
-use datafusion::logical_expr::expr::{InSubquery, SetComparison, SetQuantifier};
+use datafusion::common::{DFSchemaRef, substrait_err};
 use datafusion::logical_expr::Operator;
-use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
+use datafusion::logical_expr::expr::{InSubquery, SetComparison, SetQuantifier};
 use substrait::proto::expression::subquery::InPredicate;
+use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
@@ -56,7 +56,7 @@ pub fn from_in_subquery(
     if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                 function_reference: function_anchor,

@@ -21,10 +21,14 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example flight -- [client|server|sql_server]
+//! cargo run --example flight -- [all|client|server|sql_server]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
+//! - `all` — run all examples included in this module
+//!   Note: The Flight server must be started in a separate process
+//!   before running the `client` example. Therefore, running `all` will
+//!   not produce a full server+client workflow automatically.
 //! - `client` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `server` — run DataFusion as a standalone process and execute SQL queries from a client using the Flight protocol
 //! - `sql_server` — run DataFusion as a standalone process and execute SQL queries from JDBC clients
@@ -33,46 +37,43 @@ mod client;
 mod server;
 mod sql_server;
 
-use std::str::FromStr;
-
 use datafusion::error::{DataFusionError, Result};
+use strum::{IntoEnumIterator, VariantNames};
+use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 
+/// The `all` option cannot run all examples end-to-end because the
+/// `server` example must run in a separate process before the `client`
+/// example can connect.  
+/// Therefore, `all` only iterates over individually runnable examples.
+#[derive(EnumIter, EnumString, Display, VariantNames)]
+#[strum(serialize_all = "snake_case")]
 enum ExampleKind {
+    All,
     Client,
     Server,
     SqlServer,
 }
 
-impl AsRef<str> for ExampleKind {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Client => "client",
-            Self::Server => "server",
-            Self::SqlServer => "sql_server",
-        }
-    }
-}
-
-impl FromStr for ExampleKind {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "client" => Ok(Self::Client),
-            "server" => Ok(Self::Server),
-            "sql_server" => Ok(Self::SqlServer),
-            _ => Err(DataFusionError::Execution(format!("Unknown example: {s}"))),
-        }
-    }
-}
-
 impl ExampleKind {
-    const ALL: [Self; 3] = [Self::Client, Self::Server, Self::SqlServer];
-
     const EXAMPLE_NAME: &str = "flight";
 
-    fn variants() -> Vec<&'static str> {
-        Self::ALL.iter().map(|x| x.as_ref()).collect()
+    fn runnable() -> impl Iterator<Item = ExampleKind> {
+        ExampleKind::iter().filter(|v| !matches!(v, ExampleKind::All))
+    }
+
+    async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            ExampleKind::All => {
+                for example in ExampleKind::runnable() {
+                    println!("Running example: {example}");
+                    Box::pin(example.run()).await?;
+                }
+            }
+            ExampleKind::Client => client::client().await?,
+            ExampleKind::Server => server::server().await?,
+            ExampleKind::SqlServer => sql_server::sql_server().await?,
+        }
+        Ok(())
     }
 }
 
@@ -81,19 +82,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let usage = format!(
         "Usage: cargo run --example {} -- [{}]",
         ExampleKind::EXAMPLE_NAME,
-        ExampleKind::variants().join("|")
+        ExampleKind::VARIANTS.join("|")
     );
 
-    let arg = std::env::args().nth(1).ok_or_else(|| {
-        eprintln!("{usage}");
-        DataFusionError::Execution("Missing argument".to_string())
-    })?;
+    let example: ExampleKind = std::env::args()
+        .nth(1)
+        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .parse()
+        .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 
-    match arg.parse::<ExampleKind>()? {
-        ExampleKind::Client => client::client().await?,
-        ExampleKind::Server => server::server().await?,
-        ExampleKind::SqlServer => sql_server::sql_server().await?,
-    }
-
-    Ok(())
+    example.run().await
 }

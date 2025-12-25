@@ -21,7 +21,7 @@ use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{assert_batches_eq, Result};
+use datafusion_common::{Result, assert_batches_eq};
 
 fn build_table(values: &[i32]) -> Result<RecordBatch> {
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, true)]));
@@ -75,7 +75,9 @@ async fn set_comparison_all_empty() -> Result<()> {
     let results = df.collect().await?;
 
     assert_batches_eq!(
-        &["+----+", "| v  |", "+----+", "| 1  |", "| 6  |", "| 10 |", "+----+",],
+        &[
+            "+----+", "| v  |", "+----+", "| 1  |", "| 6  |", "| 10 |", "+----+",
+        ],
         &results
     );
     Ok(())

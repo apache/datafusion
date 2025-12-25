@@ -34,7 +34,9 @@ pub async fn from_subquery(
         Some(subquery_type) => match subquery_type {
             SubqueryType::InPredicate(in_predicate) => {
                 if in_predicate.needles.len() != 1 {
-                    substrait_err!("InPredicate Subquery type must have exactly one Needle expression")
+                    substrait_err!(
+                        "InPredicate Subquery type must have exactly one Needle expression"
+                    )
                 } else {
                     let needle_expr = &in_predicate.needles[0];
                     let haystack_expr = &in_predicate.haystack;
@@ -109,7 +111,7 @@ pub async fn from_subquery(
                         return substrait_err!(
                             "Unsupported reduction op for SetComparison: {}",
                             comparison.reduction_op
-                        )
+                        );
                     }
                 };
                 let comparison_op = match ComparisonOp::try_from(comparison.comparison_op)
@@ -124,7 +126,7 @@ pub async fn from_subquery(
                         return substrait_err!(
                             "Unsupported comparison op for SetComparison: {}",
                             comparison.comparison_op
-                        )
+                        );
                     }
                 };
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType, i256};
 use bigdecimal::BigDecimal;
 use half::f16;
 use rust_decimal::prelude::*;
@@ -133,7 +133,7 @@ pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -
 #[cfg(test)]
 mod tests {
     use super::big_decimal_to_str;
-    use bigdecimal::{num_bigint::BigInt, BigDecimal};
+    use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
     macro_rules! assert_decimal_str_eq {
         ($integer:expr, $scale:expr, $round_digits:expr, $expected:expr) => {

@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::parquet::utils::MetricsFinder;
-use crate::parquet::{create_data_batch, Scenario};
+use crate::parquet::{Scenario, create_data_batch};
 
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
@@ -29,17 +29,17 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{assert_contains, DFSchema};
+use datafusion_common::{DFSchema, assert_contains};
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
 

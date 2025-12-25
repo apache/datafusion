@@ -27,16 +27,16 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue,
+    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
-    lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast,
+    Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
+    Operator, TryCast, lit,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -579,7 +579,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
-                        )
+                        );
                     }
                 },
             ))),
@@ -849,7 +849,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn sql_like_to_expr(
         &self,
         negated: bool,
@@ -869,7 +869,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(value) => return plan_err!("Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"),
+            Some(value) => {
+                return plan_err!(
+                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"
+                );
+            }
             None => None,
         };
         Ok(Expr::Like(Like::new(
@@ -899,7 +903,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(value) => return plan_err!("Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"),
+            Some(value) => {
+                return plan_err!(
+                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"
+                );
+            }
             None => None,
         };
         Ok(Expr::SimilarTo(Like::new(
@@ -1220,8 +1228,8 @@ mod tests {
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::TableReference;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 

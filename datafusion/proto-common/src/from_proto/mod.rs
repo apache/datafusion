@@ -699,6 +699,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            byte_size: if let Some(sbs) = &cs.byte_size {
+                sbs.clone().into()
+            } else {
+                Precision::Absent
+            },
         }
     }
 }
@@ -903,6 +908,7 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
             double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
             newlines_in_values: proto_opts.newlines_in_values.first().map(|h| *h != 0),
             compression: proto_opts.compression().into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
             date_format: (!proto_opts.date_format.is_empty())
                 .then(|| proto_opts.date_format.clone()),
@@ -930,7 +936,6 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1015,7 +1020,6 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     fn try_from(
         value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
-        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
@@ -1092,6 +1096,7 @@ impl TryFrom<&protobuf::JsonOptions> for JsonOptions {
         let compression: protobuf::CompressionTypeVariant = proto_opts.compression();
         Ok(JsonOptions {
             compression: compression.into(),
+            compression_level: proto_opts.compression_level,
             schema_infer_max_rec: proto_opts.schema_infer_max_rec.map(|h| h as usize),
         })
     }

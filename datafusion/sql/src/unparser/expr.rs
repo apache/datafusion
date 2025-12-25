@@ -656,40 +656,53 @@ impl Unparser<'_> {
     }
 
     fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
-        assert_eq_or_internal_err!(
-            args.len(),
-            2,
-            "get_field must have exactly 2 arguments"
-        );
+        if args.len() < 2 {
+            return internal_err!(
+                "get_field must have at least 2 arguments, got {}",
+                args.len()
+            );
+        }
 
-        let field = match &args[1] {
-            Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
-            _ => {
-                return internal_err!(
-                "get_field expects second argument to be a string, but received: {:?}",
-                &args[1]
-            )
-            }
-        };
+        // Extract all field names (args[1..])
+        let mut fields = Vec::with_capacity(args.len() - 1);
+        for arg in &args[1..] {
+            let field = match arg {
+                Expr::Literal(lit, _) => self.new_ident_quoted_if_needs(lit.to_string()),
+                _ => {
+                    return internal_err!(
+                        "get_field expects field arguments to be strings, but received: {:?}",
+                        arg
+                    );
+                }
+            };
+            fields.push(field);
+        }
 
         match &args[0] {
             Expr::Column(col) => {
                 let mut id = match self.col_to_sql(col)? {
                     ast::Expr::Identifier(ident) => vec![ident],
                     ast::Expr::CompoundIdentifier(idents) => idents,
-                    other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+                    other => {
+                        return internal_err!(
+                            "expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}",
+                            other
+                        );
+                    }
                 };
-                id.push(field);
+                id.extend(fields);
                 Ok(ast::Expr::CompoundIdentifier(id))
             }
             Expr::ScalarFunction(struct_expr) => {
                 let root = self
                     .scalar_function_to_sql(struct_expr.func.name(), &struct_expr.args)?;
+                let access_chain = fields
+                    .into_iter()
+                    .map(|field| ast::AccessExpr::Dot(ast::Expr::Identifier(field)))
+                    .collect();
                 Ok(ast::Expr::CompoundFieldAccess {
                     root: Box::new(root),
-                    access_chain: vec![ast::AccessExpr::Dot(ast::Expr::Identifier(
-                        field,
-                    ))],
+                    access_chain,
                 })
             }
             _ => {
@@ -1097,7 +1110,7 @@ impl Unparser<'_> {
                 return Err(internal_datafusion_err!(
                     "Expected Timestamp, got {:?}",
                     T::DATA_TYPE
-                ))
+                ));
             }
         };
 
@@ -1457,7 +1470,9 @@ impl Unparser<'_> {
             };
             return Ok(ast::Expr::Interval(interval));
         } else if months != 0 {
-            return not_impl_err!("Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL");
+            return not_impl_err!(
+                "Unsupported Interval scalar with both Month and DayTime for IntervalStyle::MySQL"
+            );
         }
 
         // DAY only
@@ -1645,7 +1660,9 @@ impl Unparser<'_> {
                         };
                         Ok(ast::Expr::Interval(interval))
                     } else {
-                        not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
+                        not_impl_err!(
+                            "Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard"
+                        )
                     }
                 }
                 _ => not_impl_err!(
@@ -1810,6 +1827,7 @@ mod tests {
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
@@ -2196,12 +2214,15 @@ mod tests {
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(
+                    Int8.into_nullable_field_ref(),
+                    vec![String::from("@a")],
+                ),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    Int8,
+                    Int8.into_nullable_field_ref(),
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,

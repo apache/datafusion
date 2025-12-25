@@ -227,7 +227,9 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         &mut self,
         _plan: &Extension,
     ) -> datafusion::common::Result<Box<Rel>> {
-        substrait_err!("Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait")
+        substrait_err!(
+            "Specify handling for LogicalPlan::Extension by implementing the SubstraitProducer trait"
+        )
     }
 
     // Expression Methods

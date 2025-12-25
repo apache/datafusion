@@ -19,37 +19,36 @@ use std::sync::Arc;
 
 use arrow::datatypes::Field;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, NullEquality,
-    RecursionUnnestOption, Result, ScalarValue, TableReference, UnnestOptions,
+    NullEquality, RecursionUnnestOption, Result, ScalarValue, TableReference,
+    UnnestOptions, exec_datafusion_err, internal_err, plan_datafusion_err,
 };
 use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{Alias, NullTreatment, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::{
-    expr::{self, InList, WindowFunction},
-    logical_plan::{PlanType, StringifiedPlan},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
     GroupingSet::GroupingSets,
     JoinConstraint, JoinType, Like, Operator, TryCast, WindowFrame, WindowFrameBound,
     WindowFrameUnits,
+    expr::{self, InList, WindowFunction},
+    logical_plan::{PlanType, StringifiedPlan},
 };
 use datafusion_expr::{ExprFunctionExt, WriteOp};
-use datafusion_proto_common::{from_proto::FromOptionalField, FromProtoError as Error};
+use datafusion_proto_common::{FromProtoError as Error, from_proto::FromOptionalField};
 
 use crate::protobuf::plan_type::PlanTypeEnum::{
     FinalPhysicalPlanWithSchema, InitialPhysicalPlanWithSchema,
 };
 use crate::protobuf::{
-    self,
+    self, AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
+    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
     plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
         FinalPhysicalPlan, FinalPhysicalPlanWithStats, InitialLogicalPlan,
         InitialPhysicalPlan, InitialPhysicalPlanWithStats, OptimizedLogicalPlan,
         OptimizedPhysicalPlan, PhysicalPlanError,
     },
-    AnalyzedLogicalPlanType, CubeNode, GroupingSetNode, OptimizedLogicalPlanType,
-    OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
 };
 
 use super::LogicalExtensionCodec;
