@@ -375,11 +375,11 @@ impl ExecutionPlan for ProjectionExec {
         let invert_alias_map = self.collect_reverse_alias()?;
 
         let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
-        let rewrited_filters = parent_filters
+        let rewritten_filters = parent_filters
             .into_iter()
             .map(|filter| filter.rewrite(&mut rewriter).map(|t| t.data))
             .collect::<Result<Vec<_>>>()?;
-        FilterDescription::from_children(rewrited_filters, &self.children())
+        FilterDescription::from_children(rewritten_filters, &self.children())
     }
 
     fn handle_child_pushdown_result(
