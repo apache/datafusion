@@ -196,7 +196,9 @@ impl ProjectionExec {
 
     /// Collect reverse alias mapping from projection expressions.
     /// The result hash map is a map from aliased Column in parent to original Column.
-    fn collect_reverse_alias(&self) -> Result<datafusion_common::HashMap<Column, Column>> {
+    fn collect_reverse_alias(
+        &self,
+    ) -> Result<datafusion_common::HashMap<Column, Column>> {
         let mut alias_map = datafusion_common::HashMap::new();
         for projection in self.projection_expr().iter() {
             if let Some(col_expr) = projection.expr.as_any().downcast_ref::<Column>() {
@@ -379,9 +381,7 @@ impl ExecutionPlan for ProjectionExec {
         let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
         let rewrited_filters = parent_filters
             .into_iter()
-            .map(|filter| {
-                filter.rewrite(&mut rewriter).map(|t|t.data)
-            })
+            .map(|filter| filter.rewrite(&mut rewriter).map(|t| t.data))
             .collect::<Result<Vec<_>>>()?;
 
         FilterDescription::from_children(rewrited_filters, &self.children())
@@ -1120,6 +1120,7 @@ mod tests {
 
     use crate::common::collect;
 
+    use crate::filter_pushdown::PushedDown;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1316,5 +1317,282 @@ mod tests {
             "Expected 2 columns in projection statistics"
         );
         assert!(stats.total_byte_size.is_exact().unwrap_or(false));
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_alias() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&input_schema),
+            input_schema.clone(),
+        ));
+
+        // project "a" as "b"
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "b".to_string(),
+            }],
+            input,
+        )?;
+
+        // filter "b > 5"
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            &ConfigOptions::default(),
+        )?;
+
+        // Should be converted to "a > 5"
+        // "a" is index 0 in input
+        let expected_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert_eq!(description.self_filters(), vec![vec![]]);
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            format!("{}", expected_filter)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_multiple_aliases() -> Result<()> {
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.clone(),
+        ));
+
+        // project "a" as "x", "b" as "y"
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "x".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    alias: "y".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "x > 5"
+        let filter1 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "y < 10"
+        let filter2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("y", 1)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter1, filter2],
+            &ConfigOptions::default(),
+        )?;
+
+        // Should be converted to "a > 5" and "b < 10"
+        let expected_filter1 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let expected_filter2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 1)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+        // Note: The order of filters is preserved
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            format!("{}", expected_filter1)
+        );
+        assert_eq!(
+            format!("{}", pushed_filters[1].predicate),
+            format!("{}", expected_filter2)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_mixed_columns() -> Result<()> {
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.clone(),
+        ));
+
+        // project "a" as "x", "b" as "b" (pass through)
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "x".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    alias: "b".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "x > 5"
+        let filter1 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("x", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "b < 10" (using output index 1 which corresponds to 'b')
+        let filter2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 1)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter1, filter2],
+            &ConfigOptions::default(),
+        )?;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+        // "x" -> "a" (index 0)
+        let expected_filter1 = "a@0 > 5";
+        // "b" -> "b" (index 1)
+        let expected_filter2 = "b@1 < 10";
+
+        assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
+        assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_complex_expression() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.clone(),
+        ));
+
+        // project "a + 1" as "z"
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                alias: "z".to_string(),
+            }],
+            input,
+        )?;
+
+        // filter "z > 10"
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("z", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            &ConfigOptions::default(),
+        )?;
+
+        // Should NOT be converted to "a + 1 > 10" because we don't support inverting complex expressions yet.
+        // It should result in UnKnownColumn.
+        let pushed_filters = &description.parent_filters()[0];
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
+        let output_filter_str = format!("{}", pushed_filters[0].predicate);
+        assert!(output_filter_str.contains("z"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_with_unknown_column() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.clone(),
+        ));
+
+        // project "a" as "a"
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("a", 0)),
+                alias: "a".to_string(),
+            }],
+            input,
+        )?;
+
+        // filter "unknown_col > 5" - using a column name that doesn't exist in projection output
+        // Column constructor: name, index. Index 1 doesn't exist.
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("unknown_col", 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            &ConfigOptions::default(),
+        )?;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
+        let output_filter_str = format!("{}", pushed_filters[0].predicate);
+        // The column shouldn't be found in the alias map, so it should become UnKnownColumn
+        assert!(output_filter_str.contains("unknown_col"));
+
+        Ok(())
     }
 }

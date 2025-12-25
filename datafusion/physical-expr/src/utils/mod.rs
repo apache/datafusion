@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
+use crate::expressions::UnKnownColumn;
 use crate::expressions::{BinaryExpr, Column};
 use crate::tree_node::ExprContext;
 
@@ -236,6 +237,21 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
     columns
+}
+
+pub fn have_unknown_columns(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut found = false;
+    expr.apply(|e| {
+        if let Some(_) = e.as_any().downcast_ref::<UnKnownColumn>() {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("no way to return error during recursion");
+
+    found
 }
 
 /// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
