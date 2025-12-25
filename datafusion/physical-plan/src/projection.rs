@@ -200,7 +200,6 @@ impl ProjectionExec {
         let mut alias_map = datafusion_common::HashMap::new();
         for projection in self.projection_expr().iter() {
             if let Some(col_expr) = projection.expr.as_any().downcast_ref::<Column>() {
-                // FIXME: not sure if two physical column somehow have the same name, what will happen
                 let (aliased_index, _output_field) = self
                     .projector
                     .output_schema()
@@ -376,7 +375,6 @@ impl ExecutionPlan for ProjectionExec {
         // For the time being, we pass through untransformed filters, so filters on aliases are not handled.
         // https://github.com/apache/datafusion/issues/17246
 
-        // FIXME: statically change is not enough, need to add projection at the inner most child?
         let invert_alias_map = self.collect_reverse_alias()?;
         let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
         let rewrited_filters = parent_filters
