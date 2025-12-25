@@ -699,12 +699,13 @@ impl ExternalSorter {
 
     /// Sorts a single `RecordBatch` into a single stream.
     ///
-    /// `reservation` accounts for the memory used by this batch and
-    /// is released when the sort is complete
-    ///
-    /// passing `split` true will return a [`BatchSplitStream`] where each batch maximum row count
-    /// will be `self.batch_size`.
-    /// If `split` is false, the stream will return a single batch
+    /// This may output multiple batches depending on the size of the
+    /// sorted data and the target batch size.
+    /// For single-batch output cases, `reservation` will be freed immediately after sorting,
+    /// as the batch will be output and is expected to be reserved by the consumer of the stream.
+    /// For multi-batch output cases, `reservation` will be grown to match the actual
+    /// size of sorted output, and as each batch is output, its memory will be freed from the reservation.
+    /// (This leads to the same behaviour, as futures are only evaluated when polled by the consumer.)
     fn sort_batch_stream(
         &self,
         batch: RecordBatch,
