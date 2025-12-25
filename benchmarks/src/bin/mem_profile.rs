@@ -33,7 +33,7 @@ use datafusion_benchmarks::{
 
 #[derive(Debug, Parser)]
 #[command(name = "Memory Profiling Utility")]
-struct MemProfileOpt {
+struct Cli {
     /// Cargo profile to use in dfbench (e.g. release, release-nonlto)
     #[arg(long, default_value = "release")]
     bench_profile: String,
@@ -55,9 +55,9 @@ enum Options {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // 1. Parse args and check which benchmarks should be run
-    let mem_profile_opt = MemProfileOpt::parse();
-    let profile = mem_profile_opt.bench_profile;
-    let query_range = match mem_profile_opt.command {
+    let cli = Cli::parse();
+    let profile = cli.bench_profile;
+    let query_range = match cli.command {
         Options::Clickbench(opt) => {
             let entries = std::fs::read_dir(&opt.queries_path)?
                 .filter_map(Result::ok)

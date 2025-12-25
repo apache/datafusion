@@ -34,24 +34,30 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[derive(Debug, Subcommand)]
-enum BenchmarkSubCommandOpt {
-    #[command(name = "datafusion")]
-    DataFusionBenchmark(imdb::RunOpt),
-}
-
 #[derive(Debug, Parser)]
 #[command(name = "IMDB", about = "IMDB Dataset Processing.")]
+struct Cli {
+    #[command(subcommand)]
+    command: ImdbOpt,
+}
+
+#[derive(Debug, Subcommand)]
 enum ImdbOpt {
     #[command(subcommand)]
     Benchmark(BenchmarkSubCommandOpt),
     Convert(imdb::ConvertOpt),
 }
 
+#[derive(Debug, Subcommand)]
+enum BenchmarkSubCommandOpt {
+    #[command(name = "datafusion")]
+    DataFusionBenchmark(imdb::RunOpt),
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
     env_logger::init();
-    match ImdbOpt::parse() {
+    match Cli::parse().command {
         ImdbOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
             Box::pin(opt.run()).await
         }
