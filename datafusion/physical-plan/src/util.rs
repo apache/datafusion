@@ -99,8 +99,8 @@ mod tests {
     }
 
     /// Helper function to create a deeply nested expression
+    /// Create: col_a + (col_b + (col_c + (col_d + col_e)))
     fn create_deeply_nested_expression(schema: &Schema) -> Arc<dyn PhysicalExpr> {
-        // Create: col_a + (col_b + (col_c + (col_d + col_e)))
         let col_a = col("a", schema).unwrap();
         let col_b = col("b", schema).unwrap();
         let col_c = col("c", schema).unwrap();
@@ -172,6 +172,11 @@ mod tests {
 
         // Verify transformation occurred
         assert!(result.transformed);
+
+        assert_eq!(
+            format!("{}", result.data),
+            "a + b + 100 + new_col@5 + d + e"
+        );
 
         Ok(())
     }
@@ -283,7 +288,6 @@ mod tests {
 
         let result = expr.rewrite(&mut rewriter)?;
 
-        dbg!(format!("{}", result.data));
         assert_eq!(
             format!("{}", result.data),
             "5 * a@0 + 3 - another_col@7 + b"
