@@ -531,13 +531,15 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         // 2. Perform `vectorized_append`
         {
-            let _timer = self.metrics.vectorized_append_time.timer();
+            let time = self.metrics.vectorized_append_time.clone();
+            let _timer = time.timer();
             self.vectorized_append(cols)?;
         }
 
         // 3. Perform `vectorized_equal_to`
         {
-            let _timer = self.metrics.vectorized_equal_to_time.timer();
+            let time = self.metrics.vectorized_equal_to_time.clone();
+            let _timer = time.timer();
             self.vectorized_equal_to(cols, groups);
         }
 
@@ -554,7 +556,8 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
 
         {
-            let _timer = self.metrics.scalarized_intern_remaining_time.timer();
+            let time = self.metrics.scalarized_intern_remaining_time.clone();
+            let _timer = time.timer();
             // 4. Perform scalarized inter for remaining rows
             // (about remaining rows, can see comments for `remaining_row_indices`)
             self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
