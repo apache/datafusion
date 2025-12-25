@@ -212,7 +212,7 @@ impl ProjectionExec {
                     ))
                 })?;
             let aliased_col = Column::new(&projection.alias, aliased_index);
-            alias_map.insert(aliased_col, projection.expr.clone());
+            alias_map.insert(aliased_col, Arc::clone(&projection.expr));
         }
         Ok(alias_map)
     }
