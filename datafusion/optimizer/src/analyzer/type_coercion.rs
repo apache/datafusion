@@ -381,6 +381,15 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
                 let subquery_type = new_plan.schema().field(0).data_type();
+                if (expr_type.is_numeric()
+                    && is_utf8_or_utf8view_or_large_utf8(subquery_type))
+                    || (subquery_type.is_numeric()
+                        && is_utf8_or_utf8view_or_large_utf8(&expr_type))
+                {
+                    return plan_err!(
+                        "expr type {expr_type} can't cast to {subquery_type} in SetComparison"
+                    );
+                }
                 let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
                     plan_datafusion_err!(
                         "expr type {expr_type} can't cast to {subquery_type} in SetComparison"

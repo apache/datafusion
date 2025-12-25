@@ -16,14 +16,14 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{substrait_datafusion_err, substrait_err, DFSchema, Spans};
+use datafusion::common::{DFSchema, Spans, substrait_datafusion_err, substrait_err};
 use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion::logical_expr::{Expr, Operator, Subquery};
 use std::sync::Arc;
 use substrait::proto::expression as substrait_expression;
+use substrait::proto::expression::subquery::SubqueryType;
 use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
-use substrait::proto::expression::subquery::SubqueryType;
 
 pub async fn from_subquery(
     consumer: &impl SubstraitConsumer,

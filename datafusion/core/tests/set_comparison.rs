@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use arrow::array::Int32Array;
+use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{Result, assert_batches_eq};
+use datafusion_common::{Result, assert_batches_eq, assert_contains};
 
 fn build_table(values: &[i32]) -> Result<RecordBatch> {
     let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, true)]));
@@ -80,5 +80,96 @@ async fn set_comparison_all_empty() -> Result<()> {
         ],
         &results
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_comparison_type_mismatch() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", build_table(&[1])?)?;
+    ctx.register_batch("strings", {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, true)]));
+        let array = Arc::new(StringArray::from(vec![Some("a"), Some("b")]))
+            as Arc<dyn arrow::array::Array>;
+        RecordBatch::try_new(schema, vec![array])?
+    })?;
+
+    let df = ctx
+        .sql("select v from t where v > any(select s from strings)")
+        .await?;
+    let err = df.collect().await.unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "expr type Int32 can't cast to Utf8 in SetComparison"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_comparison_multiple_operators() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", build_table(&[1, 2, 3, 4])?)?;
+    ctx.register_batch("s", build_table(&[2, 3])?)?;
+
+    let df = ctx
+        .sql("select v from t where v = any(select v from s) order by v")
+        .await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        &["+---+", "| v |", "+---+", "| 2 |", "| 3 |", "+---+",],
+        &results
+    );
+
+    let df = ctx
+        .sql("select v from t where v != all(select v from s) order by v")
+        .await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        &["+---+", "| v |", "+---+", "| 1 |", "| 4 |", "+---+",],
+        &results
+    );
+
+    let df = ctx
+        .sql("select v from t where v >= all(select v from s) order by v")
+        .await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        &["+---+", "| v |", "+---+", "| 3 |", "| 4 |", "+---+",],
+        &results
+    );
+
+    let df = ctx
+        .sql("select v from t where v <= any(select v from s) order by v")
+        .await?;
+    let results = df.collect().await?;
+    assert_batches_eq!(
+        &[
+            "+---+", "| v |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_comparison_null_semantics_all() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_batch("t", build_table(&[5])?)?;
+    ctx.register_batch("s", {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int32, true)]));
+        let array = Arc::new(Int32Array::from(vec![Some(1), None]))
+            as Arc<dyn arrow::array::Array>;
+        RecordBatch::try_new(schema, vec![array])?
+    })?;
+
+    let df = ctx
+        .sql("select v from t where v != all(select v from s)")
+        .await?;
+    let results = df.collect().await?;
+    let row_count: usize = results.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(0, row_count);
     Ok(())
 }

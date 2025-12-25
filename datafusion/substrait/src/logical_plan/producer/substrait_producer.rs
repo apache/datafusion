@@ -25,16 +25,16 @@ use crate::logical_plan::producer::{
     from_union, from_values, from_window, from_window_function, to_substrait_rel,
     to_substrait_rex,
 };
-use datafusion::common::{substrait_err, Column, DFSchemaRef, ScalarValue};
-use datafusion::execution::registry::SerializerRegistry;
+use datafusion::common::{Column, DFSchemaRef, ScalarValue, substrait_err};
 use datafusion::execution::SessionState;
+use datafusion::execution::registry::SerializerRegistry;
 use datafusion::logical_expr::expr::{
     Alias, InList, InSubquery, SetComparison, WindowFunction,
 };
 use datafusion::logical_expr::{
-    expr, Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr,
-    Extension, Filter, Join, Like, Limit, LogicalPlan, Projection, Repartition, Sort,
-    SubqueryAlias, TableScan, TryCast, Union, Values, Window,
+    Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr, Extension,
+    Filter, Join, Like, Limit, LogicalPlan, Projection, Repartition, Sort, SubqueryAlias,
+    TableScan, TryCast, Union, Values, Window, expr,
 };
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::aggregate_rel::Measure;
