@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -50,9 +50,9 @@ impl PruningStatistics for DummyStats {
 /// actual file/row group metadata.
 pub struct MockPruningStatistics {
     column: String,
-    min_values: ArrayRef,
-    max_values: ArrayRef,
-    null_counts: ArrayRef,
+    min_values: Option<ArrayRef>,
+    max_values: Option<ArrayRef>,
+    null_counts: Option<ArrayRef>,
     row_counts: Option<ArrayRef>,
     num_containers: usize,
     value_sets: Option<Vec<Option<HashSet<ScalarValue>>>>,
@@ -61,9 +61,9 @@ pub struct MockPruningStatistics {
 impl MockPruningStatistics {
     pub fn new(
         column: impl Into<String>,
-        min_values: ArrayRef,
-        max_values: ArrayRef,
-        null_counts: ArrayRef,
+        min_values: Option<ArrayRef>,
+        max_values: Option<ArrayRef>,
+        null_counts: Option<ArrayRef>,
         row_counts: Option<ArrayRef>,
     ) -> Self {
         Self::new_with_sets(
@@ -78,13 +78,19 @@ impl MockPruningStatistics {
 
     pub fn new_with_sets(
         column: impl Into<String>,
-        min_values: ArrayRef,
-        max_values: ArrayRef,
-        null_counts: ArrayRef,
+        min_values: Option<ArrayRef>,
+        max_values: Option<ArrayRef>,
+        null_counts: Option<ArrayRef>,
         row_counts: Option<ArrayRef>,
         value_sets: Option<Vec<Option<HashSet<ScalarValue>>>>,
     ) -> Self {
-        let num_containers = min_values.len();
+        let num_containers = min_values
+            .as_ref()
+            .or(max_values.as_ref())
+            .or(null_counts.as_ref())
+            .or(row_counts.as_ref())
+            .map(|a| a.len())
+            .unwrap_or(0);
         if let Some(value_sets) = value_sets.as_ref() {
             assert_eq!(
                 value_sets.len(),
@@ -128,17 +134,27 @@ impl MockPruningStatistics {
         )
         .expect("rows");
 
-        Self::new(column, mins, maxs, null_counts, Some(row_counts))
+        Self::new(
+            column,
+            Some(mins),
+            Some(maxs),
+            Some(null_counts),
+            Some(row_counts),
+        )
     }
 }
 
 impl PruningStatistics for MockPruningStatistics {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        (column.name == self.column).then(|| Arc::clone(&self.min_values))
+        (column.name == self.column)
+            .then(|| self.min_values.as_ref().map(Arc::clone))
+            .flatten()
     }
 
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        (column.name == self.column).then(|| Arc::clone(&self.max_values))
+        (column.name == self.column)
+            .then(|| self.max_values.as_ref().map(Arc::clone))
+            .flatten()
     }
 
     fn num_containers(&self) -> usize {
@@ -146,7 +162,9 @@ impl PruningStatistics for MockPruningStatistics {
     }
 
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        (column.name == self.column).then(|| Arc::clone(&self.null_counts))
+        (column.name == self.column)
+            .then(|| self.null_counts.as_ref().map(Arc::clone))
+            .flatten()
     }
 
     fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
@@ -161,6 +179,59 @@ impl PruningStatistics for MockPruningStatistics {
         } else {
             None
         }
+    }
+
+    fn contained(&self, _: &Column, _: &HashSet<ScalarValue>) -> Option<BooleanArray> {
+        None
+    }
+}
+
+#[derive(Clone)]
+pub struct MultiColumnPruningStatistics {
+    pub mins: HashMap<String, ArrayRef>,
+    pub maxs: HashMap<String, ArrayRef>,
+    pub null_counts: HashMap<String, ArrayRef>,
+    pub row_counts: HashMap<String, ArrayRef>,
+    pub value_sets: HashMap<String, Vec<Option<HashSet<ScalarValue>>>>,
+    pub num_containers: usize,
+}
+
+impl MultiColumnPruningStatistics {
+    pub fn new(num_containers: usize) -> Self {
+        Self {
+            mins: HashMap::new(),
+            maxs: HashMap::new(),
+            null_counts: HashMap::new(),
+            row_counts: HashMap::new(),
+            value_sets: HashMap::new(),
+            num_containers,
+        }
+    }
+}
+
+impl PruningStatistics for MultiColumnPruningStatistics {
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.mins.get(&column.name).cloned()
+    }
+
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        self.maxs.get(&column.name).cloned()
+    }
+
+    fn num_containers(&self) -> usize {
+        self.num_containers
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.null_counts.get(&column.name).cloned()
+    }
+
+    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
+        self.row_counts.get(&column.name).cloned()
+    }
+
+    fn value_sets(&self, column: &Column) -> Option<Vec<Option<HashSet<ScalarValue>>>> {
+        self.value_sets.get(&column.name).cloned()
     }
 
     fn contained(&self, _: &Column, _: &HashSet<ScalarValue>) -> Option<BooleanArray> {

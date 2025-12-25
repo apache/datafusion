@@ -90,7 +90,7 @@ impl ScalarUDFImpl for UpperFunc {
     }
 
     /// For input stat, capitalize the set statistics.
-    /// 
+    ///
     /// Example:
     /// Input expression `c` has set stat `{'foo', 'bar'}`
     /// This function `upper(c)` will propagate the set stat to `{'FOO', 'BAR'}`

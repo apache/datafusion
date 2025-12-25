@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -28,7 +27,6 @@ use arrow::array::{ArrayRef, BooleanArray, new_empty_array};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -41,6 +39,13 @@ use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
+
+mod pruning;
+
+pub use pruning::{
+    ColumnStats, NullStats, PruningContext, PruningIntermediate, PruningResult,
+    RangeStats, SetStats,
+};
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -529,8 +534,8 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             if let Some((first, rest)) = child_null_stats.split_first() {
                 for stats in rest {
                     assert_eq_or_internal_err!(
-                        first.length,
-                        stats.length,
+                        first.len(),
+                        stats.len(),
                         "Null stats length mismatch between pruning children"
                     );
                 }
@@ -560,7 +565,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         {
             assert_eq_or_internal_err!(
                 range_stats.len(),
-                null_stats.length,
+                null_stats.len(),
                 "Range and null stats length mismatch for pruning"
             );
         }
@@ -579,7 +584,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             (null_stats.as_ref(), set_stats.as_ref())
         {
             assert_eq_or_internal_err!(
-                null_stats.length,
+                null_stats.len(),
                 set_stats.len(),
                 "Null and set stats length mismatch for pruning"
             );
@@ -590,207 +595,6 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
             null_stats,
             set_stats,
         }))
-    }
-}
-
-// Pruner Common
-/// e.g. for x > 5
-/// bucket 1 has stat [10,15] -> AlwaysTrue
-/// bucket 2 has stat [0,5] -> AlwaysFalse
-/// bucket 3 has stat [0,10] -> Unknown
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PruningResult {
-    AlwaysTrue,
-    AlwaysFalse,
-    Unknown,
-}
-
-#[derive(Debug, Clone)]
-pub enum RangeStats {
-    Values {
-        mins: Option<ArrayRef>,
-        maxs: Option<ArrayRef>,
-        length: usize,
-    },
-    /// Represents a uniform literal value across all containers.
-    /// This variant make it easy to compare between literals and normal ranges representing
-    /// each containers' value range.
-    ///
-    /// TODO: remove length -- seems redundant
-    Scalar { value: ScalarValue, length: usize },
-}
-
-#[derive(Debug, Clone)]
-pub struct NullStats {
-    null_counts: Option<ArrayRef>,
-    row_counts: Option<ArrayRef>,
-    length: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct SetStats {
-    sets: Vec<Option<HashSet<ScalarValue>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ColumnStats {
-    pub range_stats: Option<RangeStats>,
-    pub null_stats: Option<NullStats>,
-    pub set_stats: Option<SetStats>,
-}
-
-impl RangeStats {
-    pub fn new(
-        mins: Option<ArrayRef>,
-        maxs: Option<ArrayRef>,
-        length: usize,
-    ) -> Result<Self> {
-        if let Some(ref mins) = mins {
-            assert_eq_or_internal_err!(
-                mins.len(),
-                length,
-                "Range mins length mismatch for pruning statistics"
-            );
-        }
-        if let Some(ref maxs) = maxs {
-            assert_eq_or_internal_err!(
-                maxs.len(),
-                length,
-                "Range maxs length mismatch for pruning statistics"
-            );
-        }
-        Ok(Self::Values { mins, maxs, length })
-    }
-
-    /// Create range stats for a constant literal across all containers.
-    ///
-    pub fn new_scalar(value: ScalarValue, length: usize) -> Result<Self> {
-        Ok(Self::Scalar { value, length })
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            RangeStats::Values { length, .. } | RangeStats::Scalar { length, .. } => {
-                *length
-            }
-        }
-    }
-}
-
-pub struct PruningContext {
-    stats: Arc<dyn PruningStatistics>,
-}
-
-impl PruningContext {
-    pub fn new(stats: Arc<dyn PruningStatistics>) -> Self {
-        Self { stats }
-    }
-
-    pub fn statistics(&self) -> &Arc<dyn PruningStatistics> {
-        &self.stats
-    }
-}
-
-impl NullStats {
-    pub fn new(
-        null_counts: Option<ArrayRef>,
-        row_counts: Option<ArrayRef>,
-        length: usize,
-    ) -> Result<Self> {
-        if let Some(ref null_counts) = null_counts {
-            assert_eq_or_internal_err!(
-                null_counts.len(),
-                length,
-                "Null counts length mismatch for pruning statistics"
-            );
-        }
-        if let Some(ref row_counts) = row_counts {
-            assert_eq_or_internal_err!(
-                row_counts.len(),
-                length,
-                "Row counts length mismatch for pruning statistics"
-            );
-        }
-        Ok(Self {
-            null_counts,
-            row_counts,
-            length,
-        })
-    }
-
-    pub fn len(&self) -> usize {
-        self.length
-    }
-
-    pub fn null_counts(&self) -> Option<&ArrayRef> {
-        self.null_counts.as_ref()
-    }
-
-    pub fn row_counts(&self) -> Option<&ArrayRef> {
-        self.row_counts.as_ref()
-    }
-}
-
-impl SetStats {
-    pub fn new(sets: Vec<Option<HashSet<ScalarValue>>>, length: usize) -> Result<Self> {
-        assert_eq_or_internal_err!(
-            sets.len(),
-            length,
-            "Set stats length mismatch for pruning statistics"
-        );
-        Ok(Self { sets })
-    }
-
-    pub fn len(&self) -> usize {
-        self.sets.len()
-    }
-
-    pub fn value_sets(&self) -> &[Option<HashSet<ScalarValue>>] {
-        &self.sets
-    }
-}
-
-impl ColumnStats {
-    pub fn new(range_stats: Option<RangeStats>, null_stats: Option<NullStats>) -> Self {
-        Self::new_with_set_stats(range_stats, null_stats, None)
-    }
-
-    pub fn new_with_set_stats(
-        range_stats: Option<RangeStats>,
-        null_stats: Option<NullStats>,
-        set_stats: Option<SetStats>,
-    ) -> Self {
-        Self {
-            range_stats,
-            null_stats,
-            set_stats,
-        }
-    }
-
-    pub fn range_stats(&self) -> Option<&RangeStats> {
-        self.range_stats.as_ref()
-    }
-
-    pub fn null_stats(&self) -> Option<&NullStats> {
-        self.null_stats.as_ref()
-    }
-
-    pub fn set_stats(&self) -> Option<&SetStats> {
-        self.set_stats.as_ref()
-    }
-}
-
-// TODO: should include length (container count)
-#[derive(Debug, Clone)]
-pub enum PruningIntermediate {
-    IntermediateStats(ColumnStats),
-    IntermediateResult(Vec<PruningResult>),
-}
-
-impl PruningIntermediate {
-    /// Create an `IntermediateStats` variant with no range or null statistics.
-    pub fn empty_stats() -> Self {
-        Self::IntermediateStats(ColumnStats::new(None, None))
     }
 }
 
@@ -1024,10 +828,9 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::physical_expr::{PhysicalExpr, RangeStats};
+    use crate::physical_expr::PhysicalExpr;
     use arrow::array::{Array, BooleanArray, Int64Array, RecordBatch};
     use arrow::datatypes::{DataType, Schema};
-    use datafusion_common::ScalarValue;
     use datafusion_expr_common::columnar_value::ColumnarValue;
     use std::fmt::{Display, Formatter};
     use std::sync::Arc;

@@ -37,7 +37,14 @@ mod test {
         ColumnStats, PruningContext, PruningIntermediate, PruningResult, RangeStats,
     };
 
-    use crate::pruning_utils::{DummyStats, MockPruningStatistics};
+    use crate::pruning_utils::{
+        DummyStats, MockPruningStatistics, MultiColumnPruningStatistics,
+    };
+
+    // #[test]
+    // fn column_ref_stat() {
+    //     let source_pruning_stat = MockPruningStatistics::new("a", Arc::new(Int32Array::from(vec![1,2,3])), Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])), null_counts, row_counts)
+    // }
 
     #[test]
     fn column_pruning_uses_parquet_stats() {
@@ -120,9 +127,9 @@ mod test {
 
         let pruning_stats = Arc::new(MockPruningStatistics::new_with_sets(
             "c",
-            mins,
-            maxs,
-            null_counts,
+            Some(mins),
+            Some(maxs),
+            Some(null_counts),
             Some(row_counts),
             Some(vec![Some(set.clone())]),
         ));
@@ -249,7 +256,7 @@ mod test {
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysTrue])
+                assert_eq!(results, vec![PruningResult::KeepAll])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -268,7 +275,7 @@ mod test {
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysFalse; 2])
+                assert_eq!(results, vec![PruningResult::SkipAll; 2])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -283,9 +290,9 @@ mod test {
         let rows = Arc::new(UInt64Array::from(vec![Some(3), Some(3)]));
         let stats = Arc::new(MockPruningStatistics::new(
             "a",
-            mins.clone(),
-            maxs.clone(),
-            zeros.clone(),
+            Some(mins.clone()),
+            Some(maxs.clone()),
+            Some(zeros.clone()),
             Some(rows.clone()),
         ));
         let ctx = Arc::new(PruningContext::new(stats));
@@ -293,7 +300,7 @@ mod test {
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysTrue; 2])
+                assert_eq!(results, vec![PruningResult::KeepAll; 2])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -303,9 +310,9 @@ mod test {
         let maxs = Arc::new(Int32Array::from(vec![Some(9), Some(4)]));
         let stats = Arc::new(MockPruningStatistics::new(
             "a",
-            mins,
-            maxs,
-            zeros,
+            Some(mins),
+            Some(maxs),
+            Some(zeros),
             Some(rows),
         ));
         let ctx = Arc::new(PruningContext::new(stats));
@@ -314,7 +321,7 @@ mod test {
             PruningIntermediate::IntermediateResult(results) => {
                 assert_eq!(
                     results,
-                    vec![PruningResult::Unknown, PruningResult::AlwaysFalse]
+                    vec![PruningResult::Unknown, PruningResult::SkipAll]
                 )
             }
             other => panic!("unexpected result: {other:?}"),
@@ -329,9 +336,9 @@ mod test {
         let rows = Arc::new(UInt64Array::from(vec![Some(1)]));
         let stats = Arc::new(MockPruningStatistics::new(
             "a",
-            mins,
-            maxs,
-            zeros,
+            Some(mins),
+            Some(maxs),
+            Some(zeros),
             Some(rows),
         ));
         let ctx = Arc::new(PruningContext::new(stats));
@@ -373,7 +380,7 @@ mod test {
         let res = expr.evaluate_pruning(ctx).unwrap();
         match res {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+                assert_eq!(results, vec![PruningResult::SkipAll])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -392,7 +399,7 @@ mod test {
 
         match expr.evaluate_pruning(ctx).unwrap() {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+                assert_eq!(results, vec![PruningResult::SkipAll])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -407,7 +414,7 @@ mod test {
 
         match expr.evaluate_pruning(ctx).unwrap() {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysTrue])
+                assert_eq!(results, vec![PruningResult::KeepAll])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -430,9 +437,9 @@ mod test {
 
         let stats = Arc::new(MockPruningStatistics::new_with_sets(
             "c",
-            mins,
-            maxs,
-            null_counts,
+            Some(mins),
+            Some(maxs),
+            Some(null_counts),
             None,
             Some(vec![Some(value_set)]),
         ));
@@ -449,7 +456,7 @@ mod test {
 
         match expr.evaluate_pruning(ctx).unwrap() {
             PruningIntermediate::IntermediateResult(results) => {
-                assert_eq!(results, vec![PruningResult::AlwaysFalse])
+                assert_eq!(results, vec![PruningResult::SkipAll])
             }
             other => panic!("unexpected result: {other:?}"),
         }
@@ -488,9 +495,9 @@ mod test {
 
         let stats = Arc::new(MockPruningStatistics::new_with_sets(
             "c",
-            mins,
-            maxs,
-            null_counts,
+            Some(mins),
+            Some(maxs),
+            Some(null_counts),
             None,
             Some(vec![Some(set_true), Some(set_false), Some(set_unknown)]),
         ));
@@ -519,13 +526,124 @@ mod test {
                 assert_eq!(
                     results,
                     vec![
-                        PruningResult::AlwaysTrue,
-                        PruningResult::AlwaysFalse,
+                        PruningResult::KeepAll,
+                        PruningResult::SkipAll,
                         PruningResult::Unknown
                     ]
                 );
             }
             other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn logical_or_prunes_combined_predicate() {
+        let num_containers = 3;
+        let mut stats = MultiColumnPruningStatistics::new(num_containers);
+
+        // a ranges
+        stats.mins.insert(
+            "a".to_string(),
+            ScalarValue::iter_to_array(vec![
+                ScalarValue::Int32(Some(2)),
+                ScalarValue::Int32(Some(0)),
+                ScalarValue::Int32(Some(0)),
+            ])
+            .unwrap(),
+        );
+        stats.maxs.insert(
+            "a".to_string(),
+            ScalarValue::iter_to_array(vec![
+                ScalarValue::Int32(Some(3)),
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Int32(Some(3)),
+            ])
+            .unwrap(),
+        );
+
+        // b null counts
+        stats.null_counts.insert(
+            "b".to_string(),
+            ScalarValue::iter_to_array(vec![
+                ScalarValue::UInt64(Some(0)),
+                ScalarValue::UInt64(Some(5)),
+                ScalarValue::UInt64(Some(1)),
+            ])
+            .unwrap(),
+        );
+        stats.row_counts.insert(
+            "b".to_string(),
+            ScalarValue::iter_to_array(vec![
+                ScalarValue::UInt64(Some(5)),
+                ScalarValue::UInt64(Some(5)),
+                ScalarValue::UInt64(Some(5)),
+            ])
+            .unwrap(),
+        );
+
+        // c value sets
+        let mut set_true = HashSet::new();
+        set_true.insert(ScalarValue::Utf8(Some("electronic".to_string())));
+
+        let mut set_false = HashSet::new();
+        set_false.insert(ScalarValue::Utf8(Some("chair".to_string())));
+
+        let mut set_unknown = HashSet::new();
+        set_unknown.insert(ScalarValue::Utf8(Some("book".to_string())));
+        set_unknown.insert(ScalarValue::Utf8(Some("pencil".to_string())));
+
+        stats.value_sets.insert(
+            "c".to_string(),
+            vec![Some(set_true), Some(set_false), Some(set_unknown)],
+        );
+
+        let ctx = Arc::new(PruningContext::new(Arc::new(stats)));
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Utf8, true),
+        ]);
+
+        let mult_expr = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Multiply,
+            lit(7),
+        ));
+        let a_gt = Arc::new(BinaryExpr::new(mult_expr, Operator::Gt, lit(10)));
+        let b_is_null = is_null(Arc::new(Column::new("b", 1))).unwrap();
+
+        let upper_udf = string::upper();
+        let upper_expr = ScalarFunctionExpr::try_new(
+            upper_udf,
+            vec![Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>],
+            &schema,
+            Arc::new(ConfigOptions::new()),
+        )
+        .unwrap();
+        let c_in_list = in_list(
+            Arc::new(upper_expr),
+            vec![lit("ELECTRONIC"), lit("BOOK")],
+            &false,
+            &schema,
+        )
+        .unwrap();
+
+        let left_or =
+            Arc::new(BinaryExpr::new(a_gt, Operator::Or, Arc::clone(&b_is_null)));
+        let predicate = BinaryExpr::new(left_or, Operator::Or, c_in_list);
+
+        match predicate.evaluate_pruning(ctx).unwrap() {
+            PruningIntermediate::IntermediateResult(results) => {
+                assert_eq!(
+                    results,
+                    vec![
+                        PruningResult::KeepAll,
+                        PruningResult::KeepAll,
+                        PruningResult::Unknown
+                    ]
+                );
+            }
+            other => panic!("unexpected pruning result: {other:?}"),
         }
     }
 }

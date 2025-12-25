@@ -122,9 +122,9 @@ impl PhysicalExpr for IsNullExpr {
                                         let n = null_counts.value(i);
                                         let r = row_counts.value(i);
                                         if n == 0 {
-                                            AlwaysFalse
+                                            SkipAll
                                         } else if n == r {
-                                            AlwaysTrue
+                                            KeepAll
                                         } else {
                                             Unknown
                                         }

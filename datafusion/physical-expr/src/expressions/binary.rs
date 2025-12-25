@@ -305,6 +305,11 @@ impl PhysicalExpr for BinaryExpr {
 
     fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
         use Operator::*;
+
+        if matches!(self.op, And | Or) {
+            return self.evaluate_logical_pruning(ctx);
+        }
+
         let is_cmp = matches!(self.op, Eq | NotEq | Lt | LtEq | Gt | GtEq);
         if !is_cmp {
             return self.default_pruning(ctx);
@@ -350,9 +355,9 @@ impl PhysicalExpr for BinaryExpr {
                         )
                         .unwrap_or(false);
                         let pruning = if res {
-                            PruningResult::AlwaysTrue
+                            PruningResult::KeepAll
                         } else {
-                            PruningResult::AlwaysFalse
+                            PruningResult::SkipAll
                         };
                         return Ok(PruningIntermediate::IntermediateResult(vec![
                             pruning,
@@ -375,8 +380,8 @@ impl PhysicalExpr for BinaryExpr {
         let mut results = Vec::with_capacity(l_range.len());
         for (l, r) in l_range.into_iter().zip(r_range.into_iter()) {
             let res = match compare_ranges(&self.op, &l, &r) {
-                Some(true) => PruningResult::AlwaysTrue,
-                Some(false) => PruningResult::AlwaysFalse,
+                Some(true) => PruningResult::KeepAll,
+                Some(false) => PruningResult::SkipAll,
                 None => PruningResult::Unknown,
             };
             results.push(res);
@@ -1035,7 +1040,66 @@ fn compare_ranges(
     }
 }
 
+fn stats_len(stats: &ColumnStats) -> Option<usize> {
+    stats
+        .range_stats()
+        .map(|s| s.len())
+        .or_else(|| stats.null_stats().map(|s| s.len()))
+        .or_else(|| stats.set_stats().map(|s| s.len()))
+}
+
+fn pruning_to_results(intermediate: &PruningIntermediate) -> Option<Vec<PruningResult>> {
+    match intermediate {
+        PruningIntermediate::IntermediateResult(results) => Some(results.clone()),
+        PruningIntermediate::IntermediateStats(stats) => {
+            stats_len(stats).map(|len| vec![PruningResult::Unknown; len])
+        }
+    }
+}
+
 impl BinaryExpr {
+    fn evaluate_logical_pruning(
+        &self,
+        ctx: Arc<PruningContext>,
+    ) -> Result<PruningIntermediate> {
+        use PruningResult::*;
+
+        let left = self.left.evaluate_pruning(Arc::clone(&ctx))?;
+        let right = self.right.evaluate_pruning(ctx)?;
+
+        let left_results = pruning_to_results(&left);
+        let right_results = pruning_to_results(&right);
+
+        match (left_results, right_results) {
+            (Some(mut l), Some(r)) => {
+                assert_eq_or_internal_err!(
+                    l.len(),
+                    r.len(),
+                    "Logical pruning inputs have mismatched lengths"
+                );
+
+                for (lres, rres) in l.iter_mut().zip(r.into_iter()) {
+                    *lres = match self.op {
+                        Operator::And => match (*lres, rres) {
+                            (SkipAll, _) | (_, SkipAll) => SkipAll,
+                            (KeepAll, KeepAll) => KeepAll,
+                            _ => Unknown,
+                        },
+                        Operator::Or => match (*lres, rres) {
+                            (KeepAll, _) | (_, KeepAll) => KeepAll,
+                            (SkipAll, SkipAll) => SkipAll,
+                            _ => Unknown,
+                        },
+                        _ => unreachable!("Logical pruning only handles AND/OR"),
+                    };
+                }
+
+                Ok(PruningIntermediate::IntermediateResult(l))
+            }
+            _ => Ok(PruningIntermediate::IntermediateResult(vec![Unknown])),
+        }
+    }
+
     #[allow(dead_code)]
     fn default_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
         let children = self.children();

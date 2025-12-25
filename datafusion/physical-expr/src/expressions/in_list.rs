@@ -895,10 +895,10 @@ impl PhysicalExpr for InListExpr {
                         let is_subset = values.iter().all(|v| list_values.contains(v));
                         let is_disjoint = values.iter().all(|v| !list_values.contains(v));
                         match (is_subset, is_disjoint, self.negated) {
-                            (true, _, false) => PruningResult::AlwaysTrue,
-                            (true, _, true) => PruningResult::AlwaysFalse,
-                            (_, true, false) => PruningResult::AlwaysFalse,
-                            (_, true, true) => PruningResult::AlwaysTrue,
+                            (true, _, false) => PruningResult::KeepAll,
+                            (true, _, true) => PruningResult::SkipAll,
+                            (_, true, false) => PruningResult::SkipAll,
+                            (_, true, true) => PruningResult::KeepAll,
                             _ => PruningResult::Unknown,
                         }
                     }
