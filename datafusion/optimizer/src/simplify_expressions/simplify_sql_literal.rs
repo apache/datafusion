@@ -24,7 +24,8 @@
 use crate::simplify_expressions::ExprSimplifier;
 use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::{
-    DFSchemaRef, DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
+    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr::Expr;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -53,27 +54,30 @@ use std::sync::Arc;
 /// ```
 pub fn parse_sql_literal<T>(
     expr: &ast::Expr,
-    schema: &DFSchemaRef,
     context: &mut dyn RelationPlannerContext,
 ) -> Result<T::Native>
 where
     T: ArrowPrimitiveType,
     <T as ArrowPrimitiveType>::Native: TryFrom<ScalarValue, Error = DataFusionError>,
 {
-    match context.sql_to_expr(expr.clone(), &Arc::clone(schema)) {
+    // Empty schema is sufficient because it parses only literal expressions
+    let schema = DFSchemaRef::new(DFSchema::empty());
+
+    match context.sql_to_expr(expr.clone(), &schema) {
         Ok(logical_expr) => {
             log::debug!("Parsing expr {:?} to type {}", logical_expr, T::DATA_TYPE);
 
             let execution_props = ExecutionProps::new();
             let simplifier = ExprSimplifier::new(
-                SimplifyContext::new(&execution_props).with_schema(Arc::clone(schema)),
+                SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
             );
 
             // Simplify and coerce expression in case of constant arithmetic operations (e.g., 10 + 5)
             let simplified_expr: Expr = simplifier
                 .simplify(logical_expr.clone())
                 .map_err(|err| plan_datafusion_err!("Cannot simplify {expr:?}: {err}"))?;
-            let coerced_expr: Expr = simplifier.coerce(simplified_expr, schema)?;
+            let coerced_expr: Expr =
+                simplifier.coerce(simplified_expr, schema.as_ref())?;
             log::debug!("Coerced expression: {:?}", &coerced_expr);
 
             match coerced_expr {
@@ -108,7 +112,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Float64Type, Int64Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{DFSchema, TableReference, not_impl_err};
+    use datafusion_common::{TableReference, not_impl_err};
     use datafusion_expr::planner::ContextProvider;
     use datafusion_expr::sqlparser::parser::Parser;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
@@ -181,7 +185,6 @@ mod tests {
             ("2.5e-1", 0.25),
         ];
 
-        let schema = DFSchemaRef::new(DFSchema::empty());
         let context = MockContextProvider {
             options: ConfigOptions::default(),
         };
@@ -199,7 +202,7 @@ mod tests {
                 .unwrap();
 
             let result: Result<f64> =
-                parse_sql_literal::<Float64Type>(&ast_expr, &schema, &mut sql_context);
+                parse_sql_literal::<Float64Type>(&ast_expr, &mut sql_context);
 
             match result {
                 Ok(value) => {
@@ -215,7 +218,6 @@ mod tests {
 
     #[test]
     fn test_parse_sql_integer_literal() {
-        let schema = DFSchemaRef::new(DFSchema::empty());
         let context = MockContextProvider {
             options: ConfigOptions::default(),
         };
@@ -233,7 +235,7 @@ mod tests {
             .unwrap();
 
         let result: Result<i64> =
-            parse_sql_literal::<Int64Type>(&ast_expr, &schema, &mut sql_context);
+            parse_sql_literal::<Int64Type>(&ast_expr, &mut sql_context);
 
         match result {
             Ok(value) => {
