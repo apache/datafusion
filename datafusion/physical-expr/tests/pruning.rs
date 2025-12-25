@@ -34,17 +34,13 @@ mod test {
         BinaryExpr, Column, in_list, is_null, lit,
     };
     use datafusion_physical_expr_common::physical_expr::{
-        ColumnStats, PruningContext, PruningIntermediate, PruningResult, RangeStats,
+        ColumnStats, NullPresence, PruningContext, PruningIntermediate, PruningResult,
+        RangeStats,
     };
 
     use crate::pruning_utils::{
         DummyStats, MockPruningStatistics, MultiColumnPruningStatistics,
     };
-
-    // #[test]
-    // fn column_ref_stat() {
-    //     let source_pruning_stat = MockPruningStatistics::new("a", Arc::new(Int32Array::from(vec![1,2,3])), Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])), null_counts, row_counts)
-    // }
 
     #[test]
     fn column_pruning_uses_parquet_stats() {
@@ -88,21 +84,10 @@ mod test {
                 let null_stats = stats.null_stats().expect("null stats");
                 assert_eq!(null_stats.len(), 2);
 
-                let null_counts = null_stats
-                    .null_counts()
-                    .expect("null counts")
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .unwrap();
-                assert_eq!(null_counts, &UInt64Array::from(vec![Some(0), Some(0)]));
-
-                let row_counts = null_stats
-                    .row_counts()
-                    .expect("row counts")
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
-                    .unwrap();
-                assert_eq!(row_counts, &UInt64Array::from(vec![Some(3), Some(3)]));
+                assert_eq!(
+                    null_stats.presence(),
+                    &[NullPresence::NoNull, NullPresence::NoNull]
+                );
             }
             other => panic!("expected stats, got {other:?}"),
         }

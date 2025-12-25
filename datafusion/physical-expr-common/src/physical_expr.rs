@@ -43,8 +43,8 @@ use itertools::izip;
 mod pruning;
 
 pub use pruning::{
-    ColumnStats, NullStats, PruningContext, PruningIntermediate, PruningResult,
-    RangeStats, SetStats,
+    ColumnStats, NullPresence, NullStats, PruningContext, PruningIntermediate,
+    PruningResult, RangeStats, SetStats,
 };
 
 /// Shared [`PhysicalExpr`].

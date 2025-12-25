@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
 
@@ -49,11 +49,21 @@ pub enum RangeStats {
     Scalar { value: ScalarValue, length: usize },
 }
 
+/// Summaries about whether a container has nulls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NullPresence {
+    /// Every row in the container is null.
+    AllNull,
+    /// No rows in the container are null.
+    NoNull,
+    /// Mixed values or insufficient information to decide.
+    Unknown,
+}
+
+/// Null-related statistics for each container.
 #[derive(Debug, Clone)]
 pub struct NullStats {
-    null_counts: Option<ArrayRef>,
-    row_counts: Option<ArrayRef>,
-    length: usize,
+    presence: Vec<NullPresence>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,23 +150,40 @@ impl NullStats {
                 "Row counts length mismatch for pruning statistics"
             );
         }
-        Ok(Self {
-            null_counts,
-            row_counts,
-            length,
-        })
+
+        let null_counts = null_counts
+            .as_ref()
+            .and_then(|counts| counts.as_any().downcast_ref::<arrow::array::UInt64Array>());
+        let row_counts = row_counts
+            .as_ref()
+            .and_then(|counts| counts.as_any().downcast_ref::<arrow::array::UInt64Array>());
+
+        let mut presence = Vec::with_capacity(length);
+        for idx in 0..length {
+            let nulls = null_counts
+                .and_then(|counts| (!counts.is_null(idx)).then(|| counts.value(idx)));
+            let rows = row_counts
+                .and_then(|counts| (!counts.is_null(idx)).then(|| counts.value(idx)));
+
+            let state = match (nulls, rows) {
+                (Some(0), Some(_)) => NullPresence::NoNull,
+                (Some(n), Some(r)) if n == r => NullPresence::AllNull,
+                (Some(0), None) => NullPresence::NoNull,
+                _ => NullPresence::Unknown,
+            };
+
+            presence.push(state);
+        }
+
+        Ok(Self { presence })
     }
 
     pub fn len(&self) -> usize {
-        self.length
+        self.presence.len()
     }
 
-    pub fn null_counts(&self) -> Option<&ArrayRef> {
-        self.null_counts.as_ref()
-    }
-
-    pub fn row_counts(&self) -> Option<&ArrayRef> {
-        self.row_counts.as_ref()
+    pub fn presence(&self) -> &[NullPresence] {
+        &self.presence
     }
 }
 

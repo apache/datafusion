@@ -18,7 +18,6 @@
 //! IS NULL expression
 
 use crate::PhysicalExpr;
-use arrow::array::{Array, UInt64Array};
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -27,7 +26,7 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    PruningContext, PruningIntermediate,
+    NullPresence, PruningContext, PruningIntermediate,
 };
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -103,41 +102,17 @@ impl PhysicalExpr for IsNullExpr {
         match child {
             PruningIntermediate::IntermediateStats(stats) => {
                 if let Some(null_stats) = stats.null_stats() {
-                    if let (Some(null_counts), Some(row_counts)) =
-                        (null_stats.null_counts(), null_stats.row_counts())
-                    {
-                        if let (Some(null_counts), Some(row_counts)) = (
-                            null_counts.as_any().downcast_ref::<UInt64Array>(),
-                            row_counts.as_any().downcast_ref::<UInt64Array>(),
-                        ) {
-                            let len = null_counts.len();
-                            if len == row_counts.len() {
-                                let mut results = Vec::with_capacity(len);
-                                for i in 0..len {
-                                    let res = if null_counts.is_null(i)
-                                        || row_counts.is_null(i)
-                                    {
-                                        Unknown
-                                    } else {
-                                        let n = null_counts.value(i);
-                                        let r = row_counts.value(i);
-                                        if n == 0 {
-                                            SkipAll
-                                        } else if n == r {
-                                            KeepAll
-                                        } else {
-                                            Unknown
-                                        }
-                                    };
-                                    results.push(res);
-                                }
+                    let results = null_stats
+                        .presence()
+                        .iter()
+                        .map(|presence| match presence {
+                            NullPresence::AllNull => KeepAll,
+                            NullPresence::NoNull => SkipAll,
+                            NullPresence::Unknown => Unknown,
+                        })
+                        .collect();
 
-                                return Ok(PruningIntermediate::IntermediateResult(
-                                    results,
-                                ));
-                            }
-                        }
-                    }
+                    return Ok(PruningIntermediate::IntermediateResult(results));
                 }
                 Ok(PruningIntermediate::IntermediateResult(vec![Unknown]))
             }
