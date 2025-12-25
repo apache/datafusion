@@ -29,7 +29,10 @@ use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
 use std::hint::black_box;
 use std::sync::Arc;
+use arrow_schema::{Schema, SchemaRef};
+use itertools::Itertools;
 use tokio::runtime::Runtime;
+use crate::data_utils::{create_large_non_nested_schema, create_nested_schema, create_table_provider_from_schema};
 
 #[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
@@ -48,12 +51,31 @@ fn create_context(
     Ok(Arc::new(Mutex::new(ctx)))
 }
 
+fn create_context_with_random_data_for_schema(
+    partitions_len: usize,
+    array_len: usize,
+    batch_size: usize,
+    schema: SchemaRef,
+) -> Result<Arc<Mutex<SessionContext>>> {
+    let ctx = SessionContext::new();
+    let provider = create_table_provider_from_schema(partitions_len, array_len, batch_size, schema)?;
+    ctx.register_table("t", provider)?;
+    Ok(Arc::new(Mutex::new(ctx)))
+}
+
+
 fn criterion_benchmark(c: &mut Criterion) {
     let partitions_len = 8;
     let array_len = 32768 * 2; // 2^16
     let batch_size = 2048; // 2^11
     let ctx = create_context(partitions_len, array_len, batch_size).unwrap();
     let rt = Runtime::new().unwrap();
+
+    let nested_ctx = create_context_with_random_data_for_schema(1, array_len, batch_size, create_nested_schema()).unwrap();
+    let nested_rt = Runtime::new().unwrap();
+
+    let large_non_nested_schema_ctx = create_context_with_random_data_for_schema(1, array_len, batch_size, create_large_non_nested_schema()).unwrap();
+    let large_non_nested_schema_rt = Runtime::new().unwrap();
 
     c.bench_function("aggregate_query_no_group_by 15 12", |b| {
         b.iter(|| {
@@ -188,6 +210,40 @@ fn criterion_benchmark(c: &mut Criterion) {
         },
     );
 
+    {
+        let column_names = get_all_columns_in_schema(&create_large_non_nested_schema());
+        let sql = format!("SELECT {column_names} FROM t GROUP BY {column_names}");
+        c.bench_function(
+            "aggregate_query_on_large_non_nested_schema",
+            |b| {
+                b.iter(|| {
+                    query(
+                        large_non_nested_schema_ctx.clone(),
+                        &large_non_nested_schema_rt,
+                        sql.as_str()
+                    )
+                })
+            },
+        );
+    }
+
+    {
+        let column_names = get_all_columns_in_schema(&create_nested_schema());
+        let sql = format!("SELECT {column_names} FROM t GROUP BY {column_names}");
+        c.bench_function(
+            "aggregate_query_on_complex_schema",
+            |b| {
+                b.iter(|| {
+                    query(
+                        nested_ctx.clone(),
+                        &nested_rt,
+                        sql.as_str()
+                    )
+                })
+            },
+        );
+    }
+
     c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
         b.iter(|| {
             query(
@@ -256,6 +312,14 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+}
+
+fn get_all_columns_in_schema(schema: &Schema) -> String {
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name())
+        .join(", ")
 }
 
 criterion_group!(benches, criterion_benchmark);
