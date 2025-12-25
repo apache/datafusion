@@ -195,26 +195,24 @@ impl ProjectionExec {
     }
 
     /// Collect reverse alias mapping from projection expressions.
-    /// The result hash map is a map from aliased Column in parent to original Column.
+    /// The result hash map is a map from aliased Column in parent to original expr.
     fn collect_reverse_alias(
         &self,
-    ) -> Result<datafusion_common::HashMap<Column, Column>> {
+    ) -> Result<datafusion_common::HashMap<Column, Arc<dyn PhysicalExpr>>> {
         let mut alias_map = datafusion_common::HashMap::new();
         for projection in self.projection_expr().iter() {
-            if let Some(col_expr) = projection.expr.as_any().downcast_ref::<Column>() {
-                let (aliased_index, _output_field) = self
-                    .projector
-                    .output_schema()
-                    .column_with_name(&projection.alias)
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(format!(
-                            "Column {:?} with alias {} not found in output schema",
-                            col_expr, projection.alias
-                        ))
-                    })?;
-                let aliased_col = Column::new(&projection.alias, aliased_index);
-                alias_map.insert(aliased_col, col_expr.clone());
-            }
+            let (aliased_index, _output_field) = self
+                .projector
+                .output_schema()
+                .column_with_name(&projection.alias)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Expr {} with alias {} not found in output schema",
+                        projection.expr, projection.alias
+                    ))
+                })?;
+            let aliased_col = Column::new(&projection.alias, aliased_index);
+            alias_map.insert(aliased_col, projection.expr.clone());
         }
         Ok(alias_map)
     }
@@ -373,17 +371,14 @@ impl ExecutionPlan for ProjectionExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // TODO: In future, we can try to handle inverting aliases here.
-        // For the time being, we pass through untransformed filters, so filters on aliases are not handled.
-        // https://github.com/apache/datafusion/issues/17246
-
+        // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
+
         let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
         let rewrited_filters = parent_filters
             .into_iter()
             .map(|filter| filter.rewrite(&mut rewriter).map(|t| t.data))
             .collect::<Result<Vec<_>>>()?;
-
         FilterDescription::from_children(rewrited_filters, &self.children())
     }
 
@@ -1129,7 +1124,9 @@ mod tests {
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
 
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, col};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, col, lit,
+    };
 
     #[test]
     fn test_collect_column_indices() -> Result<()> {
@@ -1546,9 +1543,8 @@ mod tests {
         // Should NOT be converted to "a + 1 > 10" because we don't support inverting complex expressions yet.
         // It should result in UnKnownColumn.
         let pushed_filters = &description.parent_filters()[0];
-        assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
-        let output_filter_str = format!("{}", pushed_filters[0].predicate);
-        assert!(output_filter_str.contains("z"));
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert_eq!(format!("{}", pushed_filters[0].predicate), "a@0 + 1 > 10");
 
         Ok(())
     }
@@ -1592,6 +1588,74 @@ mod tests {
         let output_filter_str = format!("{}", pushed_filters[0].predicate);
         // The column shouldn't be found in the alias map, so it should become UnKnownColumn
         assert!(output_filter_str.contains("unknown_col"));
+
+        Ok(())
+    }
+
+    /// Test that `DynamicFilterPhysicalExpr` can correctly update its child expression
+    /// i.e. starting with lit(true) and after update it becomes `a > 5`
+    /// with projection [b as a], the pushed down filter should be `b > 5`
+    #[test]
+    fn test_dyn_filter_projection_pushdown_update_child() -> Result<()> {
+        let input_schema =
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.as_ref().clone(),
+        ));
+
+        // project "b" as "a"
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: Arc::new(Column::new("b", 0)),
+                alias: "a".to_string(),
+            }],
+            input,
+        )?;
+
+        // simulate projection's parent create a dynamic filter on "a"
+        let projected_schema = projection.schema();
+        let col_a = col("a", &projected_schema)?;
+        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&col_a)],
+            lit(true),
+        ));
+        // Initial state should be lit(true)
+        let current = dynamic_filter.current()?;
+        assert_eq!(format!("{current}"), "true");
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![dynamic_filter.clone()],
+            &ConfigOptions::default(),
+        )?;
+
+        let pushed_filters = &description.parent_filters()[0][0];
+
+        // Check currently pushed_filters is lit(true)
+        assert_eq!(
+            format!("{}", pushed_filters.predicate),
+            "DynamicFilter [ empty ]"
+        );
+
+        // Update to a > 5 (after projection, b is now called a)
+        let new_expr =
+            Arc::new(BinaryExpr::new(Arc::clone(&col_a), Operator::Gt, lit(5i32)));
+        dynamic_filter.update(new_expr)?;
+
+        // Now it should be a > 5
+        let current = dynamic_filter.current()?;
+        assert_eq!(format!("{current}"), "a@0 > 5");
+
+        // Check currently pushed_filters is b > 5 (because b is projected as a)
+        assert_eq!(
+            format!("{}", pushed_filters.predicate),
+            "DynamicFilter [ b@0 > 5 ]"
+        );
 
         Ok(())
     }
