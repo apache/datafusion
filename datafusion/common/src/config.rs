@@ -310,6 +310,13 @@ config_namespace! {
         /// By default, `nulls_max` is used to follow Postgres's behavior.
         /// postgres rule: <https://www.postgresql.org/docs/current/queries-order.html>
         pub default_null_ordering: String, default = "nulls_max".to_string()
+
+        /// When set to true, ORDER BY clauses in subqueries and CTEs will be preserved
+        /// rather than being optimized away. By default this is false for SQL standard
+        /// compliance, as ORDER BY in subqueries has no guaranteed effect on the final
+        /// result ordering. Enable this if you need deterministic ordering within
+        /// subquery results, such as for streaming output or specific application requirements.
+        pub preserve_subquery_order: bool, default = false
     }
 }
 

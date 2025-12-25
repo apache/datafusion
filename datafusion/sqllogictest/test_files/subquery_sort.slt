@@ -174,3 +174,65 @@ b 5
 c 4
 d 1
 e 1
+
+
+###############################################
+# Tests for preserve_subquery_order config
+###############################################
+
+# Test that when preserve_subquery_order is enabled, ORDER BY in subqueries is preserved
+
+statement ok
+SET datafusion.sql_parser.preserve_subquery_order = true;
+
+# The sort should now be preserved in the logical and physical plans
+query TT
+EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2) AS ttt
+----
+logical_plan
+01)SubqueryAlias: ttt
+02)--Projection: sink_table.c1
+03)----Sort: sink_table.c2 ASC NULLS LAST
+04)------TableScan: sink_table projection=[c1, c2]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
+
+# Without alias should also preserve sort
+query TT
+EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2)
+----
+logical_plan
+01)Projection: sink_table.c1
+02)--Sort: sink_table.c2 ASC NULLS LAST
+03)----TableScan: sink_table projection=[c1, c2]
+physical_plan
+01)ProjectionExec: expr=[c1@0 as c1]
+02)--SortExec: expr=[c2@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
+
+# Test CTE with ORDER BY is preserved
+query TT
+EXPLAIN WITH t0 AS (SELECT c1, c2 FROM sink_table ORDER BY c2 DESC) SELECT * FROM t0
+----
+logical_plan
+01)SubqueryAlias: t0
+02)--Sort: sink_table.c2 DESC NULLS FIRST
+03)----TableScan: sink_table projection=[c1, c2]
+physical_plan
+01)SortExec: expr=[c2@1 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2], file_type=csv, has_header=true
+
+# Reset to default
+statement ok
+SET datafusion.sql_parser.preserve_subquery_order = false;
+
+# Verify that with default setting, subquery ORDER BY is still removed
+query TT
+EXPLAIN SELECT c1 FROM (SELECT c1 FROM sink_table ORDER BY c2) AS ttt
+----
+logical_plan
+01)SubqueryAlias: ttt
+02)--TableScan: sink_table projection=[c1]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true

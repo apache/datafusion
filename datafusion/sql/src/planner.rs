@@ -57,6 +57,8 @@ pub struct ParserOptions {
     pub map_string_types_to_utf8view: bool,
     /// Default null ordering for sorting expressions.
     pub default_null_ordering: NullOrdering,
+    /// Whether to preserve ORDER BY in subqueries and CTEs.
+    pub preserve_subquery_order: bool,
 }
 
 impl ParserOptions {
@@ -81,6 +83,7 @@ impl ParserOptions {
             // By default, `nulls_max` is used to follow Postgres's behavior.
             // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
             default_null_ordering: NullOrdering::NullsMax,
+            preserve_subquery_order: false,
         }
     }
 
@@ -141,6 +144,12 @@ impl ParserOptions {
         self.default_null_ordering = value;
         self
     }
+
+    /// Sets the `preserve_subquery_order` option.
+    pub fn with_preserve_subquery_order(mut self, value: bool) -> Self {
+        self.preserve_subquery_order = value;
+        self
+    }
 }
 
 impl Default for ParserOptions {
@@ -160,6 +169,7 @@ impl From<&SqlParserOptions> for ParserOptions {
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
             default_null_ordering: options.default_null_ordering.as_str().into(),
+            preserve_subquery_order: options.preserve_subquery_order,
         }
     }
 }

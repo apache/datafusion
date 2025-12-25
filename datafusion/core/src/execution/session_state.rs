@@ -532,6 +532,7 @@ impl SessionState {
                 .default_null_ordering
                 .as_str()
                 .into(),
+            preserve_subquery_order: sql_parser_options.preserve_subquery_order,
         }
     }
 

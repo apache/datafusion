@@ -97,7 +97,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
             };
 
-        let optimized_plan = optimize_subquery_sort(planned_relation.plan)?.data;
+        // Optionally skip the subquery sort optimization if preserve_subquery_order is enabled
+        let optimized_plan = if self.options.preserve_subquery_order {
+            planned_relation.plan
+        } else {
+            optimize_subquery_sort(planned_relation.plan)?.data
+        };
         if let Some(alias) = planned_relation.alias {
             self.apply_table_alias(optimized_plan, alias)
         } else {

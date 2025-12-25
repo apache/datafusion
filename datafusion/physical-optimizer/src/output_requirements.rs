@@ -306,10 +306,18 @@ impl PhysicalOptimizerRule for OutputRequirements {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        _config: &ConfigOptions,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match self.mode {
-            RuleMode::Add => require_top_ordering(plan),
+            RuleMode::Add => {
+                if config.sql_parser.preserve_subquery_order {
+                    // When preserve_subquery_order is enabled, wrap all sort-containing
+                    // subtrees with OutputRequirementExec at their relation boundaries
+                    require_all_orderings(plan)
+                } else {
+                    require_top_ordering(plan)
+                }
+            }
             RuleMode::Remove => plan
                 .transform_up(|plan| {
                     if let Some(sort_req) =
@@ -407,6 +415,63 @@ fn require_top_ordering_helper(
         // Stop searching, there is no global ordering desired for the query.
         Ok((plan, false))
     }
+}
+
+/// When preserve_subquery_order is enabled, this function wraps ALL sort-containing
+/// subtrees with OutputRequirementExec at their relation boundaries, not just the
+/// top-level sort. This ensures that ORDER BY clauses in subqueries and CTEs are
+/// preserved through physical optimization.
+fn require_all_orderings(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    // First, recursively process all children to wrap any nested sorts
+    let children = plan.children();
+    let new_children: Vec<Arc<dyn ExecutionPlan>> = children
+        .into_iter()
+        .map(|child| wrap_subtree_with_ordering(Arc::clone(child)))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Rebuild the plan with processed children
+    let plan = if new_children.is_empty() {
+        plan
+    } else {
+        plan.with_new_children(new_children)?
+    };
+
+    // Now wrap the top level (same as require_top_ordering)
+    let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
+    if is_changed {
+        Ok(new_plan)
+    } else {
+        Ok(Arc::new(OutputRequirementExec::new(
+            new_plan,
+            None,
+            Distribution::UnspecifiedDistribution,
+            None,
+        )) as _)
+    }
+}
+
+/// Recursively wraps subtrees that contain SortExec with OutputRequirementExec
+/// at the relation boundary (top of the sort-preserving chain).
+fn wrap_subtree_with_ordering(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    // First recursively process children
+    let children = plan.children();
+    let new_children: Vec<Arc<dyn ExecutionPlan>> = children
+        .into_iter()
+        .map(|child| wrap_subtree_with_ordering(Arc::clone(child)))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Rebuild with new children
+    let plan = if new_children.is_empty() {
+        plan
+    } else {
+        plan.with_new_children(new_children)?
+    };
+
+    // Now check if this subtree should be wrapped
+    let (wrapped_plan, _) = require_top_ordering_helper(plan)?;
+    Ok(wrapped_plan)
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
