@@ -30,7 +30,6 @@ use super::{
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::execution_plan::{
     InvariantLevel, boundedness_from_children, check_default_invariants,
@@ -39,6 +38,8 @@ use crate::execution_plan::{
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::metrics::BaselineMetrics;
 use crate::projection::{ProjectionExec, make_with_child};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -49,6 +50,8 @@ use datafusion_common::{
     Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
 use futures::Stream;
@@ -97,10 +100,11 @@ use tokio::macros::support::thread_rng_n;
 pub struct UnionExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl UnionExec {
@@ -117,8 +121,9 @@ impl UnionExec {
         let cache = Self::compute_properties(&inputs, schema).unwrap();
         UnionExec {
             inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -146,8 +151,9 @@ impl UnionExec {
                 let cache = Self::compute_properties(&inputs, schema).unwrap();
                 Ok(Arc::new(UnionExec {
                     inputs,
-                    metrics: ExecutionPlanMetricsSet::new(),
                     cache,
+                    #[cfg(not(feature = "stateless_plan"))]
+                    metrics: ExecutionPlanMetricsSet::new(),
                 }))
             }
         }
@@ -266,14 +272,20 @@ impl ExecutionPlan for UnionExec {
         &self,
         mut partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
         trace!(
             "Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
             context.session_id(),
             context.task_id()
         );
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
@@ -283,7 +295,7 @@ impl ExecutionPlan for UnionExec {
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, context)?;
+                let stream = execute_input!(0, input, partition, context, state)?;
                 debug!("Found a Union partition to execute");
                 return Ok(Box::pin(ObservedStream::new(
                     stream,
@@ -300,6 +312,7 @@ impl ExecutionPlan for UnionExec {
         exec_err!("Partition {partition} not found in Union")
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -408,10 +421,11 @@ impl ExecutionPlan for UnionExec {
 pub struct InterleaveExec {
     /// Input execution plan
     inputs: Vec<Arc<dyn ExecutionPlan>>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl InterleaveExec {
@@ -424,8 +438,9 @@ impl InterleaveExec {
         let cache = Self::compute_properties(&inputs)?;
         Ok(InterleaveExec {
             inputs,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -502,14 +517,20 @@ impl ExecutionPlan for InterleaveExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
         trace!(
             "Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
             context.session_id(),
             context.task_id()
         );
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
@@ -518,7 +539,9 @@ impl ExecutionPlan for InterleaveExec {
         let mut input_stream_vec = vec![];
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
-                input_stream_vec.push(input.execute(partition, Arc::clone(&context))?);
+                let stream =
+                    execute_input!(0, input, partition, Arc::clone(&context), state)?;
+                input_stream_vec.push(stream);
             } else {
                 // Do not find a partition to execute
                 break;
@@ -541,6 +564,7 @@ impl ExecutionPlan for InterleaveExec {
         exec_err!("Partition {partition} not found in InterleaveExec")
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

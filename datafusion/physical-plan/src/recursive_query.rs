@@ -25,22 +25,30 @@ use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
-};
+use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
+};
+#[cfg(feature = "stateless_plan")]
+use crate::{
+    state::{PlanState, PlanStateNode},
+    work_table::WorkTableExec,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+#[cfg(not(feature = "stateless_plan"))]
+use {
+    datafusion_common::tree_node::TransformedResult,
+    datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet},
+};
 
 use futures::{Stream, StreamExt, ready};
 
@@ -63,18 +71,43 @@ use futures::{Stream, StreamExt, ready};
 pub struct RecursiveQueryExec {
     /// Name of the query handler
     name: String,
-    /// The working table of cte
-    work_table: Arc<WorkTable>,
     /// The base part (static term)
     static_term: Arc<dyn ExecutionPlan>,
     /// The dynamic part (recursive term)
     recursive_term: Arc<dyn ExecutionPlan>,
     /// Distinction
     is_distinct: bool,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Plan state.
+    #[cfg(not(feature = "stateless_plan"))]
+    state: RecursiveQueryExecState,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
+}
+
+#[derive(Debug, Clone)]
+struct RecursiveQueryExecState {
+    /// The working table of cte.
+    work_table: Arc<WorkTable>,
+}
+
+impl RecursiveQueryExecState {
+    fn new(work_table: Arc<WorkTable>) -> Self {
+        Self { work_table }
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+impl PlanState for RecursiveQueryExecState {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn work_table(&self) -> Option<Arc<WorkTable>> {
+        Some(Arc::clone(&self.work_table))
+    }
 }
 
 impl RecursiveQueryExec {
@@ -86,18 +119,27 @@ impl RecursiveQueryExec {
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
+        #[cfg(not(feature = "stateless_plan"))]
         let work_table = Arc::new(WorkTable::new());
+
         // Use the same work table for both the WorkTableExec and the recursive term
+        #[cfg(not(feature = "stateless_plan"))]
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
+
+        #[cfg(feature = "stateless_plan")]
+        ensure_input_is_supported(Arc::clone(&recursive_term))?;
+
         let cache = Self::compute_properties(static_term.schema());
         Ok(RecursiveQueryExec {
             name,
             static_term,
             recursive_term,
             is_distinct,
-            work_table,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: RecursiveQueryExecState::new(work_table),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -185,7 +227,13 @@ impl ExecutionPlan for RecursiveQueryExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         // TODO: we might be able to handle multiple partitions in the future.
         if partition != 0 {
             return Err(internal_datafusion_err!(
@@ -193,18 +241,31 @@ impl ExecutionPlan for RecursiveQueryExec {
             ));
         }
 
-        let static_stream = self.static_term.execute(partition, Arc::clone(&context))?;
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        #[cfg(feature = "stateless_plan")]
+        let exec_state = state.get_or_init_state(|| {
+            RecursiveQueryExecState::new(Arc::new(WorkTable::new()))
+        });
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let exec_state = &self.state;
+
+        let static_stream =
+            execute_input!(0, self.static_term, partition, Arc::clone(&context), state)?;
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
         Ok(Box::pin(RecursiveQueryStream::new(
             context,
-            Arc::clone(&self.work_table),
+            Arc::clone(&exec_state.work_table),
             Arc::clone(&self.recursive_term),
             static_stream,
             self.is_distinct,
             baseline_metrics,
+            #[cfg(feature = "stateless_plan")]
+            Arc::clone(&state.plan_node),
         )?))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -277,6 +338,9 @@ struct RecursiveQueryStream {
     distinct_deduplicator: Option<DistinctDeduplicator>,
     /// Metrics.
     baseline_metrics: BaselineMetrics,
+    /// [`RecursiveQueryExec`] plan reference.
+    #[cfg(feature = "stateless_plan")]
+    parent_plan: Arc<dyn ExecutionPlan>,
 }
 
 impl RecursiveQueryStream {
@@ -288,6 +352,7 @@ impl RecursiveQueryStream {
         static_stream: SendableRecordBatchStream,
         is_distinct: bool,
         baseline_metrics: BaselineMetrics,
+        #[cfg(feature = "stateless_plan")] parent_plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
         let schema = static_stream.schema();
         let reservation =
@@ -306,6 +371,8 @@ impl RecursiveQueryStream {
             reservation,
             distinct_deduplicator,
             baseline_metrics,
+            #[cfg(feature = "stateless_plan")]
+            parent_plan,
         })
     }
 
@@ -356,13 +423,61 @@ impl RecursiveQueryStream {
         // Downstream plans should not expect any partitioning.
         let partition = 0;
 
-        let recursive_plan = reset_plan_states(Arc::clone(&self.recursive_term))?;
-        self.recursive_stream =
-            Some(recursive_plan.execute(partition, Arc::clone(&self.task_context))?);
+        #[cfg(feature = "stateless_plan")]
+        {
+            // Initialize a new state for the recursive term. This way we also pass
+            // work table into the recursive term.
+            // TODO: figure out how to merge metrics.
+            use crate::state::WithPlanStateNode;
+            let state = PlanStateNode::new_root_arc(Arc::clone(&self.parent_plan));
+            state.get_or_init_state(|| RecursiveQueryExecState {
+                work_table: Arc::clone(&self.work_table),
+            });
+            let raw_recursive_stream = self.recursive_term.execute(
+                partition,
+                Arc::clone(&self.task_context),
+                &state.child_state(1),
+            )?;
+            self.recursive_stream = Some(Box::pin(WithPlanStateNode::new(
+                raw_recursive_stream,
+                state,
+            )));
+        }
+
+        #[cfg(not(feature = "stateless_plan"))]
+        {
+            let recursive_plan = reset_plan_states(Arc::clone(&self.recursive_term))?;
+            self.recursive_stream =
+                Some(recursive_plan.execute(partition, Arc::clone(&self.task_context))?);
+        }
+
         self.poll_next(cx)
     }
 }
 
+#[cfg(feature = "stateless_plan")]
+fn ensure_input_is_supported(plan: Arc<dyn ExecutionPlan>) -> Result<()> {
+    let mut work_table_refs = 0;
+    plan.transform_down(|plan| {
+        if plan.as_any().is::<WorkTableExec>() {
+            if work_table_refs > 0 {
+                not_impl_err!(
+                    "Multiple recursive references to the same CTE are not supported"
+                )
+            } else {
+                work_table_refs += 1;
+                Ok(Transformed::no(plan))
+            }
+        } else if plan.as_any().is::<RecursiveQueryExec>() {
+            not_impl_err!("Recursive queries cannot be nested")
+        } else {
+            Ok(Transformed::no(plan))
+        }
+    })
+    .map(|_| ())
+}
+
+#[cfg(not(feature = "stateless_plan"))]
 fn assign_work_table(
     plan: Arc<dyn ExecutionPlan>,
     work_table: &Arc<WorkTable>,
@@ -395,6 +510,7 @@ fn assign_work_table(
 /// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
 /// However, if the data of the left table is derived from the work table, it will become outdated
 /// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+#[cfg(not(feature = "stateless_plan"))]
 fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
     plan.transform_up(|plan| {
         let new_plan = Arc::clone(&plan).reset_state()?;

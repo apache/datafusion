@@ -22,18 +22,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::metrics::BaselineMetrics;
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use crate::execution_plan::{Boundedness, CardinalityEffect};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{DisplayFormatType, Distribution, ExecutionPlan, Partitioning};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -48,9 +52,10 @@ pub struct GlobalLimitExec {
     /// Maximum number of rows to fetch,
     /// `None` means fetching all rows
     fetch: Option<usize>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl GlobalLimitExec {
@@ -61,8 +66,9 @@ impl GlobalLimitExec {
             input,
             skip,
             fetch,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -164,7 +170,13 @@ impl ExecutionPlan for GlobalLimitExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!("Start GlobalLimitExec::execute for partition: {partition}");
         // GlobalLimitExec has a single output partition
         assert_eq_or_internal_err!(
@@ -180,8 +192,9 @@ impl ExecutionPlan for GlobalLimitExec {
             "GlobalLimitExec requires a single input partition"
         );
 
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let stream = self.input.execute(0, context)?;
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
+        let stream = execute_input!(0, self.input, 0, context, state)?;
         Ok(Box::pin(LimitStream::new(
             stream,
             self.skip,
@@ -190,6 +203,7 @@ impl ExecutionPlan for GlobalLimitExec {
         )))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -220,9 +234,10 @@ pub struct LocalLimitExec {
     input: Arc<dyn ExecutionPlan>,
     /// Maximum number of rows to return
     fetch: usize,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl LocalLimitExec {
@@ -232,8 +247,9 @@ impl LocalLimitExec {
         Self {
             input,
             fetch,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -319,15 +335,22 @@ impl ExecutionPlan for LocalLimitExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!(
             "Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
             context.session_id(),
             context.task_id()
         );
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let stream = self.input.execute(partition, context)?;
+        let baseline_metrics =
+            BaselineMetrics::new(plan_metrics!(self, state), partition);
+        let stream = execute_input!(0, self.input, partition, context, state)?;
         Ok(Box::pin(LimitStream::new(
             stream,
             0,
@@ -336,6 +359,7 @@ impl ExecutionPlan for LocalLimitExec {
         )))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -493,12 +517,14 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common::collect;
+    use crate::execution_plan::execute_plan;
     use crate::test;
 
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use arrow::array::RecordBatchOptions;
     use arrow::datatypes::Schema;
     use datafusion_common::stats::Precision;
+    use datafusion_execution::metrics::ExecutionPlanMetricsSet;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
 
@@ -516,7 +542,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), 0, Some(7));
 
         // The result should contain 4 batches (one per input partition)
-        let iter = limit.execute(0, task_ctx)?;
+        let iter = execute_plan(Arc::new(limit), 0, task_ctx)?;
         let batches = collect(iter).await?;
 
         // There should be a total of 100 rows
@@ -632,7 +658,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(csv)), skip, fetch);
 
         // The result should contain 4 batches (one per input partition)
-        let iter = offset.execute(0, task_ctx)?;
+        let iter = execute_plan(Arc::new(offset), 0, task_ctx)?;
         let batches = collect(iter).await?;
         Ok(batches.iter().map(|batch| batch.num_rows()).sum())
     }

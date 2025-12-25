@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
@@ -24,6 +25,8 @@ use arrow::array::RecordBatch;
 use arrow_schema::{Fields, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
@@ -46,6 +49,7 @@ pub struct AsyncFuncExec {
     async_exprs: Vec<Arc<AsyncFuncExpr>>,
     input: Arc<dyn ExecutionPlan>,
     cache: PlanProperties,
+    #[cfg(not(feature = "stateless_plan"))]
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -80,6 +84,7 @@ impl AsyncFuncExec {
             input,
             async_exprs,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: ExecutionPlanMetricsSet::new(),
         })
     }
@@ -171,7 +176,13 @@ impl ExecutionPlan for AsyncFuncExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::execute_input;
+
         trace!(
             "Start AsyncFuncExpr::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
@@ -181,7 +192,8 @@ impl ExecutionPlan for AsyncFuncExec {
         // TODO figure out how to record metrics
 
         // first execute the input stream
-        let input_stream = self.input.execute(partition, Arc::clone(&context))?;
+        let input_stream =
+            execute_input!(0, self.input, partition, Arc::clone(&context), state)?;
 
         // now, for each record batch, evaluate the async expressions and add the columns to the result
         let async_exprs_captured = Arc::new(self.async_exprs.clone());
@@ -216,6 +228,7 @@ impl ExecutionPlan for AsyncFuncExec {
         Ok(Box::pin(adapter))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

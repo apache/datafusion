@@ -2987,7 +2987,7 @@ mod tests {
             .map(|c| Arc::new(c.clone()) as Arc<dyn PhysicalExpr>)
             .collect_vec();
         let dynamic_phys_expr =
-            Arc::new(DynamicFilterPhysicalExpr::new(children, phys_expr))
+            Arc::new(DynamicFilterPhysicalExpr::new(phys_expr, children))
                 as Arc<dyn PhysicalExpr>;
         // Simulate the partition value substitution that would happen in ParquetOpener
         let remapped_expr = dynamic_phys_expr
@@ -4682,7 +4682,7 @@ mod tests {
             true,
             // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
             true,
-            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate 
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate
             // original (min, max) maybe ("A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}\u{10ffff}\u{10ffff}")
             true,
         ];

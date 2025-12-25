@@ -50,10 +50,11 @@ impl GroupByMetrics {
 
 #[cfg(test)]
 mod tests {
+    use crate::ExecutionPlan;
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::execution_plan::collect_and_get_metrics_of;
     use crate::metrics::MetricsSet;
     use crate::test::TestMemoryExec;
-    use crate::{ExecutionPlan, collect};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -126,7 +127,7 @@ mod tests {
             ),
         ];
 
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
             aggregates,
@@ -136,10 +137,14 @@ mod tests {
         )?);
 
         let task_ctx = Arc::new(TaskContext::default());
-        let _result =
-            collect(Arc::clone(&aggregate_exec) as _, Arc::clone(&task_ctx)).await?;
+        let (_result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&aggregate_exec),
+            &aggregate_exec,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
-        let metrics = aggregate_exec.metrics().unwrap();
+        let metrics = metrics.unwrap();
         assert_groupby_metrics(&metrics);
 
         Ok(())
@@ -193,7 +198,7 @@ mod tests {
         )?);
 
         // Create final aggregate
-        let final_aggregate = Arc::new(AggregateExec::try_new(
+        let final_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             group_by.as_final(),
             aggregates,
@@ -203,10 +208,14 @@ mod tests {
         )?);
 
         let task_ctx = Arc::new(TaskContext::default());
-        let _result =
-            collect(Arc::clone(&final_aggregate) as _, Arc::clone(&task_ctx)).await?;
+        let (_result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&final_aggregate),
+            &final_aggregate,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
-        let metrics = final_aggregate.metrics().unwrap();
+        let metrics = metrics.unwrap();
         assert_groupby_metrics(&metrics);
 
         Ok(())

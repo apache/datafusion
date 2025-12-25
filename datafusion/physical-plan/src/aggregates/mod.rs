@@ -25,12 +25,16 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::dynamic_filter::{
+    DynamicFilterPhysicalExpr, PlannedDynamicFilterPhysicalExpr,
+};
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDownPredicate,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
@@ -49,10 +53,12 @@ use datafusion_common::{
     Constraint, Constraints, Result, ScalarValue, assert_eq_or_internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{Column, lit};
 use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
@@ -465,6 +471,30 @@ struct AggrDynFilter {
     supported_accumulators_info: Vec<PerAccumulatorDynFilter>,
 }
 
+/// Planning time version of [`AggrDynFilter`].
+#[derive(Debug)]
+struct PlannedAggrDynFilter {
+    filter: Arc<PlannedDynamicFilterPhysicalExpr>,
+    supported_accumulators_info: Vec<PlannedPerAccumulatorDynFilter>,
+}
+
+impl PlannedAggrDynFilter {
+    fn to_executable(&self) -> AggrDynFilter {
+        AggrDynFilter {
+            #[cfg(feature = "stateless_plan")]
+            filter: Arc::new(self.filter.to_executable()),
+            // Filter is already executable.
+            #[cfg(not(feature = "stateless_plan"))]
+            filter: Arc::clone(&self.filter),
+            supported_accumulators_info: self
+                .supported_accumulators_info
+                .iter()
+                .map(PlannedPerAccumulatorDynFilter::to_executable)
+                .collect(),
+        }
+    }
+}
+
 // ---- Aggregate Dynamic Filter Utility Structs ----
 
 /// Aggregate expressions that support the dynamic filter pushdown in aggregation.
@@ -482,8 +512,27 @@ struct PerAccumulatorDynFilter {
     shared_bound: Arc<Mutex<ScalarValue>>,
 }
 
+/// Planning time version of the [`PerAccumulatorDynFilter`].
+#[derive(Debug)]
+struct PlannedPerAccumulatorDynFilter {
+    aggr_type: DynamicFilterAggregateType,
+    /// During planning and optimization, the parent structure is kept in `AggregateExec`,
+    /// this index is into `aggr_expr` vec inside `AggregateExec`.
+    aggr_index: usize,
+}
+
+impl PlannedPerAccumulatorDynFilter {
+    fn to_executable(&self) -> PerAccumulatorDynFilter {
+        PerAccumulatorDynFilter {
+            aggr_type: self.aggr_type,
+            aggr_index: self.aggr_index,
+            shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
+        }
+    }
+}
+
 /// Aggregate types that are supported for dynamic filter in `AggregateExec`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum DynamicFilterAggregateType {
     Min,
     Max,
@@ -512,8 +561,6 @@ pub struct AggregateExec {
     /// We need the input schema of partial aggregate to be able to deserialize aggregate
     /// expressions from protobuf for final aggregate.
     pub input_schema: SchemaRef,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
@@ -524,8 +571,43 @@ pub struct AggregateExec {
     /// During filter pushdown optimization, if a child node can accept this filter,
     /// it remains `Some(..)` to enable dynamic filtering during aggregate execution;
     /// otherwise, it is cleared to `None`.
-    dynamic_filter: Option<Arc<AggrDynFilter>>,
+    dynamic_filter: Option<Arc<PlannedAggrDynFilter>>,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
+
+#[cfg(feature = "stateless_plan")]
+mod exec_state {
+    use super::{AggrDynFilter, Any, Arc, DynamicFilterPhysicalExpr};
+    use crate::state::PlanState;
+
+    #[derive(Debug, Default, Clone)]
+    pub struct AggregateExecState {
+        /// Originated from [`AggregateExec::dynamic_filter`] on execution stage.
+        /// It is not stored in the case of stateful plan as in this case planned and executable
+        /// filters are the same and filter is stored directly in [`AggregateExec`].
+        #[cfg(feature = "stateless_plan")]
+        pub dynamic_filter: Option<Arc<AggrDynFilter>>,
+    }
+
+    impl PlanState for AggregateExecState {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn dynamic_filters(&self) -> Vec<Arc<DynamicFilterPhysicalExpr>> {
+            if let Some(dynamic_filter) = self.dynamic_filter.as_ref() {
+                vec![Arc::clone(&dynamic_filter.filter)]
+            } else {
+                vec![]
+            }
+        }
+    }
+}
+
+#[cfg(feature = "stateless_plan")]
+use exec_state::AggregateExecState;
 
 impl AggregateExec {
     /// Function used in `OptimizeAggregateOrder` optimizer rule,
@@ -539,7 +621,6 @@ impl AggregateExec {
             aggr_expr,
             // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
             mode: self.mode,
@@ -550,6 +631,8 @@ impl AggregateExec {
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
             dynamic_filter: self.dynamic_filter.clone(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -674,12 +757,13 @@ impl AggregateExec {
             input,
             schema,
             input_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
             limit: None,
             input_order_mode,
             cache,
             dynamic_filter: None,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         };
 
         exec.init_dynamic_filter();
@@ -736,10 +820,35 @@ impl AggregateExec {
         &self,
         partition: usize,
         context: &Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<StreamType> {
         if self.group_by.is_true_no_grouping() {
+            // Make an executable filter and put it into state.
+            #[cfg(feature = "stateless_plan")]
+            let dynamic_filter = state
+                .get_or_init_state(|| AggregateExecState {
+                    dynamic_filter: self
+                        .dynamic_filter
+                        .as_ref()
+                        .map(|filter| Arc::new(filter.to_executable())),
+                })
+                .dynamic_filter
+                .clone();
+
+            // Get filter from self.
+            #[cfg(not(feature = "stateless_plan"))]
+            let dynamic_filter = self
+                .dynamic_filter
+                .clone()
+                .map(|f| Arc::new(f.to_executable()));
+
             return Ok(StreamType::AggregateStream(AggregateStream::new(
-                self, context, partition,
+                self,
+                context,
+                partition,
+                dynamic_filter,
+                #[cfg(feature = "stateless_plan")]
+                state,
             )?));
         }
 
@@ -748,13 +857,24 @@ impl AggregateExec {
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
             return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                GroupedTopKAggregateStream::new(
+                    self,
+                    context,
+                    partition,
+                    limit,
+                    #[cfg(feature = "stateless_plan")]
+                    state,
+                )?,
             ));
         }
 
         // grouping by something else and we need to just materialize all results
         Ok(StreamType::GroupedHash(GroupedHashAggregateStream::new(
-            self, context, partition,
+            self,
+            context,
+            partition,
+            #[cfg(feature = "stateless_plan")]
+            state,
         )?))
     }
 
@@ -988,17 +1108,19 @@ impl AggregateExec {
                 && arg.as_any().is::<Column>()
             {
                 all_cols.push(Arc::clone(arg));
-                aggr_dyn_filters.push(PerAccumulatorDynFilter {
+                aggr_dyn_filters.push(PlannedPerAccumulatorDynFilter {
                     aggr_type,
                     aggr_index: i,
-                    shared_bound: Arc::new(Mutex::new(ScalarValue::Null)),
                 });
             }
         }
 
         if !aggr_dyn_filters.is_empty() {
-            self.dynamic_filter = Some(Arc::new(AggrDynFilter {
-                filter: Arc::new(DynamicFilterPhysicalExpr::new(all_cols, lit(true))),
+            self.dynamic_filter = Some(Arc::new(PlannedAggrDynFilter {
+                filter: Arc::new(PlannedDynamicFilterPhysicalExpr::new(
+                    lit(true),
+                    all_cols,
+                )),
                 supported_accumulators_info: aggr_dyn_filters,
             }))
         }
@@ -1224,11 +1346,18 @@ impl ExecutionPlan for AggregateExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
-        self.execute_typed(partition, &context)
-            .map(|stream| stream.into())
+        self.execute_typed(
+            partition,
+            &context,
+            #[cfg(feature = "stateless_plan")]
+            state,
+        )
+        .map(|stream| stream.into())
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1808,6 +1937,8 @@ mod tests {
     use crate::common;
     use crate::common::collect;
     use crate::execution_plan::Boundedness;
+    use crate::execution_plan::collect_and_get_metrics_of;
+    use crate::execution_plan::execute_plan;
     use crate::expressions::col;
     use crate::metrics::MetricValue;
     use crate::test::TestMemoryExec;
@@ -1824,6 +1955,7 @@ mod tests {
     use datafusion_common::{DataFusionError, ScalarValue, internal_err};
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::FairSpillPool;
+    use datafusion_execution::metrics::MetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::array_agg::array_agg_udaf;
     use datafusion_functions_aggregate::average::avg_udaf;
@@ -1986,7 +2118,7 @@ mod tests {
             Arc::new(TaskContext::default())
         };
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -1995,8 +2127,12 @@ mod tests {
             Arc::clone(&input_schema),
         )?);
 
-        let result =
-            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result = collect(execute_plan(
+            Arc::clone(&partial_aggregate),
+            0,
+            Arc::clone(&task_ctx),
+        )?)
+        .await?;
 
         if spill {
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
@@ -2066,7 +2202,7 @@ mod tests {
             task_ctx
         };
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
+        let merged_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -2075,7 +2211,12 @@ mod tests {
             input_schema,
         )?);
 
-        let result = collect(merged_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&merged_aggregate),
+            &merged_aggregate,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 4);
         assert_eq!(batch.num_rows(), 12);
@@ -2104,7 +2245,7 @@ mod tests {
         );
         }
 
-        let metrics = merged_aggregate.metrics().unwrap();
+        let metrics = metrics.unwrap();
         let output_rows = metrics.output_rows().unwrap();
         assert_eq!(12, output_rows);
 
@@ -2136,7 +2277,7 @@ mod tests {
             Arc::new(TaskContext::default())
         };
 
-        let partial_aggregate = Arc::new(AggregateExec::try_new(
+        let partial_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             grouping_set.clone(),
             aggregates.clone(),
@@ -2145,8 +2286,12 @@ mod tests {
             Arc::clone(&input_schema),
         )?);
 
-        let result =
-            collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let result = collect(execute_plan(
+            Arc::clone(&partial_aggregate),
+            0,
+            Arc::clone(&task_ctx),
+        )?)
+        .await?;
 
         if spill {
             allow_duplicates! {
@@ -2180,7 +2325,7 @@ mod tests {
 
         let final_grouping_set = grouping_set.as_final();
 
-        let merged_aggregate = Arc::new(AggregateExec::try_new(
+        let merged_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             final_grouping_set,
             aggregates,
@@ -2199,7 +2344,12 @@ mod tests {
         } else {
             Arc::clone(&task_ctx)
         };
-        let result = collect(merged_aggregate.execute(0, task_ctx)?).await?;
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&merged_aggregate),
+            &merged_aggregate,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
         let batch = concat_batches(&result[0].schema(), &result)?;
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.num_rows(), 3);
@@ -2218,7 +2368,7 @@ mod tests {
             // For row 3: 4, (3 + 4 + 4) / 3
         }
 
-        let metrics = merged_aggregate.metrics().unwrap();
+        let metrics = metrics.unwrap();
         let output_rows = metrics.output_rows().unwrap();
         let spill_count = metrics.spill_count().unwrap();
         let spilled_bytes = metrics.spilled_bytes().unwrap();
@@ -2316,6 +2466,7 @@ mod tests {
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
+            #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
         ) -> Result<SendableRecordBatchStream> {
             let stream = if self.yield_first {
                 TestYieldingStream::New
@@ -2494,6 +2645,14 @@ mod tests {
                 Arc::clone(&input_schema),
             )?);
 
+            #[cfg(feature = "stateless_plan")]
+            let state =
+                PlanStateNode::new_root_arc(Arc::clone(&partial_aggregate) as Arc<_>);
+
+            #[cfg(feature = "stateless_plan")]
+            let stream = partial_aggregate.execute_typed(0, &task_ctx, &state)?;
+
+            #[cfg(not(feature = "stateless_plan"))]
             let stream = partial_aggregate.execute_typed(0, &task_ctx)?;
 
             // ensure that we really got the version we wanted
@@ -2943,8 +3102,12 @@ mod tests {
             schema,
         )?);
 
-        let output =
-            collect(aggregate_exec.execute(0, Arc::new(TaskContext::default()))?).await?;
+        let output = collect(execute_plan(
+            aggregate_exec,
+            0,
+            Arc::new(TaskContext::default()),
+        )?)
+        .await?;
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&output), @r"
@@ -3059,7 +3222,7 @@ mod tests {
 
         let session_config = SessionConfig::default();
         let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+        let output = collect(execute_plan(aggregate_exec, 0, Arc::new(ctx))?).await?;
 
         allow_duplicates! {
         assert_snapshot!(batches_to_string(&output), @r"
@@ -3134,7 +3297,7 @@ mod tests {
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+        let output = collect(execute_plan(aggregate_exec, 0, Arc::new(ctx))?).await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
@@ -3221,7 +3384,7 @@ mod tests {
         );
 
         let ctx = TaskContext::default().with_session_config(session_config);
-        let output = collect(aggregate_exec.execute(0, Arc::new(ctx))?).await?;
+        let output = collect(execute_plan(aggregate_exec, 0, Arc::new(ctx))?).await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&output), @r"
@@ -3344,7 +3507,7 @@ mod tests {
             ),
         ];
 
-        let single_aggregate = Arc::new(AggregateExec::try_new(
+        let single_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
             grouping_set,
             aggregates,
@@ -3365,9 +3528,14 @@ mod tests {
                 )),
         );
 
-        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&single_aggregate),
+            &single_aggregate,
+            Arc::clone(&task_ctx),
+        )
+        .await?;
 
-        assert_spill_count_metric(expect_spill, single_aggregate);
+        assert_spill_count_metric(expect_spill, metrics);
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
@@ -3384,11 +3552,8 @@ mod tests {
         Ok(())
     }
 
-    fn assert_spill_count_metric(
-        expect_spill: bool,
-        single_aggregate: Arc<AggregateExec>,
-    ) {
-        if let Some(metrics_set) = single_aggregate.metrics() {
+    fn assert_spill_count_metric(expect_spill: bool, metrics: Option<MetricsSet>) {
+        if let Some(metrics_set) = metrics {
             let mut spill_count = 0;
 
             // Inspect metrics for SpillCount
@@ -3489,7 +3654,7 @@ mod tests {
             ),
         ];
 
-        let single_aggregate = Arc::new(AggregateExec::try_new(
+        let single_aggregate: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
             grouping_set,
             aggregates,
@@ -3510,10 +3675,15 @@ mod tests {
                 )),
         );
 
-        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
+        let result = collect_and_get_metrics_of(
+            Arc::clone(&single_aggregate),
+            &single_aggregate,
+            Arc::clone(&task_ctx),
+        )
+        .await;
         match result {
-            Ok(result) => {
-                assert_spill_count_metric(true, single_aggregate);
+            Ok((result, metrics)) => {
+                assert_spill_count_metric(true, metrics);
 
                 allow_duplicates! {
                     assert_snapshot!(batches_to_string(&result), @r"
@@ -3649,7 +3819,7 @@ mod tests {
             .unwrap(),
         ])?;
 
-        let aggr = Arc::new(AggregateExec::try_new(
+        let aggr: Arc<dyn ExecutionPlan> = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
             PhysicalGroupBy::new(
                 vec![
@@ -3672,8 +3842,10 @@ mod tests {
         )?);
 
         let task_ctx = new_spill_ctx(1, 600);
-        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
-        assert_spill_count_metric(true, aggr);
+        let (result, metrics) =
+            collect_and_get_metrics_of(Arc::clone(&aggr), &aggr, Arc::clone(&task_ctx))
+                .await?;
+        assert_spill_count_metric(true, metrics);
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"

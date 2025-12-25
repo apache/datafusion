@@ -51,6 +51,7 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use insta::{allow_duplicates, assert_snapshot};
 
 use crate::{
+    execution_plan::{execute_plan, execute_plan_and_get_metrics_of},
     expressions::Column,
     joins::sort_merge_join::stream::{JoinedRecordBatches, get_corrected_filter_mask},
 };
@@ -304,7 +305,7 @@ async fn join_collect_with_filter(
     )?;
     let columns = columns(&join.schema());
 
-    let stream = join.execute(0, task_ctx)?;
+    let stream = execute_plan(Arc::new(join), 0, task_ctx)?;
     let batches = common::collect(stream).await?;
     Ok((columns, batches))
 }
@@ -322,7 +323,7 @@ async fn join_collect_with_options(
         join_with_options(left, right, on, join_type, sort_options, null_equality)?;
     let columns = columns(&join.schema());
 
-    let stream = join.execute(0, task_ctx)?;
+    let stream = execute_plan(Arc::new(join), 0, task_ctx)?;
     let batches = common::collect(stream).await?;
     Ok((columns, batches))
 }
@@ -339,7 +340,7 @@ async fn join_collect_batch_size_equals_two(
     let join = join(left, right, on, join_type)?;
     let columns = columns(&join.schema());
 
-    let stream = join.execute(0, task_ctx)?;
+    let stream = execute_plan(Arc::new(join), 0, task_ctx)?;
     let batches = common::collect(stream).await?;
     Ok((columns, batches))
 }
@@ -2075,25 +2076,27 @@ async fn overallocation_single_batch_no_spill() -> Result<()> {
             .with_runtime(Arc::clone(&runtime));
         let task_ctx = Arc::new(task_ctx);
 
-        let join = join_with_options(
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
-        )?;
+        )?);
 
-        let stream = join.execute(0, task_ctx)?;
+        let (stream, metrics) =
+            execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
 
         assert_contains!(err.to_string(), "Failed to allocate additional");
         assert_contains!(err.to_string(), "SMJStream[0]");
         assert_contains!(err.to_string(), "Disk spilling disabled");
-        assert!(join.metrics().is_some());
-        assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-        assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-        assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+
+        let metrics = metrics.unwrap();
+        assert_eq!(metrics.spill_count(), Some(0));
+        assert_eq!(metrics.spilled_bytes(), Some(0));
+        assert_eq!(metrics.spilled_rows(), Some(0));
     }
 
     Ok(())
@@ -2155,25 +2158,27 @@ async fn overallocation_multi_batch_no_spill() -> Result<()> {
             .with_session_config(session_config.clone())
             .with_runtime(Arc::clone(&runtime));
         let task_ctx = Arc::new(task_ctx);
-        let join = join_with_options(
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             join_type,
             sort_options.clone(),
             NullEquality::NullEqualsNothing,
-        )?;
+        )?);
 
-        let stream = join.execute(0, task_ctx)?;
+        let (stream, metrics) =
+            execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, task_ctx)?;
         let err = common::collect(stream).await.unwrap_err();
 
         assert_contains!(err.to_string(), "Failed to allocate additional");
         assert_contains!(err.to_string(), "SMJStream[0]");
         assert_contains!(err.to_string(), "Disk spilling disabled");
-        assert!(join.metrics().is_some());
-        assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-        assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-        assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+
+        let metrics = metrics.unwrap();
+        assert_eq!(metrics.spill_count(), Some(0));
+        assert_eq!(metrics.spilled_bytes(), Some(0));
+        assert_eq!(metrics.spilled_rows(), Some(0));
     }
 
     Ok(())
@@ -2218,43 +2223,49 @@ async fn overallocation_single_batch_spill() -> Result<()> {
                 .with_runtime(Arc::clone(&runtime));
             let task_ctx = Arc::new(task_ctx);
 
-            let join = join_with_options(
+            let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
                 *join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
-            )?;
+            )?);
 
-            let stream = join.execute(0, task_ctx)?;
+            let (stream, metrics) =
+                execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, task_ctx)?;
             let spilled_join_result = common::collect(stream).await.unwrap();
 
-            assert!(join.metrics().is_some());
-            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+            let metrics = metrics.unwrap();
+            assert!(metrics.spill_count().unwrap() > 0);
+            assert!(metrics.spilled_bytes().unwrap() > 0);
+            assert!(metrics.spilled_rows().unwrap() > 0);
 
             // Run the test with no spill configuration as
             let task_ctx_no_spill =
                 TaskContext::default().with_session_config(session_config.clone());
             let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
 
-            let join = join_with_options(
+            let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
                 *join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+            )?);
+            let (stream, metrics) = execute_plan_and_get_metrics_of(
+                Arc::clone(&join),
+                &join,
+                0,
+                task_ctx_no_spill,
             )?;
-            let stream = join.execute(0, task_ctx_no_spill)?;
             let no_spilled_join_result = common::collect(stream).await.unwrap();
 
-            assert!(join.metrics().is_some());
-            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            let metrics = metrics.unwrap();
+            assert_eq!(metrics.spill_count(), Some(0));
+            assert_eq!(metrics.spilled_bytes(), Some(0));
+            assert_eq!(metrics.spilled_rows(), Some(0));
             // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
             assert_eq!(spilled_join_result, no_spilled_join_result);
         }
@@ -2321,42 +2332,48 @@ async fn overallocation_multi_batch_spill() -> Result<()> {
                 .with_session_config(session_config.clone())
                 .with_runtime(Arc::clone(&runtime));
             let task_ctx = Arc::new(task_ctx);
-            let join = join_with_options(
+            let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
                 *join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
-            )?;
+            )?);
 
-            let stream = join.execute(0, task_ctx)?;
+            let (stream, metrics) =
+                execute_plan_and_get_metrics_of(Arc::clone(&join), &join, 0, task_ctx)?;
             let spilled_join_result = common::collect(stream).await.unwrap();
-            assert!(join.metrics().is_some());
-            assert!(join.metrics().unwrap().spill_count().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_bytes().unwrap() > 0);
-            assert!(join.metrics().unwrap().spilled_rows().unwrap() > 0);
+            let metrics = metrics.unwrap();
+            assert!(metrics.spill_count().unwrap() > 0);
+            assert!(metrics.spilled_bytes().unwrap() > 0);
+            assert!(metrics.spilled_rows().unwrap() > 0);
 
             // Run the test with no spill configuration as
             let task_ctx_no_spill =
                 TaskContext::default().with_session_config(session_config.clone());
             let task_ctx_no_spill = Arc::new(task_ctx_no_spill);
 
-            let join = join_with_options(
+            let join: Arc<dyn ExecutionPlan> = Arc::new(join_with_options(
                 Arc::clone(&left),
                 Arc::clone(&right),
                 on.clone(),
                 *join_type,
                 sort_options.clone(),
                 NullEquality::NullEqualsNothing,
+            )?);
+            let (stream, metrics) = execute_plan_and_get_metrics_of(
+                Arc::clone(&join),
+                &join,
+                0,
+                task_ctx_no_spill,
             )?;
-            let stream = join.execute(0, task_ctx_no_spill)?;
             let no_spilled_join_result = common::collect(stream).await.unwrap();
 
-            assert!(join.metrics().is_some());
-            assert_eq!(join.metrics().unwrap().spill_count(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_bytes(), Some(0));
-            assert_eq!(join.metrics().unwrap().spilled_rows(), Some(0));
+            let metrics = metrics.unwrap();
+            assert_eq!(metrics.spill_count(), Some(0));
+            assert_eq!(metrics.spilled_bytes(), Some(0));
+            assert_eq!(metrics.spilled_rows(), Some(0));
             // Compare spilled and non spilled data to check spill logic doesn't corrupt the data
             assert_eq!(spilled_join_result, no_spilled_join_result);
         }

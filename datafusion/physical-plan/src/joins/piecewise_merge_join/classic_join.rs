@@ -655,6 +655,7 @@ mod tests {
     use super::*;
     use crate::{
         ExecutionPlan, common,
+        execution_plan::execute_plan,
         joins::PiecewiseMergeJoinExec,
         test::{TestMemoryExec, build_table_i32},
     };
@@ -762,7 +763,7 @@ mod tests {
         let join = join(left, right, on, operator, join_type)?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0, task_ctx)?;
+        let stream = execute_plan(Arc::new(join), 0, task_ctx)?;
         let batches = common::collect(stream).await?;
         Ok((columns, batches))
     }

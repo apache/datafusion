@@ -32,11 +32,12 @@ use crate::joins::utils::{
     estimate_join_statistics, reorder_output_after_swap,
     symmetric_join_output_partitioning,
 };
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -50,6 +51,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
@@ -116,8 +119,6 @@ pub struct SortMergeJoinExec {
     pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// The left SortExpr
     left_sort_exprs: LexOrdering,
     /// The right SortExpr
@@ -128,6 +129,9 @@ pub struct SortMergeJoinExec {
     pub null_equality: NullEquality,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl SortMergeJoinExec {
@@ -193,12 +197,13 @@ impl SortMergeJoinExec {
             filter,
             join_type,
             schema,
-            metrics: ExecutionPlanMetricsSet::new(),
             left_sort_exprs,
             right_sort_exprs,
             sort_options,
             null_equality,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -458,7 +463,13 @@ impl ExecutionPlan for SortMergeJoinExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
         assert_eq_or_internal_err!(
@@ -468,13 +479,14 @@ impl ExecutionPlan for SortMergeJoinExec {
                  consider using RepartitionExec"
         );
         let (on_left, on_right) = self.on.iter().cloned().unzip();
-        let (streamed, buffered, on_streamed, on_buffered) =
+        let (streamed, buffered, on_streamed, on_buffered, streamed_child_num) =
             if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {
                 (
                     Arc::clone(&self.left),
                     Arc::clone(&self.right),
                     on_left,
                     on_right,
+                    0,
                 )
             } else {
                 (
@@ -482,12 +494,27 @@ impl ExecutionPlan for SortMergeJoinExec {
                     Arc::clone(&self.left),
                     on_right,
                     on_left,
+                    1,
                 )
             };
 
         // execute children plans
-        let streamed = streamed.execute(partition, Arc::clone(&context))?;
-        let buffered = buffered.execute(partition, Arc::clone(&context))?;
+        let streamed = execute_input!(
+            streamed_child_num,
+            streamed,
+            partition,
+            Arc::clone(&context),
+            state
+        )?;
+        let buffered = execute_input!(
+            1 - streamed_child_num,
+            buffered,
+            partition,
+            Arc::clone(&context),
+            state
+        )?;
+
+        let _ = streamed_child_num;
 
         // create output buffer
         let batch_size = context.session_config().batch_size();
@@ -509,12 +536,13 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.filter.clone(),
             self.join_type,
             batch_size,
-            SortMergeJoinMetrics::new(partition, &self.metrics),
+            SortMergeJoinMetrics::new(partition, plan_metrics!(self, state)),
             reservation,
             context.runtime_env(),
         )?))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

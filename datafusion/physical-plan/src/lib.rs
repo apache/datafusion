@@ -43,10 +43,12 @@ pub use datafusion_physical_expr::{
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+#[cfg(not(feature = "stateless_plan"))]
+pub use crate::execution_plan::execute_input_stream;
 pub use crate::execution_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
-    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
-    get_plan_string, with_new_children_if_necessary,
+    displayable, execute_stream, execute_stream_partitioned, get_plan_string,
+    with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
@@ -57,6 +59,7 @@ pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
+mod dynamic_filter;
 mod ordering;
 mod render_tree;
 mod topk;
@@ -87,6 +90,8 @@ pub mod repartition;
 pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
+#[cfg(feature = "stateless_plan")]
+pub mod state;
 pub mod stream;
 pub mod streaming;
 pub mod tree_node;

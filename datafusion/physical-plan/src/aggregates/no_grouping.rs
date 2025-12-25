@@ -22,6 +22,8 @@ use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -274,12 +276,19 @@ impl AggregateStream {
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
+        maybe_dynamic_filter: Option<Arc<AggrDynFilter>>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         let agg_schema = Arc::clone(&agg.schema);
         let agg_filter_expr = agg.filter_expr.clone();
 
-        let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let input = agg.input.execute(partition, Arc::clone(context))?;
+        let baseline_metrics = BaselineMetrics::new(plan_metrics!(agg, state), partition);
+        let input = execute_input!(0, agg.input, partition, Arc::clone(context), state)?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
         let filter_expressions = match agg.mode {
@@ -299,19 +308,16 @@ impl AggregateStream {
         // 1. AggregateExec did the check and ensure it supports the dynamic filter
         //    (its dynamic_filter field will be Some(..))
         // 2. Aggregate dynamic filter is enabled from the config
-        let mut maybe_dynamic_filter = match agg.dynamic_filter.as_ref() {
-            Some(filter) => Some(Arc::clone(filter)),
-            _ => None,
-        };
-
-        if !context
+        let maybe_dynamic_filter = if !context
             .session_config()
             .options()
             .optimizer
             .enable_aggregate_dynamic_filter_pushdown
         {
-            maybe_dynamic_filter = None;
-        }
+            None
+        } else {
+            maybe_dynamic_filter
+        };
 
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),

@@ -1067,6 +1067,8 @@ impl RecordBatchStore {
 
 #[cfg(test)]
 mod tests {
+    use crate::dynamic_filter::make_executable_dynamic_filter;
+
     use super::*;
     use arrow::array::{Float64Array, Int32Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1149,7 +1151,7 @@ mod tests {
             runtime,
             &metrics,
             Arc::new(RwLock::new(TopKDynamicFilters::new(Arc::new(
-                DynamicFilterPhysicalExpr::new(vec![], lit(true)),
+                make_executable_dynamic_filter(lit(true), vec![]),
             )))),
         )?;
 
@@ -1222,7 +1224,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
 
         // Create a dynamic filter that we'll check for completion
-        let dynamic_filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let dynamic_filter = Arc::new(make_executable_dynamic_filter(lit(true), vec![]));
         let dynamic_filter_clone = Arc::clone(&dynamic_filter);
 
         // Create a TopK instance

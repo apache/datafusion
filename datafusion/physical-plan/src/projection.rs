@@ -21,7 +21,7 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use super::expressions::{Column, Literal};
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::metrics::BaselineMetrics;
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -32,6 +32,8 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
 use std::collections::HashMap;
@@ -47,6 +49,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::collect_columns;
@@ -72,10 +76,11 @@ pub struct ProjectionExec {
     projector: Projector,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ProjectionExec {
@@ -149,8 +154,9 @@ impl ProjectionExec {
         Ok(Self {
             projector,
             input,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -286,7 +292,13 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!(
             "Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
@@ -295,11 +307,12 @@ impl ExecutionPlan for ProjectionExec {
         );
         Ok(Box::pin(ProjectionStream::new(
             self.projector.clone(),
-            self.input.execute(partition, context)?,
-            BaselineMetrics::new(&self.metrics, partition),
+            execute_input!(0, self.input, partition, context, state)?,
+            BaselineMetrics::new(plan_metrics!(self, state), partition),
         )?))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1002,6 +1015,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::common::collect;
+    use crate::execution_plan::execute_plan;
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
@@ -1091,10 +1105,11 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
 
         let exec = test::scan_partitioned(1);
-        let expected = collect(exec.execute(0, Arc::clone(&task_ctx))?).await?;
+        let expected =
+            collect(execute_plan(Arc::clone(&exec), 0, Arc::clone(&task_ctx))?).await?;
 
         let projection = ProjectionExec::try_new(vec![] as Vec<ProjectionExpr>, exec)?;
-        let stream = projection.execute(0, Arc::clone(&task_ctx))?;
+        let stream = execute_plan(Arc::new(projection), 0, Arc::clone(&task_ctx))?;
         let output = collect(stream).await?;
         assert_eq!(output.len(), expected.len());
 

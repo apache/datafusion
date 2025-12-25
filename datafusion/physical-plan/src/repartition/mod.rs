@@ -26,7 +26,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use super::common::SharedMemoryReservation;
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -38,6 +38,8 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
+#[cfg(feature = "stateless_plan")]
+use crate::state::{PlanState, PlanStateNode};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
@@ -54,6 +56,8 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -201,7 +205,7 @@ impl Debug for ConsumingInputStreamsState {
 
 /// Inner state of [`RepartitionExec`].
 #[derive(Default)]
-enum RepartitionExecState {
+enum RepartitionExecStateInner {
     /// Not initialized yet. This is the default state stored in the RepartitionExec node
     /// upon instantiation.
     #[default]
@@ -215,45 +219,54 @@ enum RepartitionExecState {
     ConsumingInputStreams(ConsumingInputStreamsState),
 }
 
-impl Debug for RepartitionExecState {
+impl Debug for RepartitionExecStateInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RepartitionExecState::NotInitialized => write!(f, "NotInitialized"),
-            RepartitionExecState::InputStreamsInitialized(v) => {
+            Self::NotInitialized => write!(f, "NotInitialized"),
+            Self::InputStreamsInitialized(v) => {
                 write!(f, "InputStreamsInitialized({:?})", v.len())
             }
-            RepartitionExecState::ConsumingInputStreams(v) => {
+            Self::ConsumingInputStreams(v) => {
                 write!(f, "ConsumingInputStreams({v:?})")
             }
         }
     }
 }
 
-impl RepartitionExecState {
+impl RepartitionExecStateInner {
     fn ensure_input_streams_initialized(
         &mut self,
         input: &Arc<dyn ExecutionPlan>,
         metrics: &ExecutionPlanMetricsSet,
         output_partitions: usize,
         ctx: &Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<()> {
-        if !matches!(self, RepartitionExecState::NotInitialized) {
+        if !matches!(self, Self::NotInitialized) {
             return Ok(());
         }
 
         let num_input_partitions = input.output_partitioning().partition_count();
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
+        #[cfg(feature = "stateless_plan")]
+        let child_state = state.child_state(0);
         for i in 0..num_input_partitions {
             let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
 
             let timer = metrics.fetch_time.timer();
+
+            #[cfg(not(feature = "stateless_plan"))]
             let stream = input.execute(i, Arc::clone(ctx))?;
+
+            #[cfg(feature = "stateless_plan")]
+            let stream = input.execute(i, Arc::clone(ctx), &child_state)?;
+
             timer.done();
 
             streams_and_metrics.push((stream, metrics));
         }
-        *self = RepartitionExecState::InputStreamsInitialized(streams_and_metrics);
+        *self = Self::InputStreamsInitialized(streams_and_metrics);
         Ok(())
     }
 
@@ -267,16 +280,19 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
-            RepartitionExecState::NotInitialized => {
+            Self::NotInitialized => {
                 self.ensure_input_streams_initialized(
                     input,
                     metrics,
                     partitioning.partition_count(),
                     context,
+                    #[cfg(feature = "stateless_plan")]
+                    state,
                 )?;
-                let RepartitionExecState::InputStreamsInitialized(value) = self else {
+                let Self::InputStreamsInitialized(value) = self else {
                     // This cannot happen, as ensure_input_streams_initialized() was just called,
                     // but the compiler does not know.
                     return internal_err!(
@@ -285,8 +301,8 @@ impl RepartitionExecState {
                 };
                 value
             }
-            RepartitionExecState::ConsumingInputStreams(value) => return Ok(value),
-            RepartitionExecState::InputStreamsInitialized(value) => value,
+            Self::ConsumingInputStreams(value) => return Ok(value),
+            Self::InputStreamsInitialized(value) => value,
         };
 
         let num_input_partitions = streams_and_metrics.len();
@@ -404,9 +420,18 @@ impl RepartitionExecState {
             abort_helper: Arc::new(spawned_tasks),
         });
         match self {
-            RepartitionExecState::ConsumingInputStreams(value) => Ok(value),
+            Self::ConsumingInputStreams(value) => Ok(value),
             _ => unreachable!(),
         }
+    }
+}
+
+type RepartitionExecState = Arc<Mutex<RepartitionExecStateInner>>;
+
+#[cfg(feature = "stateless_plan")]
+impl PlanState for RepartitionExecState {
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -678,16 +703,18 @@ impl BatchPartitioner {
 pub struct RepartitionExec {
     /// Input execution plan
     input: Arc<dyn ExecutionPlan>,
-    /// Inner state that is initialized when the parent calls .execute() on this node
-    /// and consumed as soon as the parent starts consuming this node.
-    state: Arc<Mutex<RepartitionExecState>>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Boolean flag to decide whether to preserve ordering. If true means
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    #[cfg(not(feature = "stateless_plan"))]
+    /// Inner state that is initialized when the parent calls .execute() on this node
+    /// and consumed as soon as the parent starts consuming this node.
+    state: RepartitionExecState,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 #[derive(Debug, Clone)]
@@ -849,18 +876,24 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::plan_metrics;
+
         trace!(
             "Start {}::execute for partition: {}",
             self.name(),
             partition
         );
 
-        let spill_metrics = SpillMetrics::new(&self.metrics, partition);
+        let spill_metrics = SpillMetrics::new(plan_metrics!(self, state), partition);
 
         let input = Arc::clone(&self.input);
         let partitioning = self.partitioning().clone();
-        let metrics = self.metrics.clone();
+        let metrics = plan_metrics!(self, state).clone();
         let preserve_order = self.sort_exprs().is_some();
         let name = self.name().to_owned();
         let schema = self.schema();
@@ -875,24 +908,35 @@ impl ExecutionPlan for RepartitionExec {
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
 
-        let state = Arc::clone(&self.state);
-        if let Some(mut state) = state.try_lock() {
-            state.ensure_input_streams_initialized(
+        #[cfg(feature = "stateless_plan")]
+        let exec_state = Arc::clone(state.get_or_init_state(|| {
+            Arc::new(Mutex::new(RepartitionExecStateInner::default()))
+        }));
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let exec_state = Arc::clone(&self.state);
+
+        if let Some(mut exec_state) = exec_state.try_lock() {
+            exec_state.ensure_input_streams_initialized(
                 &input,
                 &metrics,
                 partitioning.partition_count(),
                 &context,
+                #[cfg(feature = "stateless_plan")]
+                state,
             )?;
         }
 
         let num_input_partitions = input.output_partitioning().partition_count();
 
+        #[cfg(feature = "stateless_plan")]
+        let state = Arc::clone(state);
         let stream = futures::stream::once(async move {
             // lock scope
             let (rx, reservation, spill_readers, abort_helper) = {
                 // lock mutexes
-                let mut state = state.lock();
-                let state = state.consume_input_streams(
+                let mut exec_state = exec_state.lock();
+                let exec_state = exec_state.consume_input_streams(
                     &input,
                     &metrics,
                     &partitioning,
@@ -900,6 +944,8 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
+                    #[cfg(feature = "stateless_plan")]
+                    &state,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -909,7 +955,7 @@ impl ExecutionPlan for RepartitionExec {
                     reservation,
                     spill_readers,
                     ..
-                } = state
+                } = exec_state
                     .channels
                     .remove(&partition)
                     .expect("partition not used yet");
@@ -918,7 +964,7 @@ impl ExecutionPlan for RepartitionExec {
                     rx,
                     reservation,
                     spill_readers,
-                    Arc::clone(&state.abort_helper),
+                    Arc::clone(&exec_state.abort_helper),
                 )
             };
 
@@ -990,6 +1036,7 @@ impl ExecutionPlan for RepartitionExec {
         Ok(Box::pin(stream))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -1136,10 +1183,12 @@ impl ExecutionPlan for RepartitionExec {
         };
         Ok(Some(Arc::new(Self {
             input: Arc::clone(&self.input),
-            state: Arc::clone(&self.state),
-            metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
             cache: new_properties,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: Arc::clone(&self.state),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: self.metrics.clone(),
         })))
     }
 }
@@ -1156,10 +1205,12 @@ impl RepartitionExec {
         let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {
             input,
-            state: Default::default(),
-            metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: Default::default(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         })
     }
 
@@ -1641,7 +1692,9 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::execution_plan::execute_plan;
     use crate::test::TestMemoryExec;
+    use crate::test::{collect_counting_rows, collect_partitions, collect_with};
     use crate::{
         test::{
             assert_is_pending,
@@ -1763,15 +1816,15 @@ mod tests {
 
         // create physical plan
         let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-        let exec = RepartitionExec::try_new(exec, partitioning)?;
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(exec, partitioning)?);
 
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                assert_eq!(200, batch.num_rows());
-            }
-        }
+        collect_with(exec, task_ctx, |_, batch| {
+            assert_eq!(200, batch?.num_rows());
+            Ok(())
+        })
+        .await?;
+
         Ok(())
     }
 
@@ -1788,19 +1841,11 @@ mod tests {
         // create physical plan
         let exec =
             TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(schema), None)?;
-        let exec = RepartitionExec::try_new(exec, partitioning)?;
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(exec, partitioning)?);
 
         // execute and collect results
-        let mut output_partitions = vec![];
-        for i in 0..exec.partitioning().partition_count() {
-            // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            let mut batches = vec![];
-            while let Some(result) = stream.next().await {
-                batches.push(result?);
-            }
-            output_partitions.push(batches);
-        }
+        let (output_partitions, _) = collect_partitions(exec, task_ctx).await?;
         Ok(output_partitions)
     }
 
@@ -1847,7 +1892,7 @@ mod tests {
         // returned and no results produced
         let partitioning = Partitioning::UnknownPartitioning(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = execute_plan(Arc::new(exec), 0, task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::common::collect(output_stream)
@@ -1872,7 +1917,10 @@ mod tests {
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
         // Expect that an error is returned
-        let result_string = exec.execute(0, task_ctx).err().unwrap().to_string();
+        let result_string = execute_plan(Arc::new(exec), 0, task_ctx)
+            .err()
+            .unwrap()
+            .to_string();
 
         assert!(
             result_string.contains("ErrorExec, unsurprisingly, errored in partition 0"),
@@ -1900,7 +1948,7 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = execute_plan(Arc::new(exec), 0, task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::common::collect(output_stream)
@@ -1948,7 +1996,7 @@ mod tests {
         +------------------+
         ");
 
-        let output_stream = exec.execute(0, task_ctx).unwrap();
+        let output_stream = execute_plan(Arc::new(exec), 0, task_ctx).unwrap();
         let batches = crate::common::collect(output_stream).await.unwrap();
 
         assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -1972,14 +2020,18 @@ mod tests {
         let input = Arc::new(make_barrier_exec());
 
         // partition into two output streams
-        let exec = RepartitionExec::try_new(
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            partitioning,
-        )
-        .unwrap();
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                partitioning,
+            )
+            .unwrap(),
+        );
 
-        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
-        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
+        let output_stream0 =
+            execute_plan(Arc::clone(&exec), 0, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 =
+            execute_plan(Arc::clone(&exec), 1, Arc::clone(&task_ctx)).unwrap();
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
@@ -2027,7 +2079,8 @@ mod tests {
             partitioning.clone(),
         )
         .unwrap();
-        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 =
+            execute_plan(Arc::new(exec), 1, Arc::clone(&task_ctx)).unwrap();
         let mut background_task = JoinSet::new();
         background_task.spawn(async move {
             input.wait().await;
@@ -2047,13 +2100,17 @@ mod tests {
 
         // Now do the same but dropping the stream before waiting for the barrier
         let input = Arc::new(make_barrier_exec());
-        let exec = RepartitionExec::try_new(
-            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
-            partitioning,
-        )
-        .unwrap();
-        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
-        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(
+            RepartitionExec::try_new(
+                Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+                partitioning,
+            )
+            .unwrap(),
+        );
+        let output_stream0 =
+            execute_plan(Arc::clone(&exec), 0, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 =
+            execute_plan(Arc::clone(&exec), 1, Arc::clone(&task_ctx)).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
         drop(output_stream0);
@@ -2157,10 +2214,11 @@ mod tests {
         );
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
-        let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, Arc::clone(&task_ctx)).unwrap();
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(Arc::new(input), partitioning).unwrap());
+        let output_stream0 = execute_plan(Arc::clone(&exec), 0, Arc::clone(&task_ctx))?;
         let batch0 = crate::common::collect(output_stream0).await.unwrap();
-        let output_stream1 = exec.execute(1, Arc::clone(&task_ctx)).unwrap();
+        let output_stream1 = execute_plan(Arc::clone(&exec), 1, Arc::clone(&task_ctx))?;
         let batch1 = crate::common::collect(output_stream1).await.unwrap();
         assert!(batch0.is_empty() || batch1.is_empty());
         Ok(())
@@ -2185,23 +2243,17 @@ mod tests {
         // create physical plan
         let exec =
             TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = RepartitionExec::try_new(exec, partitioning)?;
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(exec, partitioning)?);
 
         // Collect all partitions - should succeed by spilling to disk
-        let mut total_rows = 0;
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                total_rows += batch.num_rows();
-            }
-        }
+        let (total_rows, metrics) = collect_counting_rows(exec, task_ctx).await?;
 
         // Verify we got all the data (50 batches * 8 rows each)
         assert_eq!(total_rows, 50 * 8);
 
         // Verify spilling metrics to confirm spilling actually happened
-        let metrics = exec.metrics().unwrap();
+
         assert!(
             metrics.spill_count().unwrap() > 0,
             "Expected spill_count > 0, but got {:?}",
@@ -2251,20 +2303,14 @@ mod tests {
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // Collect all partitions - should succeed with partial spilling
-        let mut total_rows = 0;
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                total_rows += batch.num_rows();
-            }
-        }
+        let (total_rows, metrics) =
+            collect_counting_rows(Arc::new(exec), task_ctx).await?;
 
         // Verify we got all the data (50 batches * 8 rows each)
         assert_eq!(total_rows, 50 * 8);
 
         // Verify partial spilling metrics
-        let metrics = exec.metrics().unwrap();
+        // Verify spilling metrics to confirm spilling actually happened
         let spill_count = metrics.spill_count().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
         let spilled_bytes = metrics.spilled_bytes().unwrap();
@@ -2316,20 +2362,12 @@ mod tests {
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // Collect all partitions - should succeed without spilling
-        let mut total_rows = 0;
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                total_rows += batch.num_rows();
-            }
-        }
-
+        let (total_rows, metrics) =
+            collect_counting_rows(Arc::new(exec), task_ctx).await?;
         // Verify we got all the data (50 batches * 8 rows each)
         assert_eq!(total_rows, 50 * 8);
 
         // Verify no spilling occurred
-        let metrics = exec.metrics().unwrap();
         assert_eq!(
             metrics.spill_count(),
             Some(0),
@@ -2378,19 +2416,20 @@ mod tests {
         // create physical plan
         let exec =
             TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
-        let exec = RepartitionExec::try_new(exec, partitioning)?;
+        let exec: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(exec, partitioning)?);
 
         // Attempt to execute - should fail with ResourcesExhausted error
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            let err = stream.next().await.unwrap().unwrap_err();
+        collect_with(exec, task_ctx, |_, result| {
+            let err = result.unwrap_err();
             let err = err.find_root();
             assert!(
                 matches!(err, DataFusionError::ResourcesExhausted(_)),
                 "Wrong error type: {err}",
             );
-        }
-
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
 
@@ -2456,19 +2495,9 @@ mod tests {
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // Collect all output partitions
-        let mut all_batches = Vec::new();
-        for i in 0..exec.partitioning().partition_count() {
-            let mut partition_batches = Vec::new();
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                partition_batches.push(batch);
-            }
-            all_batches.push(partition_batches);
-        }
+        let (all_batches, metrics) = collect_partitions(Arc::new(exec), task_ctx).await?;
 
         // Verify spilling occurred
-        let metrics = exec.metrics().unwrap();
         assert!(
             metrics.spill_count().unwrap() > 0,
             "Expected spilling to occur, but spill_count = 0"
@@ -2511,6 +2540,7 @@ mod test {
 
     use super::*;
     use crate::test::TestMemoryExec;
+    use crate::test::collect_with;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
@@ -2634,15 +2664,11 @@ mod test {
             .with_preserve_order();
 
         let mut batches = vec![];
-
-        // Collect all partitions - should succeed by spilling to disk
-        for i in 0..exec.partitioning().partition_count() {
-            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
-            while let Some(result) = stream.next().await {
-                let batch = result?;
-                batches.push(batch);
-            }
-        }
+        let metrics = collect_with(Arc::new(exec), task_ctx, |_, batch| {
+            batches.push(batch?);
+            Ok(())
+        })
+        .await?;
 
         #[rustfmt::skip]
         let expected = [
@@ -2686,7 +2712,6 @@ mod test {
         // - We spill data during the repartitioning phase
         // - We may also spill during the final merge sort
         let all_batches = [batch1, batch2, batch3, batch4, batch5, batch6];
-        let metrics = exec.metrics().unwrap();
         assert!(
             metrics.spill_count().unwrap() > input_partitions.len(),
             "Expected spill_count > {} for order-preserving repartition, but got {:?}",
@@ -2747,13 +2772,22 @@ mod test {
         let exec = Arc::new(TestMemoryExec::update_cache(&exec));
         // Hash partition into 2 partitions by column c0
         let hash_expr = col("c0", &schema)?;
-        let exec =
-            RepartitionExec::try_new(exec, Partitioning::Hash(vec![hash_expr], 2))?;
+        let exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            exec,
+            Partitioning::Hash(vec![hash_expr], 2),
+        )?);
+
+        #[cfg(feature = "stateless_plan")]
+        let state = PlanStateNode::new_root_arc(Arc::clone(&exec));
 
         // Collect all partitions concurrently using JoinSet - this prevents deadlock
         // where the distribution channel gate closes when all output channels are full
         let mut join_set = tokio::task::JoinSet::new();
-        for i in 0..exec.partitioning().partition_count() {
+        for i in 0..exec.properties().partitioning.partition_count() {
+            #[cfg(feature = "stateless_plan")]
+            let stream = exec.execute(i, Arc::clone(&task_ctx), &state)?;
+
+            #[cfg(not(feature = "stateless_plan"))]
             let stream = exec.execute(i, Arc::clone(&task_ctx))?;
             join_set.spawn(async move {
                 let mut count = 0;
@@ -2778,7 +2812,12 @@ mod test {
         assert_eq!(total_rows, expected_rows);
 
         // Verify metrics are available
+        #[cfg(feature = "stateless_plan")]
+        let metrics = state.metrics.clone_inner();
+
+        #[cfg(not(feature = "stateless_plan"))]
         let metrics = exec.metrics().unwrap();
+
         // Just verify the metrics can be retrieved (spilling may or may not occur)
         let spill_count = metrics.spill_count().unwrap_or(0);
         assert!(spill_count > 0);

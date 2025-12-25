@@ -23,6 +23,8 @@ use std::sync::Arc;
 use crate::coop::cooperative;
 use crate::execution_plan::{Boundedness, EmissionType, SchedulingType};
 use crate::memory::MemoryStream;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream, Statistics, common,
@@ -151,6 +153,7 @@ impl ExecutionPlan for PlaceholderRowExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
             "Start PlaceholderRowExec::execute for partition {} of context session_id {} and task_id {:?}",
@@ -195,6 +198,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution_plan::execute_plan;
     use crate::test;
     use crate::with_new_children_if_necessary;
 
@@ -222,11 +226,16 @@ mod tests {
     async fn invalid_execute() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
-        let placeholder = PlaceholderRowExec::new(schema);
+        let placeholder: Arc<dyn ExecutionPlan> =
+            Arc::new(PlaceholderRowExec::new(schema));
 
         // Ask for the wrong partition
-        assert!(placeholder.execute(1, Arc::clone(&task_ctx)).is_err());
-        assert!(placeholder.execute(20, task_ctx).is_err());
+        assert!(
+            execute_plan(Arc::clone(&placeholder), 1, Arc::clone(&task_ctx)).is_err()
+        );
+        assert!(
+            execute_plan(Arc::clone(&placeholder), 20, Arc::clone(&task_ctx)).is_err()
+        );
         Ok(())
     }
 
@@ -236,7 +245,7 @@ mod tests {
         let schema = test::aggr_test_schema();
         let placeholder = PlaceholderRowExec::new(schema);
 
-        let iter = placeholder.execute(0, task_ctx)?;
+        let iter = execute_plan(Arc::new(placeholder), 0, task_ctx)?;
         let batches = common::collect(iter).await?;
 
         // Should have one item
@@ -250,10 +259,11 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let schema = test::aggr_test_schema();
         let partitions = 3;
-        let placeholder = PlaceholderRowExec::new(schema).with_partitions(partitions);
+        let placeholder: Arc<dyn ExecutionPlan> =
+            Arc::new(PlaceholderRowExec::new(schema).with_partitions(partitions));
 
         for n in 0..partitions {
-            let iter = placeholder.execute(n, Arc::clone(&task_ctx))?;
+            let iter = execute_plan(Arc::clone(&placeholder), n, Arc::clone(&task_ctx))?;
             let batches = common::collect(iter).await?;
 
             // Should have one item

@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
 use crate::execution_plan::{Boundedness, EmissionType};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -132,6 +134,7 @@ impl ExecutionPlan for ExplainExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         trace!(
             "Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}",

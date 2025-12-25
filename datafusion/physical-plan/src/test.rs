@@ -29,7 +29,8 @@ use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
-use crate::metrics::MetricsSet;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
@@ -39,6 +40,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
     Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::equivalence::{
     OrderingEquivalenceClass, ProjectionMapping,
@@ -47,7 +49,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
-use futures::{Future, FutureExt};
+use futures::{Future, FutureExt, StreamExt};
 
 pub mod exec;
 
@@ -161,10 +163,12 @@ impl ExecutionPlan for TestMemoryExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         self.open(partition, context)
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         unimplemented!()
     }
@@ -551,3 +555,79 @@ macro_rules! assert_join_metrics {
 }
 #[cfg(test)]
 pub(crate) use assert_join_metrics;
+
+pub async fn collect_with(
+    exec: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+    mut f: impl FnMut(usize, Result<RecordBatch>) -> Result<()>,
+) -> Result<MetricsSet> {
+    #[cfg(feature = "stateless_plan")]
+    let state = PlanStateNode::new_root_arc(Arc::clone(&exec));
+
+    for i in 0..exec.properties().partitioning.partition_count() {
+        #[cfg(feature = "stateless_plan")]
+        let mut stream = exec.execute(i, Arc::clone(&task_ctx), &state)?;
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+        while let Some(result) = stream.next().await {
+            f(i, result)?;
+        }
+    }
+
+    #[cfg(feature = "stateless_plan")]
+    let metrics = state.metrics.clone_inner();
+
+    #[cfg(not(feature = "stateless_plan"))]
+    let metrics = exec.metrics().unwrap();
+
+    Ok(metrics)
+}
+
+pub async fn collect_partitions(
+    exec: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Result<(Vec<Vec<RecordBatch>>, MetricsSet)> {
+    let mut partitions = vec![vec![]; exec.properties().partitioning.partition_count()];
+
+    let metrics = collect_with(exec, task_ctx, |i, batch| {
+        partitions[i].push(batch?);
+        Ok(())
+    })
+    .await?;
+
+    Ok((partitions, metrics))
+}
+
+pub async fn collect_batches(
+    exec: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Result<(Vec<RecordBatch>, MetricsSet)> {
+    let mut batches = vec![];
+
+    let metrics = collect_with(exec, task_ctx, |_i, batch| {
+        let batch = batch?;
+        if batch.num_rows() > 0 {
+            batches.push(batch);
+        }
+        Ok(())
+    })
+    .await?;
+
+    Ok((batches, metrics))
+}
+
+pub async fn collect_counting_rows(
+    exec: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Result<(usize, MetricsSet)> {
+    let mut rows_count = 0;
+
+    let metrics = collect_with(exec, task_ctx, |_i, batch| {
+        rows_count += batch?.num_rows();
+        Ok(())
+    })
+    .await?;
+
+    Ok((rows_count, metrics))
+}

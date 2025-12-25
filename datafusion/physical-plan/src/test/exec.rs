@@ -24,6 +24,8 @@ use std::{
     task::{Context, Poll},
 };
 
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics, common,
@@ -212,6 +214,7 @@ impl ExecutionPlan for MockExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
@@ -369,14 +372,14 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        vec![]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        Ok(self)
     }
 
     /// Returns a stream which yields data
@@ -384,6 +387,7 @@ impl ExecutionPlan for BarrierExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
@@ -492,14 +496,14 @@ impl ExecutionPlan for ErrorExec {
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        vec![]
     }
 
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        Ok(self)
     }
 
     /// Returns a stream which yields data
@@ -507,6 +511,7 @@ impl ExecutionPlan for ErrorExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         internal_err!("ErrorExec, unsurprisingly, errored in partition {partition}")
     }
@@ -596,6 +601,7 @@ impl ExecutionPlan for StatisticsExec {
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
@@ -704,6 +710,7 @@ impl ExecutionPlan for BlockingExec {
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(BlockingStream {
             schema: Arc::clone(&self.schema),
@@ -850,6 +857,7 @@ impl ExecutionPlan for PanicExec {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] _state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(PanicStream {
             partition,

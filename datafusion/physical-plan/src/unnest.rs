@@ -22,10 +22,11 @@ use std::task::{Poll, ready};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{
-    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-    RecordOutput,
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
 };
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
     SendableRecordBatchStream,
@@ -47,6 +48,8 @@ use datafusion_common::{
     internal_err,
 };
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
@@ -71,10 +74,11 @@ pub struct UnnestExec {
     struct_column_indices: Vec<usize>,
     /// Options
     options: UnnestOptions,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl UnnestExec {
@@ -99,8 +103,9 @@ impl UnnestExec {
             list_column_indices,
             struct_column_indices,
             options,
-            metrics: Default::default(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: Default::default(),
         })
     }
 
@@ -250,9 +255,15 @@ impl ExecutionPlan for UnnestExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
-        let metrics = UnnestMetrics::new(partition, &self.metrics);
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
+        let input = execute_input!(0, self.input, partition, context, state)?;
+        let metrics = UnnestMetrics::new(partition, plan_metrics!(self, state));
 
         Ok(Box::pin(UnnestStream {
             input,
@@ -264,6 +275,7 @@ impl ExecutionPlan for UnnestExec {
         }))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

@@ -89,9 +89,9 @@ pub struct Metric {
 ///   will be shown.
 /// - When set to `summary`, only metrics with type `MetricType::Summary` are shown.
 ///
-/// # Difference from `EXPLAIN ANALYZE VERBOSE`:  
-/// The `VERBOSE` keyword controls whether per-partition metrics are shown (when specified),  
-/// or aggregated metrics are displayed (when omitted).  
+/// # Difference from `EXPLAIN ANALYZE VERBOSE`:
+/// The `VERBOSE` keyword controls whether per-partition metrics are shown (when specified),
+/// or aggregated metrics are displayed (when omitted).
 /// In contrast, the `analyze_level` configuration determines which categories or
 /// levels of metrics are displayed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -211,6 +211,16 @@ impl MetricsSet {
     /// Create a new container of metrics
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Return a number of metrics.
+    pub fn len(&self) -> usize {
+        self.metrics.len()
+    }
+
+    /// Check if the set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Add the specified metric

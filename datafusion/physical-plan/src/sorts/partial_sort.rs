@@ -57,8 +57,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::BaselineMetrics;
 use crate::sorts::sort::sort_batch;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -69,6 +71,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::utils::evaluate_partition_ranges;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_execution::{RecordBatchStream, TaskContext};
 use datafusion_physical_expr::LexOrdering;
 
@@ -85,8 +89,6 @@ pub struct PartialSortExec {
     /// Length of continuous matching columns of input that satisfy
     /// the required ordering for the sort
     common_prefix_length: usize,
-    /// Containing all metrics set created during sort
-    metrics_set: ExecutionPlanMetricsSet,
     /// Preserve partitions of input plan. If false, the input partitions
     /// will be sorted and merged into a single output partition.
     preserve_partitioning: bool,
@@ -94,6 +96,9 @@ pub struct PartialSortExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// Containing all metrics set created during sort
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl PartialSortExec {
@@ -111,10 +116,11 @@ impl PartialSortExec {
             input,
             expr,
             common_prefix_length,
-            metrics_set: ExecutionPlanMetricsSet::new(),
             preserve_partitioning,
             fetch: None,
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -298,7 +304,13 @@ impl ExecutionPlan for PartialSortExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         trace!(
             "Start PartialSortExec::execute for partition {} of context session_id {} and task_id {:?}",
             partition,
@@ -306,7 +318,8 @@ impl ExecutionPlan for PartialSortExec {
             context.task_id()
         );
 
-        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let input =
+            execute_input!(0, self.input, partition, Arc::clone(&context), state)?;
 
         trace!("End PartialSortExec's input.execute for partition: {partition}");
 
@@ -321,12 +334,13 @@ impl ExecutionPlan for PartialSortExec {
             in_mem_batch: RecordBatch::new_empty(Arc::clone(&self.schema())),
             fetch: self.fetch,
             is_closed: false,
-            baseline_metrics: BaselineMetrics::new(&self.metrics_set, partition),
+            baseline_metrics: BaselineMetrics::new(plan_metrics!(self, state), partition),
         }))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics_set.clone_inner())
+        Some(self.metrics.clone_inner())
     }
 
     fn statistics(&self) -> Result<Statistics> {
@@ -497,6 +511,7 @@ mod tests {
     use itertools::Itertools;
 
     use crate::collect;
+    use crate::execution_plan::collect_and_get_metrics_of;
     use crate::expressions::PhysicalSortExpr;
     use crate::expressions::col;
     use crate::sorts::sort::SortExec;
@@ -1013,7 +1028,7 @@ mod tests {
             ],
         )?;
 
-        let partial_sort_exec = Arc::new(PartialSortExec::new(
+        let partial_sort_exec: Arc<dyn ExecutionPlan> = Arc::new(PartialSortExec::new(
             [
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
@@ -1046,8 +1061,9 @@ mod tests {
             *partial_sort_exec.schema().field(2).data_type()
         );
 
-        let result: Vec<RecordBatch> = collect(
-            Arc::clone(&partial_sort_exec) as Arc<dyn ExecutionPlan>,
+        let (result, metrics) = collect_and_get_metrics_of(
+            Arc::clone(&partial_sort_exec),
+            &partial_sort_exec,
             task_ctx,
         )
         .await?;
@@ -1066,7 +1082,7 @@ mod tests {
         +-----+------+-------+
         ");
         assert_eq!(result.len(), 2);
-        let metrics = partial_sort_exec.metrics().unwrap();
+        let metrics = metrics.unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
 

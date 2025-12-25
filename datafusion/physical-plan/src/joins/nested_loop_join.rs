@@ -37,12 +37,14 @@ use crate::joins::utils::{
     need_produce_right_in_final,
 };
 use crate::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, RatioMetrics,
 };
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
 };
+#[cfg(feature = "stateless_plan")]
+use crate::state::{PlanState, PlanStateNode};
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -66,6 +68,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::MetricsSet;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
@@ -182,6 +186,22 @@ pub struct NestedLoopJoinExec {
     /// The full concatenated schema of left and right children should be distinct from
     /// the output schema of the operator
     join_schema: SchemaRef,
+    /// Information of index and left / right placement of columns
+    column_indices: Vec<ColumnIndex>,
+    /// Projection to apply to the output of the join
+    projection: Option<Vec<usize>>,
+    /// Cache holding plan properties like equivalences, output partitioning etc.
+    cache: PlanProperties,
+    /// State of the plan.
+    #[cfg(not(feature = "stateless_plan"))]
+    state: NestedLoopJoinExecState,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
+}
+
+#[derive(Debug, Default)]
+struct NestedLoopJoinExecState {
     /// Future that consumes left input and buffers it in memory
     ///
     /// This structure is *shared* across all output streams.
@@ -189,15 +209,13 @@ pub struct NestedLoopJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the build(left) side data, and buffer them all for later joining.
     build_side_data: OnceAsync<JoinLeftData>,
-    /// Information of index and left / right placement of columns
-    column_indices: Vec<ColumnIndex>,
-    /// Projection to apply to the output of the join
-    projection: Option<Vec<usize>>,
+}
 
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+#[cfg(feature = "stateless_plan")]
+impl PlanState for NestedLoopJoinExecState {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 impl NestedLoopJoinExec {
@@ -229,11 +247,13 @@ impl NestedLoopJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            build_side_data: Default::default(),
             column_indices,
             projection,
-            metrics: Default::default(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            state: Default::default(),
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: Default::default(),
         })
     }
 
@@ -489,7 +509,13 @@ impl ExecutionPlan for NestedLoopJoinExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         assert_eq_or_internal_err!(
             self.left.output_partitioning().partition_count(),
             1,
@@ -497,15 +523,23 @@ impl ExecutionPlan for NestedLoopJoinExec {
                  consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        let metrics = NestedLoopJoinMetrics::new(&self.metrics, partition);
+        let metrics = NestedLoopJoinMetrics::new(plan_metrics!(self, state), partition);
 
         // Initialization reservation for load of inner table
         let load_reservation =
             MemoryConsumer::new(format!("NestedLoopJoinLoad[{partition}]"))
                 .register(context.memory_pool());
 
-        let build_side_data = self.build_side_data.try_once(|| {
-            let stream = self.left.execute(0, Arc::clone(&context))?;
+        #[cfg(feature = "stateless_plan")]
+        let build_side_data = &state
+            .get_or_init_state(NestedLoopJoinExecState::default)
+            .build_side_data;
+
+        #[cfg(not(feature = "stateless_plan"))]
+        let build_side_data = &self.state.build_side_data;
+
+        let build_side_data = build_side_data.try_once(|| {
+            let stream = execute_input!(0, self.left, 0, Arc::clone(&context), state)?;
 
             Ok(collect_left_input(
                 stream,
@@ -518,7 +552,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
-        let probe_side_data = self.right.execute(partition, context)?;
+        let probe_side_data = execute_input!(1, self.right, partition, context, state)?;
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -541,6 +575,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         )))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -2213,15 +2248,16 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::{TestMemoryExec, assert_join_metrics};
+    use crate::test::{TestMemoryExec, assert_join_metrics, collect_with};
     use crate::{
-        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
+        expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common::{ScalarValue, assert_contains};
+    use datafusion_execution::metrics::MetricsSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
@@ -2361,21 +2397,15 @@ pub(crate) mod tests {
             NestedLoopJoinExec::try_new(left, right, join_filter, join_type, None)?;
         let columns = columns(&nested_loop_join.schema());
         let mut batches = vec![];
-        for i in 0..partition_count {
-            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
-            let more_batches = common::collect(stream).await?;
-            batches.extend(
-                more_batches
-                    .into_iter()
-                    .inspect(|b| {
-                        assert!(b.num_rows() <= context.session_config().batch_size())
-                    })
-                    .filter(|b| b.num_rows() > 0)
-                    .collect::<Vec<_>>(),
-            );
-        }
+        let batch_size = context.session_config().batch_size();
 
-        let metrics = nested_loop_join.metrics().unwrap();
+        let metrics = collect_with(Arc::new(nested_loop_join), context, |_, batch| {
+            let batch = batch?;
+            assert!(batch.num_rows() <= batch_size);
+            batches.push(batch);
+            Ok(())
+        })
+        .await?;
 
         Ok((columns, batches, metrics))
     }

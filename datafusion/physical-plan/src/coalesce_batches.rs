@@ -22,9 +22,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use super::metrics::BaselineMetrics;
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::projection::ProjectionExec;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -33,6 +35,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;
+#[cfg(not(feature = "stateless_plan"))]
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_expr::PhysicalExpr;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
@@ -65,9 +69,10 @@ pub struct CoalesceBatchesExec {
     target_batch_size: usize,
     /// Maximum number of rows to fetch, `None` means fetching all rows
     fetch: Option<usize>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Execution metrics
+    #[cfg(not(feature = "stateless_plan"))]
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl CoalesceBatchesExec {
@@ -78,8 +83,9 @@ impl CoalesceBatchesExec {
             input,
             target_batch_size,
             fetch: None,
-            metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            #[cfg(not(feature = "stateless_plan"))]
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -182,19 +188,26 @@ impl ExecutionPlan for CoalesceBatchesExec {
         &self,
         partition: usize,
         context: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::{execute_input, plan_metrics};
+
         Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition, context)?,
+            input: execute_input!(0, self.input, partition, context, state)?,
             coalescer: LimitedBatchCoalescer::new(
                 self.input.schema(),
                 self.target_batch_size,
                 self.fetch,
             ),
-            baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
+            baseline_metrics: BaselineMetrics::new(plan_metrics!(self, state), partition),
             completed: false,
         }))
     }
 
+    #[cfg(not(feature = "stateless_plan"))]
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
@@ -214,6 +227,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
             input: Arc::clone(&self.input),
             target_batch_size: self.target_batch_size,
             fetch: limit,
+            #[cfg(not(feature = "stateless_plan"))]
             metrics: self.metrics.clone(),
             cache: self.cache.clone(),
         }))

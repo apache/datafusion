@@ -80,6 +80,8 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation,
 };
 use crate::projection::ProjectionExec;
+#[cfg(feature = "stateless_plan")]
+use crate::state::PlanStateNode;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream,
@@ -282,8 +284,14 @@ impl ExecutionPlan for CooperativeExec {
         &self,
         partition: usize,
         task_ctx: Arc<TaskContext>,
+        #[cfg(feature = "stateless_plan")] state: &Arc<PlanStateNode>,
     ) -> Result<SendableRecordBatchStream> {
-        let child_stream = self.input.execute(partition, task_ctx)?;
+        #[cfg(not(feature = "stateless_plan"))]
+        #[expect(unused)]
+        let state = ();
+        use crate::execute_input;
+
+        let child_stream = execute_input!(0, self.input, partition, task_ctx, state)?;
         Ok(make_cooperative(child_stream))
     }
 
