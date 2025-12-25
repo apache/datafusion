@@ -2683,12 +2683,7 @@ mod tests {
 
             assert!(
                 a_curr < a_next || (a_curr == a_next && b_curr <= b_next),
-                "Not properly sorted at position {}: ({}, {}) -> ({}, {})",
-                i,
-                a_curr,
-                b_curr,
-                a_next,
-                b_next
+                "Not properly sorted at position {i}: ({a_curr}, {b_curr}) -> ({a_next}, {b_next})",
             );
         }
 
@@ -2931,13 +2926,13 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
-        let _result = collect(sort_exec.clone(), task_ctx).await?;
+        let _result = collect(Arc::clone(&sort_exec) as _, task_ctx).await?;
 
         let metrics = sort_exec.metrics().unwrap();
 
         // Verify that SplitMetrics are not present
         // The metrics should only include baseline and spill metrics
-        let metrics_str = format!("{:?}", metrics);
+        let metrics_str = format!("{metrics:?}");
 
         // Should not contain split-related metrics
         assert!(
@@ -3057,16 +3052,13 @@ mod tests {
                 assert_eq!(
                     batch.num_rows(),
                     batch_size,
-                    "Batch {} should have {} rows",
-                    i,
-                    batch_size
+                    "Batch {i} should have {batch_size} rows",
                 );
             } else {
                 // Last batch can be smaller
                 assert!(
                     batch.num_rows() <= batch_size,
-                    "Last batch should have <= {} rows",
-                    batch_size
+                    "Last batch should have <= {batch_size} rows",
                 );
             }
         }
@@ -3098,7 +3090,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
 
-        let result = collect(sort_exec.clone(), task_ctx.clone()).await?;
+        let result = collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
 
         // Verify correct sorting across partitions
         let concatenated = concat_batches(&schema, &result)?;
@@ -3192,7 +3184,7 @@ mod tests {
             .with_fetch(Some(fetch_limit)),
         );
 
-        let result = collect(sort_exec, task_ctx.clone()).await?;
+        let result = collect(sort_exec, Arc::clone(&task_ctx)).await?;
 
         // Verify correct number of rows returned
         let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();

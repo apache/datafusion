@@ -1094,7 +1094,7 @@ mod test {
             ReservationStream::new(Arc::clone(&schema), inner, reservation);
 
         // Consume all batches
-        while let Some(_) = res_stream.next().await {}
+        while res_stream.next().await.is_some() {}
 
         // Memory should be fully freed
         assert_eq!(runtime.memory_pool.reserved(), 0);
