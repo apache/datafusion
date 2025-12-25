@@ -3345,6 +3345,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..Default::default()
     }
 }
 
@@ -3357,6 +3358,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..Default::default()
     }
 }
 
@@ -3369,6 +3371,7 @@ fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..Default::default()
     }
 }
 

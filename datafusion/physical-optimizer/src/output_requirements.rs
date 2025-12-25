@@ -421,22 +421,16 @@ fn require_top_ordering_helper(
 /// subtrees with OutputRequirementExec at their relation boundaries, not just the
 /// top-level sort. This ensures that ORDER BY clauses in subqueries and CTEs are
 /// preserved through physical optimization.
+///
+/// The algorithm works top-down: at each "boundary" node (where order isn't maintained
+/// from a child), we wrap that child's subtree to preserve any sorts it contains.
+/// This allows the OutputRequirementExec to be placed at the outermost point of the
+/// order-preserving chain, giving the optimizer maximum flexibility.
 fn require_all_orderings(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    // First, recursively process all children to wrap any nested sorts
-    let children = plan.children();
-    let new_children: Vec<Arc<dyn ExecutionPlan>> = children
-        .into_iter()
-        .map(|child| wrap_subtree_with_ordering(Arc::clone(child)))
-        .collect::<Result<Vec<_>>>()?;
+    // First, find and wrap sorts at boundaries throughout the tree
+    let plan = wrap_sorts_at_boundaries(plan)?;
 
-    // Rebuild the plan with processed children
-    let plan = if new_children.is_empty() {
-        plan
-    } else {
-        plan.with_new_children(new_children)?
-    };
-
-    // Now wrap the top level (same as require_top_ordering)
+    // Then handle the top level (same as require_top_ordering)
     let (new_plan, is_changed) = require_top_ordering_helper(plan)?;
     if is_changed {
         Ok(new_plan)
@@ -450,28 +444,71 @@ fn require_all_orderings(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
     }
 }
 
-/// Recursively wraps subtrees that contain SortExec with OutputRequirementExec
-/// at the relation boundary (top of the sort-preserving chain).
-fn wrap_subtree_with_ordering(
+/// Recursively finds "boundary" nodes and wraps their children's sort-containing
+/// subtrees with OutputRequirementExec.
+///
+/// A boundary occurs when a parent node:
+/// - Has multiple children (each child is independent), OR
+/// - Doesn't maintain input order from a child, OR
+/// - Requires a specific ordering from a child (so any sort below can't be the "source")
+///
+/// At boundaries, we call `require_top_ordering_helper` on each child, which walks
+/// DOWN through order-preserving operators and wraps at the top of the chain containing
+/// any Sort. This ensures OutputRequirementExec is placed at the outermost position.
+fn wrap_sorts_at_boundaries(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // First recursively process children
     let children = plan.children();
+    if children.is_empty() {
+        return Ok(plan);
+    }
+
+    let maintains_order = plan.maintains_input_order();
+    let required_orderings = plan.required_input_ordering();
+    let has_multiple_children = children.len() > 1;
+
     let new_children: Vec<Arc<dyn ExecutionPlan>> = children
         .into_iter()
-        .map(|child| wrap_subtree_with_ordering(Arc::clone(child)))
+        .enumerate()
+        .map(|(idx, child)| {
+            let child = Arc::clone(child);
+
+            // Check if this child is at a boundary
+            let child_maintains_order =
+                maintains_order.get(idx).copied().unwrap_or(false);
+            let parent_requires_ordering = required_orderings
+                .get(idx)
+                .and_then(|r| r.as_ref())
+                .is_some_and(|o| !matches!(o, OrderingRequirements::Soft(_)));
+
+            let at_boundary = has_multiple_children
+                || !child_maintains_order
+                || parent_requires_ordering;
+
+            if at_boundary {
+                // This child is at a boundary - wrap any sorts it contains at the top
+                // of its order-preserving chain, then recurse into the wrapped result
+                let (wrapped_node, was_wrapped) = require_top_ordering_helper(child)?;
+                if was_wrapped {
+                    // Skip the immediate plan since it's an OutputRequirementExec we just added
+                    // we'd end up in an infinite loop otherwise.
+                    wrap_sorts_at_boundaries(Arc::clone(
+                        wrapped_node
+                            .children()
+                            .get(0)
+                            .expect("OutputRequirementExec has a single child"),
+                    ))
+                } else {
+                    wrap_sorts_at_boundaries(wrapped_node)
+                }
+            } else {
+                // Not a boundary - continue looking deeper for boundaries
+                wrap_sorts_at_boundaries(child)
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
 
-    // Rebuild with new children
-    let plan = if new_children.is_empty() {
-        plan
-    } else {
-        plan.with_new_children(new_children)?
-    };
-
-    // Now check if this subtree should be wrapped
-    let (wrapped_plan, _) = require_top_ordering_helper(plan)?;
-    Ok(wrapped_plan)
+    plan.with_new_children(new_children)
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
