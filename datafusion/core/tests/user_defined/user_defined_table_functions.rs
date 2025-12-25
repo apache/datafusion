@@ -34,7 +34,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
-use datafusion_catalog::TableFunctionImpl;
+use datafusion_catalog::{SchemaProvider, TableFunctionImpl};
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
@@ -105,6 +105,76 @@ async fn test_deregister_udtf() -> Result<()> {
     ctx.deregister_udtf("read_csv");
 
     assert!(!ctx.state().table_functions().contains_key("read_csv"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_schema_qualified_udtf() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let catalog = ctx.catalog("datafusion").unwrap();
+    let schema = catalog.schema("public").unwrap();
+    let memory_schema = schema
+        .as_any()
+        .downcast_ref::<datafusion_catalog::MemorySchemaProvider>()
+        .unwrap();
+
+    let func = Arc::new(datafusion_catalog::TableFunction::new(
+        "schema_func".to_string(),
+        Arc::new(SimpleCsvTableFunc {}),
+    ));
+    memory_schema
+        .register_udtf("schema_func".to_string(), func)
+        .unwrap();
+
+    let csv_file = "tests/tpch-csv/nation.csv";
+    let rbs = ctx
+        .sql(format!("SELECT * FROM public.schema_func('{csv_file}', 3);").as_str())
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(rbs[0].num_rows(), 3);
+
+    Ok(())
+}
+
+/// Test that unqualified names still use global registry (backward compatibility)
+#[tokio::test]
+async fn test_unqualified_uses_global_registry() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_udtf("global_func", Arc::new(SimpleCsvTableFunc {}));
+
+    let csv_file = "tests/tpch-csv/nation.csv";
+    let rbs = ctx
+        .sql(format!("SELECT * FROM global_func('{csv_file}', 2);").as_str())
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(rbs[0].num_rows(), 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_schema_qualified_not_in_global() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    ctx.register_udtf("global_only", Arc::new(SimpleCsvTableFunc {}));
+
+    let csv_file = "tests/tpch-csv/nation.csv";
+    let result = ctx
+        .sql(format!("SELECT * FROM public.global_only('{csv_file}');").as_str())
+        .await;
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("not found in schema"));
 
     Ok(())
 }

@@ -1828,12 +1828,8 @@ impl ContextProvider for SessionContextProvider<'_> {
         name: &str,
         args: Vec<Expr>,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let tbl_func = self
-            .state
-            .table_functions
-            .get(name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
+        let table_ref = TableReference::parse_str(name);
+
         let dummy_schema = DFSchema::empty();
         let simplifier =
             ExprSimplifier::new(SessionSimplifyProvider::new(self.state, &dummy_schema));
@@ -1841,8 +1837,25 @@ impl ContextProvider for SessionContextProvider<'_> {
             .into_iter()
             .map(|arg| simplifier.simplify(arg))
             .collect::<datafusion_common::Result<Vec<_>>>()?;
-        let provider = tbl_func.create_table_provider(&args)?;
 
+        let tbl_func = if table_ref.schema().is_some() {
+            let func_name = table_ref.table().to_string();
+            let schema = self.state.schema_for_ref(table_ref)?;
+
+            schema.udtf(&func_name)?.ok_or_else(|| {
+                plan_datafusion_err!("Table function '{}' not found in schema", name)
+            })?
+        } else {
+            self.state
+                .table_functions
+                .get(name)
+                .cloned()
+                .ok_or_else(|| {
+                    plan_datafusion_err!("table function '{name}' not found")
+                })?
+        };
+
+        let provider = tbl_func.create_table_provider(&args)?;
         Ok(provider_as_source(provider))
     }
 

@@ -509,3 +509,32 @@ SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
 1 2
 2 1
 2 2
+
+#
+# Test schema-qualified table function names
+# Global table functions are not accessible via qualified names
+#
+
+# Test: unqualified table function name resolves from global registry (backward compatibility)
+query I
+SELECT * FROM generate_series(1, 3)
+----
+1
+2
+3
+
+# Test: qualified name for global table function should fail
+# (global table functions are not in schemas, they're in the global registry)
+statement error DataFusion error: Error during planning: Table function 'public.generate_series' not found in schema
+SELECT * FROM public.generate_series(1, 3)
+
+statement error DataFusion error: Error during planning: Table function 'datafusion.public.generate_series' not found in schema
+SELECT * FROM datafusion.public.generate_series(1, 3)
+
+# Test: non-existent function with qualified name
+statement error DataFusion error: Error during planning: Table function 'public.nonexistent_func' not found in schema
+SELECT * FROM public.nonexistent_func(1, 2)
+
+# Test: non-existent function with unqualified name
+statement error DataFusion error: Error during planning: table function 'nonexistent_func' not found
+SELECT * FROM nonexistent_func(1, 2)
