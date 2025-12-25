@@ -47,7 +47,7 @@ use crate::{df_result, rresult_return};
 /// A stable struct for sharing [`LogicalExtensionCodec`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub struct FFI_LogicalExtensionCodec {
     /// Decode bytes into a table provider.
     try_decode_table_provider: unsafe extern "C" fn(

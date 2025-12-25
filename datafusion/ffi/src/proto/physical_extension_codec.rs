@@ -40,7 +40,7 @@ use crate::{df_result, rresult_return};
 /// A stable struct for sharing [`PhysicalExtensionCodec`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
+#[expect(non_camel_case_types)]
 pub struct FFI_PhysicalExtensionCodec {
     /// Decode bytes into an execution plan.
     try_decode: unsafe extern "C" fn(
