@@ -19,6 +19,7 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -26,6 +27,7 @@ use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
+use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::execution::SessionState;
 use datafusion::execution::SessionStateBuilder;
@@ -44,6 +46,8 @@ use datafusion::prelude::ParquetReadOptions;
 use datafusion::prelude::SessionContext;
 use datafusion::prelude::*;
 use datafusion_common::HashMap;
+use tempfile::TempDir;
+use tokio::fs::create_dir_all;
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
 /// By default, [DataFrame::cache] in Datafusion is eager and creates an in-memory table. This example shows a basic alternative implementation for lazy caching.
@@ -53,28 +57,46 @@ use datafusion_common::HashMap;
 /// - A [CacheNodeQueryPlanner] that installs [CacheNodePlanner].
 /// - A simple in-memory [CacheManager] that stores cached [RecordBatch]es. Note that the implementation for this example is very naive and only implements put, but for real production use cases cache eviction and drop should also be implemented.
 pub async fn cache_dataframe_with_custom_logic() -> Result<()> {
-    let testdata = datafusion::test_util::parquet_test_data();
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
-
     let session_state = SessionStateBuilder::new()
         .with_cache_factory(Some(Arc::new(CustomCacheFactory {})))
         .with_query_planner(Arc::new(CacheNodeQueryPlanner::default()))
         .build();
     let ctx = SessionContext::new_with_state(session_state);
 
+    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
+    // This replaces a static parquet fixture and makes the example self-contained
+    // without requiring DataFusion test files.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("cars.csv");
+    let csv_df = ctx
+        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
+        .await?;
+    let tmp_source = TempDir::new()?;
+    let out_dir = tmp_source.path().join("parquet_source");
+    create_dir_all(&out_dir).await?;
+    csv_df
+        .write_parquet(
+            out_dir.to_str().unwrap(),
+            DataFrameWriteOptions::default(),
+            None,
+        )
+        .await?;
+
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
         .await?;
 
     let df_cached = parquet_df
-        .select_columns(&["id", "bool_col", "timestamp_col"])?
-        .filter(col("id").gt(lit(1)))?
+        .select_columns(&["car", "speed", "time"])?
+        .filter(col("speed").gt(lit(1.0)))?
         .cache()
         .await?;
 
-    let df1 = df_cached.clone().filter(col("bool_col").is_true())?;
-    let df2 = df1.clone().sort(vec![col("id").sort(true, false)])?;
+    let df1 = df_cached.clone().filter(col("car").eq(lit("red")))?;
+    let df2 = df1.clone().sort(vec![col("car").sort(true, false)])?;
 
     // should see log for caching only once
     df_cached.show().await?;
