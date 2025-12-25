@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A custom binary heap implementation for performant top K aggregation
+//! A custom binary heap implementation for performant top K aggregation.
+//!
+//! the `new_heap` //! factory function selects an appropriate heap implementation
+//! based on the Arrow data type.
+//!
+//! Supported value types include Arrow primitives (integers, floats, decimals, intervals)
+//! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
 use arrow::array::{
+    LargeStringArray, StringArray, StringViewArray,
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
@@ -29,7 +36,9 @@ use datafusion_common::exec_datafusion_err;
 
 use half::f16;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A custom version of `Ord` that only exists to we can implement it for the Values in our heap
@@ -40,6 +49,61 @@ pub trait Comparable {
 impl Comparable for Option<String> {
     fn comp(&self, other: &Self) -> Ordering {
         self.cmp(other)
+    }
+}
+
+impl Comparable for String {
+    /// Lexicographic string comparison used in heap ordering.
+    fn comp(&self, other: &Self) -> Ordering {
+        self.cmp(other)
+    }
+}
+
+impl Comparable for Arc<str> {
+    /// Lexicographic string comparison used in heap ordering.
+    fn comp(&self, other: &Self) -> Ordering {
+        self.as_ref().cmp(other.as_ref())
+    }
+}
+
+/// A trait for types that can be lazily converted into heap values.
+///
+/// This allows checking if a borrowed value would improve the heap before
+/// committing to allocating and storing it. This is particularly useful for
+/// expensive conversions like string interning where we only want to allocate
+/// if the value actually replaces something in the heap.
+///
+/// The typical usage pattern is:
+/// 1. Call `check_comparison()` to get a comparison result without allocating
+/// 2. Only if the comparison indicates improvement, call `into_heap_value()` to
+///    perform the expensive conversion (allocation, interning, etc.)
+pub trait IntoHeapValue<T: ValueType> {
+    /// Returns a comparison result against an existing heap value.
+    ///
+    /// This method performs the comparison without incurring allocation costs,
+    /// allowing early exit if the value doesn't improve the heap.
+    fn check_comparison(&self, existing: &T, desc: bool) -> bool;
+
+    /// Converts this value into the heap representation.
+    ///
+    /// Takes the StringHeap as an immutable reference since interning
+    /// should not require exclusive access.
+    fn to_heap_value(&self, heap: &mut StringHeap) -> T;
+}
+
+/// Implement for borrowed strings that convert to `Arc<str>` with interning.
+impl IntoHeapValue<Arc<str>> for &str {
+    fn check_comparison(&self, existing: &Arc<str>, desc: bool) -> bool {
+        let existing_str = existing.as_ref();
+        if !desc {
+            self < &existing_str
+        } else {
+            self > &existing_str
+        }
+    }
+
+    fn to_heap_value(&self, heap: &mut StringHeap) -> Arc<str> {
+        heap.intern_string(self)
     }
 }
 
@@ -158,6 +222,166 @@ where
         let arr = PrimitiveArray::<VAL>::new(ScalarBuffer::from(vals), nulls)
             .with_data_type(self.data_type.clone());
         (Arc::new(arr), map_idxs)
+    }
+}
+
+/// An implementation of `ArrowHeap` that deals with string values.
+///
+/// Supports all three UTF-8 string types: `Utf8`, `LargeUtf8`, and `Utf8View`.
+/// String values are compared lexicographically. Null values are not explicitly handled
+/// and should not appear in the input; the aggregation layer ensures nulls are managed
+/// appropriately before calling this heap.
+///
+/// Uses string interning to avoid repeated allocations for duplicate strings within a batch.
+/// The `string_cache` maps string hashes to `Arc<str>` values, amortizing allocation costs
+/// when the same string appears multiple times (common in trace IDs, user IDs, etc.).
+pub struct StringHeap {
+    batch: ArrayRef,
+    heap: TopKHeap<Arc<str>>,
+    desc: bool,
+    data_type: DataType,
+    /// Cache of interned strings for the current batch, mapping hash to `Arc<str>`.
+    /// Cleared on each `set_batch` call to prevent memory leaks from old batches.
+    string_cache: HashMap<u64, Arc<str>>,
+}
+
+impl StringHeap {
+    pub fn new(limit: usize, desc: bool, data_type: DataType) -> Self {
+        let batch: ArrayRef = Arc::new(StringArray::from(Vec::<&str>::new()));
+        Self {
+            batch,
+            heap: TopKHeap::new(limit, desc),
+            desc,
+            data_type,
+            string_cache: HashMap::new(),
+        }
+    }
+
+    /// Extracts a string value from the current batch at the given row index.
+    ///
+    /// Panics if the row index is out of bounds or if the data type is not one of
+    /// the supported UTF-8 string types.
+    ///
+    /// Note: Null values should not appear in the input; the aggregation layer
+    /// ensures nulls are filtered before reaching this code.
+    fn value(&self, row_idx: usize) -> &str {
+        extract_string_value(&self.batch, &self.data_type, row_idx)
+    }
+
+    /// Interns a string value, returning a cached `Arc<str>` if available.
+    ///
+    /// This method implements string interning to reduce allocations for duplicate strings.
+    /// It computes a hash of the input string and checks the cache. If found, returns the
+    /// cached `Arc<str>`. Otherwise, allocates a new `Arc<str>`, caches it, and returns it.
+    ///
+    /// This is particularly effective for workloads with repeated string values like trace IDs.
+    fn intern_string(&mut self, s: &str) -> Arc<str> {
+        // Compute hash of the string
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        s.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Check cache and return if found
+        if let Some(cached) = self.string_cache.get(&hash) {
+            // Verify it's actually the same string (handle hash collisions)
+            if cached.as_ref() == s {
+                return Arc::clone(cached);
+            }
+        }
+
+        // Not in cache, allocate and cache it
+        let arc_str: Arc<str> = Arc::from(s);
+        self.string_cache.insert(hash, Arc::clone(&arc_str));
+        arc_str
+    }
+}
+
+/// Helper to extract a string value from an ArrayRef at a given index.
+///
+/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types. This helper reduces
+/// duplication between `StringHeap::value()` and `StringHeap::drain()`.
+///
+/// # Panics
+/// Panics if the index is out of bounds or if the data type is unsupported.
+fn extract_string_value<'a>(
+    batch: &'a ArrayRef,
+    data_type: &DataType,
+    idx: usize,
+) -> &'a str {
+    match data_type {
+        DataType::Utf8 => batch.as_string::<i32>().value(idx),
+        DataType::LargeUtf8 => batch.as_string::<i64>().value(idx),
+        DataType::Utf8View => batch.as_string_view().value(idx),
+        _ => unreachable!("Unsupported string type: {:?}", data_type),
+    }
+}
+
+impl ArrowHeap for StringHeap {
+    fn set_batch(&mut self, vals: ArrayRef) {
+        self.batch = vals;
+        // Clear the cache to avoid retaining references to old batch strings
+        self.string_cache.clear();
+    }
+
+    fn is_worse(&self, row_idx: usize) -> bool {
+        if !self.heap.is_full() {
+            return false;
+        }
+        let new_val = self.value(row_idx);
+        let worst_val = self.heap.worst_val().expect("Missing root");
+        (!self.desc && new_val > worst_val.as_ref())
+            || (self.desc && new_val < worst_val.as_ref())
+    }
+
+    fn worst_map_idx(&self) -> usize {
+        self.heap.worst_map_idx()
+    }
+
+    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
+        self.heap.renumber(heap_to_map);
+    }
+
+    fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
+        let new_str = self.value(row_idx).to_string();
+        let new_val = new_str.as_str().to_heap_value(self);
+        self.heap.append_or_replace(new_val, map_idx, map);
+    }
+
+    fn replace_if_better(
+        &mut self,
+        heap_idx: usize,
+        row_idx: usize,
+        map: &mut Vec<(usize, usize)>,
+    ) {
+        let new_str = self.value(row_idx);
+        let existing = self.heap.heap[heap_idx]
+            .as_ref()
+            .expect("Missing heap item");
+
+        // Early exit if new value doesn't improve existing value.
+        // We use the borrowed reference for cheap comparison before allocating.
+        if !new_str.check_comparison(&existing.val, self.desc) {
+            return;
+        }
+
+        // Only convert to heap value after confirming improvement
+        let new_str_owned = new_str.to_string();
+        let new_val = new_str_owned.as_str().to_heap_value(self);
+        self.heap.replace_if_better(heap_idx, new_val, map);
+    }
+
+    fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
+        let (vals, map_idxs) = self.heap.drain();
+        // Convert Arc<str> to appropriate Arrow array type
+        // We need to convert Arc<str> to &str for the array builders
+        let string_refs: Vec<&str> = vals.iter().map(|s| s.as_ref()).collect();
+        let arr: ArrayRef = match self.data_type {
+            DataType::Utf8 => Arc::new(StringArray::from(string_refs)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(string_refs)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(string_refs)),
+            _ => unreachable!("Unsupported string type: {:?}", self.data_type),
+        };
+        (arr, map_idxs)
     }
 }
 
@@ -451,11 +675,31 @@ compare_integer!(u8, u16, u32, u64);
 compare_integer!(IntervalDayTime, IntervalMonthDayNano);
 compare_float!(f16, f32, f64);
 
+/// Returns true if the given data type can be stored in a top-K aggregation heap.
+///
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals)
+/// and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`). This is used internally by
+/// `PriorityMap::supports()` to validate aggregate value type compatibility.
+pub fn is_supported_heap_type(vt: &DataType) -> bool {
+    vt.is_primitive()
+        || matches!(
+            vt,
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
+        )
+}
+
 pub fn new_heap(
     limit: usize,
     desc: bool,
     vt: DataType,
 ) -> Result<Box<dyn ArrowHeap + Send>> {
+    if matches!(
+        vt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return Ok(Box::new(StringHeap::new(limit, desc, vt)));
+    }
+
     macro_rules! downcast_helper {
         ($vt:ty, $d:ident) => {
             return Ok(Box::new(PrimitiveHeap::<$vt>::new(limit, desc, vt)))
@@ -467,7 +711,9 @@ pub fn new_heap(
         _ => {}
     }
 
-    Err(exec_datafusion_err!("Can't group type: {vt:?}"))
+    Err(exec_datafusion_err!(
+        "Unsupported TopK aggregate value type: {vt:?}"
+    ))
 }
 
 #[cfg(test)]
