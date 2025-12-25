@@ -2470,10 +2470,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(values))],
         )?;
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 250
         let result_batches = sort_batch_chunked(&batch, &expressions, 250)?;
@@ -2525,10 +2523,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(values))],
         )?;
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 100
         let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
@@ -2559,10 +2555,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(values))],
         )?;
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         // Sort with batch_size = 100
         let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
@@ -2600,8 +2594,7 @@ mod tests {
             Some(3),
             Some(7),
         ]);
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
 
         // Test with nulls_first = true
         {
@@ -2708,10 +2701,8 @@ mod tests {
 
         let batch = RecordBatch::new_empty(Arc::clone(&schema));
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
 
@@ -2730,10 +2721,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![42]))],
         )?;
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
 
@@ -2766,8 +2755,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_reserved_byte_for_record_batch_with_sliced_batches(
-    ) -> Result<()> {
+    async fn test_get_reserved_byte_for_record_batch_with_sliced_batches() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
         // Create a larger batch then slice it
@@ -2841,8 +2829,7 @@ mod tests {
             .with_memory_limit(10 * 1024 * 1024, 1.0) // 10MB limit
             .build_arc()?;
 
-        let reservation = MemoryConsumer::new("test")
-            .register(&runtime.memory_pool);
+        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -2857,10 +2844,8 @@ mod tests {
 
         // Create a simple stream with one batch
         let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner = Box::pin(RecordBatchStreamAdapter::new(
-            Arc::clone(&schema),
-            stream,
-        )) as SendableRecordBatchStream;
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
 
         // Create reservation and grow it
         let mut reservation = reservation;
@@ -2902,10 +2887,8 @@ mod tests {
             vec![Arc::new(Int32Array::from(values))],
         )?;
 
-        let expressions: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))]
-        .into();
+        let expressions: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
 
         let batch_size = 500;
         let result_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
@@ -3039,7 +3022,8 @@ mod tests {
     async fn test_sort_exec_batch_size_respected() -> Result<()> {
         let batch_size = 50;
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let task_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -3098,7 +3082,8 @@ mod tests {
     async fn test_sort_exec_with_multiple_partitions_chunked() -> Result<()> {
         let batch_size = 100;
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let task_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
 
         let partitions = 4;
         let csv = test::scan_partitioned(partitions);
@@ -3187,7 +3172,8 @@ mod tests {
     async fn test_sort_with_fetch_limit_chunked() -> Result<()> {
         let batch_size = 50;
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let task_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 

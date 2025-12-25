@@ -1030,9 +1030,8 @@ mod test {
 
         // Create stream with batches
         let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]);
-        let inner =
-            Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-                as SendableRecordBatchStream;
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
 
         let mut res_stream =
             ReservationStream::new(Arc::clone(&schema), inner, reservation);
@@ -1088,9 +1087,8 @@ mod test {
         assert!(runtime.memory_pool.reserved() > 0);
 
         let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner =
-            Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-                as SendableRecordBatchStream;
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
 
         let mut res_stream =
             ReservationStream::new(Arc::clone(&schema), inner, reservation);
@@ -1122,9 +1120,8 @@ mod test {
 
         // Create a stream that errors
         let stream = futures::stream::iter(vec![exec_err!("Test error")]);
-        let inner =
-            Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-                as SendableRecordBatchStream;
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
 
         let mut res_stream =
             ReservationStream::new(Arc::clone(&schema), inner, reservation);
@@ -1167,9 +1164,8 @@ mod test {
         .unwrap();
 
         let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner =
-            Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-                as SendableRecordBatchStream;
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
 
         let res_stream = ReservationStream::new(Arc::clone(&schema), inner, reservation);
 
