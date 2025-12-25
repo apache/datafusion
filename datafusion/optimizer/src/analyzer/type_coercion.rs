@@ -346,26 +346,20 @@ impl<'a> TypeCoercionRewriter<'a> {
             expr: Expr,
             expr_type: &DataType,
         ) -> Result<Expr, DataFusionError> {
-            let scale = match expr_type {
-                Time32(TimeUnit::Second) => 1_000_000_000,
-                Time32(TimeUnit::Millisecond) => 1_000_000,
-                Time64(TimeUnit::Microsecond) => 1_000,
-                Time64(TimeUnit::Nanosecond) => 1,
-                t => return internal_err!("Unexpected time data type {t}"),
-            };
-
             let expr = match expr_type {
                 Time32(TimeUnit::Second) => {
-                    cast(cast(expr, Int32), Int64) * lit(ScalarValue::Int64(Some(scale)))
+                    cast(cast(expr, Int32), Int64)
+                        * lit(ScalarValue::Int64(Some(1_000_000_000)))
                 }
                 Time32(TimeUnit::Millisecond) => {
-                    cast(cast(expr, Int32), Int64) * lit(ScalarValue::Int64(Some(scale)))
+                    cast(cast(expr, Int32), Int64)
+                        * lit(ScalarValue::Int64(Some(1_000_000)))
                 }
                 Time64(TimeUnit::Microsecond) => {
-                    cast(expr, Int64) * lit(ScalarValue::Int64(Some(scale)))
+                    cast(expr, Int64) * lit(ScalarValue::Int64(Some(1_000)))
                 }
                 Time64(TimeUnit::Nanosecond) => cast(expr, Int64),
-                _ => unreachable!(),
+                t => return internal_err!("Unexpected time data type {t}"),
             };
 
             Ok(expr)
