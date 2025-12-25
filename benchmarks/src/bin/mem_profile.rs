@@ -16,6 +16,7 @@
 // under the License.
 
 //! mem_profile binary entrypoint
+use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use std::{
     env,
@@ -23,7 +24,6 @@ use std::{
     path::Path,
     process::{Command, Stdio},
 };
-use structopt::StructOpt;
 
 use datafusion_benchmarks::{
     clickbench,
@@ -31,19 +31,19 @@ use datafusion_benchmarks::{
     imdb, sort_tpch, tpch,
 };
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "Memory Profiling Utility")]
+#[derive(Debug, Parser)]
+#[command(name = "Memory Profiling Utility")]
 struct MemProfileOpt {
     /// Cargo profile to use in dfbench (e.g. release, release-nonlto)
-    #[structopt(long, default_value = "release")]
+    #[arg(long, default_value = "release")]
     bench_profile: String,
 
-    #[structopt(subcommand)]
+    #[command(subcommand)]
     command: Options,
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "Benchmark command")]
+#[derive(Debug, Subcommand)]
+#[command(about = "Benchmark command")]
 enum Options {
     Clickbench(clickbench::RunOpt),
     H2o(h2o::RunOpt),
@@ -55,7 +55,7 @@ enum Options {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     // 1. Parse args and check which benchmarks should be run
-    let mem_profile_opt = MemProfileOpt::from_args();
+    let mem_profile_opt = MemProfileOpt::parse();
     let profile = mem_profile_opt.bench_profile;
     let query_range = match mem_profile_opt.command {
         Options::Clickbench(opt) => {

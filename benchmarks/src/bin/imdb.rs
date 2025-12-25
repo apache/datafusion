@@ -17,9 +17,9 @@
 
 //! IMDB binary entrypoint
 
+use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use datafusion_benchmarks::imdb;
-use structopt::StructOpt;
 
 #[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
 compile_error!(
@@ -34,16 +34,16 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
+#[derive(Debug, Subcommand)]
 enum BenchmarkSubCommandOpt {
-    #[structopt(name = "datafusion")]
+    #[command(name = "datafusion")]
     DataFusionBenchmark(imdb::RunOpt),
 }
 
-#[derive(Debug, StructOpt)]
-#[structopt(name = "IMDB", about = "IMDB Dataset Processing.")]
+#[derive(Debug, Parser)]
+#[command(name = "IMDB", about = "IMDB Dataset Processing.")]
 enum ImdbOpt {
+    #[command(subcommand)]
     Benchmark(BenchmarkSubCommandOpt),
     Convert(imdb::ConvertOpt),
 }
@@ -51,7 +51,7 @@ enum ImdbOpt {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     env_logger::init();
-    match ImdbOpt::from_args() {
+    match ImdbOpt::parse() {
         ImdbOpt::Benchmark(BenchmarkSubCommandOpt::DataFusionBenchmark(opt)) => {
             Box::pin(opt.run()).await
         }

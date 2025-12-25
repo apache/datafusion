@@ -54,7 +54,7 @@ regex.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { workspace = true }
 snmalloc-rs = { version = "0.3", optional = true }
-structopt = { version = "0.3", default-features = false }
+clap = { version = "4.5.53", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tokio-util = { version = "0.7.17" }
 
