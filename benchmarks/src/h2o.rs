@@ -20,11 +20,11 @@
 //! - [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
-use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, print_memory_stats};
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
-    exec_datafusion_err, instant::Instant, internal_err, DataFusionError, TableReference,
+    DataFusionError, TableReference, exec_datafusion_err, instant::Instant, internal_err,
 };
 use std::path::{Path, PathBuf};
 use structopt::StructOpt;

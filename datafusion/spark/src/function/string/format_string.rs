@@ -26,12 +26,12 @@ use arrow::{
     datatypes::{DataType, Field, FieldRef},
 };
 use bigdecimal::{
-    num_bigint::{BigInt, Sign},
     BigDecimal, ToPrimitive,
+    num_bigint::{BigInt, Sign},
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -323,7 +323,7 @@ impl<'a> Formatter<'a> {
                             (index as usize, &rest2[1..])
                         }
                         (NumericParam::FromArgument, true) => {
-                            return exec_err!("Invalid numeric parameter")
+                            return exec_err!("Invalid numeric parameter");
                         }
                         (_, false) => {
                             argument_index += 1;
@@ -1681,7 +1681,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for boolean array",
                     self.conversion_type
-                )
+                );
             }
         };
         self.format_str(writer, formatted)
@@ -1750,7 +1750,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
 
@@ -1795,7 +1795,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
         }
@@ -1914,7 +1914,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for u64",
                     self.conversion_type
-                )
+                );
             }
         }
         let mut prefix = if self.alt_form {
@@ -2071,7 +2071,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for decimal",
                     self.conversion_type
-                )
+                );
             }
         };
 

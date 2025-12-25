@@ -23,8 +23,8 @@ use std::fmt::{self, Debug};
 use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -94,6 +94,12 @@ use hashbrown::HashTable;
 ///
 /// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
 /// `JoinHashMapType`.
+///
+/// ## Note on use of this trait as a public API
+/// This is currently a public trait but is mainly intended for internal use within DataFusion.
+/// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
+/// rather than deep equality of contents, as deep equality would be expensive and in our usage
+/// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
@@ -120,6 +126,9 @@ pub trait JoinHashMapType: Send + Sync {
 
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
+
+    /// Returns the number of entries in the join hash map.
+    fn len(&self) -> usize;
 }
 
 pub struct JoinHashMapU32 {
@@ -190,6 +199,10 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
 }
 
 pub struct JoinHashMapU64 {
@@ -259,6 +272,10 @@ impl JoinHashMapType for JoinHashMapU64 {
 
     fn is_empty(&self) -> bool {
         self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 

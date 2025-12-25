@@ -24,15 +24,15 @@ use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
-use datafusion_common::cast::as_int32_array;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_int32_array;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF, Volatility,
+    Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    Volatility, table_scan,
 };
 use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -243,10 +243,10 @@ fn to_timestamp_expr_folded() -> Result<()> {
     let actual = formatted.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8("2020-09-08T12:00:00+00:00"))
       TableScan: test
-    "###
+    "#
     );
     Ok(())
 }
@@ -273,10 +273,10 @@ fn now_less_than_timestamp() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Filter: Boolean(true)
       TableScan: test
-    "###
+    "
     );
     Ok(())
 }
@@ -312,10 +312,10 @@ fn select_date_plus_interval() -> Result<()> {
 
     assert_snapshot!(
         actual,
-        @r###"
+        @r#"
     Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
       TableScan: test
-    "###
+    "#
     );
     Ok(())
 }
@@ -334,10 +334,10 @@ fn simplify_project_scalar_fn() -> Result<()> {
     let actual = formatter.trim();
     assert_snapshot!(
         actual,
-        @r###"
+        @r"
     Projection: test.f AS power(test.f,Float64(1))
       TableScan: test
-    "###
+    "
     );
     Ok(())
 }

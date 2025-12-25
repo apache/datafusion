@@ -20,8 +20,8 @@
 use std::{borrow::Cow, sync::Arc};
 
 use crate::metrics::{
-    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
     MetricType,
+    value::{PruningMetrics, RatioMergeStrategy, RatioMetrics},
 };
 
 use super::{
@@ -34,7 +34,7 @@ use super::{
 /// case of constant strings
 ///
 /// ```rust
-/// use datafusion_physical_plan::metrics::*;
+/// use datafusion_execution::metrics::*;
 ///
 /// let metrics = ExecutionPlanMetricsSet::new();
 /// let partition = 1;

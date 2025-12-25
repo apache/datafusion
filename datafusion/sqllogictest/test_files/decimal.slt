@@ -614,21 +614,10 @@ select a / b from foo;
 ----
 0.2
 
-statement ok
-create table t as values (arrow_cast(123, 'Decimal256(5,2)'));
-
-# make sure query below runs in single partition
-# otherwise error message may not be deterministic
-statement ok
-set datafusion.execution.target_partitions = 1;
-
 query R
-select AVG(column1) from t;
+select AVG(column1) from values (arrow_cast(123, 'Decimal256(5,2)'));
 ----
 123
-
-statement ok
-drop table t;
 
 statement ok
 CREATE EXTERNAL TABLE decimal256_simple (
@@ -788,6 +777,13 @@ Float64 133333333333333330000000000000000000000000000
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = true;
 
+# round should keep decimals when parse_float_as_decimal is enabled
+query TR
+select arrow_typeof(round(173975140545.855, 2)),
+       round(173975140545.855, 2);
+----
+Decimal128(15, 3) 173975140545.86
+
 # smoke test for decimal parsing
 query RT
 select 100000000000000000000000000000000000::decimal(38,0), arrow_typeof(100000000000000000000000000000000000::decimal(38,0));
@@ -805,6 +801,11 @@ select log(arrow_cast(100, 'Decimal32(9, 2)'));
 ----
 2
 
+query R
+select log(2.0, arrow_cast(12345.67, 'Decimal32(9, 2)'));
+----
+13
+
 # log for small decimal64
 query R
 select log(arrow_cast(100, 'Decimal64(18, 0)'));
@@ -815,6 +816,12 @@ query R
 select log(arrow_cast(100, 'Decimal64(18, 2)'));
 ----
 2
+
+query R
+select log(2.0, arrow_cast(12345.6789, 'Decimal64(15, 4)'));
+----
+13
+
 
 # log for small decimal128
 query R
@@ -918,6 +925,116 @@ select log(2.0, null);
 ----
 NULL
 
+# log with negative scale decimals
+# Using scientific notation to create decimals with negative scales
+# 1e4 = 10000 with scale -4, log10(10000) = 4.0
+query R
+select log(1e4);
+----
+4
+
+# log with negative scale and explicit base 10
+query R
+select log(10, 1e4);
+----
+4
+
+# log with negative scale and base 2
+# 8e1 = 80 with scale -1, log2(80) ≈ 6.321928
+query R
+select log(2.0, 8e1);
+----
+6.321928094887
+
+# log with negative scale and base 2 (another value)
+# 16e1 = 160 with scale -1, log2(160) ≈ 7.321928
+query R
+select log(2.0, 16e1);
+----
+7.321928094887
+
+# log with negative scale -3
+# 5e3 = 5000 with scale -3, log10(5000) ≈ 3.69897
+query R
+select log(5e3);
+----
+3.698970004336
+
+# log with negative scale array values
+query R rowsort
+select log(value) from (values (1e3), (1e4), (1e5)) as t(value);
+----
+3
+4
+5
+
+# log with negative scale and different bases
+query R rowsort
+select log(base, 1e4) from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
+
+# log(decimal32) with negative scale
+# 1e4 = 10000 with scale -4
+query R
+select log(CAST(1e4 AS DECIMAL(9, -4)));
+----
+4
+
+# log(decimal32) with negative scale and base 2
+# 8e1 = 80, log2(80) ≈ 6.321928
+query R
+select log(2.0, CAST(8e1 AS DECIMAL(9, -1)));
+----
+6.321928094887
+
+
+# log(decimal64) with negative scale
+# 5e3 = 5000, log10(5000) ≈ 3.69897
+query R
+select log(CAST(5e3 AS DECIMAL(18, -3)));
+----
+3.698970004336
+
+# log(decimal64) with negative scale and different bases
+query R rowsort
+select log(base, CAST(1e4 AS DECIMAL(18, -4)))
+from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
+
+# log(decimal128) with negative scale and base 2
+# 8e1 = 80, log2(80) ≈ 6.321928
+query R
+select log(2.0, CAST(8e1 AS DECIMAL(38, -1)));
+----
+6.321928094887
+
+
+# log(decimal128) with negative scale and different bases
+query R rowsort
+select log(base, CAST(1e4 AS DECIMAL(38, -4)))
+from (values (10.0), (2.0), (3.0)) as t(base);
+----
+13.287712379549
+4
+8.383613097158
+
+# Test log of a decimal value between 0 and 1 (e.g., 0.5)
+query R
+SELECT log(10, arrow_cast(0.5, 'Decimal32(5, 1)'))
+----
+NaN
+
+query R
+SELECT log(10, arrow_cast(1 , 'Decimal32(5, 1)'))
+----
+0
+
 # power with decimals
 
 query RT
@@ -945,13 +1062,30 @@ SELECT power(2.5, 0)
 ----
 1
 
-# TODO: check backward compatibility for a case with base in64 and exponent float64 since the power coercion is introduced
+query R
+SELECT power(1e4, 2)
+----
+100000000
+
+# int64 base with decimal exponent (coerced to float computation)
+query R
+SELECT power(10, -2.0)
+----
+0.01
+
+query R
+SELECT power(2, -0.5)
+----
+0.707106781187
 
 # query error Unsupported data type Decimal128\(2, 1\) for power function
 # SELECT power(2.5, 4.0)
 
-query error Arrow error: .*in integer computation is out of bounds
+# power() with very large exponent returns infinity (Float64 behavior)
+query R
 SELECT power(2, 100000000000)
+----
+Infinity
 
 query error Arrow error: Arithmetic overflow: Unsupported exp value
 SELECT power(2::decimal(38, 0), -5)
@@ -1076,7 +1210,10 @@ SELECT power(2.5, 4)
 ----
 39.0625
 
-query I
+query R
 SELECT power(2, null)
 ----
 NULL
+
+query error Arrow error: Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99
+select cast(1.1 as decimal(2, 2)) + 1;

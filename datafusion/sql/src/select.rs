@@ -22,14 +22,14 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
+    CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
-    CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
 };
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Column, Result, not_impl_err, plan_err};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -46,8 +46,9 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
-    OrderBy, SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderBy,
+    SelectItemQualifiedWildcardKind, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -273,14 +274,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             )?
         } else {
             match having_expr_opt {
-                Some(having_expr) => return plan_err!("HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"),
+                Some(having_expr) => {
+                    return plan_err!(
+                        "HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"
+                    );
+                }
                 None => AggregatePlanResult {
                     plan: base_plan.clone(),
                     select_exprs: select_exprs.clone(),
                     having_expr: having_expr_opt,
                     qualify_expr: qualify_expr_opt,
                     order_by_exprs: order_by_rex,
-                }
+                },
             }
         };
 
@@ -364,7 +369,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     || !group_by_exprs.is_empty()
                     || !window_func_exprs.is_empty()
                 {
-                    return not_impl_err!("DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported ");
+                    return not_impl_err!(
+                        "DISTINCT ON expressions with GROUP BY, aggregation or window functions are not supported "
+                    );
                 }
 
                 let on_expr = on_expr
@@ -780,7 +787,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     SelectItemQualifiedWildcardKind::Expr(_) => {
                         return plan_err!(
                             "Qualified wildcard with expression not supported"
-                        )
+                        );
                     }
                 };
                 let qualifier = self.object_name_to_table_reference(object_name)?;
@@ -910,7 +917,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///   the aggregate
     /// * `order_by_post_aggr`     - The ORDER BY expressions rewritten to reference columns from
     ///   the aggregate
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn aggregate(
         &self,
         input: &LogicalPlan,
@@ -1043,11 +1050,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .iter()
                     .find_map(|select_expr| {
                         // Only consider aliased expressions
-                        if let Expr::Alias(alias) = select_expr {
-                            if alias.expr.as_ref() == &rewritten_expr {
-                                // Use the alias name
-                                return Some(Expr::Column(alias.name.clone().into()));
-                            }
+                        if let Expr::Alias(alias) = select_expr
+                            && alias.expr.as_ref() == &rewritten_expr
+                        {
+                            // Use the alias name
+                            return Some(Expr::Column(Column::new_unqualified(
+                                alias.name.clone(),
+                            )));
                         }
                         None
                     })
@@ -1062,7 +1071,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .cloned()
             .chain(select_exprs_post_aggr.iter().filter_map(|e| {
                 if let Expr::Alias(alias) = e {
-                    Some(Expr::Column(alias.name.clone().into()))
+                    Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
                 } else {
                     None
                 }
@@ -1105,32 +1114,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             {
                 let mut err = None;
                 let _ = visit_expressions_mut(expr, |expr| {
-                    if let SQLExpr::Function(f) = expr {
+                    if let SQLExpr::Function(f) = expr
+                        && let Some(WindowType::NamedWindow(ident)) = &f.over
+                    {
+                        let normalized_ident =
+                            self.ident_normalizer.normalize(ident.clone());
+                        for (
+                            NamedWindowDefinition(_, window_expr),
+                            normalized_window_ident,
+                        ) in named_windows.iter()
+                        {
+                            if normalized_ident.eq(normalized_window_ident) {
+                                f.over = Some(match window_expr {
+                                    NamedWindowExpr::NamedWindow(ident) => {
+                                        WindowType::NamedWindow(ident.clone())
+                                    }
+                                    NamedWindowExpr::WindowSpec(spec) => {
+                                        WindowType::WindowSpec(spec.clone())
+                                    }
+                                })
+                            }
+                        }
+                        // All named windows must be defined with a WindowSpec.
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            let normalized_ident =
-                                self.ident_normalizer.normalize(ident.clone());
-                            for (
-                                NamedWindowDefinition(_, window_expr),
-                                normalized_window_ident,
-                            ) in named_windows.iter()
-                            {
-                                if normalized_ident.eq(normalized_window_ident) {
-                                    f.over = Some(match window_expr {
-                                        NamedWindowExpr::NamedWindow(ident) => {
-                                            WindowType::NamedWindow(ident.clone())
-                                        }
-                                        NamedWindowExpr::WindowSpec(spec) => {
-                                            WindowType::WindowSpec(spec.clone())
-                                        }
-                                    })
-                                }
-                            }
-                            // All named windows must be defined with a WindowSpec.
-                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                                err =
-                                    Some(plan_err!("The window {ident} is not defined!"));
-                                return ControlFlow::Break(());
-                            }
+                            err = Some(plan_err!("The window {ident} is not defined!"));
+                            return ControlFlow::Break(());
                         }
                     }
                     ControlFlow::Continue(())

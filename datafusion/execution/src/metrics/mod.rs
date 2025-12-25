@@ -22,6 +22,7 @@ mod builder;
 mod custom;
 mod value;
 
+use datafusion_common::HashMap;
 use parking_lot::Mutex;
 use std::{
     borrow::Cow,
@@ -29,9 +30,8 @@ use std::{
     sync::Arc,
 };
 
-use datafusion_common::HashMap;
-
 // public exports
+
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
@@ -40,15 +40,14 @@ pub use value::{
     ScopedTimerGuard, Time, Timestamp,
 };
 
-/// Something that tracks a value of interest (metric) of a DataFusion
-/// [`ExecutionPlan`] execution.
+/// Something that tracks a value of interest (metric) during execution.
 ///
 /// Typically [`Metric`]s are not created directly, but instead
 /// are created using [`MetricBuilder`] or methods on
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-/// use datafusion_physical_plan::metrics::*;
+/// use datafusion_execution::metrics::*;
 ///
 /// let metrics = ExecutionPlanMetricsSet::new();
 /// assert!(metrics.clone_inner().output_rows().is_none());
@@ -66,8 +65,6 @@ pub use value::{
 /// // As well as from the metrics set
 /// assert_eq!(metrics.clone_inner().output_rows(), Some(13));
 /// ```
-///
-/// [`ExecutionPlan`]: super::ExecutionPlan
 
 #[derive(Debug)]
 pub struct Metric {
@@ -204,9 +201,7 @@ impl Metric {
     }
 }
 
-/// A snapshot of the metrics for a particular ([`ExecutionPlan`]).
-///
-/// [`ExecutionPlan`]: super::ExecutionPlan
+/// A snapshot of the metrics for a particular execution plan.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Vec<Arc<Metric>>,
@@ -401,17 +396,14 @@ impl Display for MetricsSet {
     }
 }
 
-/// A set of [`Metric`]s for an individual "operator" (e.g. `&dyn
-/// ExecutionPlan`).
+/// A set of [`Metric`]s for an individual operator.
 ///
-/// This structure is intended as a convenience for [`ExecutionPlan`]
+/// This structure is intended as a convenience for execution plan
 /// implementations so they can generate different streams for multiple
 /// partitions but easily report them together.
 ///
 /// Each `clone()` of this structure will add metrics to the same
 /// underlying metrics set
-///
-/// [`ExecutionPlan`]: super::ExecutionPlan
 #[derive(Default, Debug, Clone)]
 pub struct ExecutionPlanMetricsSet {
     inner: Arc<Mutex<MetricsSet>>,
@@ -742,9 +734,15 @@ mod tests {
             n.join(", ")
         }
 
-        assert_eq!("end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows", metric_names(&metrics));
+        assert_eq!(
+            "end_timestamp, start_timestamp, elapsed_compute, the_second_counter, the_counter, the_third_counter, the_time, output_rows",
+            metric_names(&metrics)
+        );
 
         let metrics = metrics.sorted_for_display();
-        assert_eq!("output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp", metric_names(&metrics));
+        assert_eq!(
+            "output_rows, elapsed_compute, the_counter, the_second_counter, the_third_counter, the_time, start_timestamp, end_timestamp",
+            metric_names(&metrics)
+        );
     }
 }

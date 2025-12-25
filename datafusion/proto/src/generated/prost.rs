@@ -1076,7 +1076,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1154,6 +1154,8 @@ pub mod physical_plan_node {
         SortMergeJoin(::prost::alloc::boxed::Box<super::SortMergeJoinExecNode>),
         #[prost(message, tag = "35")]
         MemoryScan(super::MemoryScanExecNode),
+        #[prost(message, tag = "36")]
+        AsyncFunc(::prost::alloc::boxed::Box<super::AsyncFuncExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1274,7 +1276,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1325,6 +1327,8 @@ pub mod physical_expr_node {
         Extension(super::PhysicalExtensionExprNode),
         #[prost(message, tag = "20")]
         UnknownColumn(super::UnknownColumn),
+        #[prost(message, tag = "21")]
+        HashExpr(super::PhysicalHashExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1513,6 +1517,21 @@ pub struct PhysicalExtensionExprNode {
     pub expr: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "2")]
+    pub seed0: u64,
+    #[prost(uint64, tag = "3")]
+    pub seed1: u64,
+    #[prost(uint64, tag = "4")]
+    pub seed2: u64,
+    #[prost(uint64, tag = "5")]
+    pub seed3: u64,
+    #[prost(string, tag = "6")]
+    pub description: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
@@ -1837,6 +1856,8 @@ pub struct AggregateExecNode {
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
     #[prost(message, optional, tag = "11")]
     pub limit: ::core::option::Option<AggLimit>,
+    #[prost(bool, tag = "12")]
+    pub has_grouping_set: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {
@@ -2103,6 +2124,15 @@ pub struct SortMergeJoinExecNode {
     pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AsyncFuncExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "2")]
+    pub async_exprs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, repeated, tag = "3")]
+    pub async_expr_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]

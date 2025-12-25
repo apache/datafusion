@@ -20,7 +20,7 @@ use std::ops::ControlFlow;
 
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::ast::{
-    self, visit_expressions_mut, LimitClause, OrderByKind, SelectFlavor,
+    self, LimitClause, OrderByKind, SelectFlavor, visit_expressions_mut,
 };
 
 #[derive(Clone)]
@@ -38,7 +38,6 @@ pub struct QueryBuilder {
     distinct_union: bool,
 }
 
-#[allow(dead_code)]
 impl QueryBuilder {
     pub fn with(&mut self, value: Option<ast::With>) -> &mut Self {
         self.with = value;
@@ -140,7 +139,16 @@ impl Default for QueryBuilder {
 pub struct SelectBuilder {
     distinct: Option<ast::Distinct>,
     top: Option<ast::Top>,
-    projection: Vec<ast::SelectItem>,
+    /// Projection items for the SELECT clause.
+    ///
+    /// This field uses `Option` to distinguish between three distinct states:
+    /// - `None`: No projection has been set (not yet initialized)
+    /// - `Some(vec![])`: Empty projection explicitly set (generates `SELECT FROM ...` or `SELECT 1 FROM ...`)
+    /// - `Some(vec![SelectItem::Wildcard(...)])`: Wildcard projection (generates `SELECT * FROM ...`)
+    /// - `Some(vec![...])`: Non-empty projection with specific columns/expressions
+    ///
+    /// Use `projection()` to set this field and `already_projected()` to check if it has been set.
+    projection: Option<Vec<ast::SelectItem>>,
     into: Option<ast::SelectInto>,
     from: Vec<TableWithJoinsBuilder>,
     lateral_views: Vec<ast::LateralView>,
@@ -156,7 +164,6 @@ pub struct SelectBuilder {
     flavor: Option<SelectFlavor>,
 }
 
-#[allow(dead_code)]
 impl SelectBuilder {
     pub fn distinct(&mut self, value: Option<ast::Distinct>) -> &mut Self {
         self.distinct = value;
@@ -167,16 +174,37 @@ impl SelectBuilder {
         self
     }
     pub fn projection(&mut self, value: Vec<ast::SelectItem>) -> &mut Self {
-        self.projection = value;
+        self.projection = Some(value);
         self
     }
     pub fn pop_projections(&mut self) -> Vec<ast::SelectItem> {
-        let ret = self.projection.clone();
-        self.projection.clear();
-        ret
+        self.projection.take().unwrap_or_default()
     }
+    /// Returns true if a projection has been explicitly set via `projection()`.
+    ///
+    /// This method is used to determine whether the SELECT clause has already been
+    /// defined, which helps avoid creating duplicate projection nodes during query
+    /// unparsing. It returns `true` for both empty and non-empty projections.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if `projection()` has been called (regardless of whether it was empty or not)
+    /// - `false` if no projection has been set yet
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut builder = SelectBuilder::default();
+    /// assert!(!builder.already_projected());
+    ///
+    /// builder.projection(vec![]);
+    /// assert!(builder.already_projected()); // true even for empty projection
+    ///
+    /// builder.projection(vec![SelectItem::Wildcard(...)]);
+    /// assert!(builder.already_projected()); // true for non-empty projection
+    /// ```
     pub fn already_projected(&self) -> bool {
-        !self.projection.is_empty()
+        self.projection.is_some()
     }
     pub fn into(&mut self, value: Option<ast::SelectInto>) -> &mut Self {
         self.into = value;
@@ -290,7 +318,7 @@ impl SelectBuilder {
             distinct: self.distinct.clone(),
             top_before_distinct: false,
             top: self.top.clone(),
-            projection: self.projection.clone(),
+            projection: self.projection.clone().unwrap_or_default(),
             into: self.into.clone(),
             from: self
                 .from
@@ -302,7 +330,7 @@ impl SelectBuilder {
             group_by: match self.group_by {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("group_by")))
+                    return Err(Into::into(UninitializedFieldError::from("group_by")));
                 }
             },
             cluster_by: self.cluster_by.clone(),
@@ -327,7 +355,7 @@ impl SelectBuilder {
         Self {
             distinct: Default::default(),
             top: Default::default(),
-            projection: Default::default(),
+            projection: None,
             into: Default::default(),
             from: Default::default(),
             lateral_views: Default::default(),
@@ -356,7 +384,6 @@ pub struct TableWithJoinsBuilder {
     joins: Vec<ast::Join>,
 }
 
-#[allow(dead_code)]
 impl TableWithJoinsBuilder {
     pub fn relation(&mut self, value: RelationBuilder) -> &mut Self {
         self.relation = Some(value);
@@ -402,9 +429,8 @@ pub struct RelationBuilder {
     relation: Option<TableFactorBuilder>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 enum TableFactorBuilder {
     Table(TableRelationBuilder),
     Derived(DerivedRelationBuilder),
@@ -412,7 +438,6 @@ enum TableFactorBuilder {
     Empty,
 }
 
-#[allow(dead_code)]
 impl RelationBuilder {
     pub fn has_relation(&self) -> bool {
         self.relation.is_some()
@@ -484,7 +509,6 @@ pub struct TableRelationBuilder {
     index_hints: Vec<ast::TableIndexHints>,
 }
 
-#[allow(dead_code)]
 impl TableRelationBuilder {
     pub fn name(&mut self, value: ast::ObjectName) -> &mut Self {
         self.name = Some(value);
@@ -558,7 +582,6 @@ pub struct DerivedRelationBuilder {
     alias: Option<ast::TableAlias>,
 }
 
-#[allow(dead_code)]
 impl DerivedRelationBuilder {
     pub fn lateral(&mut self, value: bool) -> &mut Self {
         self.lateral = Some(value);
@@ -581,7 +604,7 @@ impl DerivedRelationBuilder {
             subquery: match self.subquery {
                 Some(ref value) => value.clone(),
                 None => {
-                    return Err(Into::into(UninitializedFieldError::from("subquery")))
+                    return Err(Into::into(UninitializedFieldError::from("subquery")));
                 }
             },
             alias: self.alias.clone(),
@@ -610,7 +633,6 @@ pub struct UnnestRelationBuilder {
     with_ordinality: bool,
 }
 
-#[allow(dead_code)]
 impl UnnestRelationBuilder {
     pub fn alias(&mut self, value: Option<ast::TableAlias>) -> &mut Self {
         self.alias = value;
@@ -711,10 +733,10 @@ impl From<String> for BuilderError {
 impl fmt::Display for BuilderError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::UninitializedField(ref field) => {
+            Self::UninitializedField(field) => {
                 write!(f, "`{field}` must be initialized")
             }
-            Self::ValidationError(ref error) => write!(f, "{error}"),
+            Self::ValidationError(error) => write!(f, "{error}"),
         }
     }
 }
