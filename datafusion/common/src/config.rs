@@ -22,7 +22,7 @@ use arrow_ipc::CompressionType;
 #[cfg(feature = "parquet_encryption")]
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
-use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::format::{CatalogFormat, ExplainAnalyzeLevel, ExplainFormat};
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -241,7 +241,7 @@ config_namespace! {
         pub location: Option<String>, default = None
 
         /// Type of `TableProvider` to use when loading `default` schema
-        pub format: Option<String>, default = None
+        pub format: Option<CatalogFormat>,  default = None
 
         /// Default value for `format.has_header` for `CREATE EXTERNAL TABLE`
         /// if not specified explicitly in the statement.
@@ -3080,8 +3080,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     use crate::config::TableParquetOptions;
     use crate::config::{
-        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
-        Extensions, TableOptions,
+        ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ConfigOptions,
+        ExtensionOptions, Extensions, TableOptions,
     };
     use std::any::Any;
     use std::collections::HashMap;
@@ -3454,5 +3454,46 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+
+    #[test]
+    fn test_catalog_format_validation() {
+        let mut config = ConfigOptions::default();
+
+        // Test all valid formats
+        config.set("datafusion.catalog.format", "CSV").unwrap();
+        assert!(config.catalog.format.is_some());
+
+        config.set("datafusion.catalog.format", "JSON").unwrap();
+        assert!(config.catalog.format.is_some());
+
+        config.set("datafusion.catalog.format", "NDJSON").unwrap();
+        assert!(config.catalog.format.is_some());
+
+        config.set("datafusion.catalog.format", "ARROW").unwrap();
+        assert!(config.catalog.format.is_some());
+
+        #[cfg(feature = "parquet")]
+        {
+            config.set("datafusion.catalog.format", "PARQUET").unwrap();
+            assert!(config.catalog.format.is_some());
+        }
+
+        #[cfg(feature = "avro")]
+        {
+            config.set("datafusion.catalog.format", "AVRO").unwrap();
+            assert!(config.catalog.format.is_some());
+        }
+
+        // Case-insensitive
+        config.set("datafusion.catalog.format", "csv").unwrap();
+        assert!(config.catalog.format.is_some());
+
+        // Invalid format should error
+        let result = config.set("datafusion.catalog.format", "INVALID");
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Invalid catalog format"));
+        assert!(error_msg.contains("INVALID")); // Error should mention the invalid value
     }
 }
