@@ -3488,7 +3488,7 @@ an error will be returned.</p></li>
 </section>
 <section id="to-unixtime">
 <h3><code class="docutils literal notranslate"><span class="pre">to_unixtime</span></code><a class="headerlink" href="#to-unixtime" title="Link to this heading">#</a></h3>
-<p>Converts a value to seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00Z</span></code>). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. ‘2023-07-20T05:44:00’) if no <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono formats</a> are provided.</p>
+<p>Converts a value to seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00</span></code>). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. ‘2023-07-20T05:44:00’) if no <a class="reference external" href="https://docs.rs/chrono/latest/chrono/format/strftime/index.html">Chrono formats</a> are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (<code class="docutils literal notranslate"><span class="pre">1970-01-01T00:00:00</span></code>).</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">to_unixtime</span><span class="p">(</span><span class="n">expression</span><span class="p">[,</span><span class="w"> </span><span class="p">...,</span><span class="w"> </span><span class="n">format_n</span><span class="p">])</span>
 </pre></div>
 </div>
