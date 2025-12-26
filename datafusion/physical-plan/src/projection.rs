@@ -1595,7 +1595,7 @@ mod tests {
 
     /// Test that `DynamicFilterPhysicalExpr` can correctly update its child expression
     /// i.e. starting with lit(true) and after update it becomes `a > 5`
-    /// with projection [b as a], the pushed down filter should be `b > 5`
+    /// with projection [b - 1 as a], the pushed down filter should be `b - 1 > 5`
     #[test]
     fn test_dyn_filter_projection_pushdown_update_child() -> Result<()> {
         let input_schema =
