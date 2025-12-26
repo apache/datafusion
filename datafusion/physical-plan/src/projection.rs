@@ -383,6 +383,8 @@ impl ExecutionPlan for ProjectionExec {
                     let proj_expr = &self.expr()[col.index()];
 
                     // Check if projection expression is a simple column
+                    // We cannot push down order by clauses that depend on
+                    // projected computations as they would have nothing to reference.
                     if let Some(child_col) =
                         proj_expr.expr.as_any().downcast_ref::<Column>()
                     {
