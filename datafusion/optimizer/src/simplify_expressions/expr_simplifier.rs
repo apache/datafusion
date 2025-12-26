@@ -27,6 +27,7 @@ use std::collections::HashSet;
 use std::ops::Not;
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -225,7 +226,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         mut expr: Expr,
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let config_options = self.info.config_options().cloned();
+        let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
@@ -500,7 +502,7 @@ impl TreeNodeRewriter for Canonicalizer {
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
-struct ConstEvaluator<'a> {
+struct ConstEvaluator {
     /// `can_evaluate` is used during the depth-first-search of the
     /// `Expr` tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -514,8 +516,13 @@ struct ConstEvaluator<'a> {
     /// means there were no non evaluatable siblings (or their
     /// descendants) so this `Expr` can be evaluated
     can_evaluate: Vec<bool>,
-
-    execution_props: &'a ExecutionProps,
+    /// Execution properties needed to call [`create_physical_expr`].
+    /// `ConstEvaluator` only evaluates expressions without column references
+    /// (i.e. constant expressions) and doesn't use the variable binding features
+    /// of `ExecutionProps` (we explicitly filter out [`Expr::ScalarVariable`]).
+    /// The `config_options` are passed from the session to allow scalar functions
+    /// to access configuration like timezone.
+    execution_props: ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -530,7 +537,7 @@ enum ConstSimplifyResult {
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
-impl TreeNodeRewriter for ConstEvaluator<'_> {
+impl TreeNodeRewriter for ConstEvaluator {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -593,11 +600,17 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
     }
 }
 
-impl<'a> ConstEvaluator<'a> {
-    /// Create a new `ConstantEvaluator`. Session constants (such as
-    /// the time for `now()` are taken from the passed
-    /// `execution_props`.
-    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
+impl ConstEvaluator {
+    /// Create a new `ConstantEvaluator`.
+    ///
+    /// Note: `ConstEvaluator` filters out expressions with scalar variables
+    /// (like `$var`) and volatile functions, so it creates its own default
+    /// `ExecutionProps` internally. The filtered expressions will be evaluated
+    /// at runtime where proper variable bindings are available.
+    ///
+    /// The `config_options` parameter is used to pass session configuration
+    /// (like timezone) to scalar functions during constant evaluation.
+    pub fn try_new(config_options: Option<Arc<ConfigOptions>>) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
@@ -610,6 +623,9 @@ impl<'a> ConstEvaluator<'a> {
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(schema, vec![col])?;
+
+        let mut execution_props = ExecutionProps::new();
+        execution_props.config_options = config_options;
 
         Ok(Self {
             can_evaluate: vec![],
@@ -684,11 +700,14 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
-        let phys_expr =
-            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
-                Ok(e) => e,
-                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-            };
+        let phys_expr = match create_physical_expr(
+            &expr,
+            &self.input_schema,
+            &self.execution_props,
+        ) {
+            Ok(e) => e,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         let metadata = phys_expr
             .return_field(self.input_batch.schema_ref())
             .ok()

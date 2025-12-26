@@ -121,16 +121,18 @@ impl ScalarUDFImpl for NowFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info
-            .execution_props()
-            .query_execution_start_time
-            .timestamp_nanos_opt();
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, self.timezone.clone()),
+            ScalarValue::TimestampNanosecond(
+                now_ts.timestamp_nanos_opt(),
+                self.timezone.clone(),
+            ),
             None,
         )))
     }

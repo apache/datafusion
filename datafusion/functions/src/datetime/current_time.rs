@@ -95,14 +95,15 @@ impl ScalarUDFImpl for CurrentTimeFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         // Try to get timezone from config and convert to local time
         let nano = info
-            .execution_props()
             .config_options()
             .and_then(|config| {
                 config
@@ -145,6 +146,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, TimeUnit::Nanosecond};
     use chrono::{DateTime, Utc};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -163,17 +165,21 @@ mod tests {
             Ok(true)
         }
 
-        fn execution_props(&self) -> &ExecutionProps {
-            &self.execution_props
-        }
-
         fn get_data_type(&self, _expr: &Expr) -> Result<DataType> {
             Ok(Time64(Nanosecond))
+        }
+
+        fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+            self.execution_props.query_execution_start_time
+        }
+
+        fn config_options(&self) -> Option<&Arc<ConfigOptions>> {
+            self.execution_props.config_options.as_ref()
         }
     }
 
     fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
-        let mut config = datafusion_common::config::ConfigOptions::default();
+        let mut config = ConfigOptions::default();
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
