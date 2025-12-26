@@ -786,7 +786,8 @@ pub fn simple_projection_exec(
         .map(|&i| {
             let field = schema.field(i);
             (
-                Arc::new(expressions::Column::new(field.name(), i)) as Arc<dyn PhysicalExpr>,
+                Arc::new(expressions::Column::new(field.name(), i))
+                    as Arc<dyn PhysicalExpr>,
                 field.name().to_string(),
             )
         })
@@ -805,7 +806,8 @@ pub fn projection_exec_with_alias(
         .iter()
         .map(|&(i, alias)| {
             (
-                Arc::new(expressions::Column::new(schema.field(i).name(), i)) as Arc<dyn PhysicalExpr>,
+                Arc::new(expressions::Column::new(schema.field(i).name(), i))
+                    as Arc<dyn PhysicalExpr>,
                 alias.to_string(),
             )
         })

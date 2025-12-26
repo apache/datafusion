@@ -370,7 +370,7 @@ impl ExecutionPlan for ProjectionExec {
         // Check and transform sort expressions
         for sort_expr in order {
             // Recursively transform the expression
-            let transformed = sort_expr.expr.clone().transform(|expr| {
+            let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
                 if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                     // Check if column index is valid
                     if col.index() >= self.expr().len() {
@@ -380,7 +380,9 @@ impl ExecutionPlan for ProjectionExec {
                     let proj_expr = &self.expr()[col.index()];
 
                     // Check if projection expression is a simple column
-                    if let Some(child_col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+                    if let Some(child_col) =
+                        proj_expr.expr.as_any().downcast_ref::<Column>()
+                    {
                         // Replace with the child column
                         Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
                     } else {

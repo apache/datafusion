@@ -24,14 +24,19 @@
 //! 4. Early termination is enabled for TopK queries
 //! 5. Prefix matching works correctly
 
-use std::sync::Arc;
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
+use std::sync::Arc;
 
-use crate::physical_optimizer::test_utils::{OptimizationTest, coalesce_batches_exec, coalesce_partitions_exec, parquet_exec, parquet_exec_with_sort, repartition_exec, schema, sort_exec, sort_exec_with_fetch, sort_expr, simple_projection_exec, projection_exec_with_alias, sort_expr_named, projection_exec};
+use crate::physical_optimizer::test_utils::{
+    OptimizationTest, coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
+    parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
+    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
+    sort_expr, sort_expr_named,
+};
 
 #[test]
 fn test_sort_pushdown_disabled() {
@@ -625,9 +630,7 @@ fn test_pushdown_through_blocking_node() {
     let count_expr = Arc::new(
         AggregateExprBuilder::new(
             count_udaf(),
-            vec![
-                Arc::new(expressions::Column::new("b", 1)) as _,
-            ],
+            vec![Arc::new(expressions::Column::new("b", 1)) as _],
         )
         .schema(Arc::clone(&schema))
         .alias("COUNT(b)")
@@ -773,7 +776,7 @@ fn test_no_sort_pushdown_through_computed_projection() {
         ],
         source,
     )
-        .unwrap();
+    .unwrap();
 
     // Request [sum DESC] - should NOT push down (sum is computed)
     let sum_expr = sort_expr_named("sum", 0);
