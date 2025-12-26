@@ -2063,7 +2063,7 @@ impl datafusion_execution::TaskContextProvider for SessionState {
 }
 
 impl OptimizerConfig for SessionState {
-    fn query_execution_start_time(&self) -> DateTime<Utc> {
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
         self.execution_props.query_execution_start_time
     }
 
@@ -2135,12 +2135,16 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
         expr.nullable(self.df_schema)
     }
 
-    fn execution_props(&self) -> &ExecutionProps {
-        self.state.execution_props()
-    }
-
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
         expr.get_type(self.df_schema)
+    }
+
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+        self.state.execution_props().query_execution_start_time
+    }
+
+    fn config_options(&self) -> Option<&Arc<ConfigOptions>> {
+        self.state.execution_props().config_options.as_ref()
     }
 }
 

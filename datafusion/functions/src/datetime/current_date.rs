@@ -99,14 +99,15 @@ impl ScalarUDFImpl for CurrentDateFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &dyn SimplifyInfo,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         // Get timezone from config and convert to local time
         let days = info
-            .execution_props()
             .config_options()
             .and_then(|config| {
                 config

@@ -26,6 +26,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_int32_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
@@ -66,12 +67,16 @@ impl SimplifyInfo for MyInfo {
         expr.nullable(self.schema.as_ref())
     }
 
-    fn execution_props(&self) -> &ExecutionProps {
-        &self.execution_props
-    }
-
     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
         expr.get_type(self.schema.as_ref())
+    }
+
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
+        self.execution_props.query_execution_start_time
+    }
+
+    fn config_options(&self) -> Option<&Arc<ConfigOptions>> {
+        self.execution_props.config_options.as_ref()
     }
 }
 
@@ -523,6 +528,51 @@ fn multiple_now() -> Result<()> {
     Ok(())
 }
 
+/// Test that `now()` is simplified to a literal when execution start time is set,
+/// but remains as an expression when no execution start time is available.
+#[test]
+fn now_simplification_with_and_without_start_time() {
+    let schema = expr_test_schema();
+
+    // Case 1: With execution start time set, now() should be simplified to a literal
+    {
+        let start_time = Utc::now();
+        let info = MyInfo {
+            schema: Arc::clone(&schema),
+            execution_props: ExecutionProps::new()
+                .with_query_execution_start_time(start_time),
+        };
+        let simplifier = ExprSimplifier::new(info);
+        let simplified = simplifier.simplify(now()).expect("simplify should succeed");
+
+        // Should be a literal timestamp
+        match simplified {
+            Expr::Literal(ScalarValue::TimestampNanosecond(Some(ts), _), _) => {
+                assert_eq!(ts, start_time.timestamp_nanos_opt().unwrap());
+            }
+            other => panic!("Expected timestamp literal, got: {other:?}"),
+        }
+    }
+
+    // Case 2: Without execution start time, now() should remain as a function call
+    {
+        let info = MyInfo {
+            schema: Arc::clone(&schema),
+            execution_props: ExecutionProps::new(), // No start time set
+        };
+        let simplifier = ExprSimplifier::new(info);
+        let simplified = simplifier.simplify(now()).expect("simplify should succeed");
+
+        // Should remain as a scalar function (not simplified)
+        match simplified {
+            Expr::ScalarFunction(func) => {
+                assert_eq!(func.name(), "now");
+            }
+            other => panic!("Expected now() to remain unsimplified, got: {other:?}"),
+        }
+    }
+}
+
 // ------------------------------
 // --- Simplifier tests -----
 // ------------------------------
@@ -566,7 +616,8 @@ fn test_simplify_with_cycle_count(
 ) {
     let info: MyInfo = MyInfo {
         schema: expr_test_schema(),
-        execution_props: ExecutionProps::new(),
+        execution_props: ExecutionProps::new()
+            .with_query_execution_start_time(Utc::now()),
     };
     let simplifier = ExprSimplifier::new(info);
     let (simplified_expr, count) = simplifier
