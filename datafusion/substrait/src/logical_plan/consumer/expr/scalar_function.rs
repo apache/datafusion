@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{from_substrait_func_args, SubstraitConsumer};
+use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
+use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
 use std::sync::Arc;
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
