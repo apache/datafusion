@@ -15,22 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, ops::Range};
+use std::ffi::c_void;
+use std::ops::Range;
 
-use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
-};
-use arrow::{array::ArrayRef, error::ArrowError};
-use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::{window_state::WindowAggState, PartitionEvaluator},
-    scalar::ScalarValue,
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RVec};
+use arrow::array::ArrayRef;
+use arrow::error::ArrowError;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::PartitionEvaluator;
+use datafusion_expr::window_state::WindowAggState;
 use prost::Message;
 
 use super::range::FFI_Range;
+use crate::arrow_wrappers::WrappedArray;
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 
 /// A stable struct for sharing [`PartitionEvaluator`] across FFI boundaries.
 /// For an explanation of each field, see the corresponding function
@@ -43,26 +44,25 @@ pub struct FFI_PartitionEvaluator {
         evaluator: &mut Self,
         values: RVec<WrappedArray>,
         num_rows: usize,
-    ) -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub evaluate: unsafe extern "C" fn(
         evaluator: &mut Self,
         values: RVec<WrappedArray>,
         range: FFI_Range,
-    ) -> RResult<RVec<u8>, RString>,
+    ) -> FFIResult<RVec<u8>>,
 
     pub evaluate_all_with_rank: unsafe extern "C" fn(
         evaluator: &Self,
         num_rows: usize,
         ranks_in_partition: RVec<FFI_Range>,
-    )
-        -> RResult<WrappedArray, RString>,
+    ) -> FFIResult<WrappedArray>,
 
     pub get_range: unsafe extern "C" fn(
         evaluator: &Self,
         idx: usize,
         n_rows: usize,
-    ) -> RResult<FFI_Range, RString>,
+    ) -> FFIResult<FFI_Range>,
 
     pub is_causal: bool,
 
@@ -92,13 +92,17 @@ pub struct PartitionEvaluatorPrivateData {
 
 impl FFI_PartitionEvaluator {
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn PartitionEvaluator + 'static> {
-        let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        &mut (*private_data).evaluator
+        unsafe {
+            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            &mut (*private_data).evaluator
+        }
     }
 
     unsafe fn inner(&self) -> &(dyn PartitionEvaluator + 'static) {
-        let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
-        (*private_data).evaluator.as_ref()
+        unsafe {
+            let private_data = self.private_data as *mut PartitionEvaluatorPrivateData;
+            (*private_data).evaluator.as_ref()
+        }
     }
 }
 
@@ -106,79 +110,97 @@ unsafe extern "C" fn evaluate_all_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     num_rows: usize,
-) -> RResult<WrappedArray, RString> {
-    let inner = evaluator.inner_mut();
+) -> FFIResult<WrappedArray> {
+    unsafe {
+        let inner = evaluator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    let return_array = inner
-        .evaluate_all(&values_arrays, num_rows)
-        .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let return_array =
+            inner
+                .evaluate_all(&values_arrays, num_rows)
+                .and_then(|array| {
+                    WrappedArray::try_from(&array).map_err(DataFusionError::from)
+                });
 
-    rresult!(return_array)
+        rresult!(return_array)
+    }
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
     evaluator: &mut FFI_PartitionEvaluator,
     values: RVec<WrappedArray>,
     range: FFI_Range,
-) -> RResult<RVec<u8>, RString> {
-    let inner = evaluator.inner_mut();
+) -> FFIResult<RVec<u8>> {
+    unsafe {
+        let inner = evaluator.inner_mut();
 
-    let values_arrays = values
-        .into_iter()
-        .map(|v| v.try_into().map_err(DataFusionError::from))
-        .collect::<Result<Vec<ArrayRef>>>();
-    let values_arrays = rresult_return!(values_arrays);
+        let values_arrays = values
+            .into_iter()
+            .map(|v| v.try_into().map_err(DataFusionError::from))
+            .collect::<Result<Vec<ArrayRef>>>();
+        let values_arrays = rresult_return!(values_arrays);
 
-    // let return_array = (inner.evaluate(&values_arrays, &range.into()));
-    // .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
-    let scalar_result = rresult_return!(inner.evaluate(&values_arrays, &range.into()));
-    let proto_result: datafusion_proto::protobuf::ScalarValue =
-        rresult_return!((&scalar_result).try_into());
+        // let return_array = (inner.evaluate(&values_arrays, &range.into()));
+        // .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let scalar_result =
+            rresult_return!(inner.evaluate(&values_arrays, &range.into()));
+        let proto_result: datafusion_proto::protobuf::ScalarValue =
+            rresult_return!((&scalar_result).try_into());
 
-    RResult::ROk(proto_result.encode_to_vec().into())
+        RResult::ROk(proto_result.encode_to_vec().into())
+    }
 }
 
 unsafe extern "C" fn evaluate_all_with_rank_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     num_rows: usize,
     ranks_in_partition: RVec<FFI_Range>,
-) -> RResult<WrappedArray, RString> {
-    let inner = evaluator.inner();
+) -> FFIResult<WrappedArray> {
+    unsafe {
+        let inner = evaluator.inner();
 
-    let ranks_in_partition = ranks_in_partition
-        .into_iter()
-        .map(Range::from)
-        .collect::<Vec<_>>();
+        let ranks_in_partition = ranks_in_partition
+            .into_iter()
+            .map(Range::from)
+            .collect::<Vec<_>>();
 
-    let return_array = inner
-        .evaluate_all_with_rank(num_rows, &ranks_in_partition)
-        .and_then(|array| WrappedArray::try_from(&array).map_err(DataFusionError::from));
+        let return_array = inner
+            .evaluate_all_with_rank(num_rows, &ranks_in_partition)
+            .and_then(|array| {
+                WrappedArray::try_from(&array).map_err(DataFusionError::from)
+            });
 
-    rresult!(return_array)
+        rresult!(return_array)
+    }
 }
 
 unsafe extern "C" fn get_range_fn_wrapper(
     evaluator: &FFI_PartitionEvaluator,
     idx: usize,
     n_rows: usize,
-) -> RResult<FFI_Range, RString> {
-    let inner = evaluator.inner();
-    let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
+) -> FFIResult<FFI_Range> {
+    unsafe {
+        let inner = evaluator.inner();
+        let range = inner.get_range(idx, n_rows).map(FFI_Range::from);
 
-    rresult!(range)
+        rresult!(range)
+    }
 }
 
 unsafe extern "C" fn release_fn_wrapper(evaluator: &mut FFI_PartitionEvaluator) {
-    if !evaluator.private_data.is_null() {
-        let private_data =
-            Box::from_raw(evaluator.private_data as *mut PartitionEvaluatorPrivateData);
-        drop(private_data);
+    unsafe {
+        if !evaluator.private_data.is_null() {
+            let private_data = Box::from_raw(
+                evaluator.private_data as *mut PartitionEvaluatorPrivateData,
+            );
+            drop(private_data);
+            evaluator.private_data = std::ptr::null_mut();
+        }
     }
 }
 
@@ -334,11 +356,12 @@ impl PartitionEvaluator for ForeignPartitionEvaluator {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayRef;
+    use datafusion::logical_expr::PartitionEvaluator;
+
     use crate::udwf::partition_evaluator::{
         FFI_PartitionEvaluator, ForeignPartitionEvaluator,
     };
-    use arrow::array::ArrayRef;
-    use datafusion::logical_expr::PartitionEvaluator;
 
     #[derive(Debug)]
     struct TestPartitionEvaluator {}

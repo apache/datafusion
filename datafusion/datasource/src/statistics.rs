@@ -22,8 +22,8 @@
 
 use std::sync::Arc;
 
-use crate::file_groups::FileGroup;
 use crate::PartitionedFile;
+use crate::file_groups::FileGroup;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortColumn;
@@ -31,7 +31,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::row::{Row, Rows};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    plan_datafusion_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -50,13 +50,13 @@ pub(crate) struct MinMaxStatistics {
 
 impl MinMaxStatistics {
     /// Sort order used to sort the statistics
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn sort_order(&self) -> &LexOrdering {
         &self.sort_order
     }
 
     /// Min value at index
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }
@@ -292,7 +292,7 @@ fn sort_columns_from_physical_sort_exprs(
     since = "47.0.0",
     note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
 )]
-#[allow(unused)]
+#[expect(unused)]
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
     file_schema: SchemaRef,
@@ -367,12 +367,14 @@ pub async fn get_statistics_with_limit(
                         min_value: file_min,
                         sum_value: file_sum,
                         distinct_count: _,
+                        byte_size: file_sbs,
                     } = file_col_stats;
 
                     col_stats.null_count = col_stats.null_count.add(file_nc);
                     col_stats.max_value = col_stats.max_value.max(file_max);
                     col_stats.min_value = col_stats.min_value.min(file_min);
                     col_stats.sum_value = col_stats.sum_value.add(file_sum);
+                    col_stats.byte_size = col_stats.byte_size.add(file_sbs);
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing

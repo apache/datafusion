@@ -28,15 +28,15 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_execution::config::SessionConfig;
-use datafusion_physical_expr::expressions::{col, Literal};
 use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
 use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use async_trait::async_trait;
 
@@ -393,12 +393,9 @@ fn create_test_schema2() -> SchemaRef {
 /// Check if sanity checker should accept or reject plans.
 fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
+    let opts = ConfigOptions::default();
     assert_eq!(
-        sanity_checker
-            .optimize_plan(plan.clone(), &optimizer_context)
-            .is_ok(),
+        sanity_checker.optimize(plan.clone(), &opts).is_ok(),
         is_sane
     );
 }
@@ -558,7 +555,7 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
@@ -608,7 +605,7 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
@@ -656,7 +653,7 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]

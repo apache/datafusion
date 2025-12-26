@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::scalar::ScalarValue;
 
 fn criterion_benchmark(c: &mut Criterion) {

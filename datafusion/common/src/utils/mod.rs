@@ -24,7 +24,7 @@ pub mod string_utils;
 
 use crate::assert_or_internal_err;
 use crate::error::{_exec_datafusion_err, _internal_datafusion_err};
-use crate::{DataFusionError, Result, ScalarValue};
+use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,

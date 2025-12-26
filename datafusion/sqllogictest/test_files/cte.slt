@@ -125,6 +125,25 @@ SELECT * FROM nodes
 3
 4
 
+# deduplicating recursive CTE with two variables works
+query II
+WITH RECURSIVE ranges AS (
+    SELECT min, max from (VALUES (1, 1), (2, 2)) ranges(min, max)
+    UNION
+    SELECT min, max + 1 as max
+    FROM ranges
+    WHERE max < 4
+)
+SELECT * FROM ranges
+----
+1 1
+2 2
+1 2
+2 3
+1 3
+2 4
+1 4
+
 # setup
 statement ok
 CREATE EXTERNAL TABLE balance STORED as CSV LOCATION '../core/tests/data/recursive_cte/balance.csv' OPTIONS ('format.has_header' 'true');
@@ -647,21 +666,51 @@ ORDER BY
 3 1400 1
 1 2700 2
 
-#expect error from recursive CTE with nested recursive terms
-query error DataFusion error: This feature is not implemented: Recursive queries cannot be nested
+#nested recursive ctes
+query I
 WITH RECURSIVE outer_cte AS (
     SELECT 1 as a
     UNION ALL (
-        WITH  RECURSIVE nested_cte AS (
+        WITH RECURSIVE nested_cte AS (
            SELECT 1 as a
            UNION ALL
-           SELECT a+2 as a
-	   FROM nested_cte where a < 3
-         )
-    SELECT outer_cte.a +2
-    FROM outer_cte JOIN nested_cte USING(a)
-    WHERE nested_cte.a < 4
-   )
+           SELECT a + 2 as a
+           FROM nested_cte where a < 3
+        )
+        SELECT outer_cte.a + 2 as a
+        FROM outer_cte JOIN nested_cte USING(a)
+        WHERE nested_cte.a < 4
+    )
+)
+SELECT a FROM outer_cte;
+----
+1
+3
+5
+
+# Check that CTE name shadowing is returning an error
+query error DataFusion error: Error during planning: WITH query name "outer_cte" specified more than once
+WITH RECURSIVE outer_cte AS (
+    SELECT 1 as a
+    UNION ALL (
+        WITH RECURSIVE nested_cte AS (
+           SELECT 1 as a
+           UNION ALL (
+               WITH RECURSIVE outer_cte AS (
+                    SELECT 1 as a
+                    UNION ALL
+                    SELECT a + 2 as a
+                    FROM outer_cte where a < 3
+               )
+               SELECT nested_cte.a + outer_cte.a as a
+               FROM nested_cte JOIN outer_cte USING(a)
+               WHERE outer_cte_cte.a < 8
+           )
+        )
+        SELECT outer_cte.a + nested_cte.a as a
+        FROM outer_cte JOIN nested_cte USING(a)
+        WHERE nested_cte.a < 8
+    )
 )
 SELECT a FROM outer_cte;
 
@@ -909,10 +958,9 @@ logical_plan
 04)----SubqueryAlias: cte
 05)------TableScan: person projection=[id]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8182
-02)--HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
-03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)----DataSourceExec: partitions=1, partition_sizes=[0]
+01)HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement count 0
 drop table person;
@@ -1099,14 +1147,11 @@ physical_plan
 01)RecursiveQueryExec: name=trans, is_distinct=true
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 03)--CoalescePartitionsExec
-04)----CoalesceBatchesExec: target_batch_size=8182
-05)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(end@1, start@0)], projection=[start@0, end@3]
-06)--------CoalesceBatchesExec: target_batch_size=8182
-07)----------RepartitionExec: partitioning=Hash([end@1], 4), input_partitions=1
-08)------------WorkTableExec: name=trans
-09)--------CoalesceBatchesExec: target_batch_size=8182
-10)----------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
-11)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
+04)----HashJoinExec: mode=Partitioned, join_type=Inner, on=[(end@1, start@0)], projection=[start@0, end@3]
+05)------RepartitionExec: partitioning=Hash([end@1], 4), input_partitions=1
+06)--------WorkTableExec: name=trans
+07)------RepartitionExec: partitioning=Hash([start@0], 4), input_partitions=1
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/recursive_cte/closure.csv]]}, projection=[start, end], file_type=csv, has_header=true
 
 statement count 0
 set datafusion.execution.enable_recursive_ctes = false;

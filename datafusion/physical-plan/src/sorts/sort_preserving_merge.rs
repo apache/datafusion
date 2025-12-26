@@ -23,18 +23,16 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::{make_with_child, update_ordering, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
 };
 
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_err, DataFusionError, Result,
-};
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 use crate::execution_plan::{EvaluationType, SchedulingType};
@@ -306,7 +304,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             1 => match self.fetch {
                 Some(fetch) => {
                     let stream = self.input.execute(0, context)?;
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input with {fetch}"
+                    );
                     Ok(Box::pin(LimitStream::new(
                         stream,
                         0,
@@ -316,7 +316,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
                 None => {
                     let stream = self.input.execute(0, context);
-                    debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch");
+                    debug!(
+                        "Done getting stream for SortPreservingMergeExec::execute with 1 input without fetch"
+                    );
                     stream
                 }
             },
@@ -329,7 +331,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     })
                     .collect::<Result<_>>()?;
 
-                debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
+                debug!(
+                    "Done setting up sender-receiver for SortPreservingMergeExec::execute"
+                );
 
                 let result = StreamingMergeBuilder::new()
                     .with_streams(receivers)
@@ -342,7 +346,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .with_round_robin_tie_breaker(self.enable_round_robin_repartition)
                     .build()?;
 
-                debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
+                debug!(
+                    "Got stream result from SortPreservingMergeStream::new_from_receivers"
+                );
 
                 Ok(result)
             }
@@ -398,7 +404,7 @@ mod tests {
     use std::fmt::Formatter;
     use std::pin::Pin;
     use std::sync::Mutex;
-    use std::task::{ready, Context, Poll, Waker};
+    use std::task::{Context, Poll, Waker, ready};
     use std::time::Duration;
 
     use super::*;
@@ -410,8 +416,8 @@ mod tests {
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
-    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -424,11 +430,11 @@ mod tests {
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{assert_batches_eq, exec_err};
     use datafusion_common_runtime::SpawnedTask;
+    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_execution::RecordBatchStream;
-    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
@@ -977,22 +983,22 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+-------------------------------+
-            | a | b | c                             |
-            +---+---+-------------------------------+
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 1 |   | 1970-01-01T00:00:00.000000008 |
-            | 2 | a |                               |
-            | 7 | b | 1970-01-01T00:00:00.000000006 |
-            | 2 | b |                               |
-            | 9 | d |                               |
-            | 3 | e | 1970-01-01T00:00:00.000000004 |
-            | 3 | g | 1970-01-01T00:00:00.000000005 |
-            | 4 | h |                               |
-            | 5 | i | 1970-01-01T00:00:00.000000004 |
-            +---+---+-------------------------------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+-------------------------------+
+        | a | b | c                             |
+        +---+---+-------------------------------+
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 1 |   | 1970-01-01T00:00:00.000000008 |
+        | 2 | a |                               |
+        | 7 | b | 1970-01-01T00:00:00.000000006 |
+        | 2 | b |                               |
+        | 9 | d |                               |
+        | 3 | e | 1970-01-01T00:00:00.000000004 |
+        | 3 | g | 1970-01-01T00:00:00.000000005 |
+        | 4 | h |                               |
+        | 5 | i | 1970-01-01T00:00:00.000000004 |
+        +---+---+-------------------------------+
+        ");
     }
 
     #[tokio::test]
@@ -1018,14 +1024,14 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1050,17 +1056,17 @@ mod tests {
         let collected = collect(merge, task_ctx).await.unwrap();
         assert_eq!(collected.len(), 1);
 
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | a |
-            | 2 | b |
-            | 7 | c |
-            | 9 | d |
-            | 3 | e |
-            +---+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | a |
+        | 2 | b |
+        | 7 | c |
+        | 9 | d |
+        | 3 | e |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -1159,16 +1165,16 @@ mod tests {
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
             .await
             .unwrap();
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-            +----+---+
-            | a  | b |
-            +----+---+
-            | 1  | a |
-            | 10 | b |
-            | 2  | c |
-            | 20 | d |
-            +----+---+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +----+---+
+        | a  | b |
+        +----+---+
+        | 1  | a |
+        | 10 | b |
+        | 2  | c |
+        | 20 | d |
+        +----+---+
+        ");
 
         // Now, validate metrics
         let metrics = merge.metrics().unwrap();
@@ -1274,32 +1280,32 @@ mod tests {
         // Expect the data to be sorted first by "batch_number" (because
         // that was the order it was fed in, even though only "value"
         // is in the sort key)
-        assert_snapshot!(batches_to_string(collected.as_slice()), @r#"
-                +--------------+-------+
-                | batch_number | value |
-                +--------------+-------+
-                | 0            | A     |
-                | 1            | A     |
-                | 2            | A     |
-                | 3            | A     |
-                | 4            | A     |
-                | 5            | A     |
-                | 6            | A     |
-                | 7            | A     |
-                | 8            | A     |
-                | 9            | A     |
-                | 0            | B     |
-                | 1            | B     |
-                | 2            | B     |
-                | 3            | B     |
-                | 4            | B     |
-                | 5            | B     |
-                | 6            | B     |
-                | 7            | B     |
-                | 8            | B     |
-                | 9            | B     |
-                +--------------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(collected.as_slice()), @r"
+        +--------------+-------+
+        | batch_number | value |
+        +--------------+-------+
+        | 0            | A     |
+        | 1            | A     |
+        | 2            | A     |
+        | 3            | A     |
+        | 4            | A     |
+        | 5            | A     |
+        | 6            | A     |
+        | 7            | A     |
+        | 8            | A     |
+        | 9            | A     |
+        | 0            | B     |
+        | 1            | B     |
+        | 2            | B     |
+        | 3            | B     |
+        | 4            | B     |
+        | 5            | B     |
+        | 6            | B     |
+        | 7            | B     |
+        | 8            | B     |
+        | 9            | B     |
+        +--------------+-------+
+        ");
     }
 
     #[derive(Debug)]

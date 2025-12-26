@@ -40,9 +40,9 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
       - name: Install cargo-audit
-        uses: taiki-e/install-action@b4b80945859e8ef89a9732a0f46499a443b196fe  # v2.62.59
+        uses: taiki-e/install-action@50cee16bd6b97b2579572f83cfa1c0a721b1e336  # v2.65.2
         with:
           tool: cargo-audit
       - name: Run audit check

@@ -3935,7 +3935,7 @@ mod tests {
         assert_eq!(interval.cardinality().unwrap(), 9178336040581070850);
 
         let interval = Interval::try_new(
-            ScalarValue::UInt64(Some(u64::MIN + 1)),
+            ScalarValue::UInt64(Some(1)),
             ScalarValue::UInt64(Some(u64::MAX)),
         )?;
         assert_eq!(interval.cardinality().unwrap(), u64::MAX);

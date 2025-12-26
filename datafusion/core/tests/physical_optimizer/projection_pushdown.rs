@@ -26,9 +26,8 @@ use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
-use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::TableSchema;
-use datafusion_execution::config::SessionConfig;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
@@ -36,30 +35,32 @@ use datafusion_expr::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
-    binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
+    BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr, binary, cast, col,
 };
 use datafusion_physical_expr::{Distribution, Partitioning, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::{OptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
     SymmetricHashJoinExec,
 };
-use datafusion_physical_plan::projection::{update_expr, ProjectionExec, ProjectionExpr};
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr, update_expr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::{displayable, ExecutionPlan};
+use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use insta::assert_snapshot;
 use itertools::Itertools;
@@ -231,9 +232,11 @@ fn test_update_matching_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &child_exprs, true)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert!(
+            update_expr(&expr, &child_exprs, true)?
+                .unwrap()
+                .eq(&expected_expr)
+        );
     }
 
     Ok(())
@@ -370,9 +373,11 @@ fn test_update_projected_exprs() -> Result<()> {
         .map(|(expr, alias)| ProjectionExpr::new(expr.clone(), alias.clone()))
         .collect();
     for (expr, expected_expr) in exprs.into_iter().zip(expected_exprs.into_iter()) {
-        assert!(update_expr(&expr, &proj_exprs, false)?
-            .unwrap()
-            .eq(&expected_expr));
+        assert!(
+            update_expr(&expr, &proj_exprs, false)?
+                .unwrap()
+                .eq(&expected_expr)
+        );
     }
 
     Ok(())
@@ -396,7 +401,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
             };
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
-        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_file(PartitionedFile::new("x", 100))
         .with_projection_indices(Some(vec![0, 1, 2, 3, 4]))
         .unwrap()
         .build();
@@ -421,7 +426,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
             };
             Arc::new(CsvSource::new(schema.clone()).with_csv_options(options))
         })
-        .with_file(PartitionedFile::new("x".to_string(), 100))
+        .with_file(PartitionedFile::new("x", 100))
         .with_projection_indices(Some(vec![3, 2, 1]))
         .unwrap()
         .build();
@@ -446,8 +451,8 @@ fn test_csv_after_projection() -> Result<()> {
     let csv = create_projecting_csv_exec();
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 2)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 0)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 2)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 0)), "d"),
         ],
         csv.clone(),
     )?);
@@ -462,10 +467,8 @@ fn test_csv_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -485,9 +488,9 @@ fn test_memory_after_projection() -> Result<()> {
     let memory = create_projecting_memory_exec();
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("d", 2)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 3)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 1)), "a"),
         ],
         memory.clone(),
     )?);
@@ -502,10 +505,8 @@ fn test_memory_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -593,17 +594,15 @@ fn test_streaming_table_after_projection() -> Result<()> {
     )?;
     let projection = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 2)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 2)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
         ],
         Arc::new(streaming_table) as _,
     )?) as _;
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let result = after_optimize
         .as_any()
@@ -662,28 +661,25 @@ fn test_projection_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let child_projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "new_e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "new_b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "new_e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "new_b"),
         ],
         csv.clone(),
     )?);
     let top_projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "new_b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "new_b"),
             ProjectionExpr::new(
                 Arc::new(BinaryExpr::new(
                     Arc::new(Column::new("c", 0)),
                     Operator::Plus,
                     Arc::new(Column::new("new_e", 1)),
                 )),
-                "binary".to_string(),
+                "binary",
             ),
-            ProjectionExpr::new(
-                Arc::new(Column::new("new_b", 3)),
-                "newest_b".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("new_b", 3)), "newest_b"),
         ],
         child_projection.clone(),
     )?);
@@ -702,10 +698,8 @@ fn test_projection_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(top_projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(top_projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -750,9 +744,9 @@ fn test_output_req_after_projection() -> Result<()> {
     ));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         sort_req.clone(),
     )?);
@@ -769,10 +763,8 @@ fn test_output_req_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -825,10 +817,11 @@ fn test_output_req_after_projection() -> Result<()> {
         .required_input_distribution()[0]
         .clone()
     {
-        assert!(vec
-            .iter()
-            .zip(expected_distribution)
-            .all(|(actual, expected)| actual.eq(&expected)));
+        assert!(
+            vec.iter()
+                .zip(expected_distribution)
+                .all(|(actual, expected)| actual.eq(&expected))
+        );
     } else {
         panic!("Expected HashPartitioned distribution!");
     };
@@ -843,9 +836,9 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
         Arc::new(CoalescePartitionsExec::new(csv));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
         ],
         coalesce_partitions,
     )?);
@@ -861,10 +854,8 @@ fn test_coalesce_partitions_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -901,9 +892,9 @@ fn test_filter_after_projection() -> Result<()> {
     let filter = Arc::new(FilterExec::try_new(predicate, csv)?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_new"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
         ],
         filter.clone(),
     )?) as _;
@@ -920,10 +911,8 @@ fn test_filter_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -997,17 +986,11 @@ fn test_join_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
-            ProjectionExpr::new(
-                Arc::new(Column::new("a", 5)),
-                "a_from_right".to_string(),
-            ),
-            ProjectionExpr::new(
-                Arc::new(Column::new("c", 7)),
-                "c_from_right".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a_from_right"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c_from_right"),
         ],
         join,
     )?) as _;
@@ -1024,10 +1007,8 @@ fn test_join_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1128,16 +1109,16 @@ fn test_join_after_required_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 6)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 8)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 9)), "e".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "e".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 5)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 6)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 8)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 9)), "e"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d"),
+            ProjectionExpr::new(Arc::new(Column::new("e", 4)), "e"),
         ],
         join,
     )?) as _;
@@ -1154,10 +1135,8 @@ fn test_join_after_required_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1219,7 +1198,7 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     )?) as _;
 
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
-        vec![ProjectionExpr::new(col_left_c, "c".to_string())],
+        vec![ProjectionExpr::new(col_left_c, "c")],
         Arc::clone(&join),
     )?) as _;
     let initial = displayable(projection.as_ref()).indent(true).to_string();
@@ -1234,10 +1213,8 @@ fn test_nested_loop_join_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize_string =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
     let after_optimize_string = displayable(after_optimize_string.as_ref())
         .indent(true)
         .to_string();
@@ -1311,13 +1288,10 @@ fn test_hash_join_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left".to_string()),
-            ProjectionExpr::new(
-                Arc::new(Column::new("c", 7)),
-                "c_from_right".to_string(),
-            ),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a_from_left"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c_from_right"),
         ],
         join.clone(),
     )?) as _;
@@ -1333,10 +1307,8 @@ fn test_hash_join_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1355,18 +1327,16 @@ fn test_hash_join_after_projection() -> Result<()> {
 
     let projection = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("c", 7)), "c"),
         ],
         join.clone(),
     )?);
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
         .to_string();
@@ -1401,9 +1371,9 @@ fn test_repartition_after_projection() -> Result<()> {
     )?);
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_new".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d_new".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b_new"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("d", 3)), "d_new"),
         ],
         repartition,
     )?) as _;
@@ -1418,10 +1388,8 @@ fn test_repartition_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1472,9 +1440,9 @@ fn test_sort_after_projection() -> Result<()> {
     );
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         Arc::new(sort_exec),
     )?) as _;
@@ -1490,10 +1458,8 @@ fn test_sort_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1527,9 +1493,9 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     );
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         Arc::new(sort_exec),
     )?) as _;
@@ -1545,10 +1511,8 @@ fn test_sort_preserving_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1571,9 +1535,9 @@ fn test_union_after_projection() -> Result<()> {
     let union = UnionExec::try_new(vec![csv.clone(), csv.clone(), csv])?;
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         vec![
-            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a".to_string()),
-            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b".to_string()),
+            ProjectionExpr::new(Arc::new(Column::new("c", 2)), "c"),
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "new_a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
         ],
         union.clone(),
     )?) as _;
@@ -1591,10 +1555,8 @@ fn test_union_after_projection() -> Result<()> {
     "
     );
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1635,7 +1597,7 @@ fn partitioned_data_source() -> Arc<DataSourceExec> {
         ObjectStoreUrl::parse("test:///").unwrap(),
         Arc::new(CsvSource::new(table_schema).with_csv_options(options)),
     )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_file(PartitionedFile::new("x", 100))
     .with_projection_indices(Some(vec![0, 1, 2]))
     .unwrap()
     .build();
@@ -1652,24 +1614,19 @@ fn test_partition_col_projection_pushdown() -> Result<()> {
         vec![
             ProjectionExpr::new(
                 col("string_col", partitioned_schema.as_ref())?,
-                "string_col".to_string(),
+                "string_col",
             ),
             ProjectionExpr::new(
                 col("partition_col", partitioned_schema.as_ref())?,
-                "partition_col".to_string(),
+                "partition_col",
             ),
-            ProjectionExpr::new(
-                col("int_col", partitioned_schema.as_ref())?,
-                "int_col".to_string(),
-            ),
+            ProjectionExpr::new(col("int_col", partitioned_schema.as_ref())?, "int_col"),
         ],
         source,
     )?);
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1692,7 +1649,7 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
         vec![
             ProjectionExpr::new(
                 col("string_col", partitioned_schema.as_ref())?,
-                "string_col".to_string(),
+                "string_col",
             ),
             ProjectionExpr::new(
                 // CAST(partition_col, Utf8View)
@@ -1701,20 +1658,15 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
                     partitioned_schema.as_ref(),
                     DataType::Utf8View,
                 )?,
-                "partition_col".to_string(),
+                "partition_col",
             ),
-            ProjectionExpr::new(
-                col("int_col", partitioned_schema.as_ref())?,
-                "int_col".to_string(),
-            ),
+            ProjectionExpr::new(col("int_col", partitioned_schema.as_ref())?, "int_col"),
         ],
         source,
     )?);
 
-    let session_config = SessionConfig::new();
-    let optimizer_context = OptimizerContext::new(session_config.clone());
     let after_optimize =
-        ProjectionPushdown::new().optimize_plan(projection, &optimizer_context)?;
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
 
     let after_optimize_string = displayable(after_optimize.as_ref())
         .indent(true)
@@ -1723,6 +1675,105 @@ fn test_partition_col_projection_pushdown_expr() -> Result<()> {
     assert_snapshot!(
         actual,
         @"DataSourceExec: file_groups={1 group: [[x]]}, projection=[string_col, CAST(partition_col@2 AS Utf8View) as partition_col, int_col], file_type=csv, has_header=false"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_coalesce_batches_after_projection() -> Result<()> {
+    let csv = create_simple_csv_exec();
+    let filter = Arc::new(FilterExec::try_new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c", 2)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        )),
+        csv,
+    )?);
+    let coalesce_batches: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalesceBatchesExec::new(filter, 8192));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+        ],
+        coalesce_batches,
+    )?);
+
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
+    let actual = initial.trim();
+
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[a@0 as a, b@1 as b]
+      CoalesceBatchesExec: target_batch_size=8192
+        FilterExec: c@2 > 0
+          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+
+    // Projection should be pushed down through CoalesceBatchesExec
+    assert_snapshot!(
+        actual,
+        @r"
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: c@2 > 0, projection=[a@0, b@1]
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_cooperative_exec_after_projection() -> Result<()> {
+    let csv = create_simple_csv_exec();
+    let cooperative: Arc<dyn ExecutionPlan> = Arc::new(CooperativeExec::new(csv));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr::new(Arc::new(Column::new("a", 0)), "a"),
+            ProjectionExpr::new(Arc::new(Column::new("b", 1)), "b"),
+        ],
+        cooperative,
+    )?);
+
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
+    let actual = initial.trim();
+
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[a@0 as a, b@1 as b]
+      CooperativeExec
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
+    "
+    );
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+
+    // Projection should be pushed down through CooperativeExec
+    assert_snapshot!(
+        actual,
+        @r"
+    CooperativeExec
+      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b], file_type=csv, has_header=false
+    "
     );
 
     Ok(())

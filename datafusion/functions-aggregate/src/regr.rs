@@ -26,8 +26,7 @@ use arrow::{
     datatypes::Field,
 };
 use datafusion_common::{
-    downcast_value, plan_err, unwrap_or_internal_err, DataFusionError, HashMap, Result,
-    ScalarValue,
+    HashMap, Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
 };
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -86,7 +85,6 @@ impl Regr {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[allow(clippy::upper_case_acronyms)]
 pub enum RegrType {
     /// Variant for `regr_slope` aggregate expression
     /// Returns the slope of the linear regression line for non-null pairs in aggregate columns.

@@ -27,9 +27,6 @@ use std::fs;
 mod run;
 pub use run::RunOpt;
 
-mod convert;
-pub use convert::ConvertOpt;
-
 pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];

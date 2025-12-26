@@ -26,15 +26,15 @@ use std::sync::Arc;
 use datafusion_common::Result;
 use datafusion_physical_plan::ExecutionPlan;
 
-use datafusion_common::config::OptimizerOptions;
+use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+use datafusion_physical_plan::{ExecutionPlanProperties, get_plan_string};
 
-use crate::{OptimizerContext, PhysicalOptimizerRule};
+use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
 
@@ -47,19 +47,18 @@ use itertools::izip;
 pub struct SanityCheckPlan {}
 
 impl SanityCheckPlan {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
 }
 
 impl PhysicalOptimizerRule for SanityCheckPlan {
-    fn optimize_plan(
+    fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        context: &OptimizerContext,
+        config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = context.session_config().options();
         plan.transform_up(|p| check_plan_sanity(p, &config.optimizer))
             .data()
     }
@@ -79,13 +78,14 @@ pub fn check_finiteness_requirements(
     input: Arc<dyn ExecutionPlan>,
     optimizer_options: &OptimizerOptions,
 ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
-    if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>() {
-        if !(optimizer_options.allow_symmetric_joins_without_pruning
+    if let Some(exec) = input.as_any().downcast_ref::<SymmetricHashJoinExec>()
+        && !(optimizer_options.allow_symmetric_joins_without_pruning
             || (exec.check_if_order_information_available()? && is_prunable(exec)))
-        {
-            return plan_err!("Join operation cannot operate on a non-prunable stream without enabling \
-                              the 'allow_symmetric_joins_without_pruning' configuration flag");
-        }
+    {
+        return plan_err!(
+            "Join operation cannot operate on a non-prunable stream without enabling \
+                              the 'allow_symmetric_joins_without_pruning' configuration flag"
+        );
     }
 
     if matches!(
@@ -153,7 +153,8 @@ pub fn check_plan_sanity(
 
         if !child
             .output_partitioning()
-            .satisfy(&dist_req, child_eq_props)
+            .satisfaction(&dist_req, child_eq_props, true)
+            .is_satisfied()
         {
             let plan_str = get_plan_string(&plan);
             return plan_err!(

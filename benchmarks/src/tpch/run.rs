@@ -19,16 +19,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{
-    get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_QUERY_END_ID,
-    TPCH_QUERY_START_ID, TPCH_TABLES,
+    TPCH_QUERY_END_ID, TPCH_QUERY_START_ID, TPCH_TABLES, get_query_sql,
+    get_tbl_tpch_table_schema, get_tpch_table_schema,
 };
-use crate::util::{print_memory_stats, BenchmarkRun, CommonOpt, QueryResult};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
+use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
@@ -93,9 +93,9 @@ pub struct RunOpt {
     prefer_hash_join: BoolDefaultTrue,
 
     /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
-    /// True by default.
+    /// False by default.
     #[structopt(
-        short = "j",
+        short = "w",
         long = "enable_piecewise_merge_join",
         default_value = "false"
     )]

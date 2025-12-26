@@ -26,8 +26,6 @@ use crate::{
 
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
-// TODO: handle once deprecated
-#[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
@@ -176,7 +174,6 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
-        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -202,6 +199,7 @@ impl ParquetOptions {
             metadata_size_hint: _,
             pushdown_filters: _,
             reorder_filters: _,
+            force_filter_selections: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -263,7 +261,7 @@ pub(crate) fn parse_encoding_string(
         "plain" => Ok(parquet::basic::Encoding::PLAIN),
         "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
         "rle" => Ok(parquet::basic::Encoding::RLE),
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
         "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
         "delta_length_byte_array" => {
@@ -404,10 +402,9 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        ConfigFileEncryptionProperties, ParquetColumnOptions, ParquetEncryptionOptions,
-        ParquetOptions,
-    };
+    #[cfg(feature = "parquet_encryption")]
+    use crate::config::ConfigFileEncryptionProperties;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -440,7 +437,6 @@ mod tests {
             "1.0"
         };
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
@@ -466,6 +462,7 @@ mod tests {
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
+            force_filter_selections: defaults.force_filter_selections,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -486,7 +483,6 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -547,7 +543,6 @@ mod tests {
         #[cfg(not(feature = "parquet_encryption"))]
         let fep = None;
 
-        #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
@@ -579,6 +574,7 @@ mod tests {
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
+                force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults

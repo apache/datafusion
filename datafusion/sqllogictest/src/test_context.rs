@@ -32,12 +32,12 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
 };
-use datafusion::common::{not_impl_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
-    create_udf, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility, create_udf,
 };
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
@@ -49,8 +49,8 @@ use datafusion::{
 use crate::is_spark_path;
 use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use log::info;
 use tempfile::TempDir;
 
