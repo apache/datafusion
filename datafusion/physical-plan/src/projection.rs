@@ -1616,9 +1616,11 @@ mod tests {
         let current = dynamic_filter.current()?;
         assert_eq!(format!("{current}"), "true");
 
+        let dyn_phy_expr: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![dynamic_filter.clone()],
+            vec![dyn_phy_expr],
             &ConfigOptions::default(),
         )?;
 
