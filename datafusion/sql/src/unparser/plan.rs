@@ -340,7 +340,7 @@ impl Unparser<'_> {
     ) -> Result<()> {
         match plan {
             LogicalPlan::TableScan(scan) => {
-                if let Some(unparsed_table_scan) = Self::unparse_table_scan_pushdown(
+                if let Some(unparsed_table_scan) = self.unparse_table_scan_pushdown(
                     plan,
                     None,
                     select.already_projected(),
@@ -822,7 +822,7 @@ impl Unparser<'_> {
             LogicalPlan::SubqueryAlias(plan_alias) => {
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
-                let unparsed_table_scan = Self::unparse_table_scan_pushdown(
+                let unparsed_table_scan = self.unparse_table_scan_pushdown(
                     plan,
                     Some(plan_alias.alias.clone()),
                     select.already_projected(),
@@ -1062,6 +1062,7 @@ impl Unparser<'_> {
     /// Try to unparse a table scan with pushdown operations into a new subquery plan.
     /// If the table scan is without any pushdown operations, return None.
     fn unparse_table_scan_pushdown(
+        &self,
         plan: &LogicalPlan,
         alias: Option<TableReference>,
         already_projected: bool,
@@ -1099,10 +1100,7 @@ impl Unparser<'_> {
                 // information included in the TableScan node.
                 if !already_projected && let Some(project_vec) = &table_scan.projection {
                     if project_vec.is_empty() {
-                        builder = builder.project(vec![Expr::Literal(
-                            ScalarValue::Int64(Some(1)),
-                            None,
-                        )])?;
+                        builder = builder.project(self.empty_projection_fallback())?;
                     } else {
                         let project_columns = project_vec
                             .iter()
@@ -1164,7 +1162,7 @@ impl Unparser<'_> {
                 Ok(Some(builder.build()?))
             }
             LogicalPlan::SubqueryAlias(subquery_alias) => {
-                let ret = Self::unparse_table_scan_pushdown(
+                let ret = self.unparse_table_scan_pushdown(
                     &subquery_alias.input,
                     Some(subquery_alias.alias.clone()),
                     already_projected,
@@ -1180,7 +1178,7 @@ impl Unparser<'_> {
             // SubqueryAlias could be rewritten to a plan with a projection as the top node by [rewrite::subquery_alias_inner_query_and_columns].
             // The inner table scan could be a scan with pushdown operations.
             LogicalPlan::Projection(projection) => {
-                if let Some(plan) = Self::unparse_table_scan_pushdown(
+                if let Some(plan) = self.unparse_table_scan_pushdown(
                     &projection.input,
                     alias.clone(),
                     already_projected,
@@ -1412,6 +1410,17 @@ impl Unparser<'_> {
 
     fn dml_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
         not_impl_err!("Unsupported plan: {plan:?}")
+    }
+
+    /// Generates appropriate projection expression for empty projection lists.
+    /// Returns an empty vec for dialects supporting empty select lists,
+    /// or a dummy literal `1` for other dialects.
+    fn empty_projection_fallback(&self) -> Vec<Expr> {
+        if self.dialect.supports_empty_select_list() {
+            Vec::new()
+        } else {
+            vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
+        }
     }
 }
 

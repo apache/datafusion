@@ -79,11 +79,7 @@ impl ScalarUDFImpl for SparkCrc32 {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|scalar| scalar.is_some_and(|s| s.is_null()));
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(self.name(), DataType::Int64, nullable)))
     }
 
@@ -135,7 +131,6 @@ fn spark_crc32(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_crc32_nullability() -> Result<()> {
@@ -155,15 +150,6 @@ mod tests {
         let result = crc32_func.return_field_from_args(ReturnFieldArgs {
             arg_fields: &[field_nullable],
             scalar_arguments: &[None],
-        })?;
-        assert!(result.is_nullable());
-        assert_eq!(result.data_type(), &DataType::Int64);
-
-        // null scalar value - user input literal NULL
-        let scalar_null = ScalarValue::Binary(None);
-        let result = crc32_func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[field_not_null],
-            scalar_arguments: &[Some(&scalar_null)],
         })?;
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Int64);

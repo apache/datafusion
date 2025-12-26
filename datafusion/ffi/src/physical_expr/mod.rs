@@ -18,42 +18,36 @@
 pub(crate) mod partitioning;
 pub(crate) mod sort;
 
-use std::{
-    any::Any,
-    ffi::c_void,
-    fmt::{Display, Formatter},
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
-};
+use std::any::Any;
+use std::ffi::c_void;
+use std::fmt::{Display, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RResult, RString, RVec},
-};
-use arrow::{
-    array::{ArrayRef, BooleanArray, RecordBatch},
-    datatypes::SchemaRef,
-};
-use arrow_schema::{DataType, Field, FieldRef, Schema, ffi::FFI_ArrowSchema};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RResult, RString, RVec};
+use arrow::array::{ArrayRef, BooleanArray, RecordBatch};
+use arrow::datatypes::SchemaRef;
+use arrow_schema::ffi::FFI_ArrowSchema;
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use datafusion_common::{Result, ffi_datafusion_err};
-use datafusion_expr::{
-    ColumnarValue, interval_arithmetic::Interval, sort_properties::ExprProperties,
-    statistics::Distribution,
-};
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::statistics::Distribution;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    df_result,
-    expr::{
-        columnar_value::FFI_ColumnarValue, distribution::FFI_Distribution,
-        expr_properties::FFI_ExprProperties, interval::FFI_Interval,
-    },
-    record_batch_stream::{record_batch_to_wrapped_array, wrapped_array_to_record_batch},
-    rresult, rresult_return,
-    util::FFIResult,
+use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::expr::columnar_value::FFI_ColumnarValue;
+use crate::expr::distribution::FFI_Distribution;
+use crate::expr::expr_properties::FFI_ExprProperties;
+use crate::expr::interval::FFI_Interval;
+use crate::record_batch_stream::{
+    record_batch_to_wrapped_array, wrapped_array_to_record_batch,
 };
+use crate::util::FFIResult;
+use crate::{df_result, rresult, rresult_return};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -737,14 +731,14 @@ impl Display for ForeignPhysicalExpr {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        hash::{DefaultHasher, Hash, Hasher},
-        sync::Arc,
-    };
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     use arrow::array::{BooleanArray, RecordBatch, record_batch};
-    use datafusion_common::{DataFusionError, ScalarValue, tree_node::DynTreeNode};
-    use datafusion_expr::{interval_arithmetic::Interval, statistics::Distribution};
+    use datafusion_common::tree_node::DynTreeNode;
+    use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_expr::interval_arithmetic::Interval;
+    use datafusion_expr::statistics::Distribution;
     use datafusion_physical_expr::expressions::{Column, NegativeExpr, NotExpr};
     use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, fmt_sql};
 
