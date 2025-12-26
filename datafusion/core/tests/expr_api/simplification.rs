@@ -32,8 +32,8 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
-    Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
-    Volatility, table_scan,
+    Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection,
+    ScalarUDF, Volatility, table_scan,
 };
 use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -528,27 +528,43 @@ fn multiple_now() -> Result<()> {
     Ok(())
 }
 
+/// Unwraps an alias expression to get the inner expression
+fn unrwap_aliases(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias(alias) => unrwap_aliases(&alias.expr),
+        expr => expr,
+    }
+}
+
 /// Test that `now()` is simplified to a literal when execution start time is set,
 /// but remains as an expression when no execution start time is available.
 #[test]
 fn now_simplification_with_and_without_start_time() {
-    let schema = expr_test_schema();
+    let plan = LogicalPlanBuilder::empty(false)
+        .project(vec![now()])
+        .unwrap()
+        .build()
+        .unwrap();
 
     // Case 1: With execution start time set, now() should be simplified to a literal
     {
-        let start_time = Utc::now();
-        let info = MyInfo {
-            schema: Arc::clone(&schema),
-            execution_props: ExecutionProps::new()
-                .with_query_execution_start_time(start_time),
+        let time = DateTime::<Utc>::from_timestamp_nanos(123);
+        let ctx: OptimizerContext =
+            OptimizerContext::new().with_query_execution_start_time(time);
+        let optimizer = SimplifyExpressions {};
+        let simplified = optimizer
+            .rewrite(plan.clone(), &ctx)
+            .expect("simplify should succeed")
+            .data;
+        let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
+            panic!("Expected Projection plan");
         };
-        let simplifier = ExprSimplifier::new(info);
-        let simplified = simplifier.simplify(now()).expect("simplify should succeed");
-
+        assert_eq!(expr.len(), 1);
+        let simplified = unrwap_aliases(expr.first().unwrap());
         // Should be a literal timestamp
         match simplified {
             Expr::Literal(ScalarValue::TimestampNanosecond(Some(ts), _), _) => {
-                assert_eq!(ts, start_time.timestamp_nanos_opt().unwrap());
+                assert_eq!(*ts, time.timestamp_nanos_opt().unwrap());
             }
             other => panic!("Expected timestamp literal, got: {other:?}"),
         }
@@ -556,19 +572,24 @@ fn now_simplification_with_and_without_start_time() {
 
     // Case 2: Without execution start time, now() should remain as a function call
     {
-        let info = MyInfo {
-            schema: Arc::clone(&schema),
-            execution_props: ExecutionProps::new(), // No start time set
+        let ctx: OptimizerContext =
+            OptimizerContext::new().without_query_execution_start_time();
+        let optimizer = SimplifyExpressions {};
+        let simplified = optimizer
+            .rewrite(plan, &ctx)
+            .expect("simplify should succeed")
+            .data;
+        let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
+            panic!("Expected Projection plan");
         };
-        let simplifier = ExprSimplifier::new(info);
-        let simplified = simplifier.simplify(now()).expect("simplify should succeed");
-
-        // Should remain as a scalar function (not simplified)
+        assert_eq!(expr.len(), 1);
+        let simplified = unrwap_aliases(expr.first().unwrap());
+        // Should still be a now() function call
         match simplified {
-            Expr::ScalarFunction(func) => {
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 assert_eq!(func.name(), "now");
             }
-            other => panic!("Expected now() to remain unsimplified, got: {other:?}"),
+            other => panic!("Expected now() function call, got: {other:?}"),
         }
     }
 }
