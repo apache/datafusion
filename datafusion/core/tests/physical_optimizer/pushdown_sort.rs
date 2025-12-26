@@ -35,7 +35,7 @@ use crate::physical_optimizer::test_utils::{
     OptimizationTest, coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
     parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
     repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
-    sort_expr, sort_expr_named,
+    sort_expr, sort_expr_named, test_scan_with_ordering,
 };
 
 #[test]
@@ -938,6 +938,103 @@ fn test_sort_pushdown_projection_subset_of_columns() {
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   ProjectionExec: expr=[a@0 as a]
           -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+// ============================================================================
+// TESTSCAN DEMONSTRATION TESTS
+// ============================================================================
+// These tests use TestScan to demonstrate how sort pushdown works more clearly
+// than ParquetExec. TestScan can accept ANY ordering (not just reverse) and
+// displays the requested ordering explicitly in the output.
+
+#[test]
+fn test_sort_pushdown_with_test_scan_basic() {
+    // Demonstrates TestScan showing requested ordering clearly
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a DESC] ordering
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC], requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_with_test_scan_multi_column() {
+    // Demonstrates TestScan with multi-column ordering
+    let schema = schema();
+
+    // Source has [a ASC, b DESC] ordering
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone(), b.clone().reverse()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a DESC, b ASC] ordering (reverse of source)
+    let reverse_ordering = LexOrdering::new(vec![a.reverse(), b]).unwrap();
+    let plan = sort_exec(reverse_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC, b@1 DESC NULLS LAST], requested_ordering=[a@0 DESC NULLS LAST, b@1 ASC]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_with_test_scan_arbitrary_ordering() {
+    // Demonstrates that TestScan can accept ANY ordering (not just reverse)
+    // This is different from ParquetExec which only supports reverse scans
+    let schema = schema();
+
+    // Source has [a ASC, b ASC] ordering
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone(), b.clone()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a ASC, b DESC] - NOT a simple reverse, but TestScan accepts it
+    let mixed_ordering = LexOrdering::new(vec![a, b.reverse()]).unwrap();
+    let plan = sort_exec(mixed_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC, b@1 ASC]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC, b@1 ASC], requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
     "
     );
 }
