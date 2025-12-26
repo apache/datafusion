@@ -320,7 +320,7 @@ mod tests {
                 .unwrap();
 
         // We inject the work table
-        let work_table = Arc::new(WorkTable::new());
+        let work_table = Arc::new(WorkTable::new("wt".into()));
         let work_table_exec = work_table_exec
             .with_new_state(Arc::clone(&work_table) as _)
             .unwrap();

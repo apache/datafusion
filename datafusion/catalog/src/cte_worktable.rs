@@ -25,8 +25,8 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::error::Result;
 use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
-use datafusion_physical_plan::work_table::WorkTableExec;
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::work_table::WorkTableExec;
 
 use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
