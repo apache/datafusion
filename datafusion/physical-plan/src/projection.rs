@@ -370,11 +370,13 @@ impl ExecutionPlan for ProjectionExec {
         // Check and transform sort expressions
         for sort_expr in order {
             // Recursively transform the expression
+            let mut can_pushdown = true;
             let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
                 if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                     // Check if column index is valid
                     if col.index() >= self.expr().len() {
-                        return internal_err!("Column index out of bounds");
+                        can_pushdown = false;
+                        return Ok(Transformed::no(expr));
                     }
 
                     let proj_expr = &self.expr()[col.index()];
@@ -387,24 +389,22 @@ impl ExecutionPlan for ProjectionExec {
                         Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
                     } else {
                         // Projection involves computation, cannot push down
-                        internal_err!("Projection contains computation")
+                        can_pushdown = false;
+                        Ok(Transformed::no(expr))
                     }
                 } else {
                     Ok(Transformed::no(expr))
                 }
-            });
+            })?;
 
-            match transformed {
-                Ok(t) => {
-                    child_order.push(PhysicalSortExpr {
-                        expr: t.data,
-                        options: sort_expr.options,
-                    });
-                }
-                Err(_) => {
-                    return Ok(SortOrderPushdownResult::Unsupported);
-                }
+            if !can_pushdown {
+                return Ok(SortOrderPushdownResult::Unsupported);
             }
+
+            child_order.push(PhysicalSortExpr {
+                expr: transformed.data,
+                options: sort_expr.options,
+            });
         }
 
         // Recursively push down to child node
