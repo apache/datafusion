@@ -774,3 +774,50 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
 }
+
+/// Create a simple ProjectionExec with column indices (simplified version)
+pub fn simple_projection_exec(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&i| {
+            let field = schema.field(i);
+            (
+                Arc::new(expressions::Column::new(field.name(), i)) as Arc<dyn PhysicalExpr>,
+                field.name().to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a ProjectionExec with column aliases
+pub fn projection_exec_with_alias(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<(usize, &str)>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&(i, alias)| {
+            (
+                Arc::new(expressions::Column::new(schema.field(i).name(), i)) as Arc<dyn PhysicalExpr>,
+                alias.to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a sort expression with custom name and index
+pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: Arc::new(expressions::Column::new(name, index)),
+        options: SortOptions::default(),
+    }
+}

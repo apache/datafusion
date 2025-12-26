@@ -365,8 +365,48 @@ impl ExecutionPlan for ProjectionExec {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         let child = self.input();
+        let mut child_order = Vec::new();
 
-        match child.try_pushdown_sort(order)? {
+        // Check and transform sort expressions
+        for sort_expr in order {
+            // Recursively transform the expression
+            let transformed = sort_expr.expr.clone().transform(|expr| {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    // Check if column index is valid
+                    if col.index() >= self.expr().len() {
+                        return internal_err!("Column index out of bounds");
+                    }
+
+                    let proj_expr = &self.expr()[col.index()];
+
+                    // Check if projection expression is a simple column
+                    if let Some(child_col) = proj_expr.expr.as_any().downcast_ref::<Column>() {
+                        // Replace with the child column
+                        Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
+                    } else {
+                        // Projection involves computation, cannot push down
+                        internal_err!("Projection contains computation")
+                    }
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            });
+
+            match transformed {
+                Ok(t) => {
+                    child_order.push(PhysicalSortExpr {
+                        expr: t.data,
+                        options: sort_expr.options,
+                    });
+                }
+                Err(_) => {
+                    return Ok(SortOrderPushdownResult::Unsupported);
+                }
+            }
+        }
+
+        // Recursively push down to child node
+        match child.try_pushdown_sort(&child_order)? {
             SortOrderPushdownResult::Exact { inner } => {
                 let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
                 Ok(SortOrderPushdownResult::Exact { inner: new_exec })
