@@ -5098,44 +5098,53 @@ arrow_typeof(expression)
 ### `get_field`
 
 Returns a field within a map or a struct with the given key.
+Supports nested field access by providing multiple field names.
 Note: most users invoke `get_field` indirectly via field access
 syntax such as `my_struct_col['field_name']` which results in a call to
 `get_field(my_struct_col, 'field_name')`.
+Nested access like `my_struct['a']['b']` is optimized to a single call:
+`get_field(my_struct, 'a', 'b')`.
 
 ```sql
-get_field(expression1, expression2)
+get_field(expression, field_name[, field_name2, ...])
 ```
 
 #### Arguments
 
-- **expression1**: The map or struct to retrieve a field for.
-- **expression2**: The field name in the map or struct to retrieve data for. Must evaluate to a string.
+- **expression**: The map or struct to retrieve a field from.
+- **field_name**: The field name(s) to access, in order for nested access. Must evaluate to strings.
 
 #### Example
 
 ```sql
-> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
-> select struct(idx, v) from t as c;
-+-------------------------+
-| struct(c.idx,c.v)       |
-+-------------------------+
-| {c0: data, c1: fusion}  |
-| {c0: apache, c1: arrow} |
-+-------------------------+
-> select get_field((select struct(idx, v) from t), 'c0');
-+-----------------------+
-| struct(t.idx,t.v)[c0] |
-+-----------------------+
-| data                  |
-| apache                |
-+-----------------------+
-> select get_field((select struct(idx, v) from t), 'c1');
-+-----------------------+
-| struct(t.idx,t.v)[c1] |
-+-----------------------+
-| fusion                |
-| arrow                 |
-+-----------------------+
+> -- Access a field from a struct column
+> create table test( struct_col) as values
+    ({name: 'Alice', age: 30}),
+    ({name: 'Bob', age: 25});
+> select struct_col from test;
++-----------------------------+
+| struct_col                  |
++-----------------------------+
+| {name: Alice, age: 30}      |
+| {name: Bob, age: 25}        |
++-----------------------------+
+> select struct_col['name'] as name from test;
++-------+
+| name  |
++-------+
+| Alice |
+| Bob   |
++-------+
+
+> -- Nested field access with multiple arguments
+> create table test(struct_col) as values
+    ({outer: {inner_val: 42}});
+> select struct_col['outer']['inner_val'] as result from test;
++--------+
+| result |
++--------+
+| 42     |
++--------+
 ```
 
 ### `version`
