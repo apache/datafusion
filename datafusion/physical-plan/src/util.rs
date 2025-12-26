@@ -109,10 +109,7 @@ mod tests {
             schema,
         )
         .unwrap();
-        let final_expr =
-            binary(mul_expr, datafusion_expr::Operator::Plus, col_e, schema).unwrap();
-
-        final_expr
+        binary(mul_expr, datafusion_expr::Operator::Plus, col_e, schema).unwrap()
     }
 
     /// Helper function to create a deeply nested expression
@@ -130,10 +127,7 @@ mod tests {
             binary(col_c, datafusion_expr::Operator::Plus, inner1, schema).unwrap();
         let inner3 =
             binary(col_b, datafusion_expr::Operator::Plus, inner2, schema).unwrap();
-        let final_expr =
-            binary(col_a, datafusion_expr::Operator::Plus, inner3, schema).unwrap();
-
-        final_expr
+        binary(col_a, datafusion_expr::Operator::Plus, inner3, schema).unwrap()
     }
 
     #[test]
