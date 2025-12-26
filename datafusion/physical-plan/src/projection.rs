@@ -1112,7 +1112,7 @@ mod tests {
 
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, col, lit,
+        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
     };
 
     #[test]
@@ -1596,10 +1596,16 @@ mod tests {
             input_schema.as_ref().clone(),
         ));
 
-        // project "b" as "a"
+        // project "b" - 1 as "a"
         let projection = ProjectionExec::try_new(
             vec![ProjectionExpr {
-                expr: Arc::new(Column::new("b", 0)),
+                expr: binary(
+                    Arc::new(Column::new("b", 0)),
+                    Operator::Minus,
+                    lit(1),
+                    &input_schema,
+                )
+                .unwrap(),
                 alias: "a".to_string(),
             }],
             input,
@@ -1641,10 +1647,10 @@ mod tests {
         let current = dynamic_filter.current()?;
         assert_eq!(format!("{current}"), "a@0 > 5");
 
-        // Check currently pushed_filters is b > 5 (because b is projected as a)
+        // Check currently pushed_filters is b - 1 > 5 (because b - 1 is projected as a)
         assert_eq!(
             format!("{}", pushed_filters.predicate),
-            "DynamicFilter [ b@0 > 5 ]"
+            "DynamicFilter [ b@0 - 1 > 5 ]"
         );
 
         Ok(())
