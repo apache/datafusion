@@ -99,7 +99,7 @@ pub fn from_exists(
     if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                 function_reference: function_anchor,
