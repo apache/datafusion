@@ -17,7 +17,7 @@
 
 // Constants defined for scalar construction.
 
-// Next F16 value avove π (upper bound)
+// Next F16 value above π (upper bound)
 pub(super) const PI_UPPER_F16: half::f16 = half::f16::from_bits(0x4249);
 
 // Next f32 value above π (upper bound)
