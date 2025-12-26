@@ -16,9 +16,9 @@
 // under the License.
 
 use crate::PhysicalOptimizerRule;
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::ScalarValue;
 use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr::window::{
     PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr,
@@ -113,10 +113,10 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if phase == Phase::Apply {
-                if let Some(out) = apply_limit(&node, &mut ctx) {
-                    return Ok(out);
-                }
+            if phase == Phase::Apply
+                && let Some(out) = apply_limit(&node, &mut ctx)
+            {
+                return Ok(out);
             }
 
             // nodes along the way

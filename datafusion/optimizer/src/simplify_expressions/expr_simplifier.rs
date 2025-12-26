@@ -201,7 +201,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         since = "48.0.0",
         note = "Use `simplify_with_cycle_count_transformed` instead"
     )]
-    #[allow(unused_mut)]
+    #[expect(unused_mut)]
     pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let (transformed, cycle_count) =
             self.simplify_with_cycle_count_transformed(expr)?;
@@ -496,7 +496,6 @@ impl TreeNodeRewriter for Canonicalizer {
     }
 }
 
-#[allow(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
@@ -521,7 +520,6 @@ struct ConstEvaluator<'a> {
     input_batch: RecordBatch,
 }
 
-#[allow(dead_code)]
 /// The simplify result of ConstEvaluator
 enum ConstSimplifyResult {
     // Expr was simplified and contains the new expression

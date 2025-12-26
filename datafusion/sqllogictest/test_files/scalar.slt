@@ -317,6 +317,54 @@ select ceil(100.1234, 1)
 query error DataFusion error: This feature is not implemented: CEIL with datetime is not supported
 select ceil(100.1234 to year)
 
+# ceil with decimal argument
+query RRRR
+select
+  ceil(arrow_cast(1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(-1.23,'Decimal128(10,2)')),
+  ceil(arrow_cast(123.00,'Decimal128(10,2)')),
+  ceil(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+2 -1 123 -123
+
+# ceil overflow with limited precision
+query error Decimal overflow while applying ceil
+select ceil(arrow_cast(9.23,'Decimal128(3,2)'));
+
+# ceil with decimal32 argument (ensure decimal output)
+query TTTTTTTT
+select
+  arrow_typeof(ceil(arrow_cast(9.01,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-9.01,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(-9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(10.00,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(10.00,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-0.99,'Decimal32(7,2)'))),
+  arrow_cast(ceil(arrow_cast(-0.99,'Decimal32(7,2)')), 'Utf8');
+----
+Decimal32(7, 2) 10.00 Decimal32(7, 2) -9.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) 0.00
+
+# ceil with decimal64 zero scale
+query TTTT
+select
+  arrow_typeof(ceil(arrow_cast(123456789,'Decimal64(18,0)'))),
+  arrow_cast(ceil(arrow_cast(123456789,'Decimal64(18,0)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast(-987654321,'Decimal64(18,0)'))),
+  arrow_cast(ceil(arrow_cast(-987654321,'Decimal64(18,0)')), 'Utf8');
+----
+Decimal64(18, 0) 123456789 Decimal64(18, 0) -987654321
+
+# ceil with decimal256 argument
+query TTTT
+select
+  arrow_typeof(ceil(arrow_cast('9999999999999999999999999999999999.01','Decimal256(38,2)'))),
+  arrow_cast(ceil(arrow_cast('9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8'),
+  arrow_typeof(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)'))),
+  arrow_cast(ceil(arrow_cast('-9999999999999999999999999999999999.01','Decimal256(38,2)')), 'Utf8');
+----
+Decimal256(38, 2) 10000000000000000000000000000000000.00 Decimal256(38, 2) -9999999999999999999999999999999999.00
+
 ## degrees
 
 # degrees scalar function
@@ -463,6 +511,54 @@ select floor(a, 1)
 # floor with datetime parameter ( not supported)
 query error DataFusion error: This feature is not implemented: FLOOR with datetime is not supported
 select floor(a to year)
+
+# floor with decimal argument
+query RRRR
+select
+  floor(arrow_cast(1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(-1.23,'Decimal128(10,2)')),
+  floor(arrow_cast(123.00,'Decimal128(10,2)')),
+  floor(arrow_cast(-123.00,'Decimal128(10,2)'));
+----
+1 -2 123 -123
+
+# floor overflow with limited precision
+query error Decimal overflow while applying floor
+select floor(arrow_cast(-9.23,'Decimal128(3,2)'));
+
+# floor with decimal32 argument (ensure decimal output)
+query TTTTTTTT
+select
+  arrow_typeof(floor(arrow_cast(9.99,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(9.99,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-9.01,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(-9.01,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(10.00,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(10.00,'Decimal32(7,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-0.01,'Decimal32(7,2)'))),
+  arrow_cast(floor(arrow_cast(-0.01,'Decimal32(7,2)')), 'Utf8');
+----
+Decimal32(7, 2) 9.00 Decimal32(7, 2) -10.00 Decimal32(7, 2) 10.00 Decimal32(7, 2) -1.00
+
+# floor with decimal64 zero scale
+query TTTT
+select
+  arrow_typeof(floor(arrow_cast(123456789,'Decimal64(18,0)'))),
+  arrow_cast(floor(arrow_cast(123456789,'Decimal64(18,0)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast(-987654321,'Decimal64(18,0)'))),
+  arrow_cast(floor(arrow_cast(-987654321,'Decimal64(18,0)')), 'Utf8');
+----
+Decimal64(18, 0) 123456789 Decimal64(18, 0) -987654321
+
+# floor with decimal256 argument
+query TTTT
+select
+  arrow_typeof(floor(arrow_cast('9999999999999999999999999999999999.99','Decimal256(38,2)'))),
+  arrow_cast(floor(arrow_cast('9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8'),
+  arrow_typeof(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)'))),
+  arrow_cast(floor(arrow_cast('-9999999999999999999999999999999999.99','Decimal256(38,2)')), 'Utf8');
+----
+Decimal256(38, 2) 9999999999999999999999999999999999.00 Decimal256(38, 2) -10000000000000000000000000000000000.00
 
 ## ln
 
@@ -746,26 +842,26 @@ select pi(), pi() / 2, pi() / 3;
 
 ## power
 
-# power scalar function
-query III rowsort
+# power scalar function (always returns Float64, like PostgreSQL)
+query RRR rowsort
 select power(2, 0), power(2, 1), power(2, 2);
 ----
 1 2 4
 
 # power scalar nulls
-query I rowsort
+query R rowsort
 select power(null, 64);
 ----
 NULL
 
 # power scalar nulls #1
-query I rowsort
+query R rowsort
 select power(2, null);
 ----
 NULL
 
 # power scalar nulls #2
-query I rowsort
+query R rowsort
 select power(null, null);
 ----
 NULL
@@ -827,12 +923,42 @@ select round(a), round(b), round(c) from small_floats;
 
 # round with too large
 #  max Int32 is 2147483647
-query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483648 to type Int32
+query error Arrow error: Cast error: Can't cast value 2147483648 to type Int32
 select round(3.14, 2147483648);
 
 # with array
-query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483649 to type Int32
+query error Arrow error: Cast error: Can't cast value 2147483649 to type Int32
 select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 2147483649);
+
+# round decimal should not cast to float
+query TR
+select arrow_typeof(round('173975140545.855'::decimal(38,10), 2)),
+       round('173975140545.855'::decimal(38,10), 2);
+----
+Decimal128(38, 10) 173975140545.86
+
+# round decimal ties away from zero
+query RRRR
+select round('1.5'::decimal(2,1), 0),
+       round('-1.5'::decimal(2,1), 0),
+       round('2.5'::decimal(2,1), 0),
+       round('-2.5'::decimal(2,1), 0);
+----
+2 -2 3 -3
+
+# round decimal negative places (left of decimal)
+query TR
+select arrow_typeof(round('12345.55'::decimal(10,2), -1)),
+       round('12345.55'::decimal(10,2), -1);
+----
+Decimal128(10, 2) 12350
+
+# round decimal256 keeps decimals
+query TR
+select arrow_typeof(round('1234.5678'::decimal(50,4), 2)),
+       round('1234.5678'::decimal(50,4), 2);
+----
+Decimal256(50, 4) 1234.57
 
 
 ## signum
@@ -1775,7 +1901,7 @@ CREATE TABLE test(
 (-14, -14, -14.5, -14.5),
 (NULL, NULL, NULL, NULL);
 
-query IIRRIR rowsort
+query RRRRRR rowsort
 SELECT power(i32, exp_i) as power_i32,
        power(i64, exp_f) as power_i64,
        pow(f32, exp_i) as power_f32,
@@ -1883,7 +2009,7 @@ D false
 
 # test string_temporal_coercion
 query BBBBBBBBBB
-select 
+select
   arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
   arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',

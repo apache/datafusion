@@ -58,13 +58,15 @@ impl ReservedBatches {
 #[derive(Debug)]
 pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
+    name: String,
 }
 
 impl WorkTable {
     /// Create a new work table.
-    pub(super) fn new() -> Self {
+    pub(super) fn new(name: String) -> Self {
         Self {
             batches: Mutex::new(None),
+            name,
         }
     }
 
@@ -120,14 +122,14 @@ impl WorkTableExec {
         if let Some(projection) = &projection {
             schema = Arc::new(schema.project(projection)?);
         }
-        let plan_properties = Self::compute_properties(Arc::clone(&schema));
+        let cache = Self::compute_properties(Arc::clone(&schema));
         Ok(Self {
-            name,
+            name: name.clone(),
             schema,
             projection,
+            work_table: Arc::new(WorkTable::new(name)),
             metrics: ExecutionPlanMetricsSet::new(),
-            work_table: Arc::new(WorkTable::new()),
-            cache: plan_properties,
+            cache,
         })
     }
 
@@ -251,6 +253,10 @@ impl ExecutionPlan for WorkTableExec {
         // Down-cast to the expected state type; propagate `None` on failure
         let work_table = state.downcast::<WorkTable>().ok()?;
 
+        if work_table.name != self.name {
+            return None; // Different table
+        }
+
         Some(Arc::new(Self {
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
@@ -272,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_work_table() {
-        let work_table = WorkTable::new();
+        let work_table = WorkTable::new("test".into());
         // Can't take from empty work_table
         assert!(work_table.take().is_err());
 

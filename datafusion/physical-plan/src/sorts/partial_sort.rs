@@ -549,18 +549,18 @@ mod tests {
 
         assert_eq!(2, result.len());
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&result), @r#"
-                +---+---+---+
-                | a | b | c |
-                +---+---+---+
-                | 0 | 1 | 0 |
-                | 0 | 1 | 1 |
-                | 0 | 2 | 5 |
-                | 1 | 2 | 4 |
-                | 1 | 3 | 2 |
-                | 1 | 3 | 3 |
-                +---+---+---+
-                "#);
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+---+---+
+            | a | b | c |
+            +---+---+---+
+            | 0 | 1 | 0 |
+            | 0 | 1 | 1 |
+            | 0 | 2 | 5 |
+            | 1 | 2 | 4 |
+            | 1 | 3 | 2 |
+            | 1 | 3 | 3 |
+            +---+---+---+
+            ");
         }
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
@@ -617,16 +617,16 @@ mod tests {
 
             assert_eq!(2, result.len());
             allow_duplicates! {
-                assert_snapshot!(batches_to_string(&result), @r#"
-                    +---+---+---+
-                    | a | b | c |
-                    +---+---+---+
-                    | 0 | 1 | 4 |
-                    | 0 | 2 | 3 |
-                    | 1 | 2 | 2 |
-                    | 1 | 3 | 0 |
-                    +---+---+---+
-                    "#);
+                assert_snapshot!(batches_to_string(&result), @r"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 4 |
+                | 0 | 2 | 3 |
+                | 1 | 2 | 2 |
+                | 1 | 3 | 0 |
+                +---+---+---+
+                ");
             }
             assert_eq!(
                 task_ctx.runtime_env().memory_pool.reserved(),
@@ -693,20 +693,20 @@ mod tests {
                 "The sort should have returned all memory used back to the memory manager"
             );
             allow_duplicates! {
-                assert_snapshot!(batches_to_string(&result), @r#"
-                    +---+---+---+
-                    | a | b | c |
-                    +---+---+---+
-                    | 0 | 1 | 6 |
-                    | 0 | 1 | 7 |
-                    | 0 | 3 | 4 |
-                    | 0 | 3 | 5 |
-                    | 1 | 2 | 0 |
-                    | 1 | 2 | 1 |
-                    | 1 | 4 | 2 |
-                    | 1 | 4 | 3 |
-                    +---+---+---+
-                    "#);
+                assert_snapshot!(batches_to_string(&result), @r"
+                +---+---+---+
+                | a | b | c |
+                +---+---+---+
+                | 0 | 1 | 6 |
+                | 0 | 1 | 7 |
+                | 0 | 3 | 4 |
+                | 0 | 3 | 5 |
+                | 1 | 2 | 0 |
+                | 1 | 2 | 1 |
+                | 1 | 4 | 2 |
+                | 1 | 4 | 3 |
+                +---+---+---+
+                ");
             }
         }
         Ok(())
@@ -1051,20 +1051,20 @@ mod tests {
             task_ctx,
         )
         .await?;
-        assert_snapshot!(batches_to_string(&result), @r#"
-            +-----+------+-------+
-            | a   | b    | c     |
-            +-----+------+-------+
-            | 1.0 | 20.0 | 20.0  |
-            | 1.0 | 20.0 | 10.0  |
-            | 1.0 | 40.0 | 10.0  |
-            | 2.0 | 40.0 | 100.0 |
-            | 2.0 | NaN  | NaN   |
-            | 3.0 |      |       |
-            | 3.0 |      | 100.0 |
-            | 3.0 | NaN  | NaN   |
-            +-----+------+-------+
-            "#);
+        assert_snapshot!(batches_to_string(&result), @r"
+        +-----+------+-------+
+        | a   | b    | c     |
+        +-----+------+-------+
+        | 1.0 | 20.0 | 20.0  |
+        | 1.0 | 20.0 | 10.0  |
+        | 1.0 | 40.0 | 10.0  |
+        | 2.0 | 40.0 | 100.0 |
+        | 2.0 | NaN  | NaN   |
+        | 3.0 |      |       |
+        | 3.0 |      | 100.0 |
+        | 3.0 | NaN  | NaN   |
+        +-----+------+-------+
+        ");
         assert_eq!(result.len(), 2);
         let metrics = partial_sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
@@ -1177,21 +1177,21 @@ mod tests {
         assert_eq!(result.len(), 3,);
 
         allow_duplicates! {
-            assert_snapshot!(batches_to_string(&result), @r#"
-                +---+---+---+
-                | a | b | c |
-                +---+---+---+
-                | 1 | 1 | 1 |
-                | 1 | 1 | 2 |
-                | 1 | 1 | 3 |
-                | 2 | 2 | 4 |
-                | 2 | 2 | 4 |
-                | 2 | 2 | 6 |
-                | 3 | 3 | 7 |
-                | 3 | 3 | 8 |
-                | 3 | 3 | 9 |
-                +---+---+---+
-                "#);
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+---+---+
+            | a | b | c |
+            +---+---+---+
+            | 1 | 1 | 1 |
+            | 1 | 1 | 2 |
+            | 1 | 1 | 3 |
+            | 2 | 2 | 4 |
+            | 2 | 2 | 4 |
+            | 2 | 2 | 6 |
+            | 3 | 3 | 7 |
+            | 3 | 3 | 8 |
+            | 3 | 3 | 9 |
+            +---+---+---+
+            ");
         }
 
         assert_eq!(task_ctx.runtime_env().memory_pool.reserved(), 0,);
