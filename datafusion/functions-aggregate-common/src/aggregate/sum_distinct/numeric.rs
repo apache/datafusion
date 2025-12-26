@@ -26,6 +26,7 @@ use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::DataType;
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
@@ -77,7 +78,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
         }
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) + self.values.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.values.size(pool)
     }
 }

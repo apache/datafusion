@@ -39,6 +39,7 @@ use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
 };
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
     internal_datafusion_err,
@@ -294,7 +295,7 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 
@@ -536,7 +537,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.group_values
             .iter()
             .map(|values| values.capacity() * size_of::<T>())
@@ -574,8 +575,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.distinct_values.size(pool)
     }
 }
 

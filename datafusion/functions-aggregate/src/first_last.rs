@@ -37,6 +37,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
     UInt16Type, UInt32Type, UInt64Type,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::utils::{compare_rows, extract_row_at_idx_to_buf, get_row_at_idx};
 use datafusion_common::{
@@ -52,6 +53,8 @@ use datafusion_expr::{
 use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+
+use crate::utils::claim_buffers_recursive;
 
 create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
@@ -743,7 +746,7 @@ where
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.vals.capacity() * size_of::<T::Native>()
             + self.null_builder.capacity() / 8 // capacity is in bits, so convert to bytes
             + self.is_sets.capacity() / 8
@@ -854,8 +857,21 @@ impl Accumulator for TrivialFirstValueAccumulator {
         Ok(self.first.clone())
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.first) + self.first.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self) - size_of_val(&self.first);
+        if let Some(array) = self.first.get_array_ref() {
+            total += size_of::<Arc<dyn Array>>();
+            if let Some(pool) = pool {
+                // With pool: claim buffers for accurate accounting with deduplication
+                claim_buffers_recursive(&array.to_data(), pool);
+            } else {
+                // Without pool: count buffer size (potential double accounting)
+                total += self.first.size() - size_of_val(&self.first);
+            }
+        } else {
+            total += self.first.size();
+        }
+        total
     }
 }
 
@@ -1018,11 +1034,36 @@ impl Accumulator for FirstValueAccumulator {
         Ok(self.first.clone())
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.first)
-            + self.first.size()
-            + ScalarValue::size_of_vec(&self.orderings)
-            - size_of_val(&self.orderings)
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total =
+            size_of_val(self) - size_of_val(&self.first) - size_of_val(&self.orderings)
+                + size_of::<ScalarValue>() * self.orderings.capacity();
+
+        if let Some(array) = self.first.get_array_ref() {
+            total += size_of::<Arc<dyn Array>>();
+            if let Some(pool) = pool {
+                claim_buffers_recursive(&array.to_data(), pool);
+            } else {
+                total += self.first.size() - size_of_val(&self.first);
+            }
+        } else {
+            total += self.first.size();
+        }
+
+        for scalar in &self.orderings {
+            if let Some(array) = scalar.get_array_ref() {
+                total += size_of::<Arc<dyn Array>>();
+                if let Some(pool) = pool {
+                    claim_buffers_recursive(&array.to_data(), pool);
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            } else {
+                total += scalar.size() - size_of_val(scalar);
+            }
+        }
+
+        total
     }
 }
 
@@ -1356,8 +1397,19 @@ impl Accumulator for TrivialLastValueAccumulator {
         Ok(self.last.clone())
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.last) + self.last.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self) - size_of_val(&self.last);
+        if let Some(array) = self.last.get_array_ref() {
+            total += size_of::<Arc<dyn Array>>();
+            if let Some(pool) = pool {
+                claim_buffers_recursive(&array.to_data(), pool);
+            } else {
+                total += self.last.size() - size_of_val(&self.last);
+            }
+        } else {
+            total += self.last.size();
+        }
+        total
     }
 }
 
@@ -1524,11 +1576,36 @@ impl Accumulator for LastValueAccumulator {
         Ok(self.last.clone())
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.last)
-            + self.last.size()
-            + ScalarValue::size_of_vec(&self.orderings)
-            - size_of_val(&self.orderings)
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total =
+            size_of_val(self) - size_of_val(&self.last) - size_of_val(&self.orderings)
+                + size_of::<ScalarValue>() * self.orderings.capacity();
+
+        if let Some(array) = self.last.get_array_ref() {
+            total += size_of::<Arc<dyn Array>>();
+            if let Some(pool) = pool {
+                claim_buffers_recursive(&array.to_data(), pool);
+            } else {
+                total += self.last.size() - size_of_val(&self.last);
+            }
+        } else {
+            total += self.last.size();
+        }
+
+        for scalar in &self.orderings {
+            if let Some(array) = scalar.get_array_ref() {
+                total += size_of::<Arc<dyn Array>>();
+                if let Some(pool) = pool {
+                    claim_buffers_recursive(&array.to_data(), pool);
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            } else {
+                total += scalar.size() - size_of_val(scalar);
+            }
+        }
+
+        total
     }
 }
 
@@ -1567,14 +1644,14 @@ fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<Sort
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat_with;
-
     use arrow::{
         array::{BooleanArray, Int64Array, ListArray, StringArray},
         compute::SortOptions,
         datatypes::Schema,
     };
+    use arrow_buffer::TrackingMemoryPool;
     use datafusion_physical_expr::{PhysicalSortExpr, expressions::col};
+    use std::iter::repeat_with;
 
     use super::*;
 
@@ -1942,7 +2019,9 @@ mod tests {
 
             first_accumulator.update_batch(values)?;
 
-            Ok(first_accumulator.size())
+            let pool = TrackingMemoryPool::default();
+            let structural_size = first_accumulator.size(Some(&pool));
+            Ok(structural_size + pool.used())
         }
 
         let batch1 = ListArray::from_iter_primitive::<Int32Type, _, _>(
@@ -1968,7 +2047,9 @@ mod tests {
 
             last_accumulator.update_batch(values)?;
 
-            Ok(last_accumulator.size())
+            let pool = TrackingMemoryPool::default();
+            let structural_size = last_accumulator.size(Some(&pool));
+            Ok(structural_size + pool.used())
         }
 
         let batch1 = ListArray::from_iter_primitive::<Int32Type, _, _>(

@@ -23,6 +23,7 @@ use abi_stable::StableAbi;
 use abi_stable::std_types::{RResult, RVec};
 use arrow::array::ArrayRef;
 use arrow::error::ArrowError;
+use arrow_buffer::MemoryPool;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_expr::Accumulator;
@@ -133,7 +134,7 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 }
 
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
-    unsafe { accumulator.inner().size() }
+    unsafe { accumulator.inner().size(None) }
 }
 
 unsafe extern "C" fn state_fn_wrapper(
@@ -284,7 +285,7 @@ impl Accumulator for ForeignAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         unsafe { (self.accumulator.size)(&self.accumulator) }
     }
 
@@ -352,7 +353,7 @@ mod tests {
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
         let original_accum = AvgAccumulator::default();
-        let original_size = original_accum.size();
+        let original_size = original_accum.size(None);
         let original_supports_retract = original_accum.supports_retract_batch();
 
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
@@ -390,7 +391,7 @@ mod tests {
         let avg = foreign_accum.evaluate()?;
         assert_eq!(avg, ScalarValue::Float64(Some(30.0)));
 
-        assert_eq!(original_size, foreign_accum.size());
+        assert_eq!(original_size, foreign_accum.size(None));
         assert_eq!(
             original_supports_retract,
             foreign_accum.supports_retract_batch()
@@ -403,7 +404,7 @@ mod tests {
     fn test_ffi_accumulator_local_bypass() -> Result<()> {
         let original_accum = AvgAccumulator::default();
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
-        let original_size = boxed_accum.size();
+        let original_size = boxed_accum.size(None);
 
         let ffi_accum: FFI_Accumulator = boxed_accum.into();
 
@@ -412,7 +413,7 @@ mod tests {
         unsafe {
             let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
                 as *const AvgAccumulator);
-            assert_eq!(original_size, concrete.size());
+            assert_eq!(original_size, concrete.size(None));
         }
 
         // Verify different library markers generate foreign accumulator
@@ -424,7 +425,7 @@ mod tests {
         unsafe {
             let concrete = &*(foreign_accum.as_ref() as *const dyn Accumulator
                 as *const ForeignAccumulator);
-            assert_eq!(original_size, concrete.size());
+            assert_eq!(original_size, concrete.size(None));
         }
 
         Ok(())

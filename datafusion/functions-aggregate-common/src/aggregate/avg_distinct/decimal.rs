@@ -21,6 +21,7 @@ use arrow::{
         Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, i256,
     },
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 use std::fmt::Debug;
@@ -146,11 +147,11 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         let fixed_size = size_of_val(self);
 
         // Account for the size of the sum_accumulator with its contained values
-        fixed_size + self.sum_accumulator.size()
+        fixed_size + self.sum_accumulator.size(pool)
     }
 }
 

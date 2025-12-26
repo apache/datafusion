@@ -23,6 +23,7 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowPrimitiveType;
 
+use arrow_buffer::MemoryPool;
 use datafusion_expr_common::groups_accumulator::EmitTo;
 /// Track the accumulator null state per row: if any values for that
 /// group were null and if any values have been seen at all for that group.
@@ -75,7 +76,7 @@ impl NullState {
     }
 
     /// return the size of all buffers allocated by this null state, not including self
-    pub fn size(&self) -> usize {
+    pub fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         // capacity is in bits, so convert to bytes
         self.seen_values.capacity() / 8
     }

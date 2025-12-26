@@ -28,6 +28,7 @@ use arrow::datatypes::{
     DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type,
     Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
@@ -437,7 +438,7 @@ impl Accumulator for SlidingMaxAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
@@ -729,7 +730,7 @@ impl Accumulator for SlidingMinAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }

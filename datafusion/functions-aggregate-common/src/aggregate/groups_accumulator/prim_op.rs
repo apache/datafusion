@@ -23,6 +23,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
+use arrow_buffer::MemoryPool;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -194,7 +195,7 @@ where
         true
     }
 
-    fn size(&self) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.values.capacity() * size_of::<T::Native>() + self.null_state.size(pool)
     }
 }

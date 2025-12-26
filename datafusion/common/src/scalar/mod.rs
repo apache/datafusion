@@ -3418,6 +3418,20 @@ impl ScalarValue {
         }
     }
 
+    /// Returns the inner ArrayRef if this ScalarValue contains one
+    /// (List, LargeList, FixedSizeList, Struct, Map variants).
+    /// Returns None for primitive types.
+    pub fn get_array_ref(&self) -> Option<ArrayRef> {
+        match self {
+            ScalarValue::List(arr) => Some(Arc::clone(arr) as ArrayRef),
+            ScalarValue::LargeList(arr) => Some(Arc::clone(arr) as ArrayRef),
+            ScalarValue::FixedSizeList(arr) => Some(Arc::clone(arr) as ArrayRef),
+            ScalarValue::Struct(arr) => Some(Arc::clone(arr) as ArrayRef),
+            ScalarValue::Map(arr) => Some(Arc::clone(arr) as ArrayRef),
+            _ => None,
+        }
+    }
+
     /// Converts a value in `array` at `index` into a ScalarValue
     pub fn try_from_array(array: &dyn Array, index: usize) -> Result<Self> {
         // handle NULL value

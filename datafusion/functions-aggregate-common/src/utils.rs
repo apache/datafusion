@@ -23,6 +23,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{
     ArrowNativeType, DataType, DecimalType, Field, FieldRef, ToByteSlice,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::memory::estimate_memory_size;
@@ -258,7 +259,7 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
     }
 
     /// Mirrors [`Accumulator::size`].
-    pub fn size(&self) -> usize {
+    pub fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
         estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()

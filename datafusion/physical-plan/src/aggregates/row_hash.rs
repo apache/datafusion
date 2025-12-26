@@ -38,12 +38,12 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
+use arrow_buffer::TrackingMemoryPool;
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
@@ -440,6 +440,11 @@ pub(crate) struct GroupedHashAggregateStream {
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
     // ========================================================================
+    /// Arrow memory pool for accurate buffer tracking
+    /// This pool tracks all Arrow buffers owned by accumulators
+    /// to provide accurate memory accounting without double-counting shared buffers.
+    arrow_pool: TrackingMemoryPool,
+
     /// The memory reservation for this grouping
     reservation: MemoryReservation,
 
@@ -668,6 +673,7 @@ impl GroupedHashAggregateStream {
             aggregate_arguments,
             filter_expressions,
             group_by: agg_group_by,
+            arrow_pool: TrackingMemoryPool::default(),
             reservation,
             oom_mode,
             group_values,
@@ -1056,12 +1062,16 @@ impl GroupedHashAggregateStream {
     }
 
     fn update_memory_reservation(&mut self) -> Result<()> {
-        let acc = self.accumulators.iter().map(|x| x.size()).sum::<usize>();
-        let new_size = acc
-            + self.group_values.size()
+        let total_size = self.group_values.size()
             + self.group_ordering.size()
-            + self.current_group_indices.allocated_size();
-        let reservation_result = self.reservation.try_resize(new_size);
+            + self.current_group_indices.capacity() * size_of::<usize>()
+            + self
+                .accumulators
+                .iter()
+                .map(|x| x.size(Some(&self.arrow_pool)))
+                .sum::<usize>();
+
+        let reservation_result = self.reservation.try_resize(total_size);
 
         if reservation_result.is_ok() {
             self.spill_state

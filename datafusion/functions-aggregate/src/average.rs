@@ -31,6 +31,7 @@ use arrow::datatypes::{
     DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type, i256,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -529,7 +530,7 @@ impl Accumulator for AvgAccumulator {
         ))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -607,7 +608,7 @@ impl<T: DecimalType + ArrowNumericType + Debug> Accumulator for DecimalAvgAccumu
         )
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -685,7 +686,7 @@ impl Accumulator for DurationAvgAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -948,7 +949,7 @@ where
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.counts.capacity() * size_of::<u64>() + self.sums.capacity() * size_of::<T>()
     }
 }

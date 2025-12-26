@@ -25,6 +25,7 @@ use abi_stable::std_types::{ROption, RVec};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::error::ArrowError;
 use arrow::ffi::to_ffi;
+use arrow_buffer::MemoryPool;
 use datafusion_common::error::{DataFusionError, Result};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 
@@ -168,7 +169,7 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_GroupsAccumulator) -> usize {
     unsafe {
         let accumulator = accumulator.inner();
-        accumulator.size()
+        accumulator.size(None)
     }
 }
 
@@ -335,7 +336,7 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         unsafe { (self.accumulator.size)(&self.accumulator) }
     }
 
@@ -552,7 +553,7 @@ mod tests {
     fn test_ffi_groups_accumulator_local_bypass_inner() -> Result<()> {
         let original_accum = StddevGroupsAccumulator::new(StatsType::Population);
         let boxed_accum: Box<dyn GroupsAccumulator> = Box::new(original_accum);
-        let original_size = boxed_accum.size();
+        let original_size = boxed_accum.size(None);
 
         let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
 
@@ -561,7 +562,7 @@ mod tests {
         unsafe {
             let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
                 as *const StddevGroupsAccumulator);
-            assert_eq!(original_size, concrete.size());
+            assert_eq!(original_size, concrete.size(None));
         }
 
         // Verify different library markers generate foreign accumulator
@@ -573,7 +574,7 @@ mod tests {
         unsafe {
             let concrete = &*(foreign_accum.as_ref() as *const dyn GroupsAccumulator
                 as *const ForeignGroupsAccumulator);
-            assert_eq!(original_size, concrete.size());
+            assert_eq!(original_size, concrete.size(None));
         }
 
         Ok(())

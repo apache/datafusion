@@ -112,6 +112,7 @@ extended_tests = []
 
 [dependencies]
 arrow = { workspace = true }
+arrow-buffer = { workspace = true, features = ["pool"] }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }

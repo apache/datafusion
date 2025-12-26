@@ -32,6 +32,7 @@ use arrow::array::PrimitiveArray;
 use arrow::array::types::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -117,7 +118,7 @@ where
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         let num_elements = self.values.len();
         let fixed_size = size_of_val(self) + size_of_val(&self.values);
 
@@ -161,7 +162,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulato
         Ok(ScalarValue::Int64(Some(self.values.values.len() as i64)))
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) + self.values.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.values.size(pool)
     }
 }

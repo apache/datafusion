@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crate::aggregate::groups_accumulator::nulls::filtered_null_mask;
 use arrow::array::{ArrayRef, AsArray, BooleanArray, BooleanBufferBuilder};
 use arrow::buffer::BooleanBuffer;
+use arrow_buffer::MemoryPool;
 use datafusion_common::Result;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
@@ -139,9 +140,9 @@ where
         self.update_batch(values, group_indices, opt_filter, total_num_groups)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         // capacity is in bits, so convert to bytes
-        self.values.capacity() / 8 + self.null_state.size()
+        self.values.capacity() / 8 + self.null_state.size(pool)
     }
 
     fn convert_to_state(

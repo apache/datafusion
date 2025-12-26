@@ -34,6 +34,7 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
+arrow-buffer = { workspace = true, features = ["pool"] }
 async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }

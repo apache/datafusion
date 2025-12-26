@@ -20,6 +20,7 @@ use arrow::array::{
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
+use arrow_buffer::MemoryPool;
 use datafusion_common::hash_map::Entry;
 use datafusion_common::{HashMap, Result, internal_err};
 use datafusion_expr::{EmitTo, GroupsAccumulator};
@@ -329,8 +330,8 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
-        self.inner.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.inner.size(pool)
     }
 }
 
@@ -504,7 +505,7 @@ impl MinMaxBytesState {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
     }
 }

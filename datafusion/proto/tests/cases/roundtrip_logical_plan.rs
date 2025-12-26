@@ -24,6 +24,7 @@ use arrow::datatypes::{
     TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
+use arrow_buffer::MemoryPool;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -2214,7 +2215,7 @@ fn roundtrip_aggregate_udf() {
             Ok(ScalarValue::Float64(None))
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
             size_of_val(self)
         }
     }
@@ -2515,7 +2516,7 @@ fn roundtrip_window() {
             Ok(ScalarValue::Float64(None))
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
             size_of_val(self)
         }
     }

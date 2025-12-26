@@ -27,6 +27,7 @@ use arrow::array::{
 };
 use arrow::compute::{SortOptions, filter};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use arrow_buffer::MemoryPool;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
@@ -43,6 +44,8 @@ use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+
+use crate::utils::claim_buffers_recursive;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -390,27 +393,25 @@ impl Accumulator for ArrayAggAccumulator {
         Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self)
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self)
             + (size_of::<ArrayRef>() * self.values.capacity())
-            + self
+            + self.datatype.size()
+            - size_of_val(&self.datatype);
+
+        if let Some(pool) = pool {
+            for arr in &self.values {
+                claim_buffers_recursive(&arr.to_data(), pool);
+            }
+        } else {
+            total += self
                 .values
                 .iter()
-                // Each ArrayRef might be just a reference to a bigger array, and many
-                // ArrayRefs here might be referencing exactly the same array, so if we
-                // were to call `arr.get_array_memory_size()`, we would be double-counting
-                // the same underlying data many times.
-                //
-                // Instead, we do an approximation by estimating how much memory each
-                // ArrayRef would occupy if its underlying data was fully owned by this
-                // accumulator.
-                //
-                // Note that this is just an estimation, but the reality is that this
-                // accumulator might not own any data.
                 .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
-                .sum::<usize>()
-            + self.datatype.size()
-            - size_of_val(&self.datatype)
+                .sum::<usize>();
+        }
+
+        total
     }
 }
 
@@ -458,8 +459,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values
-                        .insert(ScalarValue::try_from_array(val, i)?.compacted());
+                    self.values.insert(ScalarValue::try_from_array(val, i)?);
                 }
             }
         }
@@ -518,13 +518,29 @@ impl Accumulator for DistinctArrayAggAccumulator {
         Ok(ScalarValue::List(arr))
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) + ScalarValue::size_of_hashset(&self.values)
-            - size_of_val(&self.values)
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self)
+            + size_of_val(&self.values)
+            + (size_of::<ScalarValue>() * self.values.capacity())
             + self.datatype.size()
             - size_of_val(&self.datatype)
             - size_of_val(&self.sort_options)
-            + size_of::<Option<SortOptions>>()
+            + size_of::<Option<SortOptions>>();
+
+        for scalar in &self.values {
+            if let Some(array) = scalar.get_array_ref() {
+                total += size_of::<Arc<dyn Array>>();
+                if let Some(pool) = pool {
+                    claim_buffers_recursive(&array.to_data(), pool);
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            } else {
+                total += scalar.size() - size_of_val(scalar);
+            }
+        }
+
+        total
     }
 }
 
@@ -643,14 +659,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values
-                        .push(ScalarValue::try_from_array(val, i)?.compacted());
-                    self.ordering_values.push(
-                        get_row_at_idx(ord, i)?
-                            .into_iter()
-                            .map(|v| v.compacted())
-                            .collect(),
-                    )
+                    self.values.push(ScalarValue::try_from_array(val, i)?);
+                    self.ordering_values.push(get_row_at_idx(ord, i)?)
                 }
             }
         }
@@ -773,25 +783,48 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         Ok(ScalarValue::List(array))
     }
 
-    fn size(&self) -> usize {
-        let mut total = size_of_val(self) + ScalarValue::size_of_vec(&self.values)
-            - size_of_val(&self.values);
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self)
+            + size_of_val(&self.values)
+            + (size_of::<ScalarValue>() * self.values.capacity());
 
-        // Add size of the `self.ordering_values`
-        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
-        for row in &self.ordering_values {
-            total += ScalarValue::size_of_vec(row) - size_of_val(row);
+        for scalar in &self.values {
+            if let Some(array) = scalar.get_array_ref() {
+                total += size_of::<Arc<dyn Array>>();
+                if let Some(pool) = pool {
+                    claim_buffers_recursive(&array.to_data(), pool);
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            } else {
+                total += scalar.size() - size_of_val(scalar);
+            }
         }
 
-        // Add size of the `self.datatypes`
+        total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
+        for row in &self.ordering_values {
+            total += size_of_val(row) + (size_of::<ScalarValue>() * row.capacity());
+            for scalar in row {
+                if let Some(array) = scalar.get_array_ref() {
+                    total += size_of::<Arc<dyn Array>>();
+                    if let Some(pool) = pool {
+                        claim_buffers_recursive(&array.to_data(), pool);
+                    } else {
+                        total +=
+                            array.to_data().get_slice_memory_size().unwrap_or_default();
+                    }
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            }
+        }
+
         total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
             total += dtype.size() - size_of_val(dtype);
         }
 
-        // Add size of the `self.ordering_req`
         total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
-        // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
 }
@@ -801,6 +834,7 @@ mod tests {
     use super::*;
     use arrow::array::{ListBuilder, StringBuilder};
     use arrow::datatypes::{FieldRef, Schema};
+    use arrow_buffer::TrackingMemoryPool;
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
@@ -1075,10 +1109,21 @@ mod tests {
         acc2.update_batch(&[data(["b", "c", "a"])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 266);
+        // Calculate size without using the arrow memory pool (it will default to use get_slice_memory_size)
+        let size_without_pool = acc1.size(None);
+        assert_eq!(size_without_pool, 266);
+
+        // Calculate size using the arrow memory pool.
+        // pool.used() returns the full physical buffer capacity (offsets, nulls, data, capacity overhead),
+        // while get_slice_memory_size() only counts logical data size.
+        let pool = TrackingMemoryPool::default();
+        let fixed_size = acc1.size(Some(&pool));
+        let size_with_pool = pool.used() + fixed_size;
+        assert_eq!(size_with_pool, 2316);
 
         Ok(())
     }
+
     #[test]
     fn does_not_over_account_memory_distinct() -> Result<()> {
         let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
@@ -1092,8 +1137,10 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        // without compaction, the size is 16660
-        assert_eq!(acc1.size(), 1660);
+        let pool = TrackingMemoryPool::default();
+        let total_size = acc1.size(Some(&pool));
+        // if we don't use the memory pool: size(None); we get 16576
+        assert_eq!(total_size, 484);
 
         Ok(())
     }
@@ -1110,8 +1157,10 @@ mod tests {
             vec!["b", "c", "d"],
         ])])?;
 
-        // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2184);
+        let pool = TrackingMemoryPool::default();
+        let total_size = acc.size(Some(&pool));
+        // if we don't use the memory pool: size(None); we get 17148
+        assert_eq!(total_size, 1056);
 
         Ok(())
     }

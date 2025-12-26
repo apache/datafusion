@@ -1833,6 +1833,7 @@ name = "datafusion"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "arrow-schema",
  "async-trait",
  "bytes",
@@ -2194,6 +2195,7 @@ name = "datafusion-examples"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "arrow-flight",
  "arrow-schema",
  "async-trait",
@@ -2278,6 +2280,7 @@ name = "datafusion-expr-common"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "datafusion-common",
  "indexmap 2.12.1",
  "itertools 0.14.0",
@@ -2290,6 +2293,7 @@ version = "51.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
+ "arrow-buffer",
  "arrow-schema",
  "async-ffi",
  "async-trait",
@@ -2356,6 +2360,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2377,6 +2382,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "criterion",
  "datafusion-common",
  "datafusion-expr-common",
@@ -2559,6 +2565,7 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "async-trait",
@@ -2594,6 +2601,7 @@ name = "datafusion-proto"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "async-trait",
  "chrono",
  "datafusion",
@@ -2673,6 +2681,7 @@ name = "datafusion-spark"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "arrow-buffer",
  "bigdecimal",
  "chrono",
  "crc32fast",
@@ -2754,6 +2763,7 @@ dependencies = [
 name = "datafusion-substrait"
 version = "51.0.0"
 dependencies = [
+ "arrow-buffer",
  "async-recursion",
  "async-trait",
  "chrono",

@@ -25,6 +25,7 @@ use arrow::{
     datatypes::DataType,
     datatypes::Field,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
 };
@@ -806,7 +807,7 @@ impl Accumulator for RegrAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }

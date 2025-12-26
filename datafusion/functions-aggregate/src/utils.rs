@@ -23,6 +23,19 @@ use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err, plan
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+/// Recursively claims all buffers in an ArrayData and its children with the memory pool.
+pub(crate) fn claim_buffers_recursive(
+    data: &arrow::array::ArrayData,
+    pool: &dyn arrow_buffer::MemoryPool,
+) {
+    for buffer in data.buffers() {
+        buffer.claim(pool);
+    }
+    for child in data.child_data() {
+        claim_buffers_recursive(child, pool);
+    }
+}
+
 /// Evaluates a physical expression to extract its scalar value.
 ///
 /// This is used to extract constant values from expressions (like percentile parameters)

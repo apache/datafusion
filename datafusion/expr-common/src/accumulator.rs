@@ -18,6 +18,7 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use std::fmt::Debug;
 
@@ -71,15 +72,33 @@ pub trait Accumulator: Send + Sync + Debug {
     /// when possible (for example distinct strings)
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
-    /// Returns the allocated size required for this accumulator, in
-    /// bytes, including `Self`.
+    /// Returns the allocated memory size required by this accumulator, in bytes.
     ///
-    /// This value is used to calculate the memory used during
-    /// execution so DataFusion can stay within its allotted limit.
+    /// This value is used to calculate the memory used during execution so
+    /// DataFusion can stay within its allocated memory limit.
     ///
-    /// "Allocated" means that for internal containers such as `Vec`,
-    /// the `capacity` should be used not the `len`.
-    fn size(&self) -> usize;
+    /// # Memory Pool for Shared Buffers
+    ///
+    /// When `pool` is `None`:
+    /// - Returns the total memory size including Arrow buffers
+    /// - This is the default behavior and works for most use cases
+    ///
+    /// When `pool` is `Some`:
+    /// - Returns only the structural size (the accumulator struct, Vec capacities, etc.)
+    /// - Claims Arrow buffers with the provided [`MemoryPool`] for tracking
+    /// - It is recommended when accumulators may share Arrow array buffers, as the pool
+    ///   automatically deduplicates shared buffers to provide accurate memory accounting
+    /// - Callers should add `pool.used()` to this return value for the total memory
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // With memory pool for accurate tracking when buffers may be shared
+    /// let pool = TrackingMemoryPool::default();
+    /// let structural_size = accumulator.size(Some(&pool));
+    /// let total_memory = structural_size + pool.used();
+    /// ```
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize;
 
     /// Returns the intermediate state of the accumulator, consuming the
     /// intermediate state.

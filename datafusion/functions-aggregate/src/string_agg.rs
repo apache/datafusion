@@ -25,6 +25,7 @@ use crate::array_agg::ArrayAgg;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow_buffer::MemoryPool;
 use datafusion_common::cast::{
     as_generic_string_array, as_string_array, as_string_view_array,
 };
@@ -290,9 +291,9 @@ impl Accumulator for StringAggAccumulator {
         )))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.array_agg_acc)
-            + self.array_agg_acc.size()
+            + self.array_agg_acc.size(pool)
             + self.delimiter.capacity()
     }
 
@@ -394,7 +395,7 @@ impl Accumulator for SimpleStringAggAccumulator {
         Ok(result)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.delimiter.capacity() + self.accumulated_string.capacity()
     }
 

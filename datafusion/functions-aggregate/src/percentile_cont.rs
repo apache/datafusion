@@ -32,6 +32,7 @@ use arrow::{
 };
 
 use arrow::array::ArrowNativeTypeOp;
+use arrow_buffer::MemoryPool;
 
 use crate::min_max::{max_udaf, min_udaf};
 use datafusion_common::{
@@ -538,7 +539,7 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
     }
 }
@@ -737,7 +738,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.group_values
             .iter()
             .map(|values| values.capacity() * size_of::<T::Native>())
@@ -776,8 +777,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.distinct_values.size(pool)
     }
 }
 

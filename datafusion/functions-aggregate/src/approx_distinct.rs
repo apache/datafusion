@@ -30,6 +30,7 @@ use arrow::datatypes::{
     UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use arrow_buffer::MemoryPool;
 use datafusion_common::ScalarValue;
 use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
@@ -198,7 +199,7 @@ macro_rules! default_accumulator_impl {
             Ok(ScalarValue::UInt64(Some(self.hll.count() as u64)))
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
             // HLL has static size
             std::mem::size_of_val(self)
         }

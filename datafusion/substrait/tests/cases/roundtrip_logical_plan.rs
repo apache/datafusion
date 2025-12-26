@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::utils::test::read_json;
+use arrow_buffer::MemoryPool;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::functions_nested::map::map;
 use datafusion::logical_expr::LogicalPlanBuilder;
@@ -1560,7 +1561,7 @@ async fn roundtrip_aggregate_udf() -> Result<()> {
             Ok(ScalarValue::Int64(None))
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
             size_of_val(self)
         }
     }

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::claim_buffers_recursive;
 use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
@@ -29,6 +30,7 @@ use arrow::{
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
@@ -500,7 +502,7 @@ impl Accumulator for SlidingDistinctCountAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -551,7 +553,7 @@ impl Accumulator for CountAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -714,7 +716,7 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.counts.capacity() * size_of::<usize>()
     }
 }
@@ -772,15 +774,25 @@ impl DistinctCountAccumulator {
 
     // calculates the size as accurately as possible. Note that calling this
     // method is expensive
-    fn full_size(&self) -> usize {
-        size_of_val(self)
+    fn full_size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        let mut total = size_of_val(self)
             + (size_of::<ScalarValue>() * self.values.capacity())
-            + self
-                .values
-                .iter()
-                .map(|vals| ScalarValue::size(vals) - size_of_val(vals))
-                .sum::<usize>()
-            + size_of::<DataType>()
+            + size_of::<DataType>();
+
+        for scalar in &self.values {
+            if let Some(array) = scalar.get_array_ref() {
+                total += size_of::<Arc<dyn Array>>();
+                if let Some(pool) = pool {
+                    claim_buffers_recursive(&array.to_data(), pool);
+                } else {
+                    total += scalar.size() - size_of_val(scalar);
+                }
+            } else {
+                total += scalar.size() - size_of_val(scalar);
+            }
+        }
+
+        total
     }
 }
 
@@ -839,11 +851,11 @@ impl Accumulator for DistinctCountAccumulator {
         Ok(ScalarValue::Int64(Some(self.values.len() as i64)))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         match &self.state_data_type {
             DataType::Boolean | DataType::Null => self.fixed_size(),
             d if d.is_primitive() => self.fixed_size(),
-            _ => self.full_size(),
+            _ => self.full_size(pool),
         }
     }
 }
@@ -1043,6 +1055,53 @@ mod tests {
         merged.merge_batch(&state_arr2)?;
         // Expect distinct {1,2,3} → count = 3
         assert_eq!(merged.evaluate()?, ScalarValue::Int64(Some(3)));
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_count_does_not_over_account_memory() -> Result<()> {
+        use arrow::array::ListArray;
+        use arrow_buffer::TrackingMemoryPool;
+
+        // Create a DistinctCountAccumulator for List<Int32> (array type)
+        let mut acc = DistinctCountAccumulator {
+            values: HashSet::default(),
+            state_data_type: DataType::List(Arc::new(Field::new_list_field(
+                DataType::Int32,
+                true,
+            ))),
+        };
+
+        // Create list arrays with shared buffers (slices of the same underlying data)
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+            Some(vec![Some(1), Some(2), Some(3)]), // duplicate
+            Some(vec![Some(7), Some(8), Some(9)]),
+            Some(vec![Some(4), Some(5), Some(6)]), // duplicate
+        ]);
+
+        acc.update_batch(&[Arc::new(list_array)])?;
+
+        // Should have 3 distinct arrays
+        assert_eq!(acc.values.len(), 3);
+
+        // Test with memory pool - should not over-account shared buffers
+        let pool = TrackingMemoryPool::default();
+        let structural_size = acc.size(Some(&pool));
+        let total_size_with_pool = structural_size + pool.used();
+
+        // Test without pool - uses scalar.size() which may over-account
+        let size_without_pool = acc.size(None);
+
+        // With pool should be much smaller than without pool due to deduplication
+        // The pool tracks actual physical buffers, avoiding double-counting
+        // With the pool we get 13544 while when using the pool we get 4728
+        assert!(
+            total_size_with_pool < size_without_pool,
+            "Pool-based size ({total_size_with_pool}) should be less than non-pool size ({size_without_pool}) due to buffer deduplication"
+        );
+
         Ok(())
     }
 }

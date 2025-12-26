@@ -18,6 +18,7 @@
 //! [`BytesDistinctCountAccumulator`] for Utf8/LargeUtf8/Binary/LargeBinary values
 
 use arrow::array::{ArrayRef, OffsetSizeTrait};
+use arrow_buffer::MemoryPool;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -86,7 +87,7 @@ impl<O: OffsetSizeTrait> Accumulator for BytesDistinctCountAccumulator<O> {
         Ok(ScalarValue::Int64(Some(self.0.non_null_len() as i64)))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.0.size()
     }
 }
@@ -147,7 +148,7 @@ impl Accumulator for BytesViewDistinctCountAccumulator {
         Ok(ScalarValue::Int64(Some(self.0.non_null_len() as i64)))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.0.size()
     }
 }
