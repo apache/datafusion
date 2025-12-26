@@ -373,7 +373,8 @@ impl ExecutionPlan for ProjectionExec {
             let mut can_pushdown = true;
             let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
                 if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                    // Check if column index is valid
+                    // Check if column index is valid.
+                    // This should always be true but fail gracefully if it's not.
                     if col.index() >= self.expr().len() {
                         can_pushdown = false;
                         return Ok(Transformed::no(expr));
