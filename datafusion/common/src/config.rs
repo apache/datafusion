@@ -469,6 +469,25 @@ config_namespace! {
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
+        /// A perfect hash join (see `HashJoinExec` for more details) will be considered
+        /// if the range of keys (max - min) on the build side is < this threshold.
+        /// This provides a fast path for joins with very small key ranges,
+        /// bypassing the density check.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_small_build_threshold: usize, default = 1024
+
+        /// The minimum required density of join keys on the build side to consider a
+        /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
+        /// `(number of rows) / (max_key - min_key + 1)`.
+        /// A perfect hash join may be used if the actual key density > this
+        /// value.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_min_key_density: f64, default = 0.99
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The

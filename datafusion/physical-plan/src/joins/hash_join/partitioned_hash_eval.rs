@@ -32,7 +32,7 @@ use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
 };
 
-use crate::joins::utils::JoinHashMapType;
+use crate::joins::Map;
 
 /// RandomState wrapper that preserves the seeds used to create it.
 ///
@@ -205,17 +205,17 @@ impl PhysicalExpr for HashExpr {
     }
 }
 
-/// Physical expression that checks if hash values exist in a hash table
+/// Physical expression that checks membership in a [`Map`] (hash table or array map).
 ///
-/// Takes a UInt64Array of hash values and checks membership in a hash table.
-/// Returns a BooleanArray indicating which hashes exist.
+/// Returns a [`BooleanArray`] indicating if join keys (from `hash_expr`) exist in the map.
+// TODO: rename to MapLookupExpr
 pub struct HashTableLookupExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
-    /// Hash table to check against
-    hash_map: Arc<dyn JoinHashMapType>,
+    /// Map to check against (hash table or array map)
+    hash_map: Arc<Map>,
     /// Description for display
     description: String,
 }
@@ -226,16 +226,15 @@ impl HashTableLookupExpr {
     /// # Arguments
     /// * `on_columns` - Columns to hash
     /// * `random_state` - SeededRandomState for hashing
-    /// * `hash_map` - Hash table to check membership
+    /// * `hash_map` - Map to check membership (hash table or array map)
     /// * `description` - Description for debugging
-    ///
     /// # Note
     /// This is public for internal testing purposes only and is not
     /// guaranteed to be stable across versions.
     pub fn new(
         on_columns: Vec<PhysicalExprRef>,
         random_state: SeededRandomState,
-        hash_map: Arc<dyn JoinHashMapType>,
+        hash_map: Arc<Map>,
         description: String,
     ) -> Self {
         Self {
@@ -331,12 +330,20 @@ impl PhysicalExpr for HashTableLookupExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         // Evaluate columns
-        let keys_values = evaluate_columns(&self.on_columns, batch)?;
+        let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
-        with_hashes(&keys_values, self.random_state.random_state(), |hashes| {
-            let array = self.hash_map.contain_hashes(hashes);
-            Ok(ColumnarValue::Array(Arc::new(array)))
-        })
+        match self.hash_map.as_ref() {
+            Map::HashMap(map) => {
+                with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
+                    let array = map.contain_hashes(hashes);
+                    Ok(ColumnarValue::Array(Arc::new(array)))
+                })
+            }
+            Map::ArrayMap(map) => {
+                let array = map.contain_keys(&join_keys)?;
+                Ok(ColumnarValue::Array(Arc::new(array)))
+            }
+        }
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -473,8 +480,8 @@ mod tests {
     #[test]
     fn test_hash_table_lookup_expr_eq_same() {
         let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
-        let hash_map: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
+        let hash_map =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
@@ -498,8 +505,8 @@ mod tests {
         let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
         let col_b: PhysicalExprRef = Arc::new(Column::new("b", 1));
 
-        let hash_map: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
+        let hash_map =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
@@ -521,8 +528,8 @@ mod tests {
     #[test]
     fn test_hash_table_lookup_expr_eq_different_description() {
         let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
-        let hash_map: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
+        let hash_map =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
@@ -546,11 +553,10 @@ mod tests {
         let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
 
         // Two different Arc pointers (even with same content) should not be equal
-        let hash_map1: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
-        let hash_map2: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
-
+        let hash_map1 =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
+        let hash_map2 =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
             SeededRandomState::with_seeds(1, 2, 3, 4),
@@ -572,8 +578,8 @@ mod tests {
     #[test]
     fn test_hash_table_lookup_expr_hash_consistency() {
         let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
-        let hash_map: Arc<dyn JoinHashMapType> =
-            Arc::new(JoinHashMapU32::with_capacity(10));
+        let hash_map =
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(10))));
 
         let expr1 = HashTableLookupExpr::new(
             vec![Arc::clone(&col_a)],
