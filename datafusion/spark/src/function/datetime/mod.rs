@@ -50,11 +50,7 @@ pub mod expr_fn {
         "Returns the date that is days days before start. The function returns NULL if at least one of the input parameters is NULL.",
         arg1 arg2
     ));
-    export_functions!((
-        hour,
-        "Extracts the hour component of a timestamp.",
-        arg1
-    ));
+    export_functions!((hour, "Extracts the hour component of a timestamp.", arg1));
     export_functions!((
         minute,
         "Extracts the minute component of a timestamp.",

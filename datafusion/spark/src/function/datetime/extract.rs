@@ -19,12 +19,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::compute::{date_part, DatePart};
+use arrow::compute::{DatePart, date_part};
 use arrow::datatypes::DataType;
-use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
+use datafusion_common::utils::take_function_args;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
