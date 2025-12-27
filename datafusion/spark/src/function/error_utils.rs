@@ -18,7 +18,7 @@
 // TODO: https://github.com/apache/spark/tree/master/common/utils/src/main/resources/error
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DataFusionError};
+use datafusion_common::{DataFusionError, exec_datafusion_err, internal_datafusion_err};
 
 pub fn invalid_arg_count_exec_err(
     function_name: &str,
@@ -44,7 +44,9 @@ pub fn unsupported_data_type_exec_err(
     required: &str,
     provided: &DataType,
 ) -> DataFusionError {
-    exec_datafusion_err!("Unsupported Data Type: Spark `{function_name}` function expects {required}, got {provided}")
+    exec_datafusion_err!(
+        "Unsupported Data Type: Spark `{function_name}` function expects {required}, got {provided}"
+    )
 }
 
 pub fn unsupported_data_types_exec_err(

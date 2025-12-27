@@ -20,7 +20,7 @@ use std::process::Command;
 use rstest::rstest;
 
 use async_trait::async_trait;
-use insta::{glob, Settings};
+use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
 use std::{env, fs};
@@ -111,7 +111,9 @@ async fn setup_minio_container() -> ContainerAsync<minio::MinIO> {
         }
 
         Err(TestcontainersError::Client(e)) => {
-            panic!("Failed to start MinIO container. Ensure Docker is running and accessible: {e}");
+            panic!(
+                "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
+            );
         }
         Err(e) => {
             panic!("Failed to start MinIO container: {e}");
@@ -258,13 +260,15 @@ async fn test_cli() {
 
     glob!("sql/integration/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
-        assert_cmd_snapshot!(cli()
-            .env_clear()
-            .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
-            .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
-            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
-            .env("AWS_ALLOW_HTTP", "true")
-            .pass_stdin(input))
+        assert_cmd_snapshot!(
+            cli()
+                .env_clear()
+                .env("AWS_ACCESS_KEY_ID", "TEST-DataFusionLogin")
+                .env("AWS_SECRET_ACCESS_KEY", "TEST-DataFusionPassword")
+                .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+                .env("AWS_ALLOW_HTTP", "true")
+                .pass_stdin(input)
+        )
     });
 }
 
@@ -328,10 +332,12 @@ SELECT COUNT(*) FROM hits;
 "#
     );
 
-    assert_cmd_snapshot!(cli()
-        .env("RUST_LOG", "warn")
-        .env_remove("AWS_ENDPOINT")
-        .pass_stdin(input));
+    assert_cmd_snapshot!(
+        cli()
+            .env("RUST_LOG", "warn")
+            .env_remove("AWS_ENDPOINT")
+            .pass_stdin(input)
+    );
 }
 
 /// Ensure backtrace will be printed, if executing `datafusion-cli` with a query
@@ -450,7 +456,7 @@ SELECT * from CARS LIMIT 1;
 #[async_trait]
 trait MinioCommandExt {
     async fn with_minio(&mut self, container: &ContainerAsync<minio::MinIO>)
-        -> &mut Self;
+    -> &mut Self;
 }
 
 #[async_trait]

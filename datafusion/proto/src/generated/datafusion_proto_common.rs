@@ -649,6 +649,9 @@ pub struct CsvOptions {
     /// Indicates if truncated rows are allowed
     #[prost(bytes = "vec", tag = "18")]
     pub truncated_rows: ::prost::alloc::vec::Vec<u8>,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "19")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 /// Options controlling CSV format
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -659,6 +662,9 @@ pub struct JsonOptions {
     /// Optional max records for schema inference
     #[prost(uint64, optional, tag = "2")]
     pub schema_infer_max_rec: ::core::option::Option<u64>,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "3")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {

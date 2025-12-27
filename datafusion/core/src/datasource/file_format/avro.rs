@@ -26,20 +26,21 @@ mod tests {
     use crate::{
         datasource::file_format::test_util::scan_format, prelude::SessionContext,
     };
-    use arrow::array::{as_string_array, Array};
+    use arrow::array::{Array, as_string_array};
     use datafusion_catalog::Session;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_common::{
+        Result,
         cast::{
             as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
             as_int32_array, as_timestamp_microsecond_array,
         },
-        test_util, Result,
+        test_util,
     };
 
     use datafusion_datasource_avro::AvroFormat;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
     use futures::StreamExt;
     use insta::assert_snapshot;
 
@@ -116,20 +117,20 @@ mod tests {
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
 
-        assert_snapshot!(batches_to_string(&batches),@r###"
-            +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
-            | id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |
-            +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
-            | 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |
-            | 5  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 2009-03-01T00:01:00 |
-            | 6  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30342f30312f3039 | 30         | 2009-04-01T00:00:00 |
-            | 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01T00:01:00 |
-            | 2  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30322f30312f3039 | 30         | 2009-02-01T00:00:00 |
-            | 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01T00:01:00 |
-            | 0  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |
-            | 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |
-            +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
-        "###);
+        assert_snapshot!(batches_to_string(&batches),@r"
+        +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
+        | id | bool_col | tinyint_col | smallint_col | int_col | bigint_col | float_col | double_col | date_string_col  | string_col | timestamp_col       |
+        +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
+        | 4  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30332f30312f3039 | 30         | 2009-03-01T00:00:00 |
+        | 5  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30332f30312f3039 | 31         | 2009-03-01T00:01:00 |
+        | 6  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30342f30312f3039 | 30         | 2009-04-01T00:00:00 |
+        | 7  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30342f30312f3039 | 31         | 2009-04-01T00:01:00 |
+        | 2  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30322f30312f3039 | 30         | 2009-02-01T00:00:00 |
+        | 3  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30322f30312f3039 | 31         | 2009-02-01T00:01:00 |
+        | 0  | true     | 0           | 0            | 0       | 0          | 0.0       | 0.0        | 30312f30312f3039 | 30         | 2009-01-01T00:00:00 |
+        | 1  | false    | 1           | 1            | 1       | 10         | 1.1       | 10.1       | 30312f30312f3039 | 31         | 2009-01-01T00:01:00 |
+        +----+----------+-------------+--------------+---------+------------+-----------+------------+------------------+------------+---------------------+
+        ");
         Ok(())
     }
 
@@ -245,7 +246,10 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]", format!("{values:?}"));
+        assert_eq!(
+            "[1235865600000000, 1235865660000000, 1238544000000000, 1238544060000000, 1233446400000000, 1233446460000000, 1230768000000000, 1230768060000000]",
+            format!("{values:?}")
+        );
 
         Ok(())
     }

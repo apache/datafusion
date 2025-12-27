@@ -19,14 +19,15 @@ use std::sync::Arc;
 
 use crate::memory_limit::DummyStreamPartition;
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, bounded_window_exec, bounded_window_exec_with_partition,
-    check_integrity, coalesce_batches_exec, coalesce_partitions_exec, create_test_schema,
-    create_test_schema2, create_test_schema3, filter_exec, global_limit_exec,
-    hash_join_exec, local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort,
-    projection_exec, repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    RequirementsTestExec, aggregate_exec, bounded_window_exec,
+    bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
+    coalesce_partitions_exec, create_test_schema, create_test_schema2,
+    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec,
+    local_limit_exec, memory_exec, parquet_exec, parquet_exec_with_sort, projection_exec,
+    repartition_exec, sort_exec, sort_exec_with_fetch, sort_expr, sort_expr_options,
+    sort_merge_join_exec, sort_preserving_merge_exec,
     sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
-    union_exec, RequirementsTestExec,
+    union_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -65,7 +66,7 @@ use datafusion_execution::TaskContext;
 use datafusion_catalog::streaming::StreamingTable;
 
 use futures::StreamExt;
-use insta::{assert_snapshot, Settings};
+use insta::{Settings, assert_snapshot};
 
 /// Create a sorted Csv exec
 fn csv_exec_sorted(
@@ -366,8 +367,8 @@ async fn test_union_inputs_different_sorted2() -> Result<()> {
 
 #[tokio::test]
 // Test with `repartition_sorts` enabled to preserve pre-sorted partitions and avoid resorting
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_true()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(true).await?,
         @r"
@@ -392,8 +393,8 @@ async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_reparti
 
 #[tokio::test]
 // Test with `repartition_sorts` disabled, causing a full resort of the data
-async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false(
-) -> Result<()> {
+async fn union_with_mix_of_presorted_and_explicitly_resorted_inputs_with_repartition_sorts_false()
+-> Result<()> {
     assert_snapshot!(
         union_with_mix_of_presorted_and_explicitly_resorted_inputs_impl(false).await?,
         @r"
@@ -770,8 +771,8 @@ async fn test_soft_hard_requirements_remove_soft_requirement() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns(
-) -> Result<()> {
+async fn test_soft_hard_requirements_remove_soft_requirement_without_pushdowns()
+-> Result<()> {
     let schema = create_test_schema()?;
     let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
@@ -1069,8 +1070,8 @@ async fn test_soft_hard_requirements_multiple_sorts() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement(
-) -> Result<()> {
+async fn test_soft_hard_requirements_with_multiple_soft_requirements_and_output_requirement()
+-> Result<()> {
     let schema = create_test_schema()?;
     let source = parquet_exec(schema.clone());
     let ordering = [sort_expr_options(
@@ -1339,12 +1340,12 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
                 assert_snapshot!(test.run(), @r"
                 Input Plan:
                 SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
                 Optimized Plan:
-                SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                   SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                   SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
@@ -1356,13 +1357,13 @@ async fn test_sort_merge_join_order_by_left() -> Result<()> {
                 assert_snapshot!(test.run(), @r"
                 Input Plan:
                 SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
                 Optimized Plan:
                 SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
@@ -1429,12 +1430,12 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                 assert_snapshot!(test.run(), @r"
                 Input Plan:
                 SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
                 Optimized Plan:
-                SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                   SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                   SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
@@ -1446,12 +1447,12 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                 assert_snapshot!(test.run(), @r"
                 Input Plan:
                 SortPreservingMergeExec: [col_a@0 ASC, col_b@1 ASC]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
                 Optimized Plan:
-                SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                   SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                   SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]
@@ -1463,13 +1464,13 @@ async fn test_sort_merge_join_order_by_right() -> Result<()> {
                 assert_snapshot!(test.run(), @r"
                 Input Plan:
                 SortPreservingMergeExec: [col_a@2 ASC, col_b@3 ASC]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
                 Optimized Plan:
                 SortExec: expr=[col_a@2 ASC, col_b@3 ASC], preserve_partitioning=[false]
-                  SortMergeJoin: join_type=..., on=[(nullable_col@0, col_a@0)]
+                  SortMergeJoinExec: join_type=..., on=[(nullable_col@0, col_a@0)]
                     SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
                       DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
                     SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
@@ -1512,13 +1513,13 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
     assert_snapshot!(test.run(), @r"
     Input Plan:
     SortPreservingMergeExec: [col_b@3 ASC, col_a@2 ASC]
-      SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
+      SortMergeJoinExec: join_type=Inner, on=[(nullable_col@0, col_a@0)]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
     Optimized Plan:
     SortExec: expr=[col_b@3 ASC, nullable_col@0 ASC], preserve_partitioning=[false]
-      SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
+      SortMergeJoinExec: join_type=Inner, on=[(nullable_col@0, col_a@0)]
         SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
         SortExec: expr=[col_a@0 ASC], preserve_partitioning=[false]
@@ -1539,12 +1540,12 @@ async fn test_sort_merge_join_complex_order_by() -> Result<()> {
     assert_snapshot!(test.run(), @r"
     Input Plan:
     SortPreservingMergeExec: [nullable_col@0 ASC, col_b@3 ASC, col_a@2 ASC]
-      SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
+      SortMergeJoinExec: join_type=Inner, on=[(nullable_col@0, col_a@0)]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[col_a, col_b], file_type=parquet
 
     Optimized Plan:
-    SortMergeJoin: join_type=Inner, on=[(nullable_col@0, col_a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(nullable_col@0, col_a@0)]
       SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet
       SortExec: expr=[col_a@0 ASC, col_b@1 ASC], preserve_partitioning=[false]

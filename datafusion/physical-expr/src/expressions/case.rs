@@ -23,8 +23,7 @@ use crate::expressions::{lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    FilterBuilder, FilterPredicate, SlicesIterator, is_not_null, not, nullif,
-    prep_null_mask_filter,
+    FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
 use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
@@ -39,6 +38,7 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
+use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
@@ -336,189 +336,6 @@ fn filter_array(
     filter.filter(array)
 }
 
-fn merge(
-    mask: &BooleanArray,
-    truthy: ColumnarValue,
-    falsy: ColumnarValue,
-) -> std::result::Result<ArrayRef, ArrowError> {
-    let (truthy, truthy_is_scalar) = match truthy {
-        ColumnarValue::Array(a) => (a, false),
-        ColumnarValue::Scalar(s) => (s.to_array()?, true),
-    };
-    let (falsy, falsy_is_scalar) = match falsy {
-        ColumnarValue::Array(a) => (a, false),
-        ColumnarValue::Scalar(s) => (s.to_array()?, true),
-    };
-
-    if truthy_is_scalar && falsy_is_scalar {
-        return zip(mask, &Scalar::new(truthy), &Scalar::new(falsy));
-    }
-
-    let falsy = falsy.to_data();
-    let truthy = truthy.to_data();
-
-    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
-
-    // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
-    // fill with falsy values
-
-    // keep track of how much is filled
-    let mut filled = 0;
-    let mut falsy_offset = 0;
-    let mut truthy_offset = 0;
-
-    SlicesIterator::new(mask).for_each(|(start, end)| {
-        // the gap needs to be filled with falsy values
-        if start > filled {
-            if falsy_is_scalar {
-                for _ in filled..start {
-                    // Copy the first item from the 'falsy' array into the output buffer.
-                    mutable.extend(1, 0, 1);
-                }
-            } else {
-                let falsy_length = start - filled;
-                let falsy_end = falsy_offset + falsy_length;
-                mutable.extend(1, falsy_offset, falsy_end);
-                falsy_offset = falsy_end;
-            }
-        }
-        // fill with truthy values
-        if truthy_is_scalar {
-            for _ in start..end {
-                // Copy the first item from the 'truthy' array into the output buffer.
-                mutable.extend(0, 0, 1);
-            }
-        } else {
-            let truthy_length = end - start;
-            let truthy_end = truthy_offset + truthy_length;
-            mutable.extend(0, truthy_offset, truthy_end);
-            truthy_offset = truthy_end;
-        }
-        filled = end;
-    });
-    // the remaining part is falsy
-    if filled < mask.len() {
-        if falsy_is_scalar {
-            for _ in filled..mask.len() {
-                // Copy the first item from the 'falsy' array into the output buffer.
-                mutable.extend(1, 0, 1);
-            }
-        } else {
-            let falsy_length = mask.len() - filled;
-            let falsy_end = falsy_offset + falsy_length;
-            mutable.extend(1, falsy_offset, falsy_end);
-        }
-    }
-
-    let data = mutable.freeze();
-    Ok(make_array(data))
-}
-
-/// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
-/// those values.
-///
-/// Each element in `indices` is the index of an array in `values`. The `indices` array is processed
-/// sequentially. The first occurrence of index value `n` will be mapped to the first
-/// value of the array at index `n`. The second occurrence to the second value, and so on.
-/// An index value where `PartialResultIndex::is_none` is `true` is used to indicate null values.
-///
-/// # Implementation notes
-///
-/// This algorithm is similar in nature to both `zip` and `interleave`, but there are some important
-/// differences.
-///
-/// In contrast to `zip`, this function supports multiple input arrays. Instead of a boolean
-/// selection vector, an index array is to take values from the input arrays, and a special marker
-/// value is used to indicate null values.
-///
-/// In contrast to `interleave`, this function does not use pairs of indices. The values in
-/// `indices` serve the same purpose as the first value in the pairs passed to `interleave`.
-/// The index in the array is implicit and is derived from the number of times a particular array
-/// index occurs.
-/// The more constrained indexing mechanism used by this algorithm makes it easier to copy values
-/// in contiguous slices. In the example below, the two subsequent elements from array `2` can be
-/// copied in a single operation from the source array instead of copying them one by one.
-/// Long spans of null values are also especially cheap because they do not need to be represented
-/// in an input array.
-///
-/// # Safety
-///
-/// This function does not check that the number of occurrences of any particular array index matches
-/// the length of the corresponding input array. If an array contains more values than required, the
-/// spurious values will be ignored. If an array contains fewer values than necessary, this function
-/// will panic.
-///
-/// # Example
-///
-/// ```text
-/// ┌───────────┐  ┌─────────┐                             ┌─────────┐
-/// │┌─────────┐│  │   None  │                             │   NULL  │
-/// ││    A    ││  ├─────────┤                             ├─────────┤
-/// │└─────────┘│  │    1    │                             │    B    │
-/// │┌─────────┐│  ├─────────┤                             ├─────────┤
-/// ││    B    ││  │    0    │    merge(values, indices)   │    A    │
-/// │└─────────┘│  ├─────────┤  ─────────────────────────▶ ├─────────┤
-/// │┌─────────┐│  │   None  │                             │   NULL  │
-/// ││    C    ││  ├─────────┤                             ├─────────┤
-/// │├─────────┤│  │    2    │                             │    C    │
-/// ││    D    ││  ├─────────┤                             ├─────────┤
-/// │└─────────┘│  │    2    │                             │    D    │
-/// └───────────┘  └─────────┘                             └─────────┘
-///    values        indices                                  result
-/// ```
-fn merge_n(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
-    #[cfg(debug_assertions)]
-    for ix in indices {
-        if let Some(index) = ix.index() {
-            assert!(
-                index < values.len(),
-                "Index out of bounds: {} >= {}",
-                index,
-                values.len()
-            );
-        }
-    }
-
-    let data_refs = values.iter().collect();
-    let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
-
-    // This loop extends the mutable array by taking slices from the partial results.
-    //
-    // take_offsets keeps track of how many values have been taken from each array.
-    let mut take_offsets = vec![0; values.len() + 1];
-    let mut start_row_ix = 0;
-    loop {
-        let array_ix = indices[start_row_ix];
-
-        // Determine the length of the slice to take.
-        let mut end_row_ix = start_row_ix + 1;
-        while end_row_ix < indices.len() && indices[end_row_ix] == array_ix {
-            end_row_ix += 1;
-        }
-        let slice_length = end_row_ix - start_row_ix;
-
-        // Extend mutable with either nulls or with values from the array.
-        match array_ix.index() {
-            None => mutable.extend_nulls(slice_length),
-            Some(index) => {
-                let start_offset = take_offsets[index];
-                let end_offset = start_offset + slice_length;
-                mutable.extend(index, start_offset, end_offset);
-                take_offsets[index] = end_offset;
-            }
-        }
-
-        if end_row_ix == indices.len() {
-            break;
-        } else {
-            // Set the start_row_ix for the next slice.
-            start_row_ix = end_row_ix;
-        }
-    }
-
-    Ok(make_array(mutable.freeze()))
-}
-
 /// An index into the partial results array that's more compact than `usize`.
 ///
 /// `u32::MAX` is reserved as a special 'none' value. This is used instead of
@@ -561,7 +378,9 @@ impl PartialResultIndex {
     fn is_none(&self) -> bool {
         self.index == NONE_VALUE
     }
+}
 
+impl MergeIndex for PartialResultIndex {
     /// Returns `Some(index)` if this value is not the 'none' placeholder, `None` otherwise.
     fn index(&self) -> Option<usize> {
         if self.is_none() {
@@ -589,7 +408,7 @@ enum ResultState {
     Partial {
         // A `Vec` of partial results that should be merged.
         // `partial_result_indices` contains indexes into this vec.
-        arrays: Vec<ArrayData>,
+        arrays: Vec<ArrayRef>,
         // Indicates per result row from which array in `partial_results` a value should be taken.
         indices: Vec<PartialResultIndex>,
     },
@@ -670,7 +489,7 @@ impl ResultBuilder {
                 } else if row_indices.len() == self.row_count {
                     self.set_complete_result(ColumnarValue::Array(a))
                 } else {
-                    self.add_partial_result(row_indices, a.to_data())
+                    self.add_partial_result(row_indices, a)
                 }
             }
             ColumnarValue::Scalar(s) => {
@@ -679,7 +498,7 @@ impl ResultBuilder {
                 } else {
                     self.add_partial_result(
                         row_indices,
-                        s.to_array_of_size(row_indices.len())?.to_data(),
+                        s.to_array_of_size(row_indices.len())?,
                     )
                 }
             }
@@ -694,7 +513,7 @@ impl ResultBuilder {
     fn add_partial_result(
         &mut self,
         row_indices: &ArrayRef,
-        row_values: ArrayData,
+        row_values: ArrayRef,
     ) -> Result<()> {
         assert_or_internal_err!(
             row_indices.null_count() == 0,
@@ -775,7 +594,8 @@ impl ResultBuilder {
             }
             ResultState::Partial { arrays, indices } => {
                 // Merge partial results into a single array.
-                Ok(ColumnarValue::Array(merge_n(&arrays, &indices)?))
+                let array_refs = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+                Ok(ColumnarValue::Array(merge_n(&array_refs, &indices)?))
             }
             ResultState::Complete(v) => {
                 // If we have a complete result, we can just return it.
@@ -1152,11 +972,20 @@ impl CaseBody {
 
         let else_value = else_expr.evaluate(&else_batch)?;
 
-        Ok(ColumnarValue::Array(merge(
-            &when_value,
-            then_value,
-            else_value,
-        )?))
+        Ok(ColumnarValue::Array(match (then_value, else_value) {
+            (ColumnarValue::Array(t), ColumnarValue::Array(e)) => {
+                merge(&when_value, &t, &e)
+            }
+            (ColumnarValue::Scalar(t), ColumnarValue::Array(e)) => {
+                merge(&when_value, &t.to_scalar()?, &e)
+            }
+            (ColumnarValue::Array(t), ColumnarValue::Scalar(e)) => {
+                merge(&when_value, &t, &e.to_scalar()?)
+            }
+            (ColumnarValue::Scalar(t), ColumnarValue::Scalar(e)) => {
+                merge(&when_value, &t.to_scalar()?, &e.to_scalar()?)
+            }
+        }?))
     }
 }
 
@@ -2565,57 +2394,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn test_merge_n() {
-        let a1 = StringArray::from(vec![Some("A")]).to_data();
-        let a2 = StringArray::from(vec![Some("B")]).to_data();
-        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
-
-        let indices = vec![
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(1).unwrap(),
-            PartialResultIndex::try_new(0).unwrap(),
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(2).unwrap(),
-            PartialResultIndex::try_new(2).unwrap(),
-        ];
-
-        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), indices.len());
-        assert!(!merged.is_valid(0));
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "A");
-        assert!(!merged.is_valid(3));
-        assert!(merged.is_valid(4));
-        assert_eq!(merged.value(4), "C");
-        assert!(merged.is_valid(5));
-        assert_eq!(merged.value(5), "D");
-    }
-
-    #[test]
-    fn test_merge() {
-        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
-        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
-
-        let mask = BooleanArray::from(vec![true, false, true]);
-
-        let merged =
-            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), mask.len());
-        assert!(merged.is_valid(0));
-        assert_eq!(merged.value(0), "A");
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "C");
     }
 
     fn when_then_else(

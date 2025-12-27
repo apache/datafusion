@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow_wrappers::WrappedArray;
 use abi_stable::StableAbi;
 use datafusion_common::DataFusionError;
 use datafusion_expr::interval_arithmetic::Interval;
+
+use crate::arrow_wrappers::WrappedArray;
 
 /// A stable struct for sharing [`Interval`] across FFI boundaries.
 /// See [`Interval`] for the meaning of each field. Scalar values
