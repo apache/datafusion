@@ -1018,6 +1018,34 @@ SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) 
 ----
 4
 
+# median_i8_max_values
+# Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+127
+
+# median_i8_min_values
+# Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
+----
+-128
+
+# median_i8_min_max_values
+# Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+0
+
+# median_u8_max_values
+# Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
+----
+255
+
 # median_sliding_window
 statement ok
 CREATE TABLE median_window_test (
