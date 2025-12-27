@@ -49,7 +49,6 @@ pub mod return_type_args;
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ScalarUDF {
     /// FFI equivalent to the `name` of a [`ScalarUDF`]
     pub name: RString,
@@ -68,7 +67,6 @@ pub struct FFI_ScalarUDF {
 
     /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
-    #[allow(clippy::type_complexity)]
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
         args: RVec<WrappedArray>,
