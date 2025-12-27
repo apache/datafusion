@@ -29,7 +29,6 @@ use crate::expr::interval::FFI_Interval;
 /// See ['Distribution'] for the meaning of each variant.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 #[expect(clippy::large_enum_variant)]
 pub enum FFI_Distribution {
     Uniform(FFI_UniformDistribution),
@@ -69,14 +68,12 @@ impl TryFrom<FFI_Distribution> for Distribution {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_UniformDistribution {
     interval: FFI_Interval,
 }
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ExponentialDistribution {
     rate: WrappedArray,
     offset: WrappedArray,
@@ -85,7 +82,6 @@ pub struct FFI_ExponentialDistribution {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_GaussianDistribution {
     mean: WrappedArray,
     variance: WrappedArray,
@@ -93,14 +89,12 @@ pub struct FFI_GaussianDistribution {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_BernoulliDistribution {
     p: WrappedArray,
 }
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_GenericDistribution {
     mean: WrappedArray,
     median: WrappedArray,

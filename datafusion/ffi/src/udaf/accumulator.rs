@@ -37,7 +37,6 @@ use crate::{df_result, rresult, rresult_return};
 /// defined in [`Accumulator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_Accumulator {
     pub update_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
