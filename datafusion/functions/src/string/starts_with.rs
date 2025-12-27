@@ -231,16 +231,19 @@ impl ScalarUDFImpl for StartsWithFunc {
 #[cfg(test)]
 mod tests {
     use crate::utils::test::test_function;
-    use arrow::array::{Array, BooleanArray};
+    use arrow::array::{Array, BooleanArray, StringArray};
     use arrow::datatypes::DataType::Boolean;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::*;
 
     #[test]
-    fn test_functions() -> Result<()> {
-        // Generate test cases for starts_with
+    fn test_scalar_scalar() -> Result<()> {
+        // Test Scalar + Scalar combinations
         let test_cases = vec![
             (Some("alphabet"), Some("alph"), Some(true)),
             (Some("alphabet"), Some("bet"), Some(false)),
@@ -283,5 +286,155 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar() -> Result<()> {
+        // Test Array + Scalar (the optimized path)
+        let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("alph".to_string())));
+
+        let args = vec![array, scalar];
+        test_function!(
+            StartsWithFunc::new(),
+            args,
+            Ok(Some(true)), // First element result
+            bool,
+            Boolean,
+            BooleanArray
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar_full_result() {
+        // Test Array + Scalar and verify all results
+        let func = StartsWithFunc::new();
+        let array = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Array(array),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("alph".to_string()))),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
+        assert_eq!(bool_array.value(1), true); // "alphabet" starts with "alph"
+        assert_eq!(bool_array.value(2), false); // "beta" does not start with "alph"
+        assert!(bool_array.is_null(3)); // null input -> null output
+    }
+
+    #[test]
+    fn test_scalar_array() {
+        // Test Scalar + Array
+        let func = StartsWithFunc::new();
+        let prefixes = Arc::new(StringArray::from(vec![
+            Some("alph"),
+            Some("bet"),
+            Some("alpha"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("alphabet".to_string()))),
+            ColumnarValue::Array(prefixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
+        assert_eq!(bool_array.value(1), false); // "alphabet" does not start with "bet"
+        assert_eq!(bool_array.value(2), true); // "alphabet" starts with "alpha"
+        assert!(bool_array.is_null(3)); // null prefix -> null output
+    }
+
+    #[test]
+    fn test_array_array() {
+        // Test Array + Array
+        let func = StartsWithFunc::new();
+        let strings = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("rust"),
+            Some("datafusion"),
+            None,
+        ]));
+        let prefixes = Arc::new(StringArray::from(vec![
+            Some("alph"),
+            Some("ru"),
+            Some("hello"),
+            Some("test"),
+        ]));
+        let args = vec![
+            ColumnarValue::Array(strings),
+            ColumnarValue::Array(prefixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
+        assert_eq!(bool_array.value(1), true); // "rust" starts with "ru"
+        assert_eq!(bool_array.value(2), false); // "datafusion" does not start with "hello"
+        assert!(bool_array.is_null(3)); // null string -> null output
     }
 }

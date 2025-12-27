@@ -175,18 +175,22 @@ impl ScalarUDFImpl for EndsWithFunc {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, BooleanArray};
+    use arrow::array::{Array, BooleanArray, StringArray};
     use arrow::datatypes::DataType::Boolean;
+    use arrow::datatypes::{DataType, Field};
+    use std::sync::Arc;
 
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::string::ends_with::EndsWithFunc;
     use crate::utils::test::test_function;
 
     #[test]
-    fn test_functions() -> Result<()> {
+    fn test_scalar_scalar() -> Result<()> {
+        // Test Scalar + Scalar combinations
         test_function!(
             EndsWithFunc::new(),
             vec![
@@ -232,6 +236,186 @@ mod tests {
             BooleanArray
         );
 
+        // Test with LargeUtf8
+        test_function!(
+            EndsWithFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(
+                    "alphabet".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some("bet".to_string()))),
+            ],
+            Ok(Some(true)),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+
+        // Test with Utf8View
+        test_function!(
+            EndsWithFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                    "alphabet".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("bet".to_string()))),
+            ],
+            Ok(Some(true)),
+            bool,
+            Boolean,
+            BooleanArray
+        );
+
         Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar() -> Result<()> {
+        // Test Array + Scalar (the optimized path)
+        let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("bet".to_string())));
+
+        let args = vec![array, scalar];
+        test_function!(
+            EndsWithFunc::new(),
+            args,
+            Ok(Some(true)), // First element result: "alphabet" ends with "bet"
+            bool,
+            Boolean,
+            BooleanArray
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar_full_result() {
+        // Test Array + Scalar and verify all results
+        let func = EndsWithFunc::new();
+        let array = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Array(array),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("bet".to_string()))),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
+        assert_eq!(bool_array.value(1), true); // "alphabet" ends with "bet"
+        assert_eq!(bool_array.value(2), false); // "beta" does not end with "bet"
+        assert!(bool_array.is_null(3)); // null input -> null output
+    }
+
+    #[test]
+    fn test_scalar_array() {
+        // Test Scalar + Array
+        let func = EndsWithFunc::new();
+        let suffixes = Arc::new(StringArray::from(vec![
+            Some("bet"),
+            Some("alph"),
+            Some("phabet"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("alphabet".to_string()))),
+            ColumnarValue::Array(suffixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
+        assert_eq!(bool_array.value(1), false); // "alphabet" does not end with "alph"
+        assert_eq!(bool_array.value(2), true); // "alphabet" ends with "phabet"
+        assert!(bool_array.is_null(3)); // null suffix -> null output
+    }
+
+    #[test]
+    fn test_array_array() {
+        // Test Array + Array
+        let func = EndsWithFunc::new();
+        let strings = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("rust"),
+            Some("datafusion"),
+            None,
+        ]));
+        let suffixes = Arc::new(StringArray::from(vec![
+            Some("bet"),
+            Some("st"),
+            Some("hello"),
+            Some("test"),
+        ]));
+        let args = vec![
+            ColumnarValue::Array(strings),
+            ColumnarValue::Array(suffixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
+        assert_eq!(bool_array.value(1), true); // "rust" ends with "st"
+        assert_eq!(bool_array.value(2), false); // "datafusion" does not end with "hello"
+        assert!(bool_array.is_null(3)); // null string -> null output
     }
 }
