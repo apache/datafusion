@@ -23,13 +23,13 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
+use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
-use crate::joins::utils::JoinHashMapType;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -49,9 +49,9 @@ use tokio::sync::Barrier;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnBounds {
     /// The minimum value observed for this column
-    min: ScalarValue,
+    pub(crate) min: ScalarValue,
     /// The maximum value observed for this column  
-    max: ScalarValue,
+    pub(crate) max: ScalarValue,
 }
 
 impl ColumnBounds {
@@ -133,7 +133,7 @@ fn create_membership_predicate(
                 on_right.to_vec(),
                 random_state.clone(),
                 "hash_join".to_string(),
-            )) as Arc<dyn PhysicalExpr>;
+            ));
 
             Ok(Some(Arc::new(HashTableLookupExpr::new(
                 lookup_hash_expr,
@@ -241,7 +241,7 @@ pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
     /// Use hash table lookup for large build sides
-    HashTable(Arc<dyn JoinHashMapType>),
+    HashTable(Arc<Map>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
