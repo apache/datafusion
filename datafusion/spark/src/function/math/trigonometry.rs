@@ -17,11 +17,13 @@
 
 use crate::function::error_utils::unsupported_data_type_exec_err;
 use arrow::array::{ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Float64Type};
+use arrow::datatypes::{DataType, Field, FieldRef, Float64Type};
+use datafusion_common::internal_err;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -62,7 +64,17 @@ impl ScalarUDFImpl for SparkCsc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+        internal_err!(
+            "SparkCsc: return_type() is not used; return_field_from_args() is implemented"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input_field = &args.arg_fields[0];
+        let out_dt = DataType::Float64;
+        let out_nullable = input_field.is_nullable();
+
+        Ok(Arc::new(Field::new(self.name(), out_dt, out_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -132,7 +144,17 @@ impl ScalarUDFImpl for SparkSec {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
+        internal_err!(
+            "SparkSec: return_type() is not used; return_field_from_args() is implemented"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input_field = &args.arg_fields[0];
+        let out_dt = DataType::Float64;
+        let out_nullable = input_field.is_nullable();
+
+        Ok(Arc::new(Field::new(self.name(), out_dt, out_nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -163,5 +185,68 @@ fn spark_sec(arg: &ColumnarValue) -> Result<ColumnarValue> {
             format!("{}", DataType::Float64).as_str(),
             &other.data_type(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_csc_nullability() {
+        let csc = SparkCsc::new();
+
+        // --- non-nullable input ---
+        let non_nullable_f64 = Arc::new(Field::new("c", DataType::Float64, false));
+        let out_non_null = csc
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&non_nullable_f64)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        assert!(!out_non_null.is_nullable());
+        assert_eq!(out_non_null.data_type(), &DataType::Float64);
+
+        // --- nullable input ---
+        let nullable_f64 = Arc::new(Field::new("c", DataType::Float64, true));
+        let out_nullable = csc
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&nullable_f64)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        assert!(out_nullable.is_nullable());
+        assert_eq!(out_nullable.data_type(), &DataType::Float64);
+    }
+
+    #[test]
+    fn test_sec_nullability() {
+        let sec = SparkSec::new();
+
+        // --- non-nullable input ---
+        let non_nullable_f64 = Arc::new(Field::new("c", DataType::Float64, false));
+        let out_non_null = sec
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&non_nullable_f64)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        assert!(!out_non_null.is_nullable());
+        assert_eq!(out_non_null.data_type(), &DataType::Float64);
+
+        // --- nullable input ---
+        let nullable_f64 = Arc::new(Field::new("c", DataType::Float64, true));
+        let out_nullable = sec
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[Arc::clone(&nullable_f64)],
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        assert!(out_nullable.is_nullable());
+        assert_eq!(out_nullable.data_type(), &DataType::Float64);
     }
 }
