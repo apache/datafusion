@@ -152,12 +152,16 @@ pub trait FileSource: Send + Sync {
     ///
     /// This method attempts to optimize data retrieval to match the requested ordering.
     /// It receives both the requested ordering and equivalence properties that describe
-    /// relationships between expressions (e.g., constant columns, monotonic functions).
+    /// the output data from this file source.
     ///
     /// # Parameters
-    /// * `order` - The requested sort ordering
-    /// * `eq_properties` - Equivalence properties that can be used to determine if a reversed
-    ///   ordering satisfies the request. This includes information about:
+    /// * `order` - The requested sort ordering from the query
+    /// * `eq_properties` - Equivalence properties of the data that will be produced by this
+    ///   file source. These properties describe the ordering, constant columns, and other
+    ///   relationships in the output data, allowing the implementation to determine if
+    ///   optimizations like reversed scanning can help satisfy the requested ordering.
+    ///   This includes information about:
+    ///   - The file's natural ordering (from output_ordering in FileScanConfig)
     ///   - Constant columns (e.g., from filters like `ticker = 'AAPL'`)
     ///   - Monotonic functions (e.g., `extract_year_month(timestamp)`)
     ///   - Other equivalence relationships
