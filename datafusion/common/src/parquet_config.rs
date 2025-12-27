@@ -26,9 +26,10 @@ use crate::error::{DataFusionError, Result};
 /// This enum validates parquet writer version values at configuration time,
 /// ensuring only valid versions ("1.0" or "2.0") can be set via `SET` commands
 /// or proto deserialization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DFWriterVersion {
     /// Parquet format version 1.0
+    #[default]
     V1_0,
     /// Parquet format version 2.0
     V2_0,
@@ -56,12 +57,6 @@ impl Display for DFWriterVersion {
             DFWriterVersion::V2_0 => "2.0",
         };
         write!(f, "{s}")
-    }
-}
-
-impl Default for DFWriterVersion {
-    fn default() -> Self {
-        DFWriterVersion::V1_0
     }
 }
 

@@ -373,7 +373,6 @@ pub fn parse_compression_string(
     }
 }
 
-
 pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
