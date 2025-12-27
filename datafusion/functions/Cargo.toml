@@ -257,11 +257,6 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
-name = "contains"
-required-features = ["string_expressions"]
-
-[[bench]]
-harness = false
 name = "starts_with"
 required-features = ["string_expressions"]
 
