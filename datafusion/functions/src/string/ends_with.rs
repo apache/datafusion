@@ -327,9 +327,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
-        assert_eq!(bool_array.value(1), true); // "alphabet" ends with "bet"
-        assert_eq!(bool_array.value(2), false); // "beta" does not end with "bet"
+        assert!(bool_array.value(0)); // "alphabet" ends with "bet"
+        assert!(bool_array.value(1)); // "alphabet" ends with "bet"
+        assert!(!bool_array.value(2)); // "beta" does not end with "bet"
         assert!(bool_array.is_null(3)); // null input -> null output
     }
 
@@ -367,9 +367,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
-        assert_eq!(bool_array.value(1), false); // "alphabet" does not end with "alph"
-        assert_eq!(bool_array.value(2), true); // "alphabet" ends with "phabet"
+        assert!(bool_array.value(0)); // "alphabet" ends with "bet"
+        assert!(!bool_array.value(1)); // "alphabet" does not end with "alph"
+        assert!(bool_array.value(2)); // "alphabet" ends with "phabet"
         assert!(bool_array.is_null(3)); // null suffix -> null output
     }
 
@@ -413,9 +413,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" ends with "bet"
-        assert_eq!(bool_array.value(1), true); // "rust" ends with "st"
-        assert_eq!(bool_array.value(2), false); // "datafusion" does not end with "hello"
+        assert!(bool_array.value(0)); // "alphabet" ends with "bet"
+        assert!(bool_array.value(1)); // "rust" ends with "st"
+        assert!(!bool_array.value(2)); // "datafusion" does not end with "hello"
         assert!(bool_array.is_null(3)); // null string -> null output
     }
 }

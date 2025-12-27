@@ -346,9 +346,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
-        assert_eq!(bool_array.value(1), true); // "alphabet" starts with "alph"
-        assert_eq!(bool_array.value(2), false); // "beta" does not start with "alph"
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(bool_array.value(1)); // "alphabet" starts with "alph"
+        assert!(!bool_array.value(2)); // "beta" does not start with "alph"
         assert!(bool_array.is_null(3)); // null input -> null output
     }
 
@@ -386,9 +386,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
-        assert_eq!(bool_array.value(1), false); // "alphabet" does not start with "bet"
-        assert_eq!(bool_array.value(2), true); // "alphabet" starts with "alpha"
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(!bool_array.value(1)); // "alphabet" does not start with "bet"
+        assert!(bool_array.value(2)); // "alphabet" starts with "alpha"
         assert!(bool_array.is_null(3)); // null prefix -> null output
     }
 
@@ -432,9 +432,9 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .unwrap();
 
-        assert_eq!(bool_array.value(0), true); // "alphabet" starts with "alph"
-        assert_eq!(bool_array.value(1), true); // "rust" starts with "ru"
-        assert_eq!(bool_array.value(2), false); // "datafusion" does not start with "hello"
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(bool_array.value(1)); // "rust" starts with "ru"
+        assert!(!bool_array.value(2)); // "datafusion" does not start with "hello"
         assert!(bool_array.is_null(3)); // null string -> null output
     }
 }
