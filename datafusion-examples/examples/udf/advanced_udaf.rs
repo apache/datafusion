@@ -34,7 +34,7 @@ use datafusion::logical_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Signature,
     expr::AggregateFunction,
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-    simplify::SimplifyInfo,
+    simplify::SimplifyContext,
 };
 use datafusion::prelude::*;
 
@@ -421,7 +421,7 @@ impl AggregateUDFImpl for SimplifiedGeoMeanUdaf {
 
     /// Optionally replaces a UDAF with another expression during query optimization.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
-        let simplify = |aggregate_function: AggregateFunction, _: &dyn SimplifyInfo| {
+        let simplify = |aggregate_function: AggregateFunction, _: &SimplifyContext| {
             // Replaces the UDAF with `GeoMeanUdaf` as a placeholder example to demonstrate the `simplify` method.
             // In real-world scenarios, you might create UDFs from built-in expressions.
             Ok(Expr::AggregateFunction(AggregateFunction::new_udf(

@@ -166,8 +166,7 @@ impl TestParquetFile {
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 
         // run coercion on the filters to coerce types etc.
-        let props = ExecutionProps::new();
-        let context = SimplifyContext::new(&props).with_schema(Arc::clone(&df_schema));
+        let context = SimplifyContext::default().with_schema(Arc::clone(&df_schema));
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();

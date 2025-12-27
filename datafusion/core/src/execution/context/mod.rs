@@ -93,9 +93,9 @@ use datafusion_expr::{
     logical_plan::{DdlStatement, Statement},
     planner::ExprPlanner,
 };
-use datafusion_optimizer::Analyzer;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
+use datafusion_optimizer::{Analyzer, OptimizerContext};
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use datafusion_session::SessionStore;
 
@@ -749,12 +749,19 @@ impl SessionContext {
                         );
                     }
                 }
-                // Store the unoptimized plan into the session state. Although storing the
-                // optimized plan or the physical plan would be more efficient, doing so is
-                // not currently feasible. This is because `now()` would be optimized to a
-                // constant value, causing each EXECUTE to yield the same result, which is
-                // incorrect behavior.
-                self.state.write().store_prepared(name, fields, input)?;
+                // Optimize the plan without evaluating expressions like now()
+                let optimizer_context = OptimizerContext::new_with_config_options(
+                    Arc::clone(self.state().config().options()),
+                )
+                .without_query_execution_start_time();
+                let plan = self.state().optimizer().optimize(
+                    Arc::unwrap_or_clone(input),
+                    &optimizer_context,
+                    |_1, _2| {},
+                )?;
+                self.state
+                    .write()
+                    .store_prepared(name, fields, Arc::new(plan))?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Execute(execute)) => {
@@ -1394,7 +1401,12 @@ impl SessionContext {
         })?;
 
         let state = self.state.read();
-        let context = SimplifyContext::new(state.execution_props());
+        let context = SimplifyContext::default()
+            .with_schema(Arc::clone(prepared.plan.schema()))
+            .with_config_options(Arc::clone(state.config_options()))
+            .with_query_execution_start_time(
+                state.execution_props().query_execution_start_time,
+            );
         let simplifier = ExprSimplifier::new(context);
 
         // Only allow literals as parameters for now.

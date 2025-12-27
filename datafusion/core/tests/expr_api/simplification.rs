@@ -23,14 +23,13 @@ use arrow::array::types::IntervalDayTime;
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
+use datafusion::{error::Result, prelude::*};
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_int32_array;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection,
     ScalarUDF, Volatility, table_scan,
@@ -40,54 +39,6 @@ use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
-
-/// In order to simplify expressions, DataFusion must have information
-/// about the expressions.
-///
-/// You can provide that information using DataFusion [DFSchema]
-/// objects or from some other implementation
-struct MyInfo {
-    /// The input schema
-    schema: DFSchemaRef,
-
-    /// Execution specific details needed for constant evaluation such
-    /// as the current time for `now()` and [VariableProviders]
-    execution_props: ExecutionProps,
-}
-
-impl SimplifyInfo for MyInfo {
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        Ok(matches!(
-            expr.get_type(self.schema.as_ref())?,
-            DataType::Boolean
-        ))
-    }
-
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        expr.nullable(self.schema.as_ref())
-    }
-
-    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        expr.get_type(self.schema.as_ref())
-    }
-
-    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
-        self.execution_props.query_execution_start_time
-    }
-
-    fn config_options(&self) -> Option<&Arc<ConfigOptions>> {
-        self.execution_props.config_options.as_ref()
-    }
-}
-
-impl From<DFSchemaRef> for MyInfo {
-    fn from(schema: DFSchemaRef) -> Self {
-        Self {
-            schema,
-            execution_props: ExecutionProps::new(),
-        }
-    }
-}
 
 /// A schema like:
 ///
@@ -137,14 +88,10 @@ fn test_evaluate_with_start_time(
     expected_expr: Expr,
     date_time: &DateTime<Utc>,
 ) {
-    let execution_props =
-        ExecutionProps::new().with_query_execution_start_time(*date_time);
-
-    let info: MyInfo = MyInfo {
-        schema: schema(),
-        execution_props,
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default()
+        .with_schema(schema())
+        .with_query_execution_start_time(Some(*date_time));
+    let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
         .expect("successfully evaluated");
@@ -206,7 +153,9 @@ fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
 
 #[test]
 fn basic() {
-    let info: MyInfo = schema().into();
+    let context = SimplifyContext::default()
+        .with_schema(schema())
+        .with_query_execution_start_time(Some(Utc::now()));
 
     // The `Expr` is a core concept in DataFusion, and DataFusion can
     // help simplify it.
@@ -215,21 +164,21 @@ fn basic() {
     // optimize form `a < 5` automatically
     let expr = col("a").lt(lit(2i32) + lit(3i32));
 
-    let simplifier = ExprSimplifier::new(info);
+    let simplifier = ExprSimplifier::new(context);
     let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, col("a").lt(lit(5i32)));
 }
 
 #[test]
 fn fold_and_simplify() {
-    let info: MyInfo = schema().into();
+    let context = SimplifyContext::default().with_schema(schema());
 
     // What will it do with the expression `concat('foo', 'bar') == 'foobar')`?
     let expr = concat(vec![lit("foo"), lit("bar")]).eq(lit("foobar"));
 
     // Since datafusion applies both simplification *and* rewriting
     // some expressions can be entirely simplified
-    let simplifier = ExprSimplifier::new(info);
+    let simplifier = ExprSimplifier::new(context);
     let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, lit(true))
 }
@@ -554,7 +503,7 @@ fn now_simplification_with_and_without_start_time() {
         let optimizer = SimplifyExpressions {};
         let simplified = optimizer
             .rewrite(plan.clone(), &ctx)
-            .expect("simplify should succeed")
+            .expect("rewrite should succeed")
             .data;
         let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
             panic!("Expected Projection plan");
@@ -577,7 +526,7 @@ fn now_simplification_with_and_without_start_time() {
         let optimizer = SimplifyExpressions {};
         let simplified = optimizer
             .rewrite(plan, &ctx)
-            .expect("simplify should succeed")
+            .expect("rewrite should succeed")
             .data;
         let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
             panic!("Expected Projection plan");
@@ -616,11 +565,8 @@ fn expr_test_schema() -> DFSchemaRef {
 }
 
 fn test_simplify(input_expr: Expr, expected_expr: Expr) {
-    let info: MyInfo = MyInfo {
-        schema: expr_test_schema(),
-        execution_props: ExecutionProps::new(),
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default().with_schema(expr_test_schema());
+    let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
         .expect("successfully evaluated");
@@ -635,12 +581,10 @@ fn test_simplify_with_cycle_count(
     expected_expr: Expr,
     expected_count: u32,
 ) {
-    let info: MyInfo = MyInfo {
-        schema: expr_test_schema(),
-        execution_props: ExecutionProps::new()
-            .with_query_execution_start_time(Utc::now()),
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default()
+        .with_schema(expr_test_schema())
+        .with_query_execution_start_time(Some(Utc::now()));
+    let simplifier = ExprSimplifier::new(context);
     let (simplified_expr, count) = simplifier
         .simplify_with_cycle_count_transformed(input_expr.clone())
         .expect("successfully evaluated");
