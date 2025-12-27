@@ -23,7 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
-use crate::parquet_config::ParquetWriterVersion;
+use crate::parquet_config::DFWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -743,7 +743,7 @@ config_namespace! {
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: ParquetWriterVersion, default = ParquetWriterVersion::default()
+        pub writer_version: DFWriterVersion, default = DFWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -3459,7 +3459,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn test_parquet_writer_version_validation() {
-        use crate::{config::ConfigOptions, parquet_config::ParquetWriterVersion};
+        use crate::{config::ConfigOptions, parquet_config::DFWriterVersion};
 
         let mut config = ConfigOptions::default();
 
@@ -3469,7 +3469,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             config.execution.parquet.writer_version,
-            ParquetWriterVersion::V1_0
+            DFWriterVersion::V1_0
         );
 
         config
@@ -3477,7 +3477,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             config.execution.parquet.writer_version,
-            ParquetWriterVersion::V2_0
+            DFWriterVersion::V2_0
         );
 
         // Invalid value should error immediately at SET time

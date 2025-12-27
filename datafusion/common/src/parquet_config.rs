@@ -27,21 +27,21 @@ use crate::error::{DataFusionError, Result};
 /// ensuring only valid versions ("1.0" or "2.0") can be set via `SET` commands
 /// or proto deserialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParquetWriterVersion {
+pub enum DFWriterVersion {
     /// Parquet format version 1.0
     V1_0,
     /// Parquet format version 2.0
     V2_0,
 }
 
-/// Implement parsing strings to `ParquetWriterVersion`
-impl FromStr for ParquetWriterVersion {
+/// Implement parsing strings to `DFWriterVersion`
+impl FromStr for DFWriterVersion {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "1.0" => Ok(ParquetWriterVersion::V1_0),
-            "2.0" => Ok(ParquetWriterVersion::V2_0),
+            "1.0" => Ok(DFWriterVersion::V1_0),
+            "2.0" => Ok(DFWriterVersion::V2_0),
             other => Err(DataFusionError::Configuration(format!(
                 "Invalid parquet writer version: {other}. Expected one of: 1.0, 2.0"
             ))),
@@ -49,64 +49,64 @@ impl FromStr for ParquetWriterVersion {
     }
 }
 
-impl Display for ParquetWriterVersion {
+impl Display for DFWriterVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            ParquetWriterVersion::V1_0 => "1.0",
-            ParquetWriterVersion::V2_0 => "2.0",
+            DFWriterVersion::V1_0 => "1.0",
+            DFWriterVersion::V2_0 => "2.0",
         };
         write!(f, "{s}")
     }
 }
 
-impl Default for ParquetWriterVersion {
+impl Default for DFWriterVersion {
     fn default() -> Self {
-        ParquetWriterVersion::V1_0
+        DFWriterVersion::V1_0
     }
 }
 
-impl ConfigField for ParquetWriterVersion {
+impl ConfigField for DFWriterVersion {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         v.some(key, self, description)
     }
 
     fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = ParquetWriterVersion::from_str(value)?;
+        *self = DFWriterVersion::from_str(value)?;
         Ok(())
     }
 }
 
-/// Convert `ParquetWriterVersion` to parquet crate's `WriterVersion`
+/// Convert `DFWriterVersion` to parquet crate's `WriterVersion`
 ///
-/// This conversion is infallible since `ParquetWriterVersion` only contains
+/// This conversion is infallible since `DFWriterVersion` only contains
 /// valid values that have been validated at configuration time.
 #[cfg(feature = "parquet")]
-impl From<ParquetWriterVersion> for parquet::file::properties::WriterVersion {
-    fn from(value: ParquetWriterVersion) -> Self {
+impl From<DFWriterVersion> for parquet::file::properties::WriterVersion {
+    fn from(value: DFWriterVersion) -> Self {
         match value {
-            ParquetWriterVersion::V1_0 => {
+            DFWriterVersion::V1_0 => {
                 parquet::file::properties::WriterVersion::PARQUET_1_0
             }
-            ParquetWriterVersion::V2_0 => {
+            DFWriterVersion::V2_0 => {
                 parquet::file::properties::WriterVersion::PARQUET_2_0
             }
         }
     }
 }
 
-/// Convert parquet crate's `WriterVersion` to `ParquetWriterVersion`
+/// Convert parquet crate's `WriterVersion` to `DFWriterVersion`
 ///
 /// This is used when converting from existing parquet writer properties,
 /// such as when reading from proto or test code.
 #[cfg(feature = "parquet")]
-impl From<parquet::file::properties::WriterVersion> for ParquetWriterVersion {
+impl From<parquet::file::properties::WriterVersion> for DFWriterVersion {
     fn from(version: parquet::file::properties::WriterVersion) -> Self {
         match version {
             parquet::file::properties::WriterVersion::PARQUET_1_0 => {
-                ParquetWriterVersion::V1_0
+                DFWriterVersion::V1_0
             }
             parquet::file::properties::WriterVersion::PARQUET_2_0 => {
-                ParquetWriterVersion::V2_0
+                DFWriterVersion::V2_0
             }
         }
     }
