@@ -23,7 +23,7 @@ use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate, TimeZone};
 
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
@@ -100,7 +100,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let Some(now_ts) = info.query_execution_start_time() else {
             return Ok(ExprSimplifyResult::Original(args));
@@ -109,14 +109,10 @@ impl ScalarUDFImpl for CurrentDateFunc {
         // Get timezone from config and convert to local time
         let days = info
             .config_options()
-            .and_then(|config| {
-                config
-                    .execution
-                    .time_zone
-                    .as_ref()
-                    .map(|tz| tz.parse::<Tz>().ok())
-            })
-            .flatten()
+            .execution
+            .time_zone
+            .as_ref()
+            .and_then(|tz| tz.parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_days(&now_ts),
                 |tz| {

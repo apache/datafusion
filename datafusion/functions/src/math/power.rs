@@ -31,7 +31,7 @@ use datafusion_common::types::{NativeType, logical_float64, logical_int64};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
     ScalarUDFImpl, Signature, TypeSignature, TypeSignatureClass, Volatility, lit,
@@ -346,7 +346,7 @@ impl ScalarUDFImpl for PowerFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [base, exponent] = take_function_args("power", args)?;
         let base_type = info.get_data_type(&base)?;

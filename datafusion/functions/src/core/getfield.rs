@@ -421,7 +421,7 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+        _info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // Need at least 2 args (base + field)
         if args.len() < 2 {

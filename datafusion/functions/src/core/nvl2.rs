@@ -21,7 +21,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
     conditional_expressions::CaseBuilder,
-    simplify::{ExprSimplifyResult, SimplifyInfo},
+    simplify::{ExprSimplifyResult, SimplifyContext},
     type_coercion::binary::comparison_coercion,
 };
 use datafusion_macros::user_doc;
@@ -108,7 +108,7 @@ impl ScalarUDFImpl for NVL2Func {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [test, if_non_null, if_null] = take_function_args(self.name(), args)?;
 
