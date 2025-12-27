@@ -61,7 +61,7 @@ pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
-
+pub mod parquet_config;
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;
