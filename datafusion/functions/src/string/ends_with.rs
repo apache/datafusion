@@ -18,12 +18,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, Scalar};
+use arrow::compute::kernels::comparison::ends_with as arrow_ends_with;
 use arrow::datatypes::DataType;
 
-use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -95,45 +95,81 @@ impl ScalarUDFImpl for EndsWithFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        match args.args[0].data_type() {
-            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(ends_with, vec![])(&args.args)
+        let [str_arg, suffix_arg] = args.args.as_slice() else {
+            return exec_err!(
+                "ends_with was called with {} arguments, expected 2",
+                args.args.len()
+            );
+        };
+
+        // Determine the common type for coercion
+        let coercion_type = string_coercion(
+            &str_arg.data_type(),
+            &suffix_arg.data_type(),
+        )
+        .or_else(|| {
+            binary_to_string_coercion(&str_arg.data_type(), &suffix_arg.data_type())
+        });
+
+        let Some(coercion_type) = coercion_type else {
+            return exec_err!(
+                "Unsupported data types {:?}, {:?} for function `ends_with`.",
+                str_arg.data_type(),
+                suffix_arg.data_type()
+            );
+        };
+
+        // Helper to cast an array if needed
+        let maybe_cast = |arr: &ArrayRef, target: &DataType| -> Result<ArrayRef> {
+            if arr.data_type() == target {
+                Ok(Arc::clone(arr))
+            } else {
+                Ok(arrow::compute::kernels::cast::cast(arr, target)?)
             }
-            other => internal_err!(
-                "Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View"
-            )?,
+        };
+
+        match (str_arg, suffix_arg) {
+            // Both scalars - just compute directly
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Scalar(suffix_scalar)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let suffix_arr = suffix_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let suffix_arr = maybe_cast(&suffix_arr, &coercion_type)?;
+                let result = arrow_ends_with(&str_arr, &suffix_arr)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &result, 0,
+                )?))
+            }
+            // String is array, suffix is scalar - use Scalar wrapper for optimization
+            (ColumnarValue::Array(str_arr), ColumnarValue::Scalar(suffix_scalar)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let suffix_arr = suffix_scalar.to_array_of_size(1)?;
+                let suffix_arr = maybe_cast(&suffix_arr, &coercion_type)?;
+                let suffix_scalar = Scalar::new(suffix_arr);
+                let result = arrow_ends_with(&str_arr, &suffix_scalar)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // String is scalar, suffix is array - use Scalar wrapper for string
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Array(suffix_arr)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let str_scalar = Scalar::new(str_arr);
+                let suffix_arr = maybe_cast(suffix_arr, &coercion_type)?;
+                let result = arrow_ends_with(&str_scalar, &suffix_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // Both arrays - pass directly
+            (ColumnarValue::Array(str_arr), ColumnarValue::Array(suffix_arr)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let suffix_arr = maybe_cast(suffix_arr, &coercion_type)?;
+                let result = arrow_ends_with(&str_arr, &suffix_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// Returns true if string ends with suffix.
-/// ends_with('alphabet', 'abet') = 't'
-fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if let Some(coercion_data_type) =
-        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
-            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
-        })
-    {
-        let arg0 = if args[0].data_type() == &coercion_data_type {
-            Arc::clone(&args[0])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
-        };
-        let arg1 = if args[1].data_type() == &coercion_data_type {
-            Arc::clone(&args[1])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
-        };
-        let result = arrow::compute::kernels::comparison::ends_with(&arg0, &arg1)?;
-        Ok(Arc::new(result) as ArrayRef)
-    } else {
-        internal_err!(
-            "Unsupported data types for ends_with. Expected Utf8, LargeUtf8 or Utf8View"
-        )
     }
 }
 

@@ -54,23 +54,23 @@ fn gen_string_array(
     }
 }
 
-/// Generate a scalar search string
-fn gen_scalar_search(search_str: &str, is_string_view: bool) -> ColumnarValue {
+/// Generate a scalar suffix string
+fn gen_scalar_suffix(suffix_str: &str, is_string_view: bool) -> ColumnarValue {
     if is_string_view {
-        ColumnarValue::Scalar(ScalarValue::Utf8View(Some(search_str.to_string())))
+        ColumnarValue::Scalar(ScalarValue::Utf8View(Some(suffix_str.to_string())))
     } else {
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(search_str.to_string())))
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(suffix_str.to_string())))
     }
 }
 
-/// Generate an array of search strings (same string repeated)
-fn gen_array_search(
-    search_str: &str,
+/// Generate an array of suffix strings (same string repeated)
+fn gen_array_suffix(
+    suffix_str: &str,
     n_rows: usize,
     is_string_view: bool,
 ) -> ColumnarValue {
     let strings: Vec<Option<String>> =
-        (0..n_rows).map(|_| Some(search_str.to_string())).collect();
+        (0..n_rows).map(|_| Some(suffix_str.to_string())).collect();
 
     if is_string_view {
         ColumnarValue::Array(Arc::new(StringViewArray::from(strings)))
@@ -80,14 +80,14 @@ fn gen_array_search(
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let contains = datafusion_functions::string::contains();
+    let ends_with = datafusion_functions::string::ends_with();
     let n_rows = 8192;
     let str_len = 128;
-    let search_str = "xyz"; // A pattern that likely won't be found
+    let suffix_str = "xyz"; // A pattern that likely won't match
 
-    // Benchmark: StringArray with scalar search (the optimized path)
+    // Benchmark: StringArray with scalar suffix (the optimized path)
     let str_array = gen_string_array(n_rows, str_len, false);
-    let scalar_search = gen_scalar_search(search_str, false);
+    let scalar_suffix = gen_scalar_suffix(suffix_str, false);
     let arg_fields = vec![
         Field::new("a", DataType::Utf8, true).into(),
         Field::new("b", DataType::Utf8, true).into(),
@@ -95,10 +95,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     let return_field = Field::new("f", DataType::Boolean, true).into();
     let config_options = Arc::new(ConfigOptions::default());
 
-    c.bench_function("contains_StringArray_scalar_search", |b| {
+    c.bench_function("ends_with_StringArray_scalar_suffix", |b| {
         b.iter(|| {
-            black_box(contains.invoke_with_args(ScalarFunctionArgs {
-                args: vec![str_array.clone(), scalar_search.clone()],
+            black_box(ends_with.invoke_with_args(ScalarFunctionArgs {
+                args: vec![str_array.clone(), scalar_suffix.clone()],
                 arg_fields: arg_fields.clone(),
                 number_rows: n_rows,
                 return_field: Arc::clone(&return_field),
@@ -107,12 +107,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Benchmark: StringArray with array search (for comparison)
-    let array_search = gen_array_search(search_str, n_rows, false);
-    c.bench_function("contains_StringArray_array_search", |b| {
+    // Benchmark: StringArray with array suffix (for comparison)
+    let array_suffix = gen_array_suffix(suffix_str, n_rows, false);
+    c.bench_function("ends_with_StringArray_array_suffix", |b| {
         b.iter(|| {
-            black_box(contains.invoke_with_args(ScalarFunctionArgs {
-                args: vec![str_array.clone(), array_search.clone()],
+            black_box(ends_with.invoke_with_args(ScalarFunctionArgs {
+                args: vec![str_array.clone(), array_suffix.clone()],
                 arg_fields: arg_fields.clone(),
                 number_rows: n_rows,
                 return_field: Arc::clone(&return_field),
@@ -121,18 +121,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Benchmark: StringViewArray with scalar search (the optimized path)
+    // Benchmark: StringViewArray with scalar suffix (the optimized path)
     let str_view_array = gen_string_array(n_rows, str_len, true);
-    let scalar_search_view = gen_scalar_search(search_str, true);
+    let scalar_suffix_view = gen_scalar_suffix(suffix_str, true);
     let arg_fields_view = vec![
         Field::new("a", DataType::Utf8View, true).into(),
         Field::new("b", DataType::Utf8View, true).into(),
     ];
 
-    c.bench_function("contains_StringViewArray_scalar_search", |b| {
+    c.bench_function("ends_with_StringViewArray_scalar_suffix", |b| {
         b.iter(|| {
-            black_box(contains.invoke_with_args(ScalarFunctionArgs {
-                args: vec![str_view_array.clone(), scalar_search_view.clone()],
+            black_box(ends_with.invoke_with_args(ScalarFunctionArgs {
+                args: vec![str_view_array.clone(), scalar_suffix_view.clone()],
                 arg_fields: arg_fields_view.clone(),
                 number_rows: n_rows,
                 return_field: Arc::clone(&return_field),
@@ -141,12 +141,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Benchmark: StringViewArray with array search (for comparison)
-    let array_search_view = gen_array_search(search_str, n_rows, true);
-    c.bench_function("contains_StringViewArray_array_search", |b| {
+    // Benchmark: StringViewArray with array suffix (for comparison)
+    let array_suffix_view = gen_array_suffix(suffix_str, n_rows, true);
+    c.bench_function("ends_with_StringViewArray_array_suffix", |b| {
         b.iter(|| {
-            black_box(contains.invoke_with_args(ScalarFunctionArgs {
-                args: vec![str_view_array.clone(), array_search_view.clone()],
+            black_box(ends_with.invoke_with_args(ScalarFunctionArgs {
+                args: vec![str_view_array.clone(), array_suffix_view.clone()],
                 arg_fields: arg_fields_view.clone(),
                 number_rows: n_rows,
                 return_field: Arc::clone(&return_field),
@@ -155,21 +155,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    // Benchmark different string lengths with scalar search
+    // Benchmark different string lengths with scalar suffix
     for str_len in [8, 32, 128, 512] {
         let str_array = gen_string_array(n_rows, str_len, true);
-        let scalar_search = gen_scalar_search(search_str, true);
+        let scalar_suffix = gen_scalar_suffix(suffix_str, true);
         let arg_fields = vec![
             Field::new("a", DataType::Utf8View, true).into(),
             Field::new("b", DataType::Utf8View, true).into(),
         ];
 
         c.bench_function(
-            &format!("contains_StringViewArray_scalar_strlen_{str_len}"),
+            &format!("ends_with_StringViewArray_scalar_strlen_{str_len}"),
             |b| {
                 b.iter(|| {
-                    black_box(contains.invoke_with_args(ScalarFunctionArgs {
-                        args: vec![str_array.clone(), scalar_search.clone()],
+                    black_box(ends_with.invoke_with_args(ScalarFunctionArgs {
+                        args: vec![str_array.clone(), scalar_suffix.clone()],
                         arg_fields: arg_fields.clone(),
                         number_rows: n_rows,
                         return_field: Arc::clone(&return_field),
