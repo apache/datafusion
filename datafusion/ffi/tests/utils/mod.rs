@@ -27,7 +27,7 @@ use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 // for use in FFI integration tests.
 // This helper centralizes setup logic and is kept intentionally
 // for upcoming FFI test expansions.
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn ctx_and_codec() -> (Arc<SessionContext>, FFI_LogicalExtensionCodec) {
     let ctx = Arc::new(SessionContext::default());
     let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
