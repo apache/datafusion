@@ -23,6 +23,11 @@ use datafusion_ffi::execution::FFI_TaskContextProvider;
 use datafusion_ffi::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 use datafusion_proto::logical_plan::DefaultLogicalExtensionCodec;
 
+// Creates a default SessionContext and FFI Logical Extension Codec
+// for use in FFI integration tests.
+// This helper centralizes setup logic and is kept intentionally
+// for upcoming FFI test expansions.
+#[allow(dead_code)]
 pub fn ctx_and_codec() -> (Arc<SessionContext>, FFI_LogicalExtensionCodec) {
     let ctx = Arc::new(SessionContext::default());
     let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
