@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{ArrayRef, Scalar};
 use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::DataType::Boolean;
 use datafusion_common::types::logical_string;
-use datafusion_common::{DataFusionError, Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -89,61 +88,81 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(contains, vec![])(&args.args)
+        let [str_arg, search_arg] = args.args.as_slice() else {
+            return exec_err!(
+                "contains was called with {} arguments, expected 2",
+                args.args.len()
+            );
+        };
+
+        // Determine the common type for coercion
+        let coercion_type = string_coercion(
+            &str_arg.data_type(),
+            &search_arg.data_type(),
+        )
+        .or_else(|| {
+            binary_to_string_coercion(&str_arg.data_type(), &search_arg.data_type())
+        });
+
+        let Some(coercion_type) = coercion_type else {
+            return exec_err!(
+                "Unsupported data types {:?}, {:?} for function `contains`.",
+                str_arg.data_type(),
+                search_arg.data_type()
+            );
+        };
+
+        // Helper to cast an array if needed
+        let maybe_cast = |arr: &ArrayRef, target: &DataType| -> Result<ArrayRef> {
+            if arr.data_type() == target {
+                Ok(Arc::clone(arr))
+            } else {
+                Ok(arrow::compute::kernels::cast::cast(arr, target)?)
+            }
+        };
+
+        match (str_arg, search_arg) {
+            // Both scalars - just compute directly
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Scalar(search_scalar)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let search_arr = search_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let search_arr = maybe_cast(&search_arr, &coercion_type)?;
+                let result = arrow_contains(&str_arr, &search_arr)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &result, 0,
+                )?))
+            }
+            // String is array, search is scalar - use Scalar wrapper for optimization
+            (ColumnarValue::Array(str_arr), ColumnarValue::Scalar(search_scalar)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let search_arr = search_scalar.to_array_of_size(1)?;
+                let search_arr = maybe_cast(&search_arr, &coercion_type)?;
+                let search_scalar = Scalar::new(search_arr);
+                let result = arrow_contains(&str_arr, &search_scalar)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // String is scalar, search is array - use Scalar wrapper for string
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Array(search_arr)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let str_scalar = Scalar::new(str_arr);
+                let search_arr = maybe_cast(search_arr, &coercion_type)?;
+                let result = arrow_contains(&str_scalar, &search_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // Both arrays - pass directly
+            (ColumnarValue::Array(str_arr), ColumnarValue::Array(search_arr)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let search_arr = maybe_cast(search_arr, &coercion_type)?;
+                let result = arrow_contains(&str_arr, &search_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// use `arrow::compute::contains` to do the calculation for contains
-fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
-    if let Some(coercion_data_type) =
-        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
-            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
-        })
-    {
-        let arg0 = if args[0].data_type() == &coercion_data_type {
-            Arc::clone(&args[0])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
-        };
-        let arg1 = if args[1].data_type() == &coercion_data_type {
-            Arc::clone(&args[1])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
-        };
-
-        match coercion_data_type {
-            Utf8View => {
-                let mod_str = arg0.as_string_view();
-                let match_str = arg1.as_string_view();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
-            Utf8 => {
-                let mod_str = arg0.as_string::<i32>();
-                let match_str = arg1.as_string::<i32>();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
-            LargeUtf8 => {
-                let mod_str = arg0.as_string::<i64>();
-                let match_str = arg1.as_string::<i64>();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
-            other => {
-                exec_err!("Unsupported data type {other:?} for function `contains`.")
-            }
-        }
-    } else {
-        exec_err!(
-            "Unsupported data type {}, {:?} for function `contains`.",
-            args[0].data_type(),
-            args[1].data_type()
-        )
     }
 }
 
