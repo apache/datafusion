@@ -80,23 +80,31 @@ impl SubstrFunc {
             vec![TypeSignatureClass::Native(logical_int32())],
             NativeType::Int64,
         );
+        let parameters = [
+            ("str", string.clone()),
+            ("start_pos", int64.clone()),
+            ("length", int64.clone()),
+        ];
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![string.clone(), int64.clone()]),
-                    TypeSignature::Coercible(vec![
-                        string.clone(),
-                        int64.clone(),
-                        int64.clone(),
-                    ]),
+                    TypeSignature::Coercible(
+                        parameters
+                            .iter()
+                            .take(2)
+                            .map(|(_, coercion)| coercion.clone())
+                            .collect(),
+                    ),
+                    TypeSignature::Coercible(
+                        parameters
+                            .iter()
+                            .map(|(_, coercion)| coercion.clone())
+                            .collect(),
+                    ),
                 ],
                 Volatility::Immutable,
             )
-            .with_parameter_names(vec![
-                "str".to_string(),
-                "start_pos".to_string(),
-                "length".to_string(),
-            ])
+            .with_parameters(&parameters)
             .expect("valid parameter names"),
             aliases: vec![String::from("substring")],
         }

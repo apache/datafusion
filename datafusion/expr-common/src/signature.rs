@@ -1094,6 +1094,29 @@ pub struct Signature {
     pub parameter_names: Option<Vec<String>>,
 }
 
+/// A helper enum used by [`Signature::with_parameter`] and [`Signature::with_parameters`]
+/// to accept either concrete [`DataType`]s (for [`TypeSignature::Exact`] and
+/// [`TypeSignature::Uniform`]) or [`Coercion`] rules (for [`TypeSignature::Coercible`]).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ParameterKind {
+    /// A concrete [`DataType`] expected by the signature.
+    DataType(DataType),
+    /// A [`Coercion`] rule that will be stored on the signature.
+    Coercion(Coercion),
+}
+
+impl From<DataType> for ParameterKind {
+    fn from(value: DataType) -> Self {
+        Self::DataType(value)
+    }
+}
+
+impl From<Coercion> for ParameterKind {
+    fn from(value: Coercion) -> Self {
+        Self::Coercion(value)
+    }
+}
+
 impl Signature {
     /// Creates a new Signature from a given type signature and volatility.
     pub fn new(type_signature: TypeSignature, volatility: Volatility) -> Self {
@@ -1328,6 +1351,126 @@ impl Signature {
     pub fn with_parameter_names(mut self, names: Vec<impl Into<String>>) -> Result<Self> {
         let names = names.into_iter().map(Into::into).collect::<Vec<String>>();
         // Validate that the number of names matches the signature
+        self.validate_parameter_names(&names)?;
+        self.parameter_names = Some(names);
+        Ok(self)
+    }
+
+    /// Add a single named parameter to this signature.
+    ///
+    /// This method is useful when constructing signatures alongside parameter
+    /// names and expected coercions. For bulk construction, prefer
+    /// [`Signature::with_parameters`].
+    pub fn with_parameter<N, P>(self, name: N, parameter: P) -> Result<Self>
+    where
+        N: Into<String> + AsRef<str>,
+        P: Into<ParameterKind> + Clone,
+    {
+        self.with_parameters(&[(name, parameter)])
+    }
+
+    /// Add parameter names together with their expected types or coercion rules.
+    ///
+    /// This builder reduces duplication when defining both a [`TypeSignature`]
+    /// and a set of parameter names. It reuses the same arity validation used
+    /// by [`Signature::with_parameter_names`] and rejects unsupported
+    /// combinations such as variadic signatures.
+    ///
+    /// The provided `parameters` slice should contain a tuple for each
+    /// parameter where the first element is the parameter name and the second
+    /// element describes the expected type:
+    ///
+    /// * [`ParameterKind::DataType`] is accepted for [`TypeSignature::Exact`]
+    ///   and [`TypeSignature::Uniform`].
+    /// * [`ParameterKind::Coercion`] is accepted for [`TypeSignature::Coercible`].
+    ///
+    /// For other fixed-arity signatures, the parameter types are ignored but
+    /// the names are still validated and stored. This keeps
+    /// [`Signature::with_parameter_names`] available for backward compatibility
+    /// while allowing new code to migrate to a single API that pairs names with
+    /// types.
+    pub fn with_parameters<N, P>(mut self, parameters: &[(N, P)]) -> Result<Self>
+    where
+        N: AsRef<str>,
+        P: Clone + Into<ParameterKind>,
+    {
+        let names = parameters
+            .iter()
+            .map(|(name, _)| name.as_ref().to_string())
+            .collect::<Vec<_>>();
+
+        match &mut self.type_signature {
+            TypeSignature::Exact(types) => {
+                let new_types = parameters
+                    .iter()
+                    .map(|(_, parameter)| match parameter.clone().into() {
+                        ParameterKind::DataType(data_type) => Ok(data_type),
+                        ParameterKind::Coercion(_) => {
+                            plan_err!("Expected DataType for Exact signature parameters")
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                if !types.is_empty() && types.len() != new_types.len() {
+                    return plan_err!(
+                        "Parameter names count ({}) does not match signature arity ({})",
+                        names.len(),
+                        types.len()
+                    );
+                }
+
+                *types = new_types;
+            }
+            TypeSignature::Coercible(coercions) => {
+                let new_coercions = parameters
+                    .iter()
+                    .map(|(_, parameter)| match parameter.clone().into() {
+                        ParameterKind::Coercion(coercion) => Ok(coercion),
+                        ParameterKind::DataType(_) => plan_err!(
+                            "Expected Coercion for Coercible signature parameters"
+                        ),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                if !coercions.is_empty() && coercions.len() != new_coercions.len() {
+                    return plan_err!(
+                        "Parameter names count ({}) does not match signature arity ({})",
+                        names.len(),
+                        coercions.len()
+                    );
+                }
+
+                *coercions = new_coercions;
+            }
+            TypeSignature::Uniform(arg_count, valid_types) => {
+                let provided_types = parameters
+                    .iter()
+                    .map(|(_, parameter)| match parameter.clone().into() {
+                        ParameterKind::DataType(data_type) => Ok(data_type),
+                        ParameterKind::Coercion(_) => plan_err!(
+                            "Expected DataType for Uniform signature parameters"
+                        ),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                for data_type in &provided_types {
+                    if !valid_types.contains(data_type) {
+                        return plan_err!(
+                            "Parameter type {:?} not permitted for Uniform signature {:?}",
+                            data_type,
+                            valid_types
+                        );
+                    }
+                }
+
+                if provided_types.len() != *arg_count {
+                    // Delegate to arity validation for consistent messaging
+                    self.validate_parameter_names(&names)?;
+                }
+            }
+            _ => {}
+        }
+
         self.validate_parameter_names(&names)?;
         self.parameter_names = Some(names);
         Ok(self)
@@ -1584,6 +1727,110 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Duplicate parameter name")
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_exact() {
+        let sig = Signature::new(TypeSignature::Exact(vec![]), Volatility::Immutable)
+            .with_parameters(&[("count", DataType::Int32), ("name", DataType::Utf8)])
+            .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["count".to_string(), "name".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_coercible() {
+        let sig = Signature::new(TypeSignature::Coercible(vec![]), Volatility::Immutable)
+            .with_parameters(&[
+                (
+                    "str",
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ),
+                (
+                    "start_pos",
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Native(logical_int32())],
+                        NativeType::Int64,
+                    ),
+                ),
+            ])
+            .unwrap();
+
+        assert_eq!(sig.type_signature.arity(), Arity::Fixed(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["str".to_string(), "start_pos".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_uniform() {
+        let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
+            .with_parameters(&[
+                ("x", DataType::Float64),
+                ("y", DataType::Float64),
+                ("z", DataType::Float64),
+            ])
+            .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Uniform(3, vec![DataType::Float64])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_mismatched_counts() {
+        let result = Signature::exact(vec![DataType::Int32], Volatility::Immutable)
+            .with_parameters(&[("count", DataType::Int32), ("name", DataType::Utf8)]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not match signature arity")
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_duplicate_names() {
+        let result = Signature::new(TypeSignature::Exact(vec![]), Volatility::Immutable)
+            .with_parameters(&[("count", DataType::Int32), ("count", DataType::Int32)]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate parameter name")
+        );
+    }
+
+    #[test]
+    fn test_signature_with_parameters_variadic_error() {
+        let result = Signature::variadic(vec![DataType::Int32], Volatility::Immutable)
+            .with_parameters(&[("arg", DataType::Int32)]);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("variable arity signature")
         );
     }
 
