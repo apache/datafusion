@@ -85,22 +85,15 @@ impl SubstrFunc {
             ("start_pos", int64.clone()),
             ("length", int64.clone()),
         ];
+        let coercions: Vec<_> = parameters
+            .iter()
+            .map(|(_, coercion)| coercion.clone())
+            .collect();
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(
-                        parameters
-                            .iter()
-                            .take(2)
-                            .map(|(_, coercion)| coercion.clone())
-                            .collect(),
-                    ),
-                    TypeSignature::Coercible(
-                        parameters
-                            .iter()
-                            .map(|(_, coercion)| coercion.clone())
-                            .collect(),
-                    ),
+                    TypeSignature::Coercible(coercions[..2].to_vec()),
+                    TypeSignature::Coercible(coercions),
                 ],
                 Volatility::Immutable,
             )
