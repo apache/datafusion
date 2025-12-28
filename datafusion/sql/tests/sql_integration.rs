@@ -4509,8 +4509,8 @@ fn test_parse_escaped_string_literal_value() {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: character_length(Utf8("%")) AS len, Utf8("K") AS hex, Utf8("\u{1}") AS unicode
-    EmptyRelation: rows=1
+    Projection: character_length(Utf8("%")) AS len, Utf8("K") AS hex, Utf8("") AS unicode
+      EmptyRelation: rows=1
     "#
     );
 
