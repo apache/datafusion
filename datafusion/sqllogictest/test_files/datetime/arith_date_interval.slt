@@ -7,6 +7,8 @@
 # note that while the above reflects what postgresql does
 # in the case of datafusion/arrow that is not the case. The
 # result will be date32/date64
+#
+# Tracking issue: https://github.com/apache/datafusion/issues/19527
 
 query D
 SELECT '2001-09-28'::date + interval '1 hour'
