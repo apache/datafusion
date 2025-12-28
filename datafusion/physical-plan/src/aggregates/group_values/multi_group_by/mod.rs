@@ -46,8 +46,10 @@ use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
 
+use datafusion_execution::metrics::{
+    ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
+};
 use hashbrown::hash_table::HashTable;
-use datafusion_execution::metrics::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time};
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
@@ -66,7 +68,6 @@ pub(crate) struct MultiColumnGroupByMetrics {
 
     /// Maximum hash map capacity
     pub(crate) maximum_hash_map_capacity: Gauge,
-
 }
 
 impl MultiColumnGroupByMetrics {
@@ -77,9 +78,9 @@ impl MultiColumnGroupByMetrics {
             build_hash_table_time: MetricBuilder::new(metrics)
                 .subset_time("build_hash_table_time", partition),
             maximum_number_of_entries_in_map: MetricBuilder::new(metrics)
-              .gauge("maximum_number_of_entries_in_map", partition),
+                .gauge("maximum_number_of_entries_in_map", partition),
             maximum_hash_map_capacity: MetricBuilder::new(metrics)
-              .gauge("maximum_hash_map_capacity", partition),
+                .gauge("maximum_hash_map_capacity", partition),
         }
     }
 }
@@ -296,7 +297,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     // ========================================================================
 
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
-    pub fn try_new(schema: SchemaRef, metrics: &ExecutionPlanMetricsSet, partition: usize) -> Result<Self> {
+    pub fn try_new(
+        schema: SchemaRef,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Result<Self> {
         let map = HashTable::with_capacity(0);
         Ok(Self {
             schema,
@@ -449,8 +454,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
         build_hash_map_timer.done();
 
-        self.metrics.maximum_hash_map_capacity.set_max(self.map.capacity());
-        self.metrics.maximum_number_of_entries_in_map.set_max(self.map.len());
+        self.metrics
+            .maximum_hash_map_capacity
+            .set_max(self.map.capacity());
+        self.metrics
+            .maximum_number_of_entries_in_map
+            .set_max(self.map.len());
 
         Ok(())
     }
@@ -481,10 +490,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
         {
-            let _timer = self
-                .metrics
-                .time_hashing_grouping_columns
-                .timer();
+            let _timer = self.metrics.time_hashing_grouping_columns.timer();
             create_hashes(cols, &self.random_state, &mut batch_hashes)?;
         };
 
@@ -616,8 +622,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
         build_hash_table_timer.done();
 
-        self.metrics.maximum_number_of_entries_in_map.set_max(self.map.len());
-        self.metrics.maximum_hash_map_capacity.set_max(self.map.capacity());
+        self.metrics
+            .maximum_number_of_entries_in_map
+            .set_max(self.map.len());
+        self.metrics
+            .maximum_hash_map_capacity
+            .set_max(self.map.capacity());
     }
 
     /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
@@ -1329,8 +1339,12 @@ mod tests {
     #[test]
     fn test_intern_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
-        let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema(), &ExecutionPlanMetricsSet::new(), 0).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(
+            data_set.schema(),
+            &ExecutionPlanMetricsSet::new(),
+            0,
+        )
+        .unwrap();
 
         data_set.load_to_group_values(&mut group_values);
         let actual_batch = group_values.emit(EmitTo::All).unwrap();
@@ -1342,8 +1356,12 @@ mod tests {
     #[test]
     fn test_emit_first_n_for_vectorized_group_values() {
         let data_set = VectorizedTestDataSet::new();
-        let mut group_values =
-            GroupValuesColumn::<false>::try_new(data_set.schema(), &ExecutionPlanMetricsSet::new(), 0).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(
+            data_set.schema(),
+            &ExecutionPlanMetricsSet::new(),
+            0,
+        )
+        .unwrap();
 
         // 1~num_rows times to emit the groups
         let num_rows = data_set.expected_batch.num_rows();
@@ -1394,7 +1412,12 @@ mod tests {
 
         let field = Field::new_list_field(DataType::Int32, true);
         let schema = Arc::new(Schema::new_with_metadata(vec![field], HashMap::new()));
-        let mut group_values = GroupValuesColumn::<false>::try_new(schema, &ExecutionPlanMetricsSet::new(), 0).unwrap();
+        let mut group_values = GroupValuesColumn::<false>::try_new(
+            schema,
+            &ExecutionPlanMetricsSet::new(),
+            0,
+        )
+        .unwrap();
 
         // Insert group index views and check if success to insert
         insert_inline_group_index_view(&mut group_values, 0, 0);

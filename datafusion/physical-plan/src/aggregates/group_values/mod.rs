@@ -204,9 +204,13 @@ pub fn new_group_values(
 
     if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema, metrics, partition)?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(
+                schema, metrics, partition,
+            )?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema, metrics, partition)?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(
+                schema, metrics, partition,
+            )?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))

@@ -201,7 +201,7 @@ impl ExecutionPlan for RecursiveQueryExec {
             static_stream,
             self.is_distinct,
             &self.metrics,
-            partition
+            partition,
         )?))
     }
 
@@ -294,7 +294,14 @@ impl RecursiveQueryStream {
         let reservation =
             MemoryConsumer::new("RecursiveQuery").register(task_context.memory_pool());
         let distinct_deduplicator = is_distinct
-            .then(|| DistinctDeduplicator::new(Arc::clone(&schema), &task_context, metrics, partition))
+            .then(|| {
+                DistinctDeduplicator::new(
+                    Arc::clone(&schema),
+                    &task_context,
+                    metrics,
+                    partition,
+                )
+            })
             .transpose()?;
         let baseline_metrics = BaselineMetrics::new(metrics, partition);
 
@@ -458,10 +465,14 @@ struct DistinctDeduplicator {
 }
 
 impl DistinctDeduplicator {
-    fn new(schema: SchemaRef, task_context: &TaskContext,
-           metrics: &ExecutionPlanMetricsSet,
-           partition: usize,) -> Result<Self> {
-        let group_values = new_group_values(schema, &GroupOrdering::None, metrics, partition)?;
+    fn new(
+        schema: SchemaRef,
+        task_context: &TaskContext,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Result<Self> {
+        let group_values =
+            new_group_values(schema, &GroupOrdering::None, metrics, partition)?;
         let reservation = MemoryConsumer::new("RecursiveQueryHashTable")
             .register(task_context.memory_pool());
         Ok(Self {
