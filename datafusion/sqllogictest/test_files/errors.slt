@@ -125,7 +125,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction wrong signature
-statement error No function matches the given name and argument types 'nth_value\(Int32, Int64, Int64\)'
+statement error DataFusion error: Error during planning: Internal error: Function 'nth_value' failed to match any signature
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
