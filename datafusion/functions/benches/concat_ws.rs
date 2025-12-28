@@ -22,7 +22,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use datafusion_functions::string::concat;
+use datafusion_functions::string::concat_ws;
 use rand::Rng;
 use rand::distr::Alphanumeric;
 use std::hint::black_box;
@@ -32,8 +32,8 @@ fn create_array_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
     let scalar = ScalarValue::Utf8(Some(", ".to_string()));
     vec![
-        ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
         ColumnarValue::Scalar(scalar),
+        ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
         ColumnarValue::Array(array),
     ]
 }
@@ -47,16 +47,21 @@ fn generate_random_string(str_len: usize) -> String {
 }
 
 fn create_scalar_args(count: usize, str_len: usize) -> Vec<ColumnarValue> {
-    std::iter::repeat_with(|| {
+    let mut args = Vec::with_capacity(count + 1);
+
+    args.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+        ",".to_string(),
+    ))));
+
+    for _ in 0..count {
         let s = generate_random_string(str_len);
-        ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-    })
-    .take(count)
-    .collect()
+        args.push(ColumnarValue::Scalar(ScalarValue::Utf8(Some(s))));
+    }
+    args
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // Benchmark for array concat
+    // Benchmark for array concat_ws
     for size in [1024, 4096, 8192] {
         let args = create_array_args(size, 32);
         let arg_fields = args
@@ -68,12 +73,12 @@ fn criterion_benchmark(c: &mut Criterion) {
             .collect::<Vec<_>>();
         let config_options = Arc::new(ConfigOptions::default());
 
-        let mut group = c.benchmark_group("concat function");
-        group.bench_function(BenchmarkId::new("concat", size), |b| {
+        let mut group = c.benchmark_group("concat_ws function");
+        group.bench_function(BenchmarkId::new("concat_ws", size), |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
                 black_box(
-                    concat()
+                    concat_ws()
                         .invoke_with_args(ScalarFunctionArgs {
                             args: args_cloned,
                             arg_fields: arg_fields.clone(),
@@ -88,19 +93,19 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.finish();
     }
 
-    // Benchmark for scalar concat
+    // Benchmark for scalar concat_ws
     let scalar_args = create_scalar_args(10, 100);
     let scalar_arg_fields = scalar_args
         .iter()
         .enumerate()
         .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let mut group = c.benchmark_group("concat function");
-    group.bench_function(BenchmarkId::new("concat", "scalar"), |b| {
+    let mut group = c.benchmark_group("concat_ws function");
+    group.bench_function(BenchmarkId::new("concat_ws", "scalar"), |b| {
         b.iter(|| {
             let args_cloned = scalar_args.clone();
             black_box(
-                concat()
+                concat_ws()
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args_cloned,
                         arg_fields: scalar_arg_fields.clone(),

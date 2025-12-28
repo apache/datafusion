@@ -130,14 +130,14 @@ impl ScalarUDFImpl for ConcatFunc {
 
         // Scalar
         if array_len.is_none() {
-            let mut result = String::new();
-            for arg in args {
+            let mut values = Vec::with_capacity(args.len());
+            for arg in &args {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     return internal_err!("concat expected scalar value, got {arg:?}");
                 };
 
                 match scalar.try_as_str() {
-                    Some(Some(v)) => result.push_str(v),
+                    Some(Some(v)) => values.push(v),
                     Some(None) => {} // null literal
                     None => plan_err!(
                         "Concat function does not support scalar type {}",
@@ -145,6 +145,7 @@ impl ScalarUDFImpl for ConcatFunc {
                     )?,
                 }
             }
+            let result = values.concat();
 
             return match return_datatype {
                 DataType::Utf8View => {
