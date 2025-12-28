@@ -24,6 +24,22 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
 use std::sync::Arc;
 
+/// Creates a scalar function implementation that receives `ColumnarValue` directly.
+///
+/// Unlike `make_scalar_function`, this does NOT expand scalar arguments into arrays.
+/// This allows the inner function to handle scalars more efficiently, for example
+/// by using Arrow's `Datum` trait which has optimized paths for scalar arguments.
+///
+/// * `inner` - the function to be executed, receives `ColumnarValue` arguments directly
+pub fn make_scalar_function_columnar<F>(
+    inner: F,
+) -> impl Fn(&[ColumnarValue]) -> Result<ColumnarValue>
+where
+    F: Fn(&[ColumnarValue]) -> Result<ColumnarValue>,
+{
+    move |args: &[ColumnarValue]| (inner)(args)
+}
+
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
 ///
