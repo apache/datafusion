@@ -264,3 +264,8 @@ required-features = ["string_expressions"]
 harness = false
 name = "ends_with"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "levenshtein"
+required-features = ["unicode_expressions"]

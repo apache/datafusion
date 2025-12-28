@@ -741,6 +741,43 @@ pub mod datafusion_strsim {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
 
+    /// Calculates the Levenshtein distance using a reusable cache buffer.
+    /// This avoids allocating a new Vec for each call, improving performance
+    /// when computing many distances.
+    ///
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    pub fn levenshtein_with_buffer(a: &str, b: &str, cache: &mut Vec<usize>) -> usize {
+        let b_len = b.chars().count();
+        let a_len = a.chars().count();
+
+        if a_len == 0 {
+            return b_len;
+        }
+        if b_len == 0 {
+            return a_len;
+        }
+
+        // Resize cache to fit b_len elements
+        cache.clear();
+        cache.extend(1..=b_len);
+
+        let mut result = 0;
+        for (i, a_char) in a.chars().enumerate() {
+            result = i + 1;
+            let mut distance_b = i;
+
+            for (j, b_char) in b.chars().enumerate() {
+                let cost = if a_char == b_char { 0 } else { 1 };
+                let distance_a = distance_b + cost;
+                distance_b = cache[j];
+                result = min(result + 1, min(distance_a, distance_b + 1));
+                cache[j] = result;
+            }
+        }
+
+        result
+    }
+
     /// Calculates the normalized Levenshtein distance between two strings.
     /// The normalized distance is a value between 0.0 and 1.0, where 1.0 indicates
     /// that the strings are identical and 0.0 indicates no similarity.
