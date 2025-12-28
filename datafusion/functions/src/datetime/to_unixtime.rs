@@ -27,7 +27,7 @@ use std::any::Any;
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.",
+    description = "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).",
     syntax_example = "to_unixtime(expression[, ..., format_n])",
     sql_example = r#"
 ```sql
@@ -101,22 +101,44 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
 
         // validate that any args after the first one are Utf8
         if arg_args.len() > 1 {
-            validate_data_types(arg_args, "to_unixtime")?;
+            // Format arguments only make sense for string inputs
+            match arg_args[0].data_type() {
+                DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
+                    validate_data_types(arg_args, "to_unixtime")?;
+                }
+                _ => {
+                    return exec_err!(
+                        "to_unixtime function only accepts format arguments with string input, got {} arguments",
+                        arg_args.len()
+                    );
+                }
+            }
         }
 
         match arg_args[0].data_type() {
-            DataType::Int32 | DataType::Int64 | DataType::Null | DataType::Float64 => {
-                arg_args[0].cast_to(&DataType::Int64, None)
-            }
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Null => arg_args[0].cast_to(&DataType::Int64, None),
             DataType::Date64 | DataType::Date32 => arg_args[0]
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
             DataType::Timestamp(_, tz) => arg_args[0]
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, tz), None)?
                 .cast_to(&DataType::Int64, None),
-            DataType::Utf8 => ToTimestampSecondsFunc::new()
-                .invoke_with_args(args)?
-                .cast_to(&DataType::Int64, None),
+            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {
+                ToTimestampSecondsFunc::new()
+                    .invoke_with_args(args)?
+                    .cast_to(&DataType::Int64, None)
+            }
             other => {
                 exec_err!("Unsupported data type {} for function to_unixtime", other)
             }

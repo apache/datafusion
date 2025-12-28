@@ -20,7 +20,6 @@ use datafusion_expr::Volatility;
 
 #[repr(C)]
 #[derive(Debug, StableAbi, Clone)]
-#[allow(non_camel_case_types)]
 pub enum FFI_Volatility {
     Immutable,
     Stable,

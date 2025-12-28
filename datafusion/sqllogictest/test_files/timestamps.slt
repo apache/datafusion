@@ -3526,6 +3526,64 @@ select to_unixtime(arrow_cast(1599523200.414, 'Float64'));
 ----
 1599523200
 
+query I
+select to_unixtime(arrow_cast(-1, 'Int8'));
+----
+-1
+
+query I
+select to_unixtime(arrow_cast(null, 'Int8'));
+----
+NULL
+
+query I
+select to_unixtime(arrow_cast(1000, 'Int16'));
+----
+1000
+
+query I
+select to_unixtime(arrow_cast(255, 'UInt8'));
+----
+255
+
+query I
+select to_unixtime(arrow_cast(65535, 'UInt16'));
+----
+65535
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'UInt32'));
+----
+1599523200
+
+query I
+select to_unixtime(arrow_cast(1599523200, 'UInt64'));
+----
+1599523200
+
+query error DataFusion error: Arrow error: Cast error: Can't cast value 18446744073709551615 to type Int64
+select to_unixtime(arrow_cast(18446744073709551615, 'UInt64'));
+
+query I
+select to_unixtime(arrow_cast(1000.12, 'Float16'));
+----
+1000
+
+query I
+select to_unixtime(arrow_cast(1000.414, 'Float32'));
+----
+1000
+
+query I
+select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'Utf8View'));
+----
+1599566400
+
+query I
+select to_unixtime(arrow_cast('2020-09-08T12:00:00+00:00', 'LargeUtf8'));
+----
+1599566400
+
 ##########
 ## Tests for the "AT TIME ZONE" clause
 ##########

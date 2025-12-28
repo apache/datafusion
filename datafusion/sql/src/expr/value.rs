@@ -191,75 +191,79 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         negative: bool,
         interval: Interval,
     ) -> Result<Expr> {
-        if interval.leading_precision.is_some() {
-            return not_impl_err!(
-                "Unsupported Interval Expression with leading_precision {:?}",
-                interval.leading_precision
-            );
-        }
-
-        if interval.last_field.is_some() {
-            return not_impl_err!(
-                "Unsupported Interval Expression with last_field {:?}",
-                interval.last_field
-            );
-        }
-
-        if interval.fractional_seconds_precision.is_some() {
-            return not_impl_err!(
-                "Unsupported Interval Expression with fractional_seconds_precision {:?}",
-                interval.fractional_seconds_precision
-            );
-        }
-
-        if let SQLExpr::BinaryOp { left, op, right } = *interval.value {
-            let df_op = match op {
-                BinaryOperator::Plus => Operator::Plus,
-                BinaryOperator::Minus => Operator::Minus,
-                _ => {
-                    return not_impl_err!("Unsupported interval operator: {op:?}");
-                }
-            };
-            let left_expr = self.sql_interval_to_expr(
-                negative,
-                Interval {
-                    value: left,
-                    leading_field: interval.leading_field.clone(),
-                    leading_precision: None,
-                    last_field: None,
-                    fractional_seconds_precision: None,
-                },
-            )?;
-            let right_expr = self.sql_interval_to_expr(
-                false,
-                Interval {
-                    value: right,
-                    leading_field: interval.leading_field,
-                    leading_precision: None,
-                    last_field: None,
-                    fractional_seconds_precision: None,
-                },
-            )?;
-            return Ok(Expr::BinaryExpr(BinaryExpr::new(
-                Box::new(left_expr),
-                df_op,
-                Box::new(right_expr),
-            )));
-        }
-
-        let value = interval_literal(*interval.value, negative)?;
-
-        // leading_field really means the unit if specified
-        // For example, "month" in  `INTERVAL '5' month`
-        let value = match interval.leading_field.as_ref() {
-            Some(leading_field) => format!("{value} {leading_field}"),
-            None => value,
-        };
-
-        let config = IntervalParseConfig::new(IntervalUnit::Second);
-        let val = parse_interval_month_day_nano_config(&value, config)?;
-        Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
+        sql_interval_to_expr_impl(negative, interval)
     }
+}
+
+fn sql_interval_to_expr_impl(negative: bool, interval: Interval) -> Result<Expr> {
+    if interval.leading_precision.is_some() {
+        return not_impl_err!(
+            "Unsupported Interval Expression with leading_precision {:?}",
+            interval.leading_precision
+        );
+    }
+
+    if interval.last_field.is_some() {
+        return not_impl_err!(
+            "Unsupported Interval Expression with last_field {:?}",
+            interval.last_field
+        );
+    }
+
+    if interval.fractional_seconds_precision.is_some() {
+        return not_impl_err!(
+            "Unsupported Interval Expression with fractional_seconds_precision {:?}",
+            interval.fractional_seconds_precision
+        );
+    }
+
+    if let SQLExpr::BinaryOp { left, op, right } = *interval.value {
+        let df_op = match op {
+            BinaryOperator::Plus => Operator::Plus,
+            BinaryOperator::Minus => Operator::Minus,
+            _ => {
+                return not_impl_err!("Unsupported interval operator: {op:?}");
+            }
+        };
+        let left_expr = sql_interval_to_expr_impl(
+            negative,
+            Interval {
+                value: left,
+                leading_field: interval.leading_field.clone(),
+                leading_precision: None,
+                last_field: None,
+                fractional_seconds_precision: None,
+            },
+        )?;
+        let right_expr = sql_interval_to_expr_impl(
+            false,
+            Interval {
+                value: right,
+                leading_field: interval.leading_field,
+                leading_precision: None,
+                last_field: None,
+                fractional_seconds_precision: None,
+            },
+        )?;
+        return Ok(Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(left_expr),
+            df_op,
+            Box::new(right_expr),
+        )));
+    }
+
+    let value = interval_literal(*interval.value, negative)?;
+
+    // leading_field really means the unit if specified
+    // For example, "month" in  `INTERVAL '5' month`
+    let value = match interval.leading_field.as_ref() {
+        Some(leading_field) => format!("{value} {leading_field}"),
+        None => value,
+    };
+
+    let config = IntervalParseConfig::new(IntervalUnit::Second);
+    let val = parse_interval_month_day_nano_config(&value, config)?;
+    Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
 }
 
 fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {

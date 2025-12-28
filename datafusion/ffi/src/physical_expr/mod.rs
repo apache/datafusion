@@ -51,7 +51,6 @@ use crate::{df_result, rresult, rresult_return};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PhysicalExpr {
     pub data_type: unsafe extern "C" fn(
         &Self,

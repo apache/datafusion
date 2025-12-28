@@ -252,7 +252,7 @@ impl Stream for AsyncTestRecordBatchStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut this = self.as_mut();
 
-        #[allow(clippy::disallowed_methods)]
+        #[expect(clippy::disallowed_methods)]
         tokio::spawn(async move {
             // Nothing to do. We just need to simulate an async
             // task running

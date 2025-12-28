@@ -29,7 +29,6 @@ use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 /// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ReturnFieldArgs {
     arg_fields: RVec<WrappedSchema>,
     scalar_arguments: RVec<ROption<RVec<u8>>>,

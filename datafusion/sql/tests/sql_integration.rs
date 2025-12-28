@@ -4508,7 +4508,10 @@ fn test_parse_escaped_string_literal_value() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation: rows=1"
+        @r#"
+    Projection: character_length(Utf8("%")) AS len, Utf8("K") AS hex, Utf8("") AS unicode
+      EmptyRelation: rows=1
+    "#
     );
 
     let sql = r"SELECT character_length(E'\000') AS len";

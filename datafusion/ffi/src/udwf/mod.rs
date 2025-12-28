@@ -51,7 +51,6 @@ use crate::{df_result, rresult, rresult_return};
 /// A stable struct for sharing a [`WindowUDF`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_WindowUDF {
     /// FFI equivalent to the `name` of a [`WindowUDF`]
     pub name: RString,
@@ -370,7 +369,6 @@ impl WindowUDFImpl for ForeignWindowUDF {
 
 #[repr(C)]
 #[derive(Debug, StableAbi, Clone)]
-#[allow(non_camel_case_types)]
 pub struct FFI_SortOptions {
     pub descending: bool,
     pub nulls_first: bool,

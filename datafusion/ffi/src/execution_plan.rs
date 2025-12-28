@@ -37,7 +37,6 @@ use crate::{df_result, rresult};
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ExecutionPlan {
     /// Return the plan properties
     pub properties: unsafe extern "C" fn(plan: &Self) -> FFI_PlanProperties,

@@ -421,7 +421,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq clang
       - name: Setup wasm-pack
-        uses: taiki-e/install-action@b9c5db3aef04caffaf95a1d03931de10fb2a140f  # v2.65.1
+        uses: taiki-e/install-action@50cee16bd6b97b2579572f83cfa1c0a721b1e336  # v2.65.2
         with:
           tool: wasm-pack
       - name: Run tests with headless mode
@@ -709,6 +709,23 @@ jobs:
           ./dev/update_function_docs.sh
           git diff --exit-code
 
+  examples-docs-check:
+    name: check example README is up-to-date
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Run examples docs check script
+        run: |
+          bash ci/scripts/check_examples_docs.sh
+
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
   # - datafusion-substrait
@@ -724,7 +741,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@b9c5db3aef04caffaf95a1d03931de10fb2a140f  # v2.65.1
+        uses: taiki-e/install-action@50cee16bd6b97b2579572f83cfa1c0a721b1e336  # v2.65.2
         with:
           tool: cargo-msrv
 

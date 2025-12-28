@@ -108,7 +108,7 @@ pub mod expr_fn {
     ),
     (
         to_unixtime,
-        "converts a string and optional formats to a Unixtime",
+        "converts a value to seconds since the unix epoch",
         args,
     ),(
         to_timestamp,

@@ -34,7 +34,6 @@ use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 /// A stable struct for sharing [`PlanProperties`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PlanProperties {
     /// The output partitioning of the plan.
     pub output_partitioning: unsafe extern "C" fn(plan: &Self) -> FFI_Partitioning,
@@ -196,7 +195,6 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
 
 /// FFI safe version of [`Boundedness`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
 pub enum FFI_Boundedness {
     Bounded,
@@ -231,7 +229,6 @@ impl From<FFI_Boundedness> for Boundedness {
 
 /// FFI safe version of [`EmissionType`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
 pub enum FFI_EmissionType {
     Incremental,

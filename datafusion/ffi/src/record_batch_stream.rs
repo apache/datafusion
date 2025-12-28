@@ -36,7 +36,6 @@ use crate::util::FFIResult;
 /// We use the async-ffi crate for handling async calls across libraries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_RecordBatchStream {
     /// This mirrors the `poll_next` of [`RecordBatchStream`] but does so
     /// in a FFI safe manner.

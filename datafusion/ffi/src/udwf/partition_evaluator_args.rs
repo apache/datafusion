@@ -35,7 +35,6 @@ use crate::util::rvec_wrapped_to_vec_fieldref;
 /// defined in [`PartitionEvaluatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PartitionEvaluatorArgs {
     input_exprs: RVec<FFI_PhysicalExpr>,
     input_fields: RVec<WrappedSchema>,

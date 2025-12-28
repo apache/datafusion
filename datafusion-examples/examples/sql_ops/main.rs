@@ -21,18 +21,18 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example sql_ops -- [all|analysis|dialect|frontend|query]
+//! cargo run --example sql_ops -- [all|analysis|custom_sql_parser|frontend|query]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
 //! - `analysis` — analyse SQL queries with DataFusion structures
-//! - `dialect` — implementing a custom SQL dialect on top of DFParser
+//! - `custom_sql_parser` — implementing a custom SQL parser to extend DataFusion
 //! - `frontend` — create LogicalPlans (only) from sql strings
 //! - `query` — query data using SQL (in memory RecordBatches, local Parquet files)
 
 mod analysis;
-mod dialect;
+mod custom_sql_parser;
 mod frontend;
 mod query;
 
@@ -45,7 +45,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 enum ExampleKind {
     All,
     Analysis,
-    Dialect,
+    CustomSqlParser,
     Frontend,
     Query,
 }
@@ -66,7 +66,9 @@ impl ExampleKind {
                 }
             }
             ExampleKind::Analysis => analysis::analysis().await?,
-            ExampleKind::Dialect => dialect::dialect().await?,
+            ExampleKind::CustomSqlParser => {
+                custom_sql_parser::custom_sql_parser().await?
+            }
             ExampleKind::Frontend => frontend::frontend()?,
             ExampleKind::Query => query::query().await?,
         }

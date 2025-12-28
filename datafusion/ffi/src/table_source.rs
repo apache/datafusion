@@ -21,7 +21,6 @@ use datafusion_expr::{TableProviderFilterPushDown, TableType};
 /// FFI safe version of [`TableProviderFilterPushDown`].
 #[repr(C)]
 #[derive(StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_TableProviderFilterPushDown {
     Unsupported,
     Inexact,
@@ -58,7 +57,6 @@ impl From<&TableProviderFilterPushDown> for FFI_TableProviderFilterPushDown {
 
 /// FFI safe version of [`TableType`].
 #[repr(C)]
-#[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StableAbi)]
 pub enum FFI_TableType {
     Base,

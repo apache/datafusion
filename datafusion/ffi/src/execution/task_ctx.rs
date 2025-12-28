@@ -36,7 +36,6 @@ use crate::udwf::FFI_WindowUDF;
 /// A stable struct for sharing [`TaskContext`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_TaskContext {
     /// Return the session ID.
     pub session_id: unsafe extern "C" fn(&Self) -> RString,
