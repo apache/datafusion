@@ -29,7 +29,6 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 async fn create_context(
-    limit: usize,
     partition_cnt: i32,
     sample_cnt: i32,
     asc: bool,
@@ -45,21 +44,10 @@ async fn create_context(
     opts.optimizer.enable_topk_aggregation = use_topk;
     let ctx = SessionContext::new_with_config(cfg);
     let _ = ctx.register_table("traces", mem_table)?;
-    let sql = format!(
-        "select max(timestamp_ms) from traces group by trace_id order by max(timestamp_ms) desc limit {limit};"
-    );
-    let df = ctx.sql(sql.as_str()).await?;
-    let physical_plan = df.create_physical_plan().await?;
-    let actual_phys_plan = displayable(physical_plan.as_ref()).indent(true).to_string();
-    assert_eq!(
-        actual_phys_plan.contains(&format!("lim=[{limit}]")),
-        use_topk
-    );
 
     Ok(ctx)
 }
 
-#[expect(clippy::needless_pass_by_value)]
 fn run(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool, asc: bool) {
     black_box(rt.block_on(async { aggregate(ctx, limit, use_topk, asc).await })).unwrap();
 }
@@ -118,9 +106,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let samples = 1_000_000;
 
     let ctx = rt
-        .block_on(create_context(
-            limit, partitions, samples, false, false, false,
-        ))
+        .block_on(create_context(partitions, samples, false, false, false))
         .unwrap();
     c.bench_function(
         format!("aggregate {} time-series rows", partitions * samples).as_str(),
@@ -128,9 +114,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
 
     let ctx = rt
-        .block_on(create_context(
-            limit, partitions, samples, true, false, false,
-        ))
+        .block_on(create_context(partitions, samples, true, false, false))
         .unwrap();
     c.bench_function(
         format!("aggregate {} worst-case rows", partitions * samples).as_str(),
@@ -138,9 +122,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
 
     let ctx = rt
-        .block_on(create_context(
-            limit, partitions, samples, false, true, false,
-        ))
+        .block_on(create_context(partitions, samples, false, true, false))
         .unwrap();
     c.bench_function(
         format!(
@@ -152,9 +134,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
 
     let ctx = rt
-        .block_on(create_context(
-            limit, partitions, samples, true, true, false,
-        ))
+        .block_on(create_context(partitions, samples, true, true, false))
         .unwrap();
     c.bench_function(
         format!(
@@ -167,9 +147,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Utf8View schema，time-series rows
     let ctx = rt
-        .block_on(create_context(
-            limit, partitions, samples, false, true, true,
-        ))
+        .block_on(create_context(partitions, samples, false, true, true))
         .unwrap();
     c.bench_function(
         format!(
@@ -182,7 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Utf8View schema，worst-case rows
     let ctx = rt
-        .block_on(create_context(limit, partitions, samples, true, true, true))
+        .block_on(create_context(partitions, samples, true, true, true))
         .unwrap();
     c.bench_function(
         format!(
