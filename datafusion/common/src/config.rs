@@ -650,9 +650,9 @@ config_namespace! {
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
 
-        pub agg_prefetch_elements: usize, default = 0
+        pub agg_prefetch_elements: usize, default = 1
         pub agg_prefetch_locality: usize, default = 3
-        pub agg_prefetch_read: bool, default = true
+        pub agg_prefetch_read: bool, default = false
     }
 }
 

@@ -306,9 +306,9 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_values: vec![],
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
-            agg_prefetch_elements: ctx.map(|c| c.session_config().options().execution.agg_prefetch_elements).unwrap_or(0),
+            agg_prefetch_elements: ctx.map(|c| c.session_config().options().execution.agg_prefetch_elements).unwrap_or(1),
             agg_prefetch_locality: ctx.map(|c| c.session_config().options().execution.agg_prefetch_locality).unwrap_or(3),
-            agg_prefetch_read: ctx.map(|c| c.session_config().options().execution.agg_prefetch_read).unwrap_or(true),
+            agg_prefetch_read: ctx.map(|c| c.session_config().options().execution.agg_prefetch_read).unwrap_or(false),
         })
     }
 
