@@ -28,7 +28,7 @@ use arrow::ffi::{FFI_ArrowSchema, from_ffi, to_ffi};
 use arrow_schema::FieldRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, internal_err};
-use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
     Signature,
@@ -140,8 +140,16 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 ) -> FFIResult<RVec<WrappedSchema>> {
     let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
+    let arg_fields = arg_types
+        .iter()
+        .map(|dt| Field::new("f", dt.clone(), true))
+        .map(Arc::new)
+        .collect::<Vec<_>>();
     let return_types =
-        rresult_return!(data_types_with_scalar_udf(&arg_types, udf.inner()));
+        rresult_return!(fields_with_udf(&arg_fields, udf.inner().as_ref()))
+            .into_iter()
+            .map(|f| f.data_type().to_owned())
+            .collect::<Vec<_>>();
 
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }

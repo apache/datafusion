@@ -26,7 +26,7 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow_schema::{Field, FieldRef};
 use datafusion_common::{Result, ffi_err};
 use datafusion_expr::function::WindowUDFFieldArgs;
-use datafusion_expr::type_coercion::functions::fields_with_window_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, Signature, WindowUDF, WindowUDFImpl,
 };
@@ -167,7 +167,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
             .map(Arc::new)
             .collect::<Vec<_>>();
 
-        let return_fields = rresult_return!(fields_with_window_udf(&arg_fields, inner));
+        let return_fields = rresult_return!(fields_with_udf(&arg_fields, inner.as_ref()));
         let return_types = return_fields
             .into_iter()
             .map(|f| f.data_type().to_owned())
