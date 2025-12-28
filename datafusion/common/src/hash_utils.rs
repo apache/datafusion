@@ -33,6 +33,7 @@ use crate::cast::{
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
 use std::cell::RefCell;
+use arrow::row::Rows;
 
 // Combines two hashes into one hash
 #[inline]
@@ -802,8 +803,8 @@ pub fn create_hashes<'a, I, T>(
     hashes_buffer: &'a mut [u64],
 ) -> Result<&'a mut [u64]>
 where
-    I: IntoIterator<Item = T>,
-    T: AsDynArray,
+  I: IntoIterator<Item = T>,
+  T: AsDynArray,
 {
     for (i, array) in arrays.into_iter().enumerate() {
         // combine hashes with `combine_hashes` for all columns besides the first
@@ -811,6 +812,48 @@ where
         hash_single_array(array.as_dyn_array(), random_state, hashes_buffer, rehash)?;
     }
     Ok(hashes_buffer)
+}
+
+/// Creates hash values for every row, based on the values in the columns.
+///
+/// The number of rows to hash is determined by `hashes_buffer.len()`.
+/// `hashes_buffer` should be pre-sized appropriately.
+pub fn create_hashes_rows<'a>(
+    rows: arrow::row::RowsIter<'_>,
+    random_state: &RandomState,
+    hashes_buffer: &'a mut [u64],
+) -> Result<&'a mut [u64]> {
+    hash_rows(rows, random_state, hashes_buffer);
+    Ok(hashes_buffer)
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_rows<'a>(
+    rows: arrow::row::RowsIter<'_>,
+    random_state: &RandomState,
+    hashes_buffer: &'a mut [u64]
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        rows.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+    for (hash, row) in hashes_buffer.iter_mut().zip(rows) {
+        *hash = row.data().hash_one(random_state);
+    }
+}
+
+/// Test version of `hash_rows` that forces all hashes to collide to zero.
+#[cfg(feature = "force_hash_collisions")]
+fn hash_rows(
+    _rows: arrow::row::RowsIter<'_>,
+    _random_state: &RandomState,
+    hashes_buffer: &'a mut [u64]
+) -> Result<()> {
+    for hash in hashes_buffer.iter_mut() {
+        *hash = 0
+    }
+    Ok(())
 }
 
 #[cfg(test)]

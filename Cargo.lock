@@ -1233,6 +1233,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "branches"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21ab2097ac67710acd7d6034dd11b719c086a440ab65b92aa625be166f5995e9"
+dependencies = [
+ "rustc_version",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1320,6 +1329,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3a53fac24f34a81bc9954b5d6cfce0c21e18ec6959f44f56e8e90e4bb7c346c"
 dependencies = [
  "libbz2-rs-sys",
+]
+
+[[package]]
+name = "cache-size"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df5c3aca3f278263eecfa3e6d2cd1fdd76029f68a0c9e9ed5ab55f0508e70723"
+dependencies = [
+ "raw-cpuid",
 ]
 
 [[package]]
@@ -1822,7 +1840,7 @@ checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
 dependencies = [
  "cfg-if",
  "crossbeam-utils",
- "hashbrown 0.14.5",
+ "hashbrown 0.14.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "lock_api",
  "once_cell",
  "parking_lot_core",
@@ -2013,7 +2031,7 @@ dependencies = [
  "chrono",
  "criterion",
  "half",
- "hashbrown 0.14.5",
+ "hashbrown 0.14.5 (git+https://github.com/rluvaton/hashbrown?rev=dbdac43f537223a469746f518929b542f3b8933d)",
  "hex",
  "indexmap 2.12.1",
  "insta",
@@ -2495,7 +2513,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-physical-expr-common",
  "half",
- "hashbrown 0.14.5",
+ "hashbrown 0.14.5 (git+https://github.com/rluvaton/hashbrown?rev=dbdac43f537223a469746f518929b542f3b8933d)",
  "indexmap 2.12.1",
  "insta",
  "itertools 0.14.0",
@@ -2529,7 +2547,7 @@ dependencies = [
  "arrow",
  "datafusion-common",
  "datafusion-expr-common",
- "hashbrown 0.14.5",
+ "hashbrown 0.14.5 (git+https://github.com/rluvaton/hashbrown?rev=dbdac43f537223a469746f518929b542f3b8933d)",
  "itertools 0.14.0",
 ]
 
@@ -2562,6 +2580,7 @@ dependencies = [
  "arrow-ord",
  "arrow-schema",
  "async-trait",
+ "cache-size",
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
@@ -2576,7 +2595,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "futures",
  "half",
- "hashbrown 0.14.5",
+ "hashbrown 0.14.5 (git+https://github.com/rluvaton/hashbrown?rev=dbdac43f537223a469746f518929b542f3b8933d)",
  "indexmap 2.12.1",
  "insta",
  "itertools 0.14.0",
@@ -3369,9 +3388,15 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+
+[[package]]
+name = "hashbrown"
+version = "0.14.5"
+source = "git+https://github.com/rluvaton/hashbrown?rev=dbdac43f537223a469746f518929b542f3b8933d#dbdac43f537223a469746f518929b542f3b8933d"
 dependencies = [
  "ahash 0.8.12",
  "allocator-api2",
+ "branches",
 ]
 
 [[package]]
@@ -5104,6 +5129,15 @@ checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
  "rand 0.9.2",
+]
+
+[[package]]
+name = "raw-cpuid"
+version = "11.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "498cd0dc59d73224351ee52a95fee0f1a617a2eae0e7d9d720cc622c73a54186"
+dependencies = [
+ "bitflags 2.9.4",
 ]
 
 [[package]]

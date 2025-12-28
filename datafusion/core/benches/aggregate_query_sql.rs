@@ -32,7 +32,7 @@ use std::sync::Arc;
 use arrow_schema::{Schema, SchemaRef};
 use itertools::Itertools;
 use tokio::runtime::Runtime;
-use crate::data_utils::{create_large_non_nested_schema, create_nested_schema, create_table_provider_from_schema};
+use crate::data_utils::{create_large_non_nested_schema, create_large_with_nested_schema, create_nested_schema, create_table_provider_from_schema};
 
 #[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
@@ -77,138 +77,141 @@ fn criterion_benchmark(c: &mut Criterion) {
     let large_non_nested_schema_ctx = create_context_with_random_data_for_schema(1, array_len, batch_size, create_large_non_nested_schema()).unwrap();
     let large_non_nested_schema_rt = Runtime::new().unwrap();
 
-    c.bench_function("aggregate_query_no_group_by 15 12", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_no_group_by_min_max_f64", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT MIN(f64), MAX(f64) \
-                 FROM t",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_no_group_by_count_distinct_wide", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT COUNT(DISTINCT u64_wide) \
-                 FROM t",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_no_group_by_count_distinct_narrow", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT COUNT(DISTINCT u64_narrow) \
-                 FROM t",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_group_by", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT utf8, MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t GROUP BY utf8",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_group_by_with_filter", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT utf8, MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t \
-                 WHERE f32 > 10 AND f32 < 20 GROUP BY utf8",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_group_by_u64 15 12", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_narrow, MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t GROUP BY u64_narrow",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_group_by_with_filter_u64 15 12", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_narrow, MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t \
-                 WHERE f32 > 10 AND f32 < 20 GROUP BY u64_narrow",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_group_by_u64_multiple_keys", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT u64_wide, utf8, MIN(f64), AVG(f64), COUNT(f64) \
-                 FROM t GROUP BY u64_wide, utf8",
-            )
-        })
-    });
-
-    c.bench_function(
-        "aggregate_query_group_by_wide_u64_and_string_without_aggregate_expressions",
-        |b| {
-            b.iter(|| {
-                query(
-                    ctx.clone(),
-                    &rt,
-                    // Due to the large number of distinct values in u64_wide,
-                    // this query test the actual grouping performance for more than 1 column
-                    "SELECT u64_wide, utf8 \
-                 FROM t GROUP BY u64_wide, utf8",
-                )
-            })
-        },
-    );
-
-    c.bench_function(
-        "aggregate_query_group_by_wide_u64_and_f32_without_aggregate_expressions",
-        |b| {
-            b.iter(|| {
-                query(
-                    ctx.clone(),
-                    &rt,
-                    // Due to the large number of distinct values in u64_wide,
-                    // this query test the actual grouping performance for more than 1 column
-                    "SELECT u64_wide, f32 \
-                 FROM t GROUP BY u64_wide, f32",
-                )
-            })
-        },
-    );
+    let large_with_nested_schema_ctx = create_context_with_random_data_for_schema(1, array_len, batch_size, create_large_with_nested_schema()).unwrap();
+    let large_with_nested_schema_rt = Runtime::new().unwrap();
+    //
+    // c.bench_function("aggregate_query_no_group_by 15 12", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_no_group_by_min_max_f64", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT MIN(f64), MAX(f64) \
+    //              FROM t",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_no_group_by_count_distinct_wide", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT COUNT(DISTINCT u64_wide) \
+    //              FROM t",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_no_group_by_count_distinct_narrow", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT COUNT(DISTINCT u64_narrow) \
+    //              FROM t",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_group_by", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT utf8, MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t GROUP BY utf8",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_group_by_with_filter", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT utf8, MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t \
+    //              WHERE f32 > 10 AND f32 < 20 GROUP BY utf8",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_group_by_u64 15 12", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT u64_narrow, MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t GROUP BY u64_narrow",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_group_by_with_filter_u64 15 12", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT u64_narrow, MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t \
+    //              WHERE f32 > 10 AND f32 < 20 GROUP BY u64_narrow",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_group_by_u64_multiple_keys", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT u64_wide, utf8, MIN(f64), AVG(f64), COUNT(f64) \
+    //              FROM t GROUP BY u64_wide, utf8",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function(
+    //     "aggregate_query_group_by_wide_u64_and_string_without_aggregate_expressions",
+    //     |b| {
+    //         b.iter(|| {
+    //             query(
+    //                 ctx.clone(),
+    //                 &rt,
+    //                 // Due to the large number of distinct values in u64_wide,
+    //                 // this query test the actual grouping performance for more than 1 column
+    //                 "SELECT u64_wide, utf8 \
+    //              FROM t GROUP BY u64_wide, utf8",
+    //             )
+    //         })
+    //     },
+    // );
+    //
+    // c.bench_function(
+    //     "aggregate_query_group_by_wide_u64_and_f32_without_aggregate_expressions",
+    //     |b| {
+    //         b.iter(|| {
+    //             query(
+    //                 ctx.clone(),
+    //                 &rt,
+    //                 // Due to the large number of distinct values in u64_wide,
+    //                 // this query test the actual grouping performance for more than 1 column
+    //                 "SELECT u64_wide, f32 \
+    //              FROM t GROUP BY u64_wide, f32",
+    //             )
+    //         })
+    //     },
+    // );
 
     {
         let column_names = get_all_columns_in_schema(&create_large_non_nested_schema());
@@ -220,6 +223,23 @@ fn criterion_benchmark(c: &mut Criterion) {
                     query(
                         large_non_nested_schema_ctx.clone(),
                         &large_non_nested_schema_rt,
+                        sql.as_str()
+                    )
+                })
+            },
+        );
+    }
+
+    {
+        let column_names = get_all_columns_in_schema(&create_large_with_nested_schema());
+        let sql = format!("SELECT {column_names} FROM t GROUP BY {column_names}");
+        c.bench_function(
+            "aggregate_query_on_large_with_nested_schema",
+            |b| {
+                b.iter(|| {
+                    query(
+                        large_with_nested_schema_ctx.clone(),
+                        &large_with_nested_schema_rt,
                         sql.as_str()
                     )
                 })
@@ -243,75 +263,75 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
     }
-
-    c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY u64_wide)  \
-                 FROM t GROUP BY utf8",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_approx_percentile_cont_on_f32", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY f32)  \
-                 FROM t GROUP BY utf8",
-            )
-        })
-    });
-
-    c.bench_function("aggregate_query_distinct_median", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT MEDIAN(DISTINCT u64_wide), MEDIAN(DISTINCT u64_narrow) \
-                 FROM t",
-            )
-        })
-    });
-
-    c.bench_function("first_last_many_columns", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT first_value(u64_wide order by f64, u64_narrow, utf8),\
-                            last_value(u64_wide order by f64, u64_narrow, utf8)  \
-                 FROM t GROUP BY u64_narrow",
-            )
-        })
-    });
-
-    c.bench_function("first_last_ignore_nulls", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT first_value(u64_wide ignore nulls order by f64, u64_narrow, utf8),  \
-                            last_value(u64_wide ignore nulls order by f64, u64_narrow, utf8)    \
-                 FROM t GROUP BY u64_narrow",
-            )
-        })
-    });
-
-    c.bench_function("first_last_one_column", |b| {
-        b.iter(|| {
-            query(
-                ctx.clone(),
-                &rt,
-                "SELECT first_value(u64_wide order by f64), \
-                            last_value(u64_wide order by f64)   \
-                FROM t GROUP BY u64_narrow",
-            )
-        })
-    });
+    //
+    // c.bench_function("aggregate_query_approx_percentile_cont_on_u64", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY u64_wide)  \
+    //              FROM t GROUP BY utf8",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_approx_percentile_cont_on_f32", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY f32)  \
+    //              FROM t GROUP BY utf8",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("aggregate_query_distinct_median", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT MEDIAN(DISTINCT u64_wide), MEDIAN(DISTINCT u64_narrow) \
+    //              FROM t",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("first_last_many_columns", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT first_value(u64_wide order by f64, u64_narrow, utf8),\
+    //                         last_value(u64_wide order by f64, u64_narrow, utf8)  \
+    //              FROM t GROUP BY u64_narrow",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("first_last_ignore_nulls", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT first_value(u64_wide ignore nulls order by f64, u64_narrow, utf8),  \
+    //                         last_value(u64_wide ignore nulls order by f64, u64_narrow, utf8)    \
+    //              FROM t GROUP BY u64_narrow",
+    //         )
+    //     })
+    // });
+    //
+    // c.bench_function("first_last_one_column", |b| {
+    //     b.iter(|| {
+    //         query(
+    //             ctx.clone(),
+    //             &rt,
+    //             "SELECT first_value(u64_wide order by f64), \
+    //                         last_value(u64_wide order by f64)   \
+    //             FROM t GROUP BY u64_narrow",
+    //         )
+    //     })
+    // });
 }
 
 fn get_all_columns_in_schema(schema: &Schema) -> String {

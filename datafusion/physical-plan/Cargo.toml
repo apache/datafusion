@@ -70,6 +70,7 @@ log = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
+cache-size = "0.7.0"
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["async_futures"] }
