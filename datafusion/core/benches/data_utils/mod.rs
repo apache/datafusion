@@ -33,8 +33,6 @@ use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
 use std::fmt::Write;
 use std::sync::Arc;
-use arrow::util::data_gen::create_random_batch;
-use arrow_schema::Fields;
 
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
@@ -50,143 +48,6 @@ pub fn create_table_provider(
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     MemTable::try_new(schema, partitions).map(Arc::new)
 }
-
-pub fn create_table_provider_from_schema(
-    partitions_len: usize,
-    array_len: usize,
-    batch_size: usize,
-    schema: SchemaRef,
-) -> Result<Arc<MemTable>> {
-    let partitions =
-      create_record_batches_from(
-          schema.clone(),
-          array_len,
-          partitions_len,
-          batch_size,
-          |schema, rng, batch_size, index| create_random_batch(
-              schema.clone(),
-              batch_size,
-              0.1,
-              0.5
-          ).unwrap()
-      );
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    MemTable::try_new(schema, partitions).map(Arc::new)
-}
-
-pub fn create_nested_schema() -> SchemaRef {
-    let fields = vec![
-        Field::new(
-            "_1",
-            DataType::Struct(Fields::from(vec![
-                Field::new("_1", DataType::Int8, true),
-                Field::new(
-                    "_2",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("_1", DataType::Int8, true),
-                        Field::new(
-                            "_1",
-                            DataType::Struct(Fields::from(vec![
-                                Field::new("_1", DataType::Int8, true),
-                                Field::new("_2", DataType::Utf8, true),
-                            ])),
-                            true,
-                        ),
-                        Field::new("_2", DataType::UInt8, true),
-                    ])),
-                    true,
-                ),
-            ])),
-            true,
-        ),
-        Field::new(
-            "_2",
-            DataType::LargeList(Arc::new(Field::new_list_field(
-                DataType::List(Arc::new(Field::new_list_field(
-                    DataType::Struct(Fields::from(vec![
-                        Field::new(
-                            "_1",
-                            DataType::Struct(Fields::from(vec![
-                                Field::new("_1", DataType::Int8, true),
-                                Field::new("_2", DataType::Int16, true),
-                                Field::new("_3", DataType::Int32, true),
-                            ])),
-                            true,
-                        ),
-                        Field::new(
-                            "_2",
-                            DataType::List(Arc::new(Field::new(
-                                "",
-                                DataType::FixedSizeBinary(2),
-                                true,
-                            ))),
-                            true,
-                        ),
-                    ])),
-                    true,
-                ))),
-                true,
-            ))),
-            true,
-        ),
-    ];
-    Arc::new(Schema::new(fields))
-
-}
-
-
-/// Creating a schema that is supported by Multi group by implementation in aggregation
-pub fn create_large_non_nested_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a1", DataType::Utf8, false),
-        Field::new("a2", DataType::LargeUtf8, false),
-        Field::new("a3", DataType::Utf8View, true),
-        Field::new("a4", DataType::Binary, true),
-        Field::new("a5", DataType::LargeBinary, true),
-        Field::new("a6", DataType::BinaryView, true),
-        Field::new("a7", DataType::Int8, false),
-        Field::new("a8", DataType::UInt8, false),
-        Field::new("a9", DataType::Int16, false),
-        Field::new("a10", DataType::UInt16, false),
-        Field::new("a11", DataType::Int32, false),
-        Field::new("a12", DataType::UInt32, false),
-        Field::new("a13", DataType::Int64, false),
-        Field::new("a14", DataType::UInt64, false),
-        // Field::new("a15", DataType::Decimal128(5, 2), false),
-        // Field::new("a16", DataType::Decimal256(5, 2), false),
-        Field::new("a17", DataType::Float32, false),
-        Field::new("a18", DataType::Float64, true),
-        Field::new("a19", DataType::Boolean, true),
-    ]))
-}
-
-/// Creating a schema that is supported by Multi group by implementation in aggregation
-pub fn create_large_with_nested_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a1", DataType::Utf8, false),
-        Field::new("a2", DataType::LargeUtf8, false),
-        Field::new("a3", DataType::Utf8View, true),
-        Field::new("a4", DataType::Binary, true),
-        Field::new("a5", DataType::LargeBinary, true),
-        Field::new("a6", DataType::BinaryView, true),
-        Field::new("a7", DataType::Int8, false),
-        Field::new("a8", DataType::UInt8, false),
-        Field::new("a9", DataType::Int16, false),
-        Field::new("a10", DataType::UInt16, false),
-        Field::new("a11", DataType::Int32, false),
-        Field::new("a12", DataType::UInt32, false),
-        Field::new("a13", DataType::Int64, false),
-        Field::new("a14", DataType::UInt64, false),
-        // Field::new("a15", DataType::Decimal128(5, 2), false),
-        // Field::new("a16", DataType::Decimal256(5, 2), false),
-        Field::new("a17", DataType::Float32, false),
-        Field::new("a18", DataType::Float64, true),
-        Field::new("a19", DataType::Boolean, true),
-        Field::new("a20", DataType::Struct(create_large_non_nested_schema().fields.clone()), true),
-        Field::new_list("a21", Field::new_list_field(DataType::Utf8, true), true),
-    ]))
-}
-
 
 /// Create test data schema
 pub fn create_schema() -> Schema {
@@ -285,35 +146,14 @@ pub fn create_record_batches(
     partitions_len: usize,
     batch_size: usize,
 ) -> Vec<Vec<RecordBatch>> {
-    create_record_batches_from(
-        schema,
-        array_len,
-        partitions_len,
-        batch_size,
-        |schema, rng, batch_size, index| create_record_batch(schema.clone(), rng, batch_size, index)
-    )
-}
-
-
-
-/// Create record batches of `partitions_len` partitions and `batch_size` for each batch,
-/// with a total number of `array_len` records
-#[expect(clippy::needless_pass_by_value)]
-fn create_record_batches_from(
-    schema: SchemaRef,
-    array_len: usize,
-    partitions_len: usize,
-    batch_size: usize,
-    record_batch_creator: fn(&SchemaRef, &mut StdRng, usize, usize) -> RecordBatch,
-) -> Vec<Vec<RecordBatch>> {
     let mut rng = StdRng::seed_from_u64(42);
     (0..partitions_len)
-      .map(|_| {
-          (0..array_len / batch_size / partitions_len)
-            .map(|i| record_batch_creator(&schema, &mut rng, batch_size, i))
-            .collect::<Vec<_>>()
-      })
-      .collect::<Vec<_>>()
+        .map(|_| {
+            (0..array_len / batch_size / partitions_len)
+                .map(|i| create_record_batch(schema.clone(), &mut rng, batch_size, i))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
 }
 
 /// An enum that wraps either a regular StringBuilder or a GenericByteViewBuilder

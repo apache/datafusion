@@ -201,7 +201,7 @@ pub fn new_group_values(
         }
     }
 
-    if schema.fields.len() <= 4 && multi_group_by::supported_schema(schema.as_ref()) {
+    if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
             Ok(Box::new(GroupValuesColumn::<false>::try_new(schema, ctx)?))
         } else {
