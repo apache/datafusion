@@ -52,29 +52,21 @@ use datafusion_execution::metrics::{Count, ExecutionPlanMetricsSet, Gauge, Metri
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
 
-
 pub(crate) struct MultiColumnGroupByMetrics {
     /// Time spent hashing the grouping columns
     pub(crate) time_hashing_grouping_columns: Time,
 
-    /// Time spent building the hash table for grouping columns
+    /// Time spent building and appending the hash table for grouping columns
     pub(crate) build_hash_table_time: Time,
 
-    /// Track the maximum amount of entries that map held
+    /// Track the maximum number of entries that map held
     ///
-    /// Very large value will probably indicate
+    /// Very large value will probably indicate problems with fetching from the hash table
     pub(crate) maximum_number_of_entries_in_map: Gauge,
 
-    /// This count is
-    pub(crate) number_of_rows_matching_unique_groups: Count,
+    /// Maximum hash map capacity
+    pub(crate) maximum_hash_map_capacity: Gauge,
 
-    pub(crate) number_of_rows_matching_existing_groups: Count,
-
-    pub(crate) number_of_hash_collisions: Count,
-
-    pub(crate) vectorized_append_time: Time,
-    pub(crate) vectorized_equal_to_time: Time,
-    pub(crate) scalarized_intern_remaining_time: Time,
 }
 
 impl MultiColumnGroupByMetrics {
@@ -85,19 +77,9 @@ impl MultiColumnGroupByMetrics {
             build_hash_table_time: MetricBuilder::new(metrics)
                 .subset_time("build_hash_table_time", partition),
             maximum_number_of_entries_in_map: MetricBuilder::new(metrics)
-                .gauge("maximum_number_of_entries_in_map", partition),
-            number_of_rows_matching_unique_groups: MetricBuilder::new(metrics)
-                .counter("number_of_rows_matching_unique_groups", partition),
-            number_of_rows_matching_existing_groups: MetricBuilder::new(metrics)
-                .counter("number_of_rows_matching_existing_groups", partition),
-            number_of_hash_collisions: MetricBuilder::new(metrics)
-                .counter("number_of_hash_collisions", partition),
-            vectorized_append_time: MetricBuilder::new(metrics)
-                .subset_time("vectorized_append_time", partition),
-            vectorized_equal_to_time: MetricBuilder::new(metrics)
-                .subset_time("vectorized_equal_to_time", partition),
-            scalarized_intern_remaining_time: MetricBuilder::new(metrics)
-                .subset_time("scalarized_intern_remaining_time", partition),
+              .gauge("maximum_number_of_entries_in_map", partition),
+            maximum_hash_map_capacity: MetricBuilder::new(metrics)
+              .gauge("maximum_hash_map_capacity", partition),
         }
     }
 }
@@ -272,6 +254,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// Random state for creating hashes
     random_state: RandomState,
 
+    /// Metrics for this group values column
     metrics: MultiColumnGroupByMetrics,
 }
 
@@ -305,15 +288,6 @@ impl VectorizedOperationBuffers {
         self.equal_to_results.clear();
         self.remaining_row_indices.clear();
     }
-}
-
-struct CollectVectorizedContextResult {
-    /// How many new map entries
-    new_map_entries: usize,
-
-    /// How many hashes map to existing entries.
-    /// this can either point to a hash collision or matching group value
-    existing_map_entries: usize,
 }
 
 impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
@@ -395,7 +369,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(n_rows, 0);
-        create_hashes(cols, &self.random_state, batch_hashes)?;
+        {
+            let _timer = self.metrics.time_hashing_grouping_columns.timer();
+            create_hashes(cols, &self.random_state, batch_hashes)?;
+        }
+
+        let build_hash_map_timer = self.metrics.build_hash_table_time.timer();
 
         for (row, &target_hash) in batch_hashes.iter().enumerate() {
             let entry = self
@@ -468,6 +447,11 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             groups.push(group_idx);
         }
 
+        build_hash_map_timer.done();
+
+        self.metrics.maximum_hash_map_capacity.set_max(self.map.capacity());
+        self.metrics.maximum_number_of_entries_in_map.set_max(self.map.len());
+
         Ok(())
     }
 
@@ -493,17 +477,15 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         groups.clear();
         groups.resize(n_rows, usize::MAX);
 
-        let batch_hashes = {
+        let mut batch_hashes = mem::take(&mut self.hashes_buffer);
+        batch_hashes.clear();
+        batch_hashes.resize(n_rows, 0);
+        {
             let _timer = self
                 .metrics
                 .time_hashing_grouping_columns
                 .timer();
-            let mut batch_hashes = mem::take(&mut self.hashes_buffer);
-            batch_hashes.clear();
-            batch_hashes.resize(n_rows, 0);
             create_hashes(cols, &self.random_state, &mut batch_hashes)?;
-
-            batch_hashes
         };
 
         // General steps for one round `vectorized equal_to & append`:
@@ -527,41 +509,17 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         //
 
         // 1. Collect vectorized context by checking hash values of `cols` in `map`
-        let result = self.collect_vectorized_process_context(&batch_hashes, groups);
+        self.collect_vectorized_process_context(&batch_hashes, groups);
 
         // 2. Perform `vectorized_append`
-        {
-            let time = self.metrics.vectorized_append_time.clone();
-            let _timer = time.timer();
-            self.vectorized_append(cols)?;
-        }
+        self.vectorized_append(cols)?;
 
         // 3. Perform `vectorized_equal_to`
-        {
-            let time = self.metrics.vectorized_equal_to_time.clone();
-            let _timer = time.timer();
-            self.vectorized_equal_to(cols, groups);
-        }
+        self.vectorized_equal_to(cols, groups);
 
-        {
-            let number_of_hash_collisions = self.vectorized_operation_buffers
-              .remaining_row_indices.len();
-
-            assert!(result.existing_map_entries >= number_of_hash_collisions, "{} must be larger than the number of hash collisions {}", result.existing_map_entries, number_of_hash_collisions);
-
-            let matching_group_values = result.existing_map_entries - number_of_hash_collisions;
-            self.metrics.number_of_rows_matching_unique_groups.add(result.new_map_entries);
-            self.metrics.number_of_rows_matching_existing_groups.add(matching_group_values);
-            self.metrics.number_of_hash_collisions.add(number_of_hash_collisions);
-        }
-
-        {
-            let time = self.metrics.scalarized_intern_remaining_time.clone();
-            let _timer = time.timer();
-            // 4. Perform scalarized inter for remaining rows
-            // (about remaining rows, can see comments for `remaining_row_indices`)
-            self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
-        }
+        // 4. Perform scalarized inter for remaining rows
+        // (about remaining rows, can see comments for `remaining_row_indices`)
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
 
         self.hashes_buffer = batch_hashes;
 
@@ -585,7 +543,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         &mut self,
         batch_hashes: &[u64],
         groups: &mut [usize],
-    ) -> CollectVectorizedContextResult {
+    ) {
         self.vectorized_operation_buffers.append_row_indices.clear();
         self.vectorized_operation_buffers
             .equal_to_row_indices
@@ -659,14 +617,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         build_hash_table_timer.done();
 
         self.metrics.maximum_number_of_entries_in_map.set_max(self.map.len());
-
-        let new_groups_count = self.group_values[0].len() - initial_group_values_len;
-        let existing_groups_count = batch_hashes.len() - new_groups_count;
-
-        CollectVectorizedContextResult {
-            new_map_entries: new_groups_count,
-            existing_map_entries: existing_groups_count
-        }
+        self.metrics.maximum_hash_map_capacity.set_max(self.map.capacity());
     }
 
     /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
