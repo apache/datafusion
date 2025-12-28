@@ -3,6 +3,8 @@
 # date '2001-10-01' - date '2001-09-28' → 3
 
 # note that datafusion returns Duration whereas postgres returns an int
+# Tracking issue: https://github.com/apache/datafusion/issues/19528
+
 query ?
 SELECT '2001-10-01'::date - '2001-09-28'::date
 ----
