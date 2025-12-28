@@ -192,6 +192,7 @@ fn spark_second(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
     use arrow::array::{Array, Int32Array, TimestampMicrosecondArray};
     use arrow::datatypes::TimeUnit;
 
