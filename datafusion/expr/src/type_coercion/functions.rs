@@ -146,55 +146,6 @@ pub fn fields_with_window_udf(
     fields_with_udf(current_fields, func)
 }
 
-/// Performs type coercion for function arguments.
-///
-/// Returns the data types to which each argument must be coerced to
-/// match `signature`.
-///
-/// For more details on coercion in general, please see the
-/// [`type_coercion`](crate::type_coercion) module.
-#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
-pub fn data_types(
-    function_name: impl AsRef<str>,
-    current_types: &[DataType],
-    signature: &Signature,
-) -> Result<Vec<DataType>> {
-    let type_signature = &signature.type_signature;
-
-    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
-        } else if type_signature.used_to_support_zero_arguments() {
-            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
-                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
-                function_name.as_ref()
-            );
-        } else {
-            return plan_err!(
-                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
-                function_name.as_ref()
-            );
-        }
-    }
-
-    let valid_types =
-        get_valid_types(function_name.as_ref(), type_signature, current_types)?;
-    if valid_types
-        .iter()
-        .any(|data_type| data_type == current_types)
-    {
-        return Ok(current_types.to_vec());
-    }
-
-    try_coerce_types(
-        function_name.as_ref(),
-        valid_types,
-        current_types,
-        type_signature,
-    )
-}
-
 /// Performs type coercion for UDF arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
@@ -247,6 +198,55 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         })
         .map(Arc::new)
         .collect())
+}
+
+/// Performs type coercion for function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
+pub fn data_types(
+    function_name: impl AsRef<str>,
+    current_types: &[DataType],
+    signature: &Signature,
+) -> Result<Vec<DataType>> {
+    let type_signature = &signature.type_signature;
+
+    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
+        if type_signature.supports_zero_argument() {
+            return Ok(vec![]);
+        } else if type_signature.used_to_support_zero_arguments() {
+            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
+            return plan_err!(
+                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                function_name.as_ref()
+            );
+        } else {
+            return plan_err!(
+                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
+                function_name.as_ref()
+            );
+        }
+    }
+
+    let valid_types =
+        get_valid_types(function_name.as_ref(), type_signature, current_types)?;
+    if valid_types
+        .iter()
+        .any(|data_type| data_type == current_types)
+    {
+        return Ok(current_types.to_vec());
+    }
+
+    try_coerce_types(
+        function_name.as_ref(),
+        valid_types,
+        current_types,
+        type_signature,
+    )
 }
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
