@@ -48,11 +48,8 @@ use datafusion_sql::unparser::Unparser;
 use datafusion_sql::unparser::dialect::DefaultDialect;
 use itertools::Itertools;
 
-/// Primary path to benchmark query files (when running from repo root).
-const BENCHMARKS_PATH_1: &str = "../../benchmarks/";
-
-/// Fallback path to benchmark query files (when running from different working directories).
-const BENCHMARKS_PATH_2: &str = "./benchmarks/";
+/// Paths to benchmark query files (supports running from repo root or different working directories).
+const BENCHMARK_PATHS: &[&str] = &["../../benchmarks/", "./benchmarks/"];
 
 /// Reads all `.sql` files from a directory and converts them to test queries.
 ///
@@ -109,9 +106,8 @@ struct TestQuery {
 
 /// Collect SQL for Clickbench queries.
 fn clickbench_queries() -> Vec<TestQuery> {
-    let paths = [BENCHMARKS_PATH_1, BENCHMARKS_PATH_2];
     let mut queries = vec![];
-    for path in paths {
+    for path in BENCHMARK_PATHS {
         let dir = format!("{path}queries/clickbench/queries/");
         println!("Reading Clickbench queries from {dir}");
         if let Ok(dir) = std::fs::read_dir(dir) {
@@ -131,9 +127,8 @@ fn clickbench_queries() -> Vec<TestQuery> {
 
 /// Collect SQL for TPC-H queries.
 fn tpch_queries() -> Vec<TestQuery> {
-    let paths = [BENCHMARKS_PATH_1, BENCHMARKS_PATH_2];
     let mut queries = vec![];
-    for path in paths {
+    for path in BENCHMARK_PATHS {
         let dir = format!("{path}queries/");
         println!("Reading TPC-H queries from {dir}");
         if let Ok(dir) = std::fs::read_dir(dir) {
