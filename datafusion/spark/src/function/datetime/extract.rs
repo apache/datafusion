@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::compute::{DatePart, date_part};
@@ -24,48 +23,15 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::utils::take_function_args;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
 /// Creates a signature for datetime extraction functions that accept timestamp types.
 fn extract_signature() -> Signature {
-    Signature::one_of(
-        vec![
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Microsecond,
-                None,
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Microsecond,
-                Some(Arc::from("")),
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Millisecond,
-                None,
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Millisecond,
-                Some(Arc::from("")),
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Second,
-                None,
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Second,
-                Some(Arc::from("")),
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Nanosecond,
-                None,
-            )]),
-            TypeSignature::Exact(vec![DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Nanosecond,
-                Some(Arc::from("")),
-            )]),
-        ],
+    Signature::coercible(
+        vec![Coercion::new_exact(TypeSignatureClass::Timestamp)],
         Volatility::Immutable,
     )
 }
