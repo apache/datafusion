@@ -29,11 +29,11 @@ use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    DataFusionError, HashMap, Result, ScalarValue, assert_or_internal_err, exec_err,
+    DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -147,10 +147,10 @@ impl CaseBody {
 
         // Construct a mapping from the original column index to the projected column index.
         let column_index_map = used_column_indices
-            .into_iter()
+            .iter()
             .enumerate()
-            .map(|(projected, original)| (original, projected))
-            .collect::<HashMap<usize, usize>>();
+            .map(|(projected, original)| (*original, projected))
+            .collect::<IndexMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
         // using the column index mapping.
