@@ -152,7 +152,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 }
             }
             let result = values.join(sep);
-            
+
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
         }
 
