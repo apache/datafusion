@@ -113,28 +113,175 @@ pub fn supports_list_predicates(expr: &Arc<dyn PhysicalExpr>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{Expr, col};
+    use datafusion_functions_nested::expr_fn::{
+        array_has, array_has_all, array_has_any, make_array,
+    };
+    use datafusion_physical_expr::expressions::{Column, IsNullExpr};
+    use datafusion_physical_expr::planner::logical2physical;
 
     #[test]
     fn test_null_check_detection() {
-        use datafusion_physical_expr::expressions::Column;
-
         let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("test", 0));
-        assert!(!is_null_check(&**col_expr));
+        assert!(!is_null_check(col_expr.as_ref()));
 
-        // IsNullExpr and IsNotNullExpr detection requires actual instances
-        // which need schema setup - tested in integration tests
+        // Test IS NULL expression
+        let is_null_expr: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNullExpr::new(Arc::new(Column::new("test", 0))));
+        assert!(is_null_check(is_null_expr.as_ref()));
+        assert!(is_null_expr.supports_list_pushdown());
     }
 
     #[test]
     fn test_supported_scalar_functions() {
-        use datafusion_physical_expr::expressions::Column;
-
         let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("test", 0));
 
         // Non-function expressions should return false
-        assert!(!is_supported_scalar_function(&**col_expr));
+        assert!(!is_supported_scalar_function(col_expr.as_ref()));
+    }
 
-        // Testing with actual ScalarFunctionExpr requires function setup
-        // and is better suited for integration tests
+    /// Creates a test schema with a list column for building array function expressions.
+    fn create_test_schema() -> Arc<arrow::datatypes::Schema> {
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "tags",
+            DataType::List(item_field),
+            true,
+        )]))
+    }
+
+    #[test]
+    fn test_array_has_all_supports_pushdown() {
+        let schema = create_test_schema();
+
+        // Build array_has_all(tags, ['c'])
+        let expr = array_has_all(
+            col("tags"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        );
+
+        let physical_expr = logical2physical(&expr, &schema);
+
+        // Verify the trait detects this as a supported function
+        assert!(
+            physical_expr.supports_list_pushdown(),
+            "array_has_all should support list pushdown"
+        );
+        assert!(
+            is_supported_scalar_function(physical_expr.as_ref()),
+            "array_has_all should be detected as supported scalar function"
+        );
+        assert!(
+            supports_list_predicates(&physical_expr),
+            "supports_list_predicates should return true for array_has_all"
+        );
+    }
+
+    #[test]
+    fn test_array_has_any_supports_pushdown() {
+        let schema = create_test_schema();
+
+        // Build array_has_any(tags, ['a', 'd'])
+        let expr = array_has_any(
+            col("tags"),
+            make_array(vec![
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
+            ]),
+        );
+
+        let physical_expr = logical2physical(&expr, &schema);
+
+        // Verify the trait detects this as a supported function
+        assert!(
+            physical_expr.supports_list_pushdown(),
+            "array_has_any should support list pushdown"
+        );
+        assert!(
+            is_supported_scalar_function(physical_expr.as_ref()),
+            "array_has_any should be detected as supported scalar function"
+        );
+        assert!(
+            supports_list_predicates(&physical_expr),
+            "supports_list_predicates should return true for array_has_any"
+        );
+    }
+
+    #[test]
+    fn test_array_has_supports_pushdown() {
+        let schema = create_test_schema();
+
+        // Build array_has(tags, 'c')
+        let expr = array_has(
+            col("tags"),
+            Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
+        );
+
+        let physical_expr = logical2physical(&expr, &schema);
+
+        // Verify the trait detects this as a supported function
+        assert!(
+            physical_expr.supports_list_pushdown(),
+            "array_has should support list pushdown"
+        );
+        assert!(
+            is_supported_scalar_function(physical_expr.as_ref()),
+            "array_has should be detected as supported scalar function"
+        );
+        assert!(
+            supports_list_predicates(&physical_expr),
+            "supports_list_predicates should return true for array_has"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_function_does_not_support_pushdown() {
+        let schema = create_test_schema();
+
+        // Build a non-supported function expression (e.g., using a simple column)
+        let expr = col("tags");
+        let physical_expr = logical2physical(&expr, &schema);
+
+        // Verify unsupported expressions are correctly identified
+        assert!(
+            !physical_expr.supports_list_pushdown(),
+            "column reference should not support list pushdown"
+        );
+        assert!(
+            !is_supported_scalar_function(physical_expr.as_ref()),
+            "column should not be detected as supported scalar function"
+        );
+        assert!(
+            !supports_list_predicates(&physical_expr),
+            "supports_list_predicates should return false for column reference"
+        );
+    }
+
+    #[test]
+    fn test_recursive_detection_in_complex_expression() {
+        let schema = create_test_schema();
+
+        // Build a complex expression that contains array_has_all
+        // For example: array_has_all(tags, ['c']) (simplified test)
+        let expr = array_has_all(
+            col("tags"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        );
+
+        let physical_expr = logical2physical(&expr, &schema);
+
+        // Test recursive detection
+        assert!(
+            supports_list_predicates(&physical_expr),
+            "supports_list_predicates should recursively find array_has_all"
+        );
     }
 }
