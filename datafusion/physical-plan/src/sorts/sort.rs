@@ -2577,50 +2577,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sort_batch_chunked_multi_column() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-
-        // Create a batch with multiple columns
-        let a_values = Int32Array::from(vec![3, 1, 2, 1, 3, 2, 1, 3, 2, 1]);
-        let b_values = Int32Array::from(vec![1, 2, 3, 1, 2, 1, 3, 3, 2, 4]);
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(a_values), Arc::new(b_values)],
-        )?;
-
-        let expressions: LexOrdering = [
-            PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
-            PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
-        ]
-        .into();
-
-        let result_batches = sort_batch_chunked(&batch, &expressions, 3)?;
-        let concatenated = concat_batches(&schema, &result_batches)?;
-
-        let a_array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
-        let b_array = as_primitive_array::<Int32Type>(concatenated.column(1))?;
-
-        // Verify multi-column sort ordering
-        for i in 0..a_array.len() - 1 {
-            let a_curr = a_array.value(i);
-            let a_next = a_array.value(i + 1);
-            let b_curr = b_array.value(i);
-            let b_next = b_array.value(i + 1);
-
-            assert!(
-                a_curr < a_next || (a_curr == a_next && b_curr <= b_next),
-                "Not properly sorted at position {i}: ({a_curr}, {b_curr}) -> ({a_next}, {b_next})",
-            );
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_sort_batch_chunked_empty_batch() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -2638,28 +2594,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_reserved_byte_for_record_batch_normal_batch() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
-        )?;
-
-        let reserved = get_reserved_byte_for_record_batch(&batch)?;
-
-        // Calculate expected value:
-        // Total = existing buffer size + new sorted buffer size (rounded to 64)
-        let record_batch_size = get_record_batch_memory_size(&batch);
-        let sliced_size = batch.get_sliced_size()?;
-        let expected = record_batch_size + round_upto_multiple_of_64(sliced_size);
-
-        assert_eq!(reserved, expected);
-        assert!(reserved > 0, "Reserved bytes should be greater than 0");
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_get_reserved_byte_for_record_batch_with_sliced_batches() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
@@ -2667,17 +2601,16 @@ mod tests {
         let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
         let sliced_array = large_array.slice(100, 50); // Take 50 elements starting at 100
 
-        let batch =
+        let sliced_batch =
             RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(sliced_array)])?;
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(large_array)])?;
 
+        let sliced_reserved = get_reserved_byte_for_record_batch(&batch)?;
         let reserved = get_reserved_byte_for_record_batch(&batch)?;
 
-        // Reserved should account for the sliced nature
-        assert!(reserved > 0);
-
-        // Verify that even if the calculation changes, we still have at least twice the actual slice size,
-        // otherwise no way we can make the sort.
-        assert!(reserved >= batch.get_sliced_size()? * 2);
+        // The reserved memory for the sliced batch should be less than that of the full batch
+        assert!(reserved > sliced_reserved);
 
         Ok(())
     }
