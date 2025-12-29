@@ -1928,10 +1928,7 @@ mod tests {
                 assert!(
                     current_reserved <= previous_reserved,
                     "Memory reservation should decrease or stay same as batches are emitted. \
-                     Batch {}: previous={}, current={}",
-                    batch_count,
-                    previous_reserved,
-                    current_reserved
+                     Batch {batch_count}: previous={previous_reserved}, current={current_reserved}"
                 );
             }
 
@@ -1940,8 +1937,7 @@ mod tests {
 
         assert!(
             batch_count > 1,
-            "Expected multiple batches to be emitted, got {}",
-            batch_count
+            "Expected multiple batches to be emitted, got {batch_count}"
         );
 
         // Verify all memory is returned at the end
