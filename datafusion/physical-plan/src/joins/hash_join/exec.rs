@@ -508,6 +508,17 @@ impl HashJoinExec {
         self.null_equality
     }
 
+    /// Get the dynamic filter expression for testing purposes.
+    /// Returns `None` if no dynamic filter has been set.
+    ///
+    /// This method is intended for testing only and should not be used in production code.
+    #[doc(hidden)]
+    pub fn dynamic_filter_for_test(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter
+            .as_ref()
+            .map(|df| Arc::clone(&df.filter))
+    }
+
     /// Calculate order preservation flags for this hash join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         vec![

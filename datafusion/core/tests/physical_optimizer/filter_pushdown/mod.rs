@@ -3518,12 +3518,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_not_used() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
-    // Configure session with dynamic filter pushdown enabled
-    let session_config = SessionConfig::default()
-        .with_batch_size(10)
-        .set_bool("datafusion.execution.parquet.pushdown_filters", true)
-        .set_bool("datafusion.optimizer.enable_dynamic_filter_pushdown", true);
-
     let build_side_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Utf8, false),
@@ -3582,27 +3576,20 @@ async fn test_hashjoin_dynamic_filter_pushdown_not_used() {
         .optimize(plan, &config)
         .unwrap();
 
-    // Execute the plan to trigger is_used() check
-    let session_ctx = SessionContext::new_with_config(session_config);
-    session_ctx.register_object_store(
-        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
-        Arc::new(InMemory::new()),
-    );
-    let state = session_ctx.state();
-    let task_ctx = state.task_ctx();
-    let _batches = collect(Arc::clone(&plan), Arc::clone(&task_ctx))
-        .await
-        .unwrap();
+    // Get the HashJoinExec to check the dynamic filter
+    let hash_join = plan
+        .as_any()
+        .downcast_ref::<HashJoinExec>()
+        .expect("Plan should be HashJoinExec");
 
-    // After execution, the dynamic filter should remain empty because is_used() returns false.
-    // Even though dynamic filter pushdown is enabled, the filter is not populated because
-    // the probe side doesn't support it (no consumer holds a reference to the inner Arc).
-    insta::assert_snapshot!(
-        format!("{}", format_plan_for_test(&plan)),
-        @r"
-    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=false
-    "
+    // Verify that a dynamic filter was created
+    let dynamic_filter = hash_join
+        .dynamic_filter_for_test()
+        .expect("Dynamic filter should be created");
+
+    // Verify that is_used() returns false because probe side doesn't support filtering
+    assert!(
+        !dynamic_filter.is_used(),
+        "is_used() should return false when probe side doesn't support dynamic filtering"
     );
 }
