@@ -272,6 +272,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_count"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "translate"
 required-features = ["unicode_expressions"]
 
