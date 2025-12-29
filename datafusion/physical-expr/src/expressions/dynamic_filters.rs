@@ -278,12 +278,17 @@ impl DynamicFilterPhysicalExpr {
 
     /// Wait asynchronously until this dynamic filter is marked as complete.
     ///
-    /// This method returns immediately if the filter is already complete.
+    /// This method returns immediately if the filter is already complete or if the filter
+    /// is not being used by any consumers.
     /// Otherwise, it waits until [`Self::mark_complete`] is called.
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
-    pub async fn wait_complete(&self) {
+    pub async fn wait_complete(self: &Arc<Self>) {
+        if !self.is_used() {
+            return;
+        }
+
         if self.inner.read().is_complete {
             return;
         }
