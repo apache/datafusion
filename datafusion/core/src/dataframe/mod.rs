@@ -453,11 +453,21 @@ impl DataFrame {
             .iter()
             .flat_map(|col| {
                 let column: Column = col.clone().into();
-                self.plan
-                    .schema()
-                    .qualified_field_from_column(&column)
+                match column.relation.as_ref() {
+                    Some(_) => {
+                        // qualified_field_from_column returns Result<(Option<&TableReference>, &FieldRef)>
+                        vec![self.plan.schema().qualified_field_from_column(&column)]
+                    }
+                    None => {
+                        // qualified_fields_with_unqualified_name returns Vec<(Option<&TableReference>, &FieldRef)>
+                        self.plan.schema().qualified_fields_with_unqualified_name(&column.name)
+                            .into_iter()
+                            .map(|field| Ok(field))
+                            .collect::<Vec<_>>()
+                    }
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         let expr: Vec<Expr> = self
             .plan
             .schema()
