@@ -614,11 +614,9 @@ async fn test_find_qualified_names() -> Result<()> {
     
     // Expected results for each column
     let binding = TableReference::bare("aggregate_test_100");
-    let expected = vec![
-        (Some(&binding), "c1"),
+    let expected = [(Some(&binding), "c1"),
         (Some(&binding), "c2"),
-        (Some(&binding), "c3"),
-    ];
+        (Some(&binding), "c3")];
     
     // Verify we got the expected number of results
     assert_eq!(columns.len(), expected.len(), "Expected {} columns, got {}", expected.len(), columns.len());
@@ -629,14 +627,11 @@ async fn test_find_qualified_names() -> Result<()> {
         let (expected_table_ref, expected_field_name) = expected;
         
         // Check table reference
-        assert_eq!(actual_table_ref, expected_table_ref,
-                   "Column {}: expected table reference {:?}, got {:?}", 
-                   i, expected_table_ref, actual_table_ref);
+        assert_eq!(actual_table_ref, expected_table_ref, "Column {i}: expected table reference {expected_table_ref:?}, got {actual_table_ref:?}");
         
         // Check field name
         assert_eq!(actual_field_ref.name(), *expected_field_name,
-                   "Column {}: expected field name '{}', got '{}'", 
-                   i, expected_field_name, actual_field_ref.name());
+                   "Column {i}: expected field name '{expected_field_name}', got '{actual_field_ref}'");
     }
     
     Ok(())
