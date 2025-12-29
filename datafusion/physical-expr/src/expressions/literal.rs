@@ -134,6 +134,10 @@ impl PhysicalExpr for Literal {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
+
+    fn is_trivial(&self) -> bool {
+        true
+    }
 }
 
 /// Create a literal expression

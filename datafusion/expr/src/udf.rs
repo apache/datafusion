@@ -122,6 +122,11 @@ impl ScalarUDF {
         Self { inner: fun }
     }
 
+    /// Returns true if this function is trivial (cheap to evaluate).
+    pub fn is_trivial(&self) -> bool {
+        self.inner.is_trivial()
+    }
+
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function
     pub fn inner(&self) -> &Arc<dyn ScalarUDFImpl> {
         &self.inner
@@ -845,6 +850,18 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// publicly facing documentation.
     fn documentation(&self) -> Option<&Documentation> {
         None
+    }
+
+    /// Returns true if this function is trivial (cheap to evaluate).
+    ///
+    /// Trivial functions are lightweight accessor functions like `get_field`
+    /// (struct field access) that simply access nested data within a column
+    /// without significant computation.
+    ///
+    /// This is used to identify expressions that are cheap to duplicate or
+    /// don't benefit from caching/partitioning optimizations.
+    fn is_trivial(&self) -> bool {
+        false
     }
 }
 
