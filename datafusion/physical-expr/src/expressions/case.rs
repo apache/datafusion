@@ -29,10 +29,11 @@ use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
-    DataFusionError, HashMap, HashSet, Result, ScalarValue, assert_or_internal_err,
-    exec_err, internal_datafusion_err, internal_err,
+    DataFusionError, HashMap, Result, ScalarValue, assert_or_internal_err, exec_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use indexmap::IndexSet;
 use std::borrow::Cow;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
@@ -122,7 +123,7 @@ impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
         // Determine the set of columns that are used in all the expressions of the case body.
-        let mut used_column_indices = HashSet::<usize>::new();
+        let mut used_column_indices = IndexSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
@@ -145,10 +146,7 @@ impl CaseBody {
         }
 
         // Construct a mapping from the original column index to the projected column index.
-        let mut sorted_used_column_indices =
-            used_column_indices.into_iter().collect::<Vec<_>>();
-        sorted_used_column_indices.sort_unstable();
-        let column_index_map = sorted_used_column_indices
+        let column_index_map = used_column_indices
             .into_iter()
             .enumerate()
             .map(|(projected, original)| (original, projected))
