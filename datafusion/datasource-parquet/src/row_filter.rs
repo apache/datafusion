@@ -399,12 +399,67 @@ fn leaf_indices_for_roots(
 ///
 /// Returns `true` if all columns referenced by the expression:
 /// - Exist in the provided schema
-/// - Are primitive types (not structs, lists, etc.)
+/// - Are primitive types OR list columns with supported predicates
+///   (e.g., `array_has`, `array_has_all`, `array_has_any`, IS NULL, IS NOT NULL)
+/// - Struct columns are not supported and will prevent pushdown
 ///
 /// # Arguments
 /// * `expr` - The filter expression to check
 /// * `file_schema` - The Arrow schema of the parquet file (or table schema when
 ///   the file schema is not yet available during planning)
+///
+/// # Examples
+///
+/// Primitive column filters can be pushed down:
+/// ```ignore
+/// use datafusion_expr::{col, Expr};
+/// use datafusion_common::ScalarValue;
+/// use arrow::datatypes::{DataType, Field, Schema};
+/// use std::sync::Arc;
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("age", DataType::Int32, false),
+/// ]));
+///
+/// // Primitive filter: can be pushed down
+/// let expr = col("age").gt(Expr::Literal(ScalarValue::Int32(Some(30)), None));
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
+///
+/// Struct column filters cannot be pushed down:
+/// ```ignore
+/// use arrow::datatypes::Fields;
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("person", DataType::Struct(
+///         Fields::from(vec![Field::new("name", DataType::Utf8, true)])
+///     ), true),
+/// ]));
+///
+/// // Struct filter: cannot be pushed down
+/// let expr = col("person").is_not_null();
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(!can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
+///
+/// List column filters with supported predicates can be pushed down:
+/// ```ignore
+/// use datafusion_functions_nested::expr_fn::{array_has_all, make_array};
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("tags", DataType::List(
+///         Arc::new(Field::new("item", DataType::Utf8, true))
+///     ), true),
+/// ]));
+///
+/// // Array filter with supported predicate: can be pushed down
+/// let expr = array_has_all(col("tags"), make_array(vec![
+///     Expr::Literal(ScalarValue::Utf8(Some("rust".to_string())), None)
+/// ]));
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
