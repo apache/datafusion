@@ -981,6 +981,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
+
+    fn is_trivial(&self) -> bool {
+        self.inner.is_trivial()
+    }
 }
 
 #[cfg(test)]
