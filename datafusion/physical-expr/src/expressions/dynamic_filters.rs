@@ -299,9 +299,14 @@ impl DynamicFilterPhysicalExpr {
     /// Returns `true` if there are references beyond the producer (e.g., the HashJoinExec
     /// that created the filter). This is useful to avoid computing expensive filter
     /// expressions when no consumer will actually use them.
+    ///
+    /// Note: We check the inner Arc's strong_count, not the outer Arc's count, because
+    /// when filters are transformed, new outer Arc instances
+    /// are created via with_new_children(), but they all share the same inner Arc<RwLock<Inner>>.
+    /// This is what allows filter updates to propagate to consumers even after transformation.
     pub fn is_used(self: &Arc<Self>) -> bool {
         // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
-        Arc::strong_count(self) > 1
+        Arc::strong_count(&self.inner) > 1
     }
 
     fn render(
