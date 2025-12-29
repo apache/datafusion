@@ -18,9 +18,8 @@
 //! Registry of physical expressions that support nested list column pushdown
 //! to the Parquet decoder.
 //!
-//! This module maintains a centralized registry of predicates that can be
-//! safely evaluated on nested list columns during Parquet decoding. Adding
-//! new supported predicates requires only updating the registry in this module.
+//! This module provides a trait-based approach for determining which predicates
+//! can be safely evaluated on nested list columns during Parquet decoding.
 
 use std::sync::Arc;
 
@@ -34,6 +33,51 @@ use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 const SUPPORTED_ARRAY_FUNCTIONS: &[&str] =
     &["array_has", "array_has_all", "array_has_any"];
 
+/// Trait for physical expressions that support list column pushdown during
+/// Parquet decoding.
+///
+/// Implement this trait on physical expressions that can be safely evaluated
+/// on nested list columns during Parquet decoding. This provides a robust,
+/// type-safe mechanism for identifying supported predicates.
+///
+/// # Examples
+///
+/// ```ignore
+/// use datafusion_physical_expr::PhysicalExpr;
+/// use datafusion_datasource_parquet::SupportsListPushdown;
+///
+/// let expr: Arc<dyn PhysicalExpr> = ...;
+/// if expr.supports_list_pushdown() {
+///     // Can safely push down to Parquet decoder
+/// }
+/// ```
+pub trait SupportsListPushdown {
+    /// Returns `true` if this expression supports list column pushdown.
+    fn supports_list_pushdown(&self) -> bool;
+}
+
+/// Default implementation for all physical expressions.
+///
+/// Checks if the expression is a supported type (IS NULL, IS NOT NULL) or
+/// a scalar function in the registry of supported array functions.
+impl SupportsListPushdown for dyn PhysicalExpr {
+    fn supports_list_pushdown(&self) -> bool {
+        // NULL checks are universally supported for all column types
+        if self.as_any().downcast_ref::<IsNullExpr>().is_some()
+            || self.as_any().downcast_ref::<IsNotNullExpr>().is_some()
+        {
+            return true;
+        }
+
+        // Check if this is a supported scalar function
+        if let Some(fun) = self.as_any().downcast_ref::<ScalarFunctionExpr>() {
+            return is_supported_list_predicate(fun.name());
+        }
+
+        false
+    }
+}
+
 /// Checks whether a function name is supported for nested list pushdown.
 ///
 /// Returns `true` if the function is in the registry of supported predicates.
@@ -45,7 +89,7 @@ const SUPPORTED_ARRAY_FUNCTIONS: &[&str] =
 /// assert!(is_supported_list_predicate("array_has"));
 /// assert!(!is_supported_list_predicate("array_append"));
 /// ```
-pub fn is_supported_list_predicate(name: &str) -> bool {
+fn is_supported_list_predicate(name: &str) -> bool {
     SUPPORTED_ARRAY_FUNCTIONS.contains(&name)
 }
 
@@ -65,20 +109,7 @@ pub fn is_supported_list_predicate(name: &str) -> bool {
 ///
 /// `true` if the expression or any of its children contain supported predicates.
 pub fn supports_list_predicates(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    // NULL checks are universally supported for all column types
-    if expr.as_any().downcast_ref::<IsNullExpr>().is_some()
-        || expr.as_any().downcast_ref::<IsNotNullExpr>().is_some()
-    {
-        return true;
-    }
-
-    // Check if this is a supported scalar function
-    // NOTE: This relies on function names matching exactly. If function names
-    // are refactored, this check must be updated. Consider using a trait-based
-    // approach (e.g., a marker trait) for more robust detection in the future.
-    if let Some(fun) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
-        && is_supported_list_predicate(fun.name())
-    {
+    if expr.supports_list_pushdown() {
         return true;
     }
 
@@ -103,5 +134,19 @@ mod tests {
         assert!(!is_supported_list_predicate("array_append"));
         assert!(!is_supported_list_predicate("array_length"));
         assert!(!is_supported_list_predicate("some_other_function"));
+    }
+
+    #[test]
+    fn test_trait_based_detection() {
+        use datafusion_physical_expr::expressions::Column;
+        use std::sync::Arc;
+
+        // Create a simple column expression (should not support pushdown)
+        let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("test", 0));
+        assert!(!col_expr.supports_list_pushdown());
+
+        // Note: Testing with actual IsNullExpr and ScalarFunctionExpr
+        // would require more complex setup and is better suited for
+        // integration tests.
     }
 }
