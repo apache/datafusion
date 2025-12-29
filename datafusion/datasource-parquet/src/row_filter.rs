@@ -294,42 +294,57 @@ impl<'schema> PushdownChecker<'schema> {
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.file_schema.index_of(column_name) {
-            self.required_columns.insert(idx);
-            if DataType::is_nested(self.file_schema.field(idx).data_type()) {
-                // Check if this is a list type
-                let is_list = matches!(
-                    self.file_schema.field(idx).data_type(),
-                    DataType::List(_)
-                        | DataType::LargeList(_)
-                        | DataType::FixedSizeList(_, _)
-                );
-
-                // List columns are only supported if the expression contains
-                // supported list predicates (e.g., array_has_all)
-                let is_supported = self.allow_list_columns && is_list;
-
-                if is_supported {
-                    // Update to ListsSupported if we haven't found unsupported types yet
-                    if self.nested_behavior == NestedColumnSupport::PrimitiveOnly {
-                        self.nested_behavior = NestedColumnSupport::ListsSupported;
-                    }
-                } else {
-                    // Block pushdown for unsupported nested types:
-                    // - Structs (regardless of predicate support)
-                    // - Lists without supported predicates
-                    self.nested_behavior = NestedColumnSupport::Unsupported;
-                    self.non_primitive_columns = true;
-                    return Some(TreeNodeRecursion::Jump);
-                }
+        let idx = match self.file_schema.index_of(column_name) {
+            Ok(idx) => idx,
+            Err(_) => {
+                // Column does not exist in the file schema, so we can't push this down.
+                self.projected_columns = true;
+                return Some(TreeNodeRecursion::Jump);
             }
-        } else {
-            // Column does not exist in the file schema, so we can't push this down.
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        }
+        };
 
-        None
+        self.required_columns.insert(idx);
+        let data_type = self.file_schema.field(idx).data_type();
+
+        if DataType::is_nested(data_type) {
+            self.handle_nested_type(data_type)
+        } else {
+            None
+        }
+    }
+
+    /// Determines whether a nested data type can be pushed down to Parquet decoding.
+    ///
+    /// Returns `Some(TreeNodeRecursion::Jump)` if the nested type prevents pushdown,
+    /// `None` if the type is supported and pushdown can continue.
+    fn handle_nested_type(&mut self, data_type: &DataType) -> Option<TreeNodeRecursion> {
+        if self.is_nested_type_supported(data_type) {
+            // Update to ListsSupported if we haven't encountered unsupported types yet
+            if self.nested_behavior == NestedColumnSupport::PrimitiveOnly {
+                self.nested_behavior = NestedColumnSupport::ListsSupported;
+            }
+            None
+        } else {
+            // Block pushdown for unsupported nested types:
+            // - Structs (regardless of predicate support)
+            // - Lists without supported predicates
+            self.nested_behavior = NestedColumnSupport::Unsupported;
+            self.non_primitive_columns = true;
+            Some(TreeNodeRecursion::Jump)
+        }
+    }
+
+    /// Checks if a nested data type is supported for list column pushdown.
+    ///
+    /// List columns are only supported if:
+    /// 1. The data type is a list variant (List, LargeList, or FixedSizeList)
+    /// 2. The expression contains supported list predicates (e.g., array_has_all)
+    fn is_nested_type_supported(&self, data_type: &DataType) -> bool {
+        let is_list = matches!(
+            data_type,
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        );
+        self.allow_list_columns && is_list
     }
 
     #[inline]
