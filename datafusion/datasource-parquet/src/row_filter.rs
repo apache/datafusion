@@ -189,7 +189,7 @@ pub(crate) struct FilterCandidate {
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
     /// Column indices into the parquet file schema required to evaluate this filter.
-    projection: ProjectionColumns,
+    projection: LeafProjection,
     /// The Arrow schema containing only the columns required by this filter,
     /// projected from the file's Arrow schema.
     filter_schema: SchemaRef,
@@ -197,7 +197,7 @@ pub(crate) struct FilterCandidate {
 
 /// Tracks the projection of an expression in both root and leaf coordinates.
 #[derive(Debug, Clone)]
-struct ProjectionColumns {
+struct LeafProjection {
     /// Leaf column indices in the Parquet schema descriptor.
     leaf_indices: Vec<usize>,
 }
@@ -253,7 +253,7 @@ impl FilterCandidateBuilder {
             expr: self.expr,
             required_bytes,
             can_use_index,
-            projection: ProjectionColumns { leaf_indices },
+            projection: LeafProjection { leaf_indices },
             filter_schema: projected_schema,
         }))
     }
