@@ -57,6 +57,7 @@ insta = { workspace = true }
 log = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "http"] }
+parquet = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 serde_json = { workspace = true }
