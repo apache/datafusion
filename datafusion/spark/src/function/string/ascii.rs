@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::{Result, internal_err};
-use datafusion_expr::ColumnarValue;
 use datafusion_expr::{
-    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::string::ascii::ascii;
 use datafusion_functions::utils::make_scalar_function;
@@ -46,8 +47,17 @@ impl Default for SparkAscii {
 
 impl SparkAscii {
     pub fn new() -> Self {
+        // Spark's ascii uses ImplicitCastInputTypes with StringType,
+        // which allows numeric types to be implicitly cast to String.
+        // See: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala
+        let string_coercion = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_string()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::String,
+        );
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
+            signature: Signature::coercible(vec![string_coercion], Volatility::Immutable),
         }
     }
 }
@@ -78,10 +88,6 @@ impl ScalarUDFImpl for SparkAscii {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(&args.args)
-    }
-
-    fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        Ok(vec![DataType::Utf8])
     }
 }
 
