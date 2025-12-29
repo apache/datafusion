@@ -18,6 +18,7 @@
 use crate::datetime::common::*;
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
+use arrow::array::temporal_conversions::NANOSECONDS;
 use arrow::array::types::Time64NanosecondType;
 use arrow::array::{Array, PrimitiveArray, StringArrayType};
 use arrow::datatypes::DataType;
@@ -31,6 +32,15 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
+/// Nanoseconds per second (1 billion)
+const NANOS_PER_SECOND: i64 = NANOSECONDS;
+/// Nanoseconds per minute
+const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
+/// Nanoseconds per hour
+const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+/// Nanoseconds per day (used for extracting time from timestamp)
+const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
+
 /// Default time formats to try when parsing without an explicit format
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f", // 12:30:45.123456789
@@ -41,8 +51,9 @@ const DEFAULT_TIME_FORMATS: &[&str] = &[
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r"Converts a value to a time (`HH:MM:SS.nnnnnnnnn`).
-Supports strings as input.
+Supports strings and timestamps as input.
 Strings are parsed as `HH:MM:SS`, `HH:MM:SS.nnnnnnnnn`, or `HH:MM` if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Timestamps will have the time portion extracted.
 Returns the corresponding time.
 
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.",
@@ -60,11 +71,17 @@ Note: `to_time` returns Time64(Nanosecond), which represents the time of day in 
 +--------------------------------------------+
 | 12:30:45                                   |
 +--------------------------------------------+
+> select to_time('2024-01-15 14:30:45'::timestamp);
++--------------------------------------------------+
+| to_time(Utf8("2024-01-15 14:30:45"))             |
++--------------------------------------------------+
+| 14:30:45                                         |
++--------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
-    standard_argument(name = "expression", prefix = "String"),
+    standard_argument(name = "expression", prefix = "String or Timestamp"),
     argument(
         name = "format_n",
         description = r"Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
@@ -168,6 +185,11 @@ impl ScalarUDFImpl for ToTimeFunc {
         match args[0].data_type() {
             Utf8View | LargeUtf8 | Utf8 => self.to_time(&args),
             Null => Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))),
+            // Support timestamp input by extracting time portion
+            Timestamp(_, _) => {
+                let nanos = extract_time_from_timestamp(&args[0])?;
+                Ok(nanos)
+            }
             other => {
                 exec_err!("Unsupported data type {} for function to_time", other)
             }
@@ -221,7 +243,127 @@ fn time_to_nanos(time: NaiveTime) -> i64 {
     let seconds = time.second() as i64;
     let nanos = time.nanosecond() as i64;
 
-    hours * 3_600_000_000_000 + minutes * 60_000_000_000 + seconds * 1_000_000_000 + nanos
+    hours * NANOS_PER_HOUR
+        + minutes * NANOS_PER_MINUTE
+        + seconds * NANOS_PER_SECOND
+        + nanos
+}
+
+/// Extract time portion from timestamp (nanoseconds since midnight)
+fn extract_time_from_timestamp(arg: &ColumnarValue) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(scalar) => {
+            let nanos = match scalar {
+                ScalarValue::TimestampNanosecond(Some(ts), _) => *ts % NANOS_PER_DAY,
+                ScalarValue::TimestampMicrosecond(Some(ts), _) => {
+                    (*ts * 1_000) % NANOS_PER_DAY
+                }
+                ScalarValue::TimestampMillisecond(Some(ts), _) => {
+                    (*ts * 1_000_000) % NANOS_PER_DAY
+                }
+                ScalarValue::TimestampSecond(Some(ts), _) => {
+                    (*ts * NANOS_PER_SECOND) % NANOS_PER_DAY
+                }
+                ScalarValue::TimestampNanosecond(None, _)
+                | ScalarValue::TimestampMicrosecond(None, _)
+                | ScalarValue::TimestampMillisecond(None, _)
+                | ScalarValue::TimestampSecond(None, _) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(
+                        None,
+                    )));
+                }
+                _ => return exec_err!("Unsupported timestamp type for to_time"),
+            };
+            // Handle negative timestamps (before epoch) - normalize to positive time
+            let normalized_nanos = if nanos < 0 {
+                nanos + NANOS_PER_DAY
+            } else {
+                nanos
+            };
+            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(
+                normalized_nanos,
+            ))))
+        }
+        ColumnarValue::Array(array) => {
+            let len = array.len();
+            let mut builder: PrimitiveBuilder<Time64NanosecondType> =
+                PrimitiveArray::builder(len);
+
+            match array.data_type() {
+                Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
+                    let ts_array =
+                        array.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
+                    for i in 0..len {
+                        if ts_array.is_null(i) {
+                            builder.append_null();
+                        } else {
+                            let nanos = ts_array.value(i) % NANOS_PER_DAY;
+                            let normalized = if nanos < 0 {
+                                nanos + NANOS_PER_DAY
+                            } else {
+                                nanos
+                            };
+                            builder.append_value(normalized);
+                        }
+                    }
+                }
+                Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
+                    let ts_array = array
+                        .as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
+                    for i in 0..len {
+                        if ts_array.is_null(i) {
+                            builder.append_null();
+                        } else {
+                            let nanos = (ts_array.value(i) * 1_000) % NANOS_PER_DAY;
+                            let normalized = if nanos < 0 {
+                                nanos + NANOS_PER_DAY
+                            } else {
+                                nanos
+                            };
+                            builder.append_value(normalized);
+                        }
+                    }
+                }
+                Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
+                    let ts_array = array
+                        .as_primitive::<arrow::datatypes::TimestampMillisecondType>();
+                    for i in 0..len {
+                        if ts_array.is_null(i) {
+                            builder.append_null();
+                        } else {
+                            let nanos = (ts_array.value(i) * 1_000_000) % NANOS_PER_DAY;
+                            let normalized = if nanos < 0 {
+                                nanos + NANOS_PER_DAY
+                            } else {
+                                nanos
+                            };
+                            builder.append_value(normalized);
+                        }
+                    }
+                }
+                Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
+                    let ts_array =
+                        array.as_primitive::<arrow::datatypes::TimestampSecondType>();
+                    for i in 0..len {
+                        if ts_array.is_null(i) {
+                            builder.append_null();
+                        } else {
+                            let nanos =
+                                (ts_array.value(i) * NANOS_PER_SECOND) % NANOS_PER_DAY;
+                            let normalized = if nanos < 0 {
+                                nanos + NANOS_PER_DAY
+                            } else {
+                                nanos
+                            };
+                            builder.append_value(normalized);
+                        }
+                    }
+                }
+                _ => return exec_err!("Unsupported timestamp type for to_time"),
+            }
+            Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+        }
+    }
 }
 
 #[cfg(test)]

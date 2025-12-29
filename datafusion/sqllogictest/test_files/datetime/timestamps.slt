@@ -3380,8 +3380,76 @@ select to_time('not_a_time');
 query error Error parsing '25:00:00' as time
 select to_time('25:00:00');
 
+# Out of range minutes
+query error Error parsing '12:60:00' as time
+select to_time('12:60:00');
+
+# Out of range seconds (61 is invalid, 60 is allowed as leap second)
+query error Error parsing '12:30:61' as time
+select to_time('12:30:61');
+
 query error does not support zero arguments
 select to_time();
+
+# HH:MM default parsing (no seconds)
+
+query D
+select to_time('14:30');
+----
+14:30:00
+
+query D
+select to_time('09:05');
+----
+09:05:00
+
+query D
+select to_time('00:00');
+----
+00:00:00
+
+# Timestamp input - extract time portion
+
+query D
+select to_time(to_timestamp('2024-01-15 14:30:45'));
+----
+14:30:45
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp);
+----
+09:15:30
+
+query D
+select to_time('2024-06-15 23:59:59.123456789'::timestamp);
+----
+23:59:59.123456789
+
+query D
+select to_time('2024-01-01 00:00:00'::timestamp);
+----
+00:00:00
+
+# Timestamp with timezone
+
+query D
+select to_time(to_timestamp('2024-01-15T14:30:45+00:00'));
+----
+14:30:45
+
+# Null timestamp
+
+query D
+select to_time(null::timestamp);
+----
+NULL
+
+# Return type check with timestamp input
+
+query T
+select arrow_typeof(to_time(to_timestamp('2024-01-15 12:30:45')));
+----
+Time64(ns)
 
 ##########
 ## to_char tests
