@@ -829,11 +829,13 @@ impl ExternalSorter {
 }
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
-/// This is calculated by adding the record batch's memory size
-/// (which can be much larger than expected for sliced record batches)
-/// with the sliced buffer sizes, as that is the amount that will be needed to create the new buffer.
-/// The latter is rounded up to the nearest multiple of 64 based on the architecture,
-/// as this is how arrow creates buffers.
+///
+/// For sliced batches, `get_record_batch_memory_size` returns the size of the
+/// underlying shared buffers (which may be larger than the logical data).
+/// We add `get_sliced_size()` (the actual logical data size, rounded to 64 bytes)
+/// because sorting will create new buffers containing only the referenced data.
+///
+/// Total = existing buffer size + new sorted buffer size
 pub(super) fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> Result<usize> {
     Ok(get_record_batch_memory_size(batch)
         + round_upto_multiple_of_64(batch.get_sliced_size()?))
