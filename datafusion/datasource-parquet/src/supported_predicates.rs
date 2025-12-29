@@ -26,19 +26,18 @@ use std::sync::Arc;
 use datafusion_physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
-/// Array functions supported for nested list pushdown.
-///
-/// These functions have been verified to work correctly when evaluated
-/// during Parquet decoding on list columns.
-const SUPPORTED_ARRAY_FUNCTIONS: &[&str] =
-    &["array_has", "array_has_all", "array_has_any"];
-
 /// Trait for physical expressions that support list column pushdown during
 /// Parquet decoding.
 ///
-/// Implement this trait on physical expressions that can be safely evaluated
-/// on nested list columns during Parquet decoding. This provides a robust,
-/// type-safe mechanism for identifying supported predicates.
+/// This trait provides a type-safe mechanism for identifying expressions that
+/// can be safely pushed down to the Parquet decoder for evaluation on nested
+/// list columns.
+///
+/// # Implementation Notes
+///
+/// Expression types in external crates cannot directly implement this trait
+/// due to Rust's orphan rules. Instead, we use a blanket implementation that
+/// delegates to a registration mechanism.
 ///
 /// # Examples
 ///
@@ -56,41 +55,36 @@ pub trait SupportsListPushdown {
     fn supports_list_pushdown(&self) -> bool;
 }
 
-/// Default implementation for all physical expressions.
+/// Blanket implementation for all physical expressions.
 ///
-/// Checks if the expression is a supported type (IS NULL, IS NOT NULL) or
-/// a scalar function in the registry of supported array functions.
+/// This delegates to specialized predicates that check whether the concrete
+/// expression type is registered as supporting list pushdown. This design
+/// allows the trait to work with expression types defined in external crates.
 impl SupportsListPushdown for dyn PhysicalExpr {
     fn supports_list_pushdown(&self) -> bool {
-        // NULL checks are universally supported for all column types
-        if self.as_any().downcast_ref::<IsNullExpr>().is_some()
-            || self.as_any().downcast_ref::<IsNotNullExpr>().is_some()
-        {
-            return true;
-        }
-
-        // Check if this is a supported scalar function
-        if let Some(fun) = self.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            return is_supported_list_predicate(fun.name());
-        }
-
-        false
+        is_null_check(self) || is_supported_scalar_function(self)
     }
 }
 
-/// Checks whether a function name is supported for nested list pushdown.
+/// Checks if an expression is a NULL or NOT NULL check.
 ///
-/// Returns `true` if the function is in the registry of supported predicates.
+/// These checks are universally supported for all column types.
+fn is_null_check(expr: &dyn PhysicalExpr) -> bool {
+    expr.as_any().downcast_ref::<IsNullExpr>().is_some()
+        || expr.as_any().downcast_ref::<IsNotNullExpr>().is_some()
+}
+
+/// Checks if an expression is a scalar function registered for list pushdown.
 ///
-/// # Examples
-///
-/// ```ignore
-/// assert!(is_supported_list_predicate("array_has_all"));
-/// assert!(is_supported_list_predicate("array_has"));
-/// assert!(!is_supported_list_predicate("array_append"));
-/// ```
-fn is_supported_list_predicate(name: &str) -> bool {
-    SUPPORTED_ARRAY_FUNCTIONS.contains(&name)
+/// Returns `true` if the expression is a `ScalarFunctionExpr` whose function
+/// is in the registry of supported operations.
+fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
+    expr.as_any()
+        .downcast_ref::<ScalarFunctionExpr>()
+        .is_some_and(|fun| {
+            // Registry of verified array functions
+            matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any")
+        })
 }
 
 /// Checks whether the given physical expression contains a supported nested
@@ -103,20 +97,17 @@ fn is_supported_list_predicate(name: &str) -> bool {
 /// # Supported predicates
 ///
 /// - `IS NULL` and `IS NOT NULL` checks on any column type
-/// - Array functions listed in [`SUPPORTED_ARRAY_FUNCTIONS`]
+/// - Array functions: `array_has`, `array_has_all`, `array_has_any`
 ///
 /// # Returns
 ///
 /// `true` if the expression or any of its children contain supported predicates.
 pub fn supports_list_predicates(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if expr.supports_list_pushdown() {
-        return true;
-    }
-
-    // Recursively check children
-    expr.children()
-        .iter()
-        .any(|child| supports_list_predicates(child))
+    expr.supports_list_pushdown()
+        || expr
+            .children()
+            .iter()
+            .any(|child| supports_list_predicates(child))
 }
 
 #[cfg(test)]
@@ -124,29 +115,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_supported_list_predicate() {
-        // Supported functions
-        assert!(is_supported_list_predicate("array_has"));
-        assert!(is_supported_list_predicate("array_has_all"));
-        assert!(is_supported_list_predicate("array_has_any"));
+    fn test_null_check_detection() {
+        use datafusion_physical_expr::expressions::Column;
 
-        // Unsupported functions
-        assert!(!is_supported_list_predicate("array_append"));
-        assert!(!is_supported_list_predicate("array_length"));
-        assert!(!is_supported_list_predicate("some_other_function"));
+        let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("test", 0));
+        assert!(!is_null_check(&**col_expr));
+
+        // IsNullExpr and IsNotNullExpr detection requires actual instances
+        // which need schema setup - tested in integration tests
     }
 
     #[test]
-    fn test_trait_based_detection() {
+    fn test_supported_scalar_functions() {
         use datafusion_physical_expr::expressions::Column;
-        use std::sync::Arc;
 
-        // Create a simple column expression (should not support pushdown)
         let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("test", 0));
-        assert!(!col_expr.supports_list_pushdown());
 
-        // Note: Testing with actual IsNullExpr and ScalarFunctionExpr
-        // would require more complex setup and is better suited for
-        // integration tests.
+        // Non-function expressions should return false
+        assert!(!is_supported_scalar_function(&**col_expr));
+
+        // Testing with actual ScalarFunctionExpr requires function setup
+        // and is better suited for integration tests
     }
 }
