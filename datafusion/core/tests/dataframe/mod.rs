@@ -563,7 +563,6 @@ async fn drop_columns_qualified() -> Result<()> {
         [col("aggregate_test_100.c1").eq(col("another_table.c1"))],
     )?;
     t3 = t3.drop_columns(&["another_table.c2", "another_table.c11"])?;
-    //t3 = t3.drop_columns_full(&["another_table.c2", "another_table.c11"])?;
 
     let plan = t3.logical_plan().clone();
 

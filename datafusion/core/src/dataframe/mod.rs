@@ -445,13 +445,17 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
+    pub fn drop_columns<T>(self, columns: &[T]) -> Result<DataFrame>
+    where
+        T: Into<Column> + Clone,
+    {
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| {
+            .flat_map(|col| {
+                let column: Column = col.clone().into();
                 self.plan
                     .schema()
-                    .qualified_fields_with_unqualified_name(name)
+                    .qualified_field_from_column(&column)
             })
             .collect::<Vec<_>>();
         let expr: Vec<Expr> = self
