@@ -544,15 +544,7 @@ let context = SimplifyContext::default()
     .with_current_time(); // Sets query_execution_start_time to Utc::now()
 ```
 
-**Available `SimplifyContext` methods:**
-
-- `with_schema(DFSchemaRef)` - Set the schema for type resolution
-- `with_config_options(Arc<ConfigOptions>)` - Set configuration options
-- `with_query_execution_start_time(Option<DateTime<Utc>>)` - Set query start time for time-dependent simplification
-- `with_current_time()` - Convenience method to set query start time to `Utc::now()`
-- `schema()` - Get the schema
-- `query_execution_start_time()` - Get the query start time (returns `Option<DateTime<Utc>>`)
-- `config_options()` - Get the configuration options
+See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
 
 ### FFI crate updates
 
