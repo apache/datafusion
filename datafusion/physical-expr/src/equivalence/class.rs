@@ -27,7 +27,7 @@ use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{HashMap, JoinType, Result, ScalarValue};
+use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 
 use indexmap::{IndexMap, IndexSet};
@@ -303,30 +303,16 @@ type AugmentedMapping<'a> = IndexMap<
 #[derive(Clone, Default)]
 pub struct EquivalenceGroup {
     /// A mapping from expressions to their equivalence class key.
-    map: HashMap<Arc<dyn PhysicalExpr>, usize>,
+    map: IndexMap<Arc<dyn PhysicalExpr>, usize>,
     /// The equivalence classes in this group.
     classes: Vec<EquivalenceClass>,
 }
 
 impl Debug for EquivalenceGroup {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut map_entries: Vec<_> = self.map.iter().collect();
-        map_entries.sort_by_key(|(expr, _)| format!("{expr:?}"));
-        let map: BTreeMap<_, _> = map_entries
-            .iter()
-            .map(|(k, v)| (format!("{k:?}"), *v))
-            .collect();
-        struct DeterministicMap<'a>(&'a [(&'a Arc<dyn PhysicalExpr>, &'a usize)]);
-        impl Debug for DeterministicMap<'_> {
-            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-                f.debug_map()
-                    .entries(self.0.iter().map(|&(k, v)| (k, v)))
-                    .finish()
-            }
-        }
 
         f.debug_struct("EquivalenceGroup")
-            .field("map", &DeterministicMap(&map_entries))
+            .field("map", &self.map)
             .field("classes", &self.classes)
             .finish()
     }
@@ -460,7 +446,7 @@ impl EquivalenceGroup {
         let cls = self.classes.swap_remove(idx);
         // Remove its entries from the lookup table:
         for expr in cls.iter() {
-            self.map.remove(expr);
+            self.map.swap_remove(expr);
         }
         // Update the lookup table for the moved class:
         if idx < self.classes.len() {
@@ -472,7 +458,7 @@ impl EquivalenceGroup {
     /// Updates the entry in lookup table for the given equivalence class with
     /// the given index.
     fn update_lookup_table(
-        map: &mut HashMap<Arc<dyn PhysicalExpr>, usize>,
+        map: &mut IndexMap<Arc<dyn PhysicalExpr>, usize>,
         cls: &EquivalenceClass,
         idx: usize,
     ) {
