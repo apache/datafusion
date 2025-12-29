@@ -35,12 +35,17 @@ fn create_args<O: OffsetSizeTrait>(
     size: usize,
     str_len: usize,
     force_view_types: bool,
+    from_len: usize,
+    to_len: usize,
 ) -> Vec<ColumnarValue> {
     if force_view_types {
         let string_array =
             Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
-        let from_array = Arc::new(create_string_view_array_with_len(size, 0.1, 3, false));
-        let to_array = Arc::new(create_string_view_array_with_len(size, 0.1, 5, false));
+        let from_array = Arc::new(create_string_view_array_with_len(
+            size, 0.1, from_len, false,
+        ));
+        let to_array =
+            Arc::new(create_string_view_array_with_len(size, 0.1, to_len, false));
         vec![
             ColumnarValue::Array(string_array),
             ColumnarValue::Array(from_array),
@@ -49,8 +54,8 @@ fn create_args<O: OffsetSizeTrait>(
     } else {
         let string_array =
             Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
-        let from_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, 3));
-        let to_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, 5));
+        let from_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, from_len));
+        let to_array = Arc::new(create_string_array_with_len::<O>(size, 0.1, to_len));
 
         vec![
             ColumnarValue::Array(string_array),
@@ -87,9 +92,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.sample_size(10);
         group.measurement_time(Duration::from_secs(10));
 
-        // Small strings
+        // ASCII single character replacement (fast path)
         let str_len = 32;
-        let args = create_args::<i32>(size, str_len, true);
+        let args = create_args::<i32>(size, str_len, false, 1, 1);
+        group.bench_function(
+            format!("replace_string_ascii_single [size={size}, str_len={str_len}]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(invoke_replace_with_args(args_cloned, size))
+                })
+            },
+        );
+
+        // Multi-character strings (general path)
+        let args = create_args::<i32>(size, str_len, true, 3, 5);
         group.bench_function(
             format!("replace_string_view [size={size}, str_len={str_len}]"),
             |b| {
@@ -100,7 +117,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let args = create_args::<i32>(size, str_len, false);
+        let args = create_args::<i32>(size, str_len, false, 3, 5);
         group.bench_function(
             format!("replace_string [size={size}, str_len={str_len}]"),
             |b| {
@@ -111,7 +128,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let args = create_args::<i64>(size, str_len, false);
+        let args = create_args::<i64>(size, str_len, false, 3, 5);
         group.bench_function(
             format!("replace_large_string [size={size}, str_len={str_len}]"),
             |b| {
@@ -124,7 +141,18 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         // Larger strings
         let str_len = 128;
-        let args = create_args::<i32>(size, str_len, true);
+        let args = create_args::<i32>(size, str_len, false, 1, 1);
+        group.bench_function(
+            format!("replace_string_ascii_single [size={size}, str_len={str_len}]"),
+            |b| {
+                b.iter(|| {
+                    let args_cloned = args.clone();
+                    black_box(invoke_replace_with_args(args_cloned, size))
+                })
+            },
+        );
+
+        let args = create_args::<i32>(size, str_len, true, 3, 5);
         group.bench_function(
             format!("replace_string_view [size={size}, str_len={str_len}]"),
             |b| {
@@ -135,7 +163,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let args = create_args::<i32>(size, str_len, false);
+        let args = create_args::<i32>(size, str_len, false, 3, 5);
         group.bench_function(
             format!("replace_string [size={size}, str_len={str_len}]"),
             |b| {
@@ -146,7 +174,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             },
         );
 
-        let args = create_args::<i64>(size, str_len, false);
+        let args = create_args::<i64>(size, str_len, false, 3, 5);
         group.bench_function(
             format!("replace_large_string [size={size}, str_len={str_len}]"),
             |b| {

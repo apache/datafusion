@@ -228,6 +228,22 @@ fn replace_into_string(buffer: &mut String, string: &str, from: &str, to: &str) 
         return;
     }
 
+    // Fast path for replacing a single ASCII character with another single ASCII character
+    // This matches Rust's str::replace() optimization and enables vectorization
+    if let ([from_byte], [to_byte]) = (from.as_bytes(), to.as_bytes())
+        && from_byte.is_ascii()
+        && to_byte.is_ascii()
+    {
+        // SAFETY: We're replacing ASCII with ASCII, which preserves UTF-8 validity
+        let replaced: Vec<u8> = string
+            .as_bytes()
+            .iter()
+            .map(|b| if *b == *from_byte { *to_byte } else { *b })
+            .collect();
+        buffer.push_str(unsafe { std::str::from_utf8_unchecked(&replaced) });
+        return;
+    }
+
     let mut last_end = 0;
     for (start, _part) in string.match_indices(from) {
         buffer.push_str(&string[last_end..start]);
