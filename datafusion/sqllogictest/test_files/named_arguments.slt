@@ -269,3 +269,80 @@ SELECT row_number(value => 1) OVER (ORDER BY id) FROM window_test;
 # Cleanup
 statement ok
 DROP TABLE window_test;
+
+#############
+## Test UDF with Many Optional Parameters (test_optional_params - sums p1 through p7)
+#############
+
+# Skip multiple middle parameters
+query I
+SELECT test_optional_params(p1 => 100, p3 => 300, p5 => 500, p7 => 700);
+----
+1600
+
+# Alternating pattern
+query I
+SELECT test_optional_params(p1 => 1, p3 => 3, p5 => 5, p7 => 7);
+----
+16
+
+# Only first and last
+query I
+SELECT test_optional_params(p1 => 5, p7 => 10);
+----
+15
+
+# Only last parameter
+query I
+SELECT test_optional_params(p7 => 42);
+----
+42
+
+# Reverse order with skips
+query I
+SELECT test_optional_params(p7 => 7, p5 => 5, p3 => 3, p1 => 1);
+----
+16
+
+# Mixed positional and named with skips
+query I
+SELECT test_optional_params(10, 20, p5 => 50, p7 => 70);
+----
+150
+
+#############
+## Test NULL handling - explicit NULL vs skipped parameters
+#############
+
+# Positional NULL
+query I
+SELECT test_optional_params(100, NULL, 300);
+----
+400
+
+# Named parameter with explicit NULL
+query I
+SELECT test_optional_params(p1 => 100, p2 => NULL, p3 => 300);
+----
+400
+
+# Skipped parameter (implicit NULL)
+query I
+SELECT test_optional_params(p1 => 100, p3 => 300);
+----
+400
+
+# Test that NULL is accepted by different type signatures
+# substr expects (string, int64, int64)
+
+# NULL in int64 position (start_pos)
+query T
+SELECT substr(str => 'hello world', start_pos => NULL, length => 5);
+----
+NULL
+
+# NULL in string position
+query T
+SELECT substr(str => NULL, start_pos => 1, length => 5);
+----
+NULL

@@ -143,6 +143,11 @@ impl TestContext {
                 info!("Registering dummy async udf");
                 register_async_abs_udf(test_ctx.session_ctx())
             }
+            "named_arguments.slt" => {
+                info!("Registering test UDF with many optional parameters");
+                let test_udf = create_optional_params_test_udf();
+                test_ctx.ctx.register_udf(test_udf);
+            }
             _ => {
                 info!("Using default SessionContext");
             }
@@ -512,4 +517,140 @@ fn register_async_abs_udf(ctx: &SessionContext) {
     let async_abs = AsyncAbs::new();
     let udf = AsyncScalarUDF::new(Arc::new(async_abs));
     ctx.register_udf(udf.into_scalar_udf());
+}
+
+/// Creates a test UDF with many optional parameters to test named argument skipping
+fn create_optional_params_test_udf() -> ScalarUDF {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::common::types::{logical_int64, NativeType};
+    use datafusion::logical_expr::{Coercion, TypeSignature};
+
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestOptionalParamsUDF {
+        signature: Signature,
+    }
+
+    impl TestOptionalParamsUDF {
+        fn new() -> Self {
+            let int64_coercion = Coercion::new_implicit(
+                datafusion::logical_expr::TypeSignatureClass::Native(logical_int64()),
+                vec![],
+                NativeType::Int64,
+            );
+
+            Self {
+                signature: Signature::one_of(
+                    vec![
+                        // Support 1 to 7 parameters
+                        TypeSignature::Coercible(vec![int64_coercion.clone()]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                        TypeSignature::Coercible(vec![
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                            int64_coercion.clone(),
+                        ]),
+                    ],
+                    Volatility::Immutable,
+                )
+                .with_parameter_names(vec![
+                    "p1".to_string(),
+                    "p2".to_string(),
+                    "p3".to_string(),
+                    "p4".to_string(),
+                    "p5".to_string(),
+                    "p6".to_string(),
+                    "p7".to_string(),
+                ])
+                .expect("valid parameter names"),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestOptionalParamsUDF {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "test_optional_params"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            // Sum all non-NULL parameters
+            let arrays = args
+                .args
+                .iter()
+                .map(|arg| match arg {
+                    ColumnarValue::Array(arr) => Arc::clone(arr),
+                    ColumnarValue::Scalar(scalar) => scalar
+                        .to_array_of_size(1)
+                        .expect("Failed to convert scalar to array"),
+                })
+                .collect::<Vec<_>>();
+
+            let len = arrays.first().map(|a| a.len()).unwrap_or(1);
+            let mut result = Vec::with_capacity(len);
+
+            for row_idx in 0..len {
+                let mut sum: i64 = 0;
+                for array in &arrays {
+                    let int_array = array
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .expect("Expected Int64Array");
+                    if let Some(value) =
+                        int_array.value(row_idx.min(int_array.len() - 1)).into()
+                    {
+                        sum += value;
+                    }
+                }
+                result.push(Some(sum));
+            }
+
+            Ok(ColumnarValue::Array(Arc::new(Int64Array::from(result))))
+        }
+    }
+
+    ScalarUDF::from(TestOptionalParamsUDF::new())
 }
