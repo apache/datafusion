@@ -54,7 +54,6 @@ use crate::{
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
 use arrow::datatypes::SchemaRef;
-use arrow::util::bit_util::round_upto_multiple_of_64;
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
@@ -830,12 +829,12 @@ impl ExternalSorter {
 
 /// Calculate how much memory to reserve for sorting a `RecordBatch` from its size,
 /// this can be calculated as the sum of the actual space it takes in memory(which would be larger for a sliced batch),
-/// and the size of the actual data, rounded up to 64 bytes, as that is what arrow will use when creating new buffers.
+/// and the size of the actual data.
 pub(crate) fn get_reserved_byte_for_record_batch_size(
     record_batch_size: usize,
     sliced_size: usize,
 ) -> usize {
-    record_batch_size + round_upto_multiple_of_64(sliced_size)
+    record_batch_size + sliced_size
 }
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
@@ -2431,9 +2430,6 @@ mod tests {
                 .map(|b| b.get_array_memory_size())
                 .sum::<usize>();
 
-            // Use half the batch memory to force spilling
-            let memory_limit = batches_memory / 2;
-
             TaskContext::default()
                 .with_session_config(
                     SessionConfig::new()
@@ -2444,7 +2440,7 @@ mod tests {
                 )
                 .with_runtime(
                     RuntimeEnvBuilder::default()
-                        .with_memory_limit(memory_limit, 1.0)
+                        .with_memory_limit(batches_memory, 1.0)
                         .build_arc()
                         .unwrap(),
                 )
@@ -2705,48 +2701,6 @@ mod tests {
 
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_get_reserved_byte_for_record_batch_rounding() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        // Create a batch with a size that's not a multiple of 64
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-
-        let reserved = get_reserved_byte_for_record_batch(&batch)?;
-
-        // Calculate expected value
-        let record_batch_size = get_record_batch_memory_size(&batch);
-        let sliced_size = batch.get_sliced_size()?;
-        let rounded_sliced_size = round_upto_multiple_of_64(sliced_size);
-        let expected = record_batch_size + rounded_sliced_size;
-
-        assert_eq!(reserved, expected);
-
-        // Verify that the sliced size component was indeed rounded to multiple of 64
-        assert_eq!(
-            rounded_sliced_size % 64,
-            0,
-            "Rounded sliced size should be a multiple of 64"
-        );
-
-        // If sliced_size is not already a multiple of 64, verify rounding occurred
-        if sliced_size % 64 != 0 {
-            assert!(
-                rounded_sliced_size > sliced_size,
-                "Rounding should have increased the size"
-            );
-            assert!(
-                rounded_sliced_size - sliced_size < 64,
-                "Rounding should add less than 64 bytes"
-            );
-        }
 
         Ok(())
     }
