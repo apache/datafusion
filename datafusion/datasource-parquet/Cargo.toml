@@ -56,6 +56,8 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+datafusion-functions-nested = { workspace = true }
+tempfile = { workspace = true }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
