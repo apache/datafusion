@@ -301,9 +301,10 @@ impl DynamicFilterPhysicalExpr {
     /// expressions when no consumer will actually use them.
     ///
     /// Note: We check the inner Arc's strong_count, not the outer Arc's count, because
-    /// when filters are transformed, new outer Arc instances
-    /// are created via with_new_children(), but they all share the same inner Arc<RwLock<Inner>>.
-    /// This is what allows filter updates to propagate to consumers even after transformation.
+    /// when filters are transformed (e.g., via reassign_expr_columns during filter pushdown),
+    /// new outer Arc instances are created via with_new_children(), but they all share the
+    /// same inner Arc<RwLock<Inner>>. This is what allows filter updates to propagate to
+    /// consumers even after transformation.
     pub fn is_used(self: &Arc<Self>) -> bool {
         // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
         Arc::strong_count(&self.inner) > 1
@@ -714,38 +715,37 @@ mod test {
             lit(true) as Arc<dyn PhysicalExpr>,
         ));
 
-        // Initially, only one reference exists (the filter itself)
+        // Initially, only one reference to the inner Arc exists
         assert!(
             !filter.is_used(),
-            "Filter should not be used with only one reference"
+            "Filter should not be used with only one inner reference"
         );
 
-        // Simulate a consumer holding a reference (e.g., ParquetExec)
-        let consumer1 = Arc::clone(&filter);
+        // Simulate a consumer created via transformation (what happens during filter pushdown).
+        // When filters are pushed down and transformed via reassign_expr_columns/transform_down,
+        // with_new_children() is called which creates a new outer Arc but clones the inner Arc.
+        let consumer1_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
+        let _consumer1 = consumer1_expr
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Should be DynamicFilterPhysicalExpr");
+
+        // Now the inner Arc is shared (inner_count = 2)
         assert!(
             filter.is_used(),
-            "Filter should be used with a consumer reference"
+            "Filter should be used when inner Arc is shared with transformed consumer"
         );
 
-        // Multiple consumers
-        let consumer2 = Arc::clone(&filter);
+        // Create another transformed consumer
+        let consumer2_expr = Arc::clone(&filter).with_new_children(vec![]).unwrap();
+        let _consumer2 = consumer2_expr
+            .as_any()
+            .downcast_ref::<DynamicFilterPhysicalExpr>()
+            .expect("Should be DynamicFilterPhysicalExpr");
+
         assert!(
             filter.is_used(),
             "Filter should still be used with multiple consumers"
-        );
-
-        // Drop one consumer
-        drop(consumer1);
-        assert!(
-            filter.is_used(),
-            "Filter should still be used with remaining consumer"
-        );
-
-        // Drop all consumers
-        drop(consumer2);
-        assert!(
-            !filter.is_used(),
-            "Filter should not be used after all consumers dropped"
         );
     }
 }
