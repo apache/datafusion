@@ -35,13 +35,13 @@ fn test_coercion_error() -> Result<()> {
 #[test]
 fn test_date_timestamp_arithmetic_error() -> Result<()> {
     let (lhs, rhs) = BinaryTypeCoercer::new(
-        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        &DataType::Timestamp(Nanosecond, None),
         &Operator::Minus,
-        &DataType::Timestamp(TimeUnit::Millisecond, None),
+        &DataType::Timestamp(Millisecond, None),
     )
     .get_input_types()?;
-    assert_eq!(lhs, DataType::Timestamp(TimeUnit::Millisecond, None));
-    assert_eq!(rhs, DataType::Timestamp(TimeUnit::Millisecond, None));
+    assert_eq!(lhs, DataType::Timestamp(Millisecond, None));
+    assert_eq!(rhs, DataType::Timestamp(Millisecond, None));
 
     let err =
         BinaryTypeCoercer::new(&DataType::Date32, &Operator::Plus, &DataType::Date64)
