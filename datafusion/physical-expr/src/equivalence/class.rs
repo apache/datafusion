@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::{self, Debug, Display, Formatter};
+use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::vec::IntoIter;
@@ -46,7 +46,7 @@ pub enum AcrossPartitions {
 }
 
 impl Display for AcrossPartitions {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AcrossPartitions::Heterogeneous => write!(f, "(heterogeneous)"),
             AcrossPartitions::Uniform(value) => {
@@ -118,7 +118,7 @@ impl ConstExpr {
     pub fn format_list(input: &[ConstExpr]) -> impl Display + '_ {
         struct DisplayableList<'a>(&'a [ConstExpr]);
         impl Display for DisplayableList<'_> {
-            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 let mut first = true;
                 for const_expr in self.0 {
                     if first {
@@ -142,7 +142,7 @@ impl PartialEq for ConstExpr {
 }
 
 impl Display for ConstExpr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.expr)?;
         write!(f, "{}", self.across_partitions)
     }
@@ -277,7 +277,7 @@ impl IntoIterator for EquivalenceClass {
 }
 
 impl Display for EquivalenceClass {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{{")?;
         write!(f, "members: {}", format_physical_expr_list(&self.exprs))?;
         if let Some(across) = &self.constant {
@@ -300,7 +300,7 @@ type AugmentedMapping<'a> = IndexMap<
 
 /// A collection of distinct `EquivalenceClass`es. This object supports fast
 /// lookups of expressions and their equivalence classes.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct EquivalenceGroup {
     /// A mapping from expressions to their equivalence class key.
     map: IndexMap<Arc<dyn PhysicalExpr>, usize>,
@@ -876,7 +876,7 @@ impl IntoIterator for EquivalenceGroup {
 }
 
 impl Display for EquivalenceGroup {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "[")?;
         let mut iter = self.iter();
         if let Some(cls) = iter.next() {
