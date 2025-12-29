@@ -157,7 +157,7 @@ To get data in `DATA_DIR` for TPCDS, please follow instructions in `./benchmarks
 DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/compare_tpcds.sh main mybranch
 ```
 
-Alternatively you can compare manually followng the example velor
+Alternatively, you can compare manually following the example below
 
 ```shell
 git checkout main
@@ -238,6 +238,21 @@ Benchmark tpch_mem.json
 │ QQuery 21    │     723.39ms │     823.34ms │  1.14x slower │
 │ QQuery 22    │      91.84ms │      89.89ms │     no change │
 └──────────────┴──────────────┴──────────────┴───────────────┘
+```
+
+## Comparing performance of main and a PR
+
+### TPCDS
+
+Considering you already have TPCDS data locally
+
+```shell
+export DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/
+export PR_NUMBER=19464
+gh pr checkout $PR_NUMBER --repo apache/datafusion -b pr-$PR_NUMBER
+git checkout main
+git pull
+./benchmarks/compare_tpcds.sh main pr-$PR_NUMBER
 ```
 
 ### Running Benchmarks Manually
