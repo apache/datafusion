@@ -17,6 +17,7 @@
 
 //! Hash aggregation
 
+use std::ops::Deref;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
@@ -590,7 +591,7 @@ impl GroupedHashAggregateStream {
             _ => OutOfMemoryMode::ReportError,
         };
 
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_group_values(group_schema, &group_ordering, Some(context.deref()))?;
         let reservation = MemoryConsumer::new(name)
             // We interpret 'can spill' as 'can handle memory back pressure'.
             // This value needs to be set to true for the default memory pool implementations

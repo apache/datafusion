@@ -25,7 +25,7 @@ use arrow::array::types::{
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
-
+use datafusion_execution::TaskContext;
 use datafusion_expr::EmitTo;
 
 pub mod multi_group_by;
@@ -134,6 +134,7 @@ pub trait GroupValues: Send {
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
+    ctx: Option<&TaskContext>
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
@@ -202,9 +203,9 @@ pub fn new_group_values(
 
     if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema, ctx)?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema, ctx)?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))
