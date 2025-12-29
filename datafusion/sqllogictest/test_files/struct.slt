@@ -653,3 +653,174 @@ test1.struct_field['substruct']['subsubstruct'] = test2.struct_field['substruct'
 
 statement ok
 drop table test;
+
+# Test nested get_field with multiple arguments
+query I
+select get_field({'a': {'b': 1}}, 'a', 'b');
+----
+1
+
+# Test nested get_field with three levels
+query I
+select get_field({'a': {'b': {'c': 42}}}, 'a', 'b', 'c');
+----
+42
+
+# Test type validation error - accessing field on non-struct
+query error Cannot access field at argument 2: type Int64 is not Struct, Map, or Null
+select get_field({'a': 1}, 'a', 'b');
+
+# Test that bracket syntax produces a single get_field call (not nested)
+# We use a table column to prevent constant folding
+statement ok
+create table explain_test (s struct(a struct(b int))) as values ({'a': {'b': 1}});
+
+query TT
+explain select s['a']['b'] from explain_test;
+----
+logical_plan
+01)Projection: get_field(explain_test.s, Utf8("a"), Utf8("b"))
+02)--TableScan: explain_test projection=[s]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, a, b) as explain_test.s[a][b]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table explain_test;
+
+# Test with nested struct in table
+statement ok
+create table nested_test (s struct(inner struct(val int))) as values ({'inner': {'val': 100}});
+
+query I
+select s['inner']['val'] from nested_test;
+----
+100
+
+query I
+select get_field(s, 'inner', 'val') from nested_test;
+----
+100
+
+statement ok
+drop table nested_test;
+
+# Test mixed struct and map access
+query I
+select get_field({'m': map(['k'], [42])}, 'm', 'k');
+----
+42
+
+# Test nested map access
+query I
+select {'m': map(['outer'], [map(['inner'], [99])])}['m']['outer']['inner'];
+----
+99
+
+###############################################
+# Additional tests for nested get_field support
+###############################################
+
+# Backwards compatibility: original 2-argument form still works
+query I
+select get_field({'a': 1}, 'a');
+----
+1
+
+# Error: get_field with no arguments
+query error get_field requires at least 2 arguments, got 0
+select get_field();
+
+# Error: get_field with only 1 argument
+query error get_field requires at least 2 arguments, got 1
+select get_field({'a': 1});
+
+# Null handling: null at base should return null
+query I
+select get_field(CAST(NULL AS STRUCT(a STRUCT(b INT))), 'a', 'b');
+----
+NULL
+
+# Null handling: null in middle of chain
+statement ok
+create table null_mid_test (s STRUCT(a STRUCT(b INT)));
+
+statement ok
+insert into null_mid_test values ({'a': NULL});
+
+query I
+select s['a']['b'] from null_mid_test;
+----
+NULL
+
+query I
+select get_field(s, 'a', 'b') from null_mid_test;
+----
+NULL
+
+statement ok
+drop table null_mid_test;
+
+# Type validation error at argument 3
+query error Cannot access field at argument 3: type Int64 is not Struct, Map, or Null
+select get_field({'a': {'b': 2}}, 'a', 'b', 'c');
+
+# Type validation error at argument 4
+query error Cannot access field at argument 4: type Int64 is not Struct, Map, or Null
+select get_field({'a': {'b': {'c': 3}}}, 'a', 'b', 'c', 'd');
+
+# Non-existent field at first level
+query error Field x not found in struct
+select get_field({'a': 1}, 'x');
+
+# Non-existent field at second level
+query error Field x not found in struct
+select get_field({'a': {'b': 1}}, 'a', 'x');
+
+# Deep nesting: 5-level access
+query I
+select get_field({'l1': {'l2': {'l3': {'l4': {'l5': 42}}}}}, 'l1', 'l2', 'l3', 'l4', 'l5');
+----
+42
+
+# Deep nesting: 5-level access via bracket syntax
+query I
+select {'l1': {'l2': {'l3': {'l4': {'l5': 99}}}}}['l1']['l2']['l3']['l4']['l5'];
+----
+99
+
+# Mixed array and struct access: array index should break the batching
+statement ok
+create table mixed_access_test (data STRUCT(items STRUCT(name VARCHAR)[]) );
+
+statement ok
+insert into mixed_access_test values ({'items': [{'name': 'first'}, {'name': 'second'}]});
+
+query T
+select data['items'][1]['name'] from mixed_access_test;
+----
+first
+
+query T
+select data['items'][2]['name'] from mixed_access_test;
+----
+second
+
+statement ok
+drop table mixed_access_test;
+
+# Nullable parent propagation: null parent should propagate
+statement ok
+create table nullable_parent_test (s STRUCT(a STRUCT(b INT)));
+
+statement ok
+insert into nullable_parent_test values ({'a': {'b': 1}}), (NULL);
+
+query I
+select s['a']['b'] from nullable_parent_test;
+----
+1
+NULL
+
+statement ok
+drop table nullable_parent_test;

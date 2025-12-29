@@ -87,6 +87,7 @@ recursive_protection = [
     "datafusion-expr/recursive_protection",
     "datafusion-optimizer/recursive_protection",
     "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-physical-expr/recursive_protection",
     "datafusion-sql/recursive_protection",
     "sqlparser/recursive-protection",
 ]
@@ -237,6 +238,10 @@ name = "physical_plan"
 harness = false
 name = "parquet_query_sql"
 required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "range_and_generate_series"
 
 [[bench]]
 harness = false

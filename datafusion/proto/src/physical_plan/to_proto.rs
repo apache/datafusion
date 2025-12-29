@@ -41,7 +41,7 @@ use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
     Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
-use datafusion_physical_plan::joins::HashTableLookupExpr;
+use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
@@ -409,6 +409,20 @@ pub fn serialize_physical_expr(
                     )?)),
                 },
             ))),
+        })
+    } else if let Some(expr) = expr.downcast_ref::<HashExpr>() {
+        let (s0, s1, s2, s3) = expr.seeds();
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::HashExpr(
+                protobuf::PhysicalHashExprNode {
+                    on_columns: serialize_physical_exprs(expr.on_columns(), codec)?,
+                    seed0: s0,
+                    seed1: s1,
+                    seed2: s2,
+                    seed3: s3,
+                    description: expr.description().to_string(),
+                },
+            )),
         })
     } else {
         let mut buf: Vec<u8> = vec![];

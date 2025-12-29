@@ -122,51 +122,51 @@ fn test_type_coercion() -> Result<()> {
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time32(TimeUnit::Second),
+        DataType::Time32(Second),
         Operator::Eq,
-        DataType::Time32(TimeUnit::Second)
+        DataType::Time32(Second)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time32(TimeUnit::Millisecond),
+        DataType::Time32(Millisecond),
         Operator::Eq,
-        DataType::Time32(TimeUnit::Millisecond)
+        DataType::Time32(Millisecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time64(TimeUnit::Microsecond),
+        DataType::Time64(Microsecond),
         Operator::Eq,
-        DataType::Time64(TimeUnit::Microsecond)
+        DataType::Time64(Microsecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Time64(TimeUnit::Nanosecond),
+        DataType::Time64(Nanosecond),
         Operator::Eq,
-        DataType::Time64(TimeUnit::Nanosecond)
+        DataType::Time64(Nanosecond)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Second, None),
+        DataType::Timestamp(Second, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Millisecond, None),
+        DataType::Timestamp(Millisecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(Microsecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
-        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        DataType::Timestamp(Nanosecond, None),
         Operator::Lt,
-        DataType::Timestamp(TimeUnit::Nanosecond, None)
+        DataType::Timestamp(Nanosecond, None)
     );
     test_coercion_binary_rule!(
         DataType::Utf8,
@@ -552,28 +552,28 @@ fn test_type_coercion_compare() -> Result<()> {
     // Timestamps
     let utc: Option<Arc<str>> = Some("UTC".into());
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
+        DataType::Timestamp(Second, utc.clone()),
+        DataType::Timestamp(Second, utc.clone()),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, utc.clone())
+        DataType::Timestamp(Second, utc.clone())
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, utc.clone()),
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, utc.clone()),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, utc.clone())
+        DataType::Timestamp(Second, utc.clone())
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into())),
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, Some("America/New_York".into())),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, Some("America/New_York".into()))
+        DataType::Timestamp(Second, Some("America/New_York".into()))
     );
     test_coercion_binary_rule!(
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into())),
-        DataType::Timestamp(TimeUnit::Second, utc),
+        DataType::Timestamp(Second, Some("Europe/Brussels".into())),
+        DataType::Timestamp(Second, utc),
         Operator::Eq,
-        DataType::Timestamp(TimeUnit::Second, Some("Europe/Brussels".into()))
+        DataType::Timestamp(Second, Some("Europe/Brussels".into()))
     );
 
     // list
@@ -634,7 +634,7 @@ fn test_type_coercion_compare() -> Result<()> {
     );
 
     let inner_timestamp_field = Arc::new(Field::new_list_field(
-        DataType::Timestamp(TimeUnit::Microsecond, None),
+        DataType::Timestamp(Microsecond, None),
         true,
     ));
     let result_type = BinaryTypeCoercer::new(
