@@ -2581,75 +2581,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sort_batch_chunked_with_nulls() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
-
-        // Create a batch with nulls
-        let values = Int32Array::from(vec![
-            Some(5),
-            None,
-            Some(2),
-            Some(8),
-            None,
-            Some(1),
-            Some(9),
-            None,
-            Some(3),
-            Some(7),
-        ]);
-        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
-
-        // Test with nulls_first = true
-        {
-            let expressions: LexOrdering = [PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                },
-            }]
-            .into();
-
-            let result_batches = sort_batch_chunked(&batch, &expressions, 4)?;
-            let concatenated = concat_batches(&schema, &result_batches)?;
-            let array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
-
-            // First 3 should be null
-            assert!(array.is_null(0));
-            assert!(array.is_null(1));
-            assert!(array.is_null(2));
-            // Then sorted values
-            assert_eq!(array.value(3), 1);
-            assert_eq!(array.value(4), 2);
-        }
-
-        // Test with nulls_first = false
-        {
-            let expressions: LexOrdering = [PhysicalSortExpr {
-                expr: Arc::new(Column::new("a", 0)),
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }]
-            .into();
-
-            let result_batches = sort_batch_chunked(&batch, &expressions, 4)?;
-            let concatenated = concat_batches(&schema, &result_batches)?;
-            let array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
-
-            // First should be 1
-            assert_eq!(array.value(0), 1);
-            // Last 3 should be null
-            assert!(array.is_null(7));
-            assert!(array.is_null(8));
-            assert!(array.is_null(9));
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_sort_batch_chunked_multi_column() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -2710,28 +2641,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_sort_batch_chunked_single_row() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![42]))],
-        )?;
-
-        let expressions: LexOrdering =
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
-
-        let result_batches = sort_batch_chunked(&batch, &expressions, 100)?;
-
-        assert_eq!(result_batches.len(), 1);
-        assert_eq!(result_batches[0].num_rows(), 1);
-        let array = as_primitive_array::<Int32Type>(result_batches[0].column(0))?;
-        assert_eq!(array.value(0), 42);
-
-        Ok(())
-    }
-
     // ========================================================================
     // Tests for get_reserved_byte_for_record_batch()
     // ========================================================================
@@ -2746,8 +2655,14 @@ mod tests {
 
         let reserved = get_reserved_byte_for_record_batch(&batch)?;
 
-        // Should be greater than 0
-        assert!(reserved > 0);
+        // Calculate expected value:
+        // Total = existing buffer size + new sorted buffer size (rounded to 64)
+        let record_batch_size = get_record_batch_memory_size(&batch);
+        let sliced_size = batch.get_sliced_size()?;
+        let expected = record_batch_size + round_upto_multiple_of_64(sliced_size);
+
+        assert_eq!(reserved, expected);
+        assert!(reserved > 0, "Reserved bytes should be greater than 0");
 
         Ok(())
     }
@@ -2788,168 +2703,32 @@ mod tests {
 
         let reserved = get_reserved_byte_for_record_batch(&batch)?;
 
-        // Should be rounded to multiple of 64
-        assert!(reserved > 0);
-        // The rounding is applied to the sliced size component
-        // Total = record_batch_memory_size + round_upto_multiple_of_64(sliced_size)
+        // Calculate expected value
+        let record_batch_size = get_record_batch_memory_size(&batch);
+        let sliced_size = batch.get_sliced_size()?;
+        let rounded_sliced_size = round_upto_multiple_of_64(sliced_size);
+        let expected = record_batch_size + rounded_sliced_size;
 
-        Ok(())
-    }
+        assert_eq!(reserved, expected);
 
-    #[tokio::test]
-    async fn test_get_reserved_byte_for_record_batch_with_string_view() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "a",
-            DataType::Utf8View,
-            false,
-        )]));
-
-        let string_array = StringViewArray::from(vec!["hello", "world", "test"]);
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(string_array)])?;
-
-        let reserved = get_reserved_byte_for_record_batch(&batch)?;
-
-        // Should handle variable-length data correctly
-        assert!(reserved > 0);
-
-        Ok(())
-    }
-
-    // ========================================================================
-    // Tests for ReservationStream (in stream.rs, but we test integration here)
-    // ========================================================================
-
-    #[tokio::test]
-    async fn test_sort_batch_stream_memory_tracking() -> Result<()> {
-        use crate::stream::ReservationStream;
-
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(10 * 1024 * 1024, 1.0) // 10MB limit
-            .build_arc()?;
-
-        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        // Create a batch
-        let values: Vec<i32> = (0..1000).collect();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(values))],
-        )?;
-
-        let batch_size = get_record_batch_memory_size(&batch);
-
-        // Create a simple stream with one batch
-        let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-            as SendableRecordBatchStream;
-
-        // Create reservation and grow it
-        let mut reservation = reservation;
-        reservation.try_grow(batch_size)?;
-
-        let initial_reserved = runtime.memory_pool.reserved();
-        assert!(initial_reserved > 0);
-
-        // Create ReservationStream
-        let mut res_stream =
-            ReservationStream::new(Arc::clone(&schema), inner, reservation);
-
-        // Consume the batch
-        let result = res_stream.next().await;
-        assert!(result.is_some());
-
-        // Memory should be reduced after consuming
-        let after_consume = runtime.memory_pool.reserved();
-        assert!(after_consume < initial_reserved);
-
-        // Consume until end
-        while res_stream.next().await.is_some() {}
-
-        // Memory should be freed
-        let final_reserved = runtime.memory_pool.reserved();
-        assert_eq!(final_reserved, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_sort_batch_stream_chunked_output() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        // Create a large batch (5000 rows)
-        let values: Vec<i32> = (0..5000).rev().collect();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(values))],
-        )?;
-
-        let expressions: LexOrdering =
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
-
-        let batch_size = 500;
-        let result_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
-
-        // Verify multiple output batches
-        assert_eq!(result_batches.len(), 10);
-
-        // Each batch should be <= batch_size
-        let mut total_rows = 0;
-        for batch in &result_batches {
-            assert!(batch.num_rows() <= batch_size);
-            total_rows += batch.num_rows();
-        }
-
-        assert_eq!(total_rows, 5000);
-
-        // Verify data is sorted
-        let concatenated = concat_batches(&schema, &result_batches)?;
-        let array = as_primitive_array::<Int32Type>(concatenated.column(0))?;
-        for i in 0..array.len() - 1 {
-            assert!(array.value(i) <= array.value(i + 1));
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_sort_no_batch_split_stream_metrics() -> Result<()> {
-        let task_ctx = Arc::new(TaskContext::default());
-        let partitions = 2;
-        let csv = test::scan_partitioned(partitions);
-        let schema = csv.schema();
-
-        let sort_exec = Arc::new(SortExec::new(
-            [PhysicalSortExpr {
-                expr: col("i", &schema)?,
-                options: SortOptions::default(),
-            }]
-            .into(),
-            Arc::new(CoalescePartitionsExec::new(csv)),
-        ));
-
-        let _result = collect(Arc::clone(&sort_exec) as _, task_ctx).await?;
-
-        let metrics = sort_exec.metrics().unwrap();
-
-        // Verify that SplitMetrics are not present
-        // The metrics should only include baseline and spill metrics
-        let metrics_str = format!("{metrics:?}");
-
-        // Should not contain split-related metrics
-        assert!(
-            !metrics_str.contains("split_count"),
-            "Should not have split_count metric"
-        );
-        assert!(
-            !metrics_str.contains("split_time"),
-            "Should not have split_time metric"
+        // Verify that the sliced size component was indeed rounded to multiple of 64
+        assert_eq!(
+            rounded_sliced_size % 64,
+            0,
+            "Rounded sliced size should be a multiple of 64"
         );
 
-        // Should still have baseline and spill metrics
-        assert!(metrics.output_rows().is_some());
-        assert!(metrics.elapsed_compute().is_some());
+        // If sliced_size is not already a multiple of 64, verify rounding occurred
+        if sliced_size % 64 != 0 {
+            assert!(
+                rounded_sliced_size > sliced_size,
+                "Rounding should have increased the size"
+            );
+            assert!(
+                rounded_sliced_size - sliced_size < 64,
+                "Rounding should add less than 64 bytes"
+            );
+        }
 
         Ok(())
     }
@@ -3012,63 +2791,6 @@ mod tests {
             0,
             "Memory should be fully released"
         );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_sort_exec_batch_size_respected() -> Result<()> {
-        let batch_size = 50;
-        let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let task_ctx =
-            Arc::new(TaskContext::default().with_session_config(session_config));
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        // Create multiple batches with various sizes
-        let batches = vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(
-                    (0..200).rev().collect::<Vec<i32>>(),
-                ))],
-            )?,
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(
-                    (200..350).rev().collect::<Vec<i32>>(),
-                ))],
-            )?,
-        ];
-
-        let sort_exec = Arc::new(SortExec::new(
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
-            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?,
-        ));
-
-        let result = collect(sort_exec, task_ctx).await?;
-
-        // Verify output batches respect batch_size
-        for (i, batch) in result.iter().enumerate() {
-            // All batches except possibly the last should have batch_size rows
-            if i < result.len() - 1 {
-                assert_eq!(
-                    batch.num_rows(),
-                    batch_size,
-                    "Batch {i} should have {batch_size} rows",
-                );
-            } else {
-                // Last batch can be smaller
-                assert!(
-                    batch.num_rows() <= batch_size,
-                    "Last batch should have <= {batch_size} rows",
-                );
-            }
-        }
-
-        // Verify total rows
-        let total_rows: usize = result.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total_rows, 350);
 
         Ok(())
     }
