@@ -198,8 +198,6 @@ pub(crate) struct FilterCandidate {
 /// Tracks the projection of an expression in both root and leaf coordinates.
 #[derive(Debug, Clone)]
 struct ProjectionColumns {
-    /// Root column indices in the Arrow schema.
-    root_indices: Vec<usize>,
     /// Leaf column indices in the Parquet schema descriptor.
     leaf_indices: Vec<usize>,
 }
@@ -255,10 +253,7 @@ impl FilterCandidateBuilder {
             expr: self.expr,
             required_bytes,
             can_use_index,
-            projection: ProjectionColumns {
-                root_indices,
-                leaf_indices,
-            },
+            projection: ProjectionColumns { leaf_indices },
             filter_schema: projected_schema,
         }))
     }
@@ -674,7 +669,6 @@ mod test {
             .expect("building candidate")
             .expect("list pushdown should be supported");
 
-        assert_eq!(candidate.projection.root_indices, vec![list_index]);
         assert_eq!(candidate.projection.leaf_indices, vec![list_index]);
     }
 
