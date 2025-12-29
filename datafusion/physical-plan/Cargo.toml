@@ -94,6 +94,10 @@ name = "partial_ordering"
 
 [[bench]]
 harness = false
+name = "plan_reuse"
+
+[[bench]]
+harness = false
 name = "spill_io"
 
 [[bench]]
