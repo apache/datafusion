@@ -130,6 +130,9 @@ impl DatafusionArrowPredicate {
 
         Ok(Self {
             physical_expr,
+            // Use leaf indices: when nested columns are involved, we must specify
+            // leaf (primitive) column indices in the Parquet schema so the decoder
+            // can properly project and filter nested structures.
             projection_mask: ProjectionMask::leaves(
                 metadata.file_metadata().schema_descr(),
                 candidate.projection.leaf_indices.iter().copied(),

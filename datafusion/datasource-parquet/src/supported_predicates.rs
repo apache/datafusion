@@ -73,6 +73,9 @@ pub fn supports_list_predicates(expr: &Arc<dyn PhysicalExpr>) -> bool {
     }
 
     // Check if this is a supported scalar function
+    // NOTE: This relies on function names matching exactly. If function names
+    // are refactored, this check must be updated. Consider using a trait-based
+    // approach (e.g., a marker trait) for more robust detection in the future.
     if let Some(fun) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
         && is_supported_list_predicate(fun.name())
     {
