@@ -827,7 +827,7 @@ impl ExternalSorter {
     }
 }
 
-/// Calculate how much memory to reserve for sorting a `RecordBatch` from its size.
+/// Estimate how much memory is needed to sort a `RecordBatch`.
 ///
 /// This is used to pre-reserve memory for the sort/merge. The sort/merge process involves
 /// creating sorted copies of sorted columns in record batches for speeding up comparison
