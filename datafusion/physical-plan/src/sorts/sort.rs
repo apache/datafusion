@@ -2455,10 +2455,6 @@ mod tests {
         Ok((sorted_batches, metrics))
     }
 
-    // ========================================================================
-    // Tests for sort_batch_chunked()
-    // ========================================================================
-
     #[tokio::test]
     async fn test_sort_batch_chunked_basic() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -2640,10 +2636,6 @@ mod tests {
 
         Ok(())
     }
-
-    // ========================================================================
-    // Tests for get_reserved_byte_for_record_batch()
-    // ========================================================================
 
     #[tokio::test]
     async fn test_get_reserved_byte_for_record_batch_normal_batch() -> Result<()> {

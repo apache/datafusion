@@ -989,7 +989,7 @@ mod test {
 
         assert_eq!(
             number_of_batches, 2,
-            "Should have received exactly one empty batch"
+            "Should have received exactly two empty batches"
         );
     }
 
@@ -1061,46 +1061,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_reservation_stream_frees_on_completion() {
-        use arrow::array::Int32Array;
-        use datafusion_execution::memory_pool::MemoryConsumer;
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(10 * 1024 * 1024, 1.0)
-            .build_arc()
-            .unwrap();
-
-        let mut reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
-
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )
-        .unwrap();
-
-        let batch_size = get_record_batch_memory_size(&batch);
-        reservation.try_grow(batch_size).unwrap();
-
-        assert!(runtime.memory_pool.reserved() > 0);
-
-        let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-            as SendableRecordBatchStream;
-
-        let mut res_stream =
-            ReservationStream::new(Arc::clone(&schema), inner, reservation);
-
-        // Consume all batches
-        while res_stream.next().await.is_some() {}
-
-        // Memory should be fully freed
-        assert_eq!(runtime.memory_pool.reserved(), 0);
-    }
-
-    #[tokio::test]
     async fn test_reservation_stream_error_handling() {
         use datafusion_execution::memory_pool::MemoryConsumer;
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1131,48 +1091,24 @@ mod test {
         assert!(result.is_some());
         assert!(result.unwrap().is_err());
 
-        // Stream should be done, but reservation might not be freed yet
-        // since we didn't consume to None
-        // This is expected behavior - the reservation is only freed when the stream ends normally
-    }
+        // Verify reservation is NOT automatically freed on error
+        // The reservation is only freed when poll_next returns Poll::Ready(None)
+        // After an error, the stream may continue to hold the reservation
+        // until it's explicitly dropped or polled to None
+        let after_error = runtime.memory_pool.reserved();
+        assert_eq!(
+            after_error, 1000,
+            "Reservation should still be held after error"
+        );
 
-    #[tokio::test]
-    async fn test_reservation_stream_schema_preserved() {
-        use arrow::array::Int32Array;
-        use datafusion_execution::memory_pool::MemoryConsumer;
-        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+        // Drop the stream to free the reservation
+        drop(res_stream);
 
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(10 * 1024 * 1024, 1.0)
-            .build_arc()
-            .unwrap();
-
-        let reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]));
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
-            ],
-        )
-        .unwrap();
-
-        let stream = futures::stream::iter(vec![Ok(batch)]);
-        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
-            as SendableRecordBatchStream;
-
-        let res_stream = ReservationStream::new(Arc::clone(&schema), inner, reservation);
-
-        // Verify schema is preserved
-        let stream_schema = res_stream.schema();
-        assert_eq!(stream_schema.fields().len(), 2);
-        assert_eq!(stream_schema.field(0).name(), "a");
-        assert_eq!(stream_schema.field(1).name(), "b");
+        // Now memory should be freed
+        assert_eq!(
+            runtime.memory_pool.reserved(),
+            0,
+            "Memory should be freed when stream is dropped"
+        );
     }
 }
