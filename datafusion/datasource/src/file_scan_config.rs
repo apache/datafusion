@@ -152,6 +152,8 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// Whether the scan's limit is order sensitive
+    pub preserve_order: bool,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
@@ -240,6 +242,7 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    preserve_order: bool,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -269,6 +272,7 @@ impl FileScanConfigBuilder {
             output_ordering: vec![],
             file_compression_type: None,
             limit: None,
+            preserve_order: false,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -280,6 +284,12 @@ impl FileScanConfigBuilder {
     /// all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set whether the limit should be order-sensitive.
+    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
+        self.preserve_order = order_sensitive;
         self
     }
 
@@ -450,6 +460,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             statistics,
@@ -471,6 +482,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             output_ordering,
@@ -493,6 +505,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             limit: config.limit,
+            preserve_order: config.preserve_order,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
