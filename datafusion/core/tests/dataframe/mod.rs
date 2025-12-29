@@ -611,29 +611,43 @@ async fn test_find_qualified_names() -> Result<()> {
     let t = test_table().await?;
     let column_names = ["c1", "c2", "c3"];
     let columns = t.find_qualified_columns(&column_names)?;
-    
+
     // Expected results for each column
     let binding = TableReference::bare("aggregate_test_100");
-    let expected = [(Some(&binding), "c1"),
+    let expected = [
+        (Some(&binding), "c1"),
         (Some(&binding), "c2"),
-        (Some(&binding), "c3")];
-    
+        (Some(&binding), "c3"),
+    ];
+
     // Verify we got the expected number of results
-    assert_eq!(columns.len(), expected.len(), "Expected {} columns, got {}", expected.len(), columns.len());
-    
+    assert_eq!(
+        columns.len(),
+        expected.len(),
+        "Expected {} columns, got {}",
+        expected.len(),
+        columns.len()
+    );
+
     // Iterate over the results and check each one individually
     for (i, (actual, expected)) in columns.iter().zip(expected.iter()).enumerate() {
         let (actual_table_ref, actual_field_ref) = actual;
         let (expected_table_ref, expected_field_name) = expected;
-        
+
         // Check table reference
-        assert_eq!(actual_table_ref, expected_table_ref, "Column {i}: expected table reference {expected_table_ref:?}, got {actual_table_ref:?}");
-        
+        assert_eq!(
+            actual_table_ref, expected_table_ref,
+            "Column {i}: expected table reference {expected_table_ref:?}, got {actual_table_ref:?}"
+        );
+
         // Check field name
-        assert_eq!(actual_field_ref.name(), *expected_field_name,
-                   "Column {i}: expected field name '{expected_field_name}', got '{actual_field_ref}'");
+        assert_eq!(
+            actual_field_ref.name(),
+            *expected_field_name,
+            "Column {i}: expected field name '{expected_field_name}', got '{actual_field_ref}'"
+        );
     }
-    
+
     Ok(())
 }
 
@@ -682,7 +696,7 @@ async fn drop_with_periods() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch)?;
 
-    let df = ctx.table("t").await?.drop_columns(&["f.c1"])?;
+    let df = ctx.table("t").await?.drop_columns(&["\"f.c1\""])?;
 
     let df_results = df.collect().await?;
 
