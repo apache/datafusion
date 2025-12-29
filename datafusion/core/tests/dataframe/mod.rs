@@ -534,7 +534,8 @@ async fn drop_columns_with_nonexistent_columns() -> Result<()> {
 async fn drop_columns_with_empty_array() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
-    let t2 = t.drop_columns(&[])?;
+    let drop_columns = vec![] as Vec<&str>;
+    let t2 = t.drop_columns(&drop_columns)?;
     let plan = t2.logical_plan().clone();
 
     // build query using SQL
@@ -542,6 +543,35 @@ async fn drop_columns_with_empty_array() -> Result<()> {
         "SELECT c1,c2,c3,c4,c5,c6,c7,c8,c9,c10,c11,c12,c13 FROM aggregate_test_100",
     )
     .await?;
+
+    // the two plans should be identical
+    assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_qualified() -> Result<()> {
+    // build plan using Table API
+    let mut t = test_table().await?;
+    t = t.select_columns(&["c1", "c2", "c11"])?;
+    let mut t2 = test_table_with_name("another_table").await?;
+    t2 = t2.select_columns(&["c1", "c2", "c11"])?;
+    let mut t3 = t.join_on(
+        t2,
+        JoinType::Inner,
+        [col("aggregate_test_100.c1").eq(col("another_table.c1"))],
+    )?;
+    t3 = t3.drop_columns(&["another_table.c2", "another_table.c11"])?;
+    //t3 = t3.drop_columns_full(&["another_table.c2", "another_table.c11"])?;
+
+    let plan = t3.logical_plan().clone();
+
+    let sql = "SELECT aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c11, another_table.c1 FROM (SELECT c1, c2, c11 FROM aggregate_test_100) INNER JOIN (SELECT c1, c2, c11 FROM another_table) ON aggregate_test_100.c1 = another_table.c1";
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, "aggregate_test_100").await?;
+    register_aggregate_csv(&ctx, "another_table").await?;
+    let sql_plan = ctx.sql(sql).await?.into_unoptimized_plan();
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
