@@ -1262,7 +1262,6 @@ mod tests {
         Ok(())
     }
 
-
     #[test]
     fn test_spill_with_and_without_gc_comparison() -> Result<()> {
         let num_rows = 2000;
