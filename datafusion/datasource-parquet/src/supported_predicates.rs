@@ -152,11 +152,16 @@ mod tests {
         )]))
     }
 
+    /// Helper to verify a physical expression supports pushdown
+    fn assert_supports_pushdown(expr: &Arc<dyn PhysicalExpr>, msg: &str) {
+        assert!(expr.supports_list_pushdown(), "{msg}");
+        assert!(is_supported_scalar_function(expr.as_ref()));
+        assert!(supports_list_predicates(expr));
+    }
+
     #[test]
     fn test_array_has_all_supports_pushdown() {
         let schema = create_test_schema();
-
-        // Build array_has_all(tags, ['c'])
         let expr = array_has_all(
             col("tags"),
             make_array(vec![Expr::Literal(
@@ -164,29 +169,16 @@ mod tests {
                 None,
             )]),
         );
-
         let physical_expr = logical2physical(&expr, &schema);
-
-        // Verify the trait detects this as a supported function
-        assert!(
-            physical_expr.supports_list_pushdown(),
-            "array_has_all should support list pushdown"
-        );
-        assert!(
-            is_supported_scalar_function(physical_expr.as_ref()),
-            "array_has_all should be detected as supported scalar function"
-        );
-        assert!(
-            supports_list_predicates(&physical_expr),
-            "supports_list_predicates should return true for array_has_all"
+        assert_supports_pushdown(
+            &physical_expr,
+            "array_has_all should support list pushdown",
         );
     }
 
     #[test]
     fn test_array_has_any_supports_pushdown() {
         let schema = create_test_schema();
-
-        // Build array_has_any(tags, ['a', 'd'])
         let expr = array_has_any(
             col("tags"),
             make_array(vec![
@@ -194,48 +186,24 @@ mod tests {
                 Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
             ]),
         );
-
         let physical_expr = logical2physical(&expr, &schema);
-
-        // Verify the trait detects this as a supported function
-        assert!(
-            physical_expr.supports_list_pushdown(),
-            "array_has_any should support list pushdown"
-        );
-        assert!(
-            is_supported_scalar_function(physical_expr.as_ref()),
-            "array_has_any should be detected as supported scalar function"
-        );
-        assert!(
-            supports_list_predicates(&physical_expr),
-            "supports_list_predicates should return true for array_has_any"
+        assert_supports_pushdown(
+            &physical_expr,
+            "array_has_any should support list pushdown",
         );
     }
 
     #[test]
     fn test_array_has_supports_pushdown() {
         let schema = create_test_schema();
-
-        // Build array_has(tags, 'c')
         let expr = array_has(
             col("tags"),
             Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
         );
-
         let physical_expr = logical2physical(&expr, &schema);
-
-        // Verify the trait detects this as a supported function
-        assert!(
-            physical_expr.supports_list_pushdown(),
-            "array_has should support list pushdown"
-        );
-        assert!(
-            is_supported_scalar_function(physical_expr.as_ref()),
-            "array_has should be detected as supported scalar function"
-        );
-        assert!(
-            supports_list_predicates(&physical_expr),
-            "supports_list_predicates should return true for array_has"
+        assert_supports_pushdown(
+            &physical_expr,
+            "array_has should support list pushdown",
         );
     }
 
@@ -291,6 +259,36 @@ mod tests {
     mod physical_plan_tests {
         use super::*;
 
+        /// Helper to verify physical plan structure for array functions
+        fn verify_array_function_physical_plan(
+            physical_expr: &Arc<dyn PhysicalExpr>,
+            expected_name: &str,
+        ) {
+            let scalar_fn = physical_expr
+                .as_any()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .expect("Should be ScalarFunctionExpr");
+
+            assert_eq!(
+                scalar_fn.name(),
+                expected_name,
+                "Function name should be {expected_name}"
+            );
+
+            // Verify it has 2 arguments: the column and the array/value
+            assert_eq!(
+                scalar_fn.children().len(),
+                2,
+                "{expected_name} should have 2 arguments"
+            );
+
+            // Verify pushdown detection
+            assert!(
+                physical_expr.supports_list_pushdown(),
+                "{expected_name} physical expr should support pushdown"
+            );
+        }
+
         #[test]
         fn test_array_has_all_physical_plan() {
             let schema = create_test_schema();
@@ -308,31 +306,7 @@ mod tests {
             );
 
             let physical_expr = logical2physical(&expr, &schema);
-
-            // Verify the physical expression structure
-            let scalar_fn = physical_expr
-                .as_any()
-                .downcast_ref::<ScalarFunctionExpr>()
-                .expect("Should be ScalarFunctionExpr");
-
-            assert_eq!(
-                scalar_fn.name(),
-                "array_has_all",
-                "Function name should be array_has_all"
-            );
-
-            // Verify it has 2 arguments: the column and the array
-            assert_eq!(
-                scalar_fn.children().len(),
-                2,
-                "array_has_all should have 2 arguments"
-            );
-
-            // Verify pushdown detection
-            assert!(
-                physical_expr.supports_list_pushdown(),
-                "array_has_all physical expr should support pushdown"
-            );
+            verify_array_function_physical_plan(&physical_expr, "array_has_all");
         }
 
         #[test]
@@ -353,31 +327,7 @@ mod tests {
             );
 
             let physical_expr = logical2physical(&expr, &schema);
-
-            // Verify the physical expression structure
-            let scalar_fn = physical_expr
-                .as_any()
-                .downcast_ref::<ScalarFunctionExpr>()
-                .expect("Should be ScalarFunctionExpr");
-
-            assert_eq!(
-                scalar_fn.name(),
-                "array_has_any",
-                "Function name should be array_has_any"
-            );
-
-            // Verify it has 2 arguments: the column and the array
-            assert_eq!(
-                scalar_fn.children().len(),
-                2,
-                "array_has_any should have 2 arguments"
-            );
-
-            // Verify pushdown detection
-            assert!(
-                physical_expr.supports_list_pushdown(),
-                "array_has_any physical expr should support pushdown"
-            );
+            verify_array_function_physical_plan(&physical_expr, "array_has_any");
         }
 
         #[test]
@@ -391,78 +341,51 @@ mod tests {
             );
 
             let physical_expr = logical2physical(&expr, &schema);
-
-            // Verify the physical expression structure
-            let scalar_fn = physical_expr
-                .as_any()
-                .downcast_ref::<ScalarFunctionExpr>()
-                .expect("Should be ScalarFunctionExpr");
-
-            assert_eq!(
-                scalar_fn.name(),
-                "array_has",
-                "Function name should be array_has"
-            );
-
-            // Verify it has 2 arguments: the column and the value
-            assert_eq!(
-                scalar_fn.children().len(),
-                2,
-                "array_has should have 2 arguments"
-            );
-
-            // Verify pushdown detection
-            assert!(
-                physical_expr.supports_list_pushdown(),
-                "array_has physical expr should support pushdown"
-            );
+            verify_array_function_physical_plan(&physical_expr, "array_has");
         }
 
         #[test]
         fn test_physical_plan_display() {
             let schema = create_test_schema();
 
-            // Test array_has_all display
-            let expr = array_has_all(
-                col("tags"),
-                make_array(vec![Expr::Literal(
-                    ScalarValue::Utf8(Some("test".to_string())),
-                    None,
-                )]),
-            );
-            let physical_expr = logical2physical(&expr, &schema);
-            let display = format!("{physical_expr:?}");
-            assert!(
-                display.contains("array_has_all"),
-                "Display should contain function name: {display}"
-            );
+            let test_cases = vec![
+                (
+                    array_has_all(
+                        col("tags"),
+                        make_array(vec![Expr::Literal(
+                            ScalarValue::Utf8(Some("test".to_string())),
+                            None,
+                        )]),
+                    ),
+                    "array_has_all",
+                ),
+                (
+                    array_has_any(
+                        col("tags"),
+                        make_array(vec![Expr::Literal(
+                            ScalarValue::Utf8(Some("test".to_string())),
+                            None,
+                        )]),
+                    ),
+                    "array_has_any",
+                ),
+                (
+                    array_has(
+                        col("tags"),
+                        Expr::Literal(ScalarValue::Utf8(Some("test".to_string())), None),
+                    ),
+                    "array_has",
+                ),
+            ];
 
-            // Test array_has_any display
-            let expr = array_has_any(
-                col("tags"),
-                make_array(vec![Expr::Literal(
-                    ScalarValue::Utf8(Some("test".to_string())),
-                    None,
-                )]),
-            );
-            let physical_expr = logical2physical(&expr, &schema);
-            let display = format!("{physical_expr:?}");
-            assert!(
-                display.contains("array_has_any"),
-                "Display should contain function name: {display}"
-            );
-
-            // Test array_has display
-            let expr = array_has(
-                col("tags"),
-                Expr::Literal(ScalarValue::Utf8(Some("test".to_string())), None),
-            );
-            let physical_expr = logical2physical(&expr, &schema);
-            let display = format!("{physical_expr:?}");
-            assert!(
-                display.contains("array_has"),
-                "Display should contain function name: {display}"
-            );
+            for (expr, expected_fn_name) in test_cases {
+                let physical_expr = logical2physical(&expr, &schema);
+                let display = format!("{physical_expr:?}");
+                assert!(
+                    display.contains(expected_fn_name),
+                    "Display should contain function name {expected_fn_name}: {display}"
+                );
+            }
         }
 
         #[test]
