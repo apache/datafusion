@@ -2527,10 +2527,12 @@ version = "51.0.0"
 dependencies = [
  "ahash 0.8.12",
  "arrow",
+ "chrono",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
  "itertools 0.14.0",
+ "parking_lot",
 ]
 
 [[package]]
