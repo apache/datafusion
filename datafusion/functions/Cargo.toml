@@ -257,5 +257,15 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
+name = "starts_with"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "ends_with"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "crypto"
 required-features = ["crypto_expressions"]

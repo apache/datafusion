@@ -75,7 +75,6 @@ pub mod config;
 /// we know the [`Session`] lifetimes are valid.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub(crate) struct FFI_SessionRef {
     session_id: unsafe extern "C" fn(&Self) -> RStr,
 

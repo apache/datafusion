@@ -34,7 +34,6 @@ use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 /// A stable struct for sharing [`CatalogProviderList`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_CatalogProviderList {
     /// Register a catalog
     pub register_catalog: unsafe extern "C" fn(
