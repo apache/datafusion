@@ -284,4 +284,236 @@ mod tests {
             "supports_list_predicates should recursively find array_has_all"
         );
     }
+
+    /// Tests that demonstrate the physical plan structure for array functions.
+    /// These show that the functions are correctly represented as ScalarFunctionExpr
+    /// and can be detected for pushdown.
+    mod physical_plan_tests {
+        use super::*;
+
+        #[test]
+        fn test_array_has_all_physical_plan() {
+            let schema = create_test_schema();
+
+            // Build array_has_all(tags, ['rust', 'performance'])
+            let expr = array_has_all(
+                col("tags"),
+                make_array(vec![
+                    Expr::Literal(ScalarValue::Utf8(Some("rust".to_string())), None),
+                    Expr::Literal(
+                        ScalarValue::Utf8(Some("performance".to_string())),
+                        None,
+                    ),
+                ]),
+            );
+
+            let physical_expr = logical2physical(&expr, &schema);
+
+            // Verify the physical expression structure
+            let scalar_fn = physical_expr
+                .as_any()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .expect("Should be ScalarFunctionExpr");
+
+            assert_eq!(
+                scalar_fn.name(),
+                "array_has_all",
+                "Function name should be array_has_all"
+            );
+
+            // Verify it has 2 arguments: the column and the array
+            assert_eq!(
+                scalar_fn.children().len(),
+                2,
+                "array_has_all should have 2 arguments"
+            );
+
+            // Verify pushdown detection
+            assert!(
+                physical_expr.supports_list_pushdown(),
+                "array_has_all physical expr should support pushdown"
+            );
+        }
+
+        #[test]
+        fn test_array_has_any_physical_plan() {
+            let schema = create_test_schema();
+
+            // Build array_has_any(tags, ['python', 'javascript', 'go'])
+            let expr = array_has_any(
+                col("tags"),
+                make_array(vec![
+                    Expr::Literal(ScalarValue::Utf8(Some("python".to_string())), None),
+                    Expr::Literal(
+                        ScalarValue::Utf8(Some("javascript".to_string())),
+                        None,
+                    ),
+                    Expr::Literal(ScalarValue::Utf8(Some("go".to_string())), None),
+                ]),
+            );
+
+            let physical_expr = logical2physical(&expr, &schema);
+
+            // Verify the physical expression structure
+            let scalar_fn = physical_expr
+                .as_any()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .expect("Should be ScalarFunctionExpr");
+
+            assert_eq!(
+                scalar_fn.name(),
+                "array_has_any",
+                "Function name should be array_has_any"
+            );
+
+            // Verify it has 2 arguments: the column and the array
+            assert_eq!(
+                scalar_fn.children().len(),
+                2,
+                "array_has_any should have 2 arguments"
+            );
+
+            // Verify pushdown detection
+            assert!(
+                physical_expr.supports_list_pushdown(),
+                "array_has_any physical expr should support pushdown"
+            );
+        }
+
+        #[test]
+        fn test_array_has_physical_plan() {
+            let schema = create_test_schema();
+
+            // Build array_has(tags, 'rust')
+            let expr = array_has(
+                col("tags"),
+                Expr::Literal(ScalarValue::Utf8(Some("rust".to_string())), None),
+            );
+
+            let physical_expr = logical2physical(&expr, &schema);
+
+            // Verify the physical expression structure
+            let scalar_fn = physical_expr
+                .as_any()
+                .downcast_ref::<ScalarFunctionExpr>()
+                .expect("Should be ScalarFunctionExpr");
+
+            assert_eq!(
+                scalar_fn.name(),
+                "array_has",
+                "Function name should be array_has"
+            );
+
+            // Verify it has 2 arguments: the column and the value
+            assert_eq!(
+                scalar_fn.children().len(),
+                2,
+                "array_has should have 2 arguments"
+            );
+
+            // Verify pushdown detection
+            assert!(
+                physical_expr.supports_list_pushdown(),
+                "array_has physical expr should support pushdown"
+            );
+        }
+
+        #[test]
+        fn test_physical_plan_display() {
+            let schema = create_test_schema();
+
+            // Test array_has_all display
+            let expr = array_has_all(
+                col("tags"),
+                make_array(vec![Expr::Literal(
+                    ScalarValue::Utf8(Some("test".to_string())),
+                    None,
+                )]),
+            );
+            let physical_expr = logical2physical(&expr, &schema);
+            let display = format!("{physical_expr:?}");
+            assert!(
+                display.contains("array_has_all"),
+                "Display should contain function name: {display}"
+            );
+
+            // Test array_has_any display
+            let expr = array_has_any(
+                col("tags"),
+                make_array(vec![Expr::Literal(
+                    ScalarValue::Utf8(Some("test".to_string())),
+                    None,
+                )]),
+            );
+            let physical_expr = logical2physical(&expr, &schema);
+            let display = format!("{physical_expr:?}");
+            assert!(
+                display.contains("array_has_any"),
+                "Display should contain function name: {display}"
+            );
+
+            // Test array_has display
+            let expr = array_has(
+                col("tags"),
+                Expr::Literal(ScalarValue::Utf8(Some("test".to_string())), None),
+            );
+            let physical_expr = logical2physical(&expr, &schema);
+            let display = format!("{physical_expr:?}");
+            assert!(
+                display.contains("array_has"),
+                "Display should contain function name: {display}"
+            );
+        }
+
+        #[test]
+        fn test_complex_predicate_with_array_functions() {
+            let schema = create_test_schema();
+
+            // Build a more complex expression:
+            // array_has_all(tags, ['rust']) OR array_has_any(tags, ['python', 'go'])
+            use datafusion_expr::Operator;
+            let left = array_has_all(
+                col("tags"),
+                make_array(vec![Expr::Literal(
+                    ScalarValue::Utf8(Some("rust".to_string())),
+                    None,
+                )]),
+            );
+            let right = array_has_any(
+                col("tags"),
+                make_array(vec![
+                    Expr::Literal(ScalarValue::Utf8(Some("python".to_string())), None),
+                    Expr::Literal(ScalarValue::Utf8(Some("go".to_string())), None),
+                ]),
+            );
+            let expr = Expr::BinaryExpr(datafusion_expr::BinaryExpr {
+                left: Box::new(left),
+                op: Operator::Or,
+                right: Box::new(right),
+            });
+
+            let physical_expr = logical2physical(&expr, &schema);
+
+            // Verify that supports_list_predicates recursively finds the supported functions
+            assert!(
+                supports_list_predicates(&physical_expr),
+                "Complex predicate with array functions should support pushdown"
+            );
+
+            // Verify the top-level is a BinaryExpr
+            assert_eq!(
+                physical_expr.children().len(),
+                2,
+                "OR expression should have 2 children"
+            );
+
+            // Verify both children are supported
+            for child in physical_expr.children() {
+                assert!(
+                    supports_list_predicates(child),
+                    "Each child should be a supported array function"
+                );
+            }
+        }
+    }
 }
