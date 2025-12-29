@@ -923,12 +923,42 @@ select round(a), round(b), round(c) from small_floats;
 
 # round with too large
 #  max Int32 is 2147483647
-query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483648 to type Int32
+query error Arrow error: Cast error: Can't cast value 2147483648 to type Int32
 select round(3.14, 2147483648);
 
 # with array
-query error DataFusion error: Execution error: Invalid values for decimal places: Cast error: Can't cast value 2147483649 to type Int32
+query error Arrow error: Cast error: Can't cast value 2147483649 to type Int32
 select round(column1, column2) from values (3.14, 2), (3.14, 3), (3.14, 2147483649);
+
+# round decimal should not cast to float
+query TR
+select arrow_typeof(round('173975140545.855'::decimal(38,10), 2)),
+       round('173975140545.855'::decimal(38,10), 2);
+----
+Decimal128(38, 10) 173975140545.86
+
+# round decimal ties away from zero
+query RRRR
+select round('1.5'::decimal(2,1), 0),
+       round('-1.5'::decimal(2,1), 0),
+       round('2.5'::decimal(2,1), 0),
+       round('-2.5'::decimal(2,1), 0);
+----
+2 -2 3 -3
+
+# round decimal negative places (left of decimal)
+query TR
+select arrow_typeof(round('12345.55'::decimal(10,2), -1)),
+       round('12345.55'::decimal(10,2), -1);
+----
+Decimal128(10, 2) 12350
+
+# round decimal256 keeps decimals
+query TR
+select arrow_typeof(round('1234.5678'::decimal(50,4), 2)),
+       round('1234.5678'::decimal(50,4), 2);
+----
+Decimal256(50, 4) 1234.57
 
 
 ## signum

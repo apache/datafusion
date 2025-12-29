@@ -29,6 +29,7 @@
 //! - `dataframe` — run a query using a DataFrame API against parquet files, csv files, and in-memory data, including multiple subqueries
 //! - `deserialize_to_struct` — convert query results (Arrow ArrayRefs) into Rust structs
 
+mod cache_factory;
 mod dataframe;
 mod deserialize_to_struct;
 
@@ -42,6 +43,7 @@ enum ExampleKind {
     All,
     Dataframe,
     DeserializeToStruct,
+    CacheFactory,
 }
 
 impl ExampleKind {
@@ -64,6 +66,9 @@ impl ExampleKind {
             }
             ExampleKind::DeserializeToStruct => {
                 deserialize_to_struct::deserialize_to_struct().await?;
+            }
+            ExampleKind::CacheFactory => {
+                cache_factory::cache_dataframe_with_custom_logic().await?;
             }
         }
         Ok(())
