@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::make_scalar_function_columnar;
 use arrow::array::{Array, ArrayRef, Scalar};
 use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
@@ -89,7 +88,7 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function_columnar(contains)(&args.args)
+        contains(args.args.as_slice())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -97,10 +96,7 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 }
 
-/// Converts a `ColumnarValue` to a value that implements `Datum` for use with arrow kernels.
-/// If the value is a scalar, wraps the single-element array in `Scalar` to signal to arrow
-/// that this is a scalar value (enabling optimized code paths).
-fn columnar_to_datum(value: &ColumnarValue) -> Result<(ArrayRef, bool)> {
+fn to_array(value: &ColumnarValue) -> Result<(ArrayRef, bool)> {
     match value {
         ColumnarValue::Array(array) => Ok((Arc::clone(array), false)),
         ColumnarValue::Scalar(scalar) => Ok((scalar.to_array()?, true)),
@@ -139,8 +135,8 @@ fn call_arrow_contains(
 
 /// use `arrow::compute::contains` to do the calculation for contains
 fn contains(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let (haystack, haystack_is_scalar) = columnar_to_datum(&args[0])?;
-    let (needle, needle_is_scalar) = columnar_to_datum(&args[1])?;
+    let (haystack, haystack_is_scalar) = to_array(&args[0])?;
+    let (needle, needle_is_scalar) = to_array(&args[1])?;
 
     if let Some(coercion_data_type) =
         string_coercion(haystack.data_type(), needle.data_type()).or_else(|| {
