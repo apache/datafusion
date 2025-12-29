@@ -274,7 +274,7 @@ struct PushdownChecker<'schema> {
     /// Indices into the file schema of columns required to evaluate the expression.
     required_columns: BTreeSet<usize>,
     /// Tracks the nested column behavior found during traversal.
-    nested_behavior: NestedBehavior,
+    nested_behavior: NestedColumnSupport,
     /// Whether nested list columns are supported by the predicate semantics.
     allow_list_columns: bool,
     /// The Arrow schema of the parquet file.
@@ -287,7 +287,7 @@ impl<'schema> PushdownChecker<'schema> {
             non_primitive_columns: false,
             projected_columns: false,
             required_columns: BTreeSet::default(),
-            nested_behavior: NestedBehavior::PrimitiveOnly,
+            nested_behavior: NestedColumnSupport::PrimitiveOnly,
             allow_list_columns,
             file_schema,
         }
@@ -311,14 +311,14 @@ impl<'schema> PushdownChecker<'schema> {
 
                 if is_supported {
                     // Update to ListsSupported if we haven't found unsupported types yet
-                    if self.nested_behavior == NestedBehavior::PrimitiveOnly {
-                        self.nested_behavior = NestedBehavior::ListsSupported;
+                    if self.nested_behavior == NestedColumnSupport::PrimitiveOnly {
+                        self.nested_behavior = NestedColumnSupport::ListsSupported;
                     }
                 } else {
                     // Block pushdown for unsupported nested types:
                     // - Structs (regardless of predicate support)
                     // - Lists without supported predicates
-                    self.nested_behavior = NestedBehavior::Unsupported;
+                    self.nested_behavior = NestedColumnSupport::Unsupported;
                     self.non_primitive_columns = true;
                     return Some(TreeNodeRecursion::Jump);
                 }
@@ -357,7 +357,7 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
 /// This enum makes explicit the different states a predicate can be in
 /// with respect to nested column handling during Parquet decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NestedBehavior {
+enum NestedColumnSupport {
     /// Expression references only primitive (non-nested) columns.
     /// These can always be pushed down to the Parquet decoder.
     PrimitiveOnly,
@@ -374,7 +374,7 @@ enum NestedBehavior {
 #[derive(Debug)]
 struct PushdownColumns {
     required_columns: BTreeSet<usize>,
-    nested: NestedBehavior,
+    nested: NestedColumnSupport,
 }
 
 /// Checks if a given expression can be pushed down to the parquet decoder.
@@ -401,10 +401,10 @@ fn pushdown_columns(
 fn leaf_indices_for_roots(
     root_indices: &[usize],
     schema_descr: &SchemaDescriptor,
-    nested: NestedBehavior,
+    nested: NestedColumnSupport,
 ) -> Vec<usize> {
     // For primitive-only columns, root indices ARE the leaf indices
-    if nested == NestedBehavior::PrimitiveOnly {
+    if nested == NestedColumnSupport::PrimitiveOnly {
         return root_indices.to_vec();
     }
 
