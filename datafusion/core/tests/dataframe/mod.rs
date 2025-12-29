@@ -579,6 +579,70 @@ async fn drop_columns_qualified() -> Result<()> {
 }
 
 #[tokio::test]
+async fn drop_columns_qualified_find_qualified() -> Result<()> {
+    // build plan using Table API
+    let mut t = test_table().await?;
+    t = t.select_columns(&["c1", "c2", "c11"])?;
+    let mut t2 = test_table_with_name("another_table").await?;
+    t2 = t2.select_columns(&["c1", "c2", "c11"])?;
+    let mut t3 = t.join_on(
+        t2.clone(),
+        JoinType::Inner,
+        [col("aggregate_test_100.c1").eq(col("another_table.c1"))],
+    )?;
+    t3 = t3.drop_columns(&t2.find_qualified_columns(&["c2", "c11"])?)?;
+
+    let plan = t3.logical_plan().clone();
+
+    let sql = "SELECT aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c11, another_table.c1 FROM (SELECT c1, c2, c11 FROM aggregate_test_100) INNER JOIN (SELECT c1, c2, c11 FROM another_table) ON aggregate_test_100.c1 = another_table.c1";
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, "aggregate_test_100").await?;
+    register_aggregate_csv(&ctx, "another_table").await?;
+    let sql_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+
+    // the two plans should be identical
+    assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_find_qualified_names() -> Result<()> {
+    let t = test_table().await?;
+    let column_names = ["c1", "c2", "c3"];
+    let columns = t.find_qualified_columns(&column_names)?;
+    
+    // Expected results for each column
+    let binding = TableReference::bare("aggregate_test_100");
+    let expected = vec![
+        (Some(&binding), "c1"),
+        (Some(&binding), "c2"),
+        (Some(&binding), "c3"),
+    ];
+    
+    // Verify we got the expected number of results
+    assert_eq!(columns.len(), expected.len(), "Expected {} columns, got {}", expected.len(), columns.len());
+    
+    // Iterate over the results and check each one individually
+    for (i, (actual, expected)) in columns.iter().zip(expected.iter()).enumerate() {
+        let (actual_table_ref, actual_field_ref) = actual;
+        let (expected_table_ref, expected_field_name) = expected;
+        
+        // Check table reference
+        assert_eq!(actual_table_ref, expected_table_ref,
+                   "Column {}: expected table reference {:?}, got {:?}", 
+                   i, expected_table_ref, actual_table_ref);
+        
+        // Check field name
+        assert_eq!(actual_field_ref.name(), *expected_field_name,
+                   "Column {}: expected field name '{}', got '{}'", 
+                   i, expected_field_name, actual_field_ref.name());
+    }
+    
+    Ok(())
+}
+
+#[tokio::test]
 async fn drop_with_quotes() -> Result<()> {
     // define data with a column name that has a "." in it:
     let array1: Int32Array = [1, 10].into_iter().collect();
