@@ -3514,7 +3514,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
 }
 
 #[tokio::test]
-async fn test_hashjoin_dynamic_filter_pushdown_not_used() {
+async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 
