@@ -1800,8 +1800,8 @@ mod tests {
     use arrow::array::{LargeListArray, ListArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
+    use datafusion_common::TableReference;
     use datafusion_common::datatype::DataTypeExt;
-    use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
@@ -1814,7 +1814,7 @@ mod tests {
     use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
-    use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::expr_fn::make_array;
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
@@ -2265,9 +2265,9 @@ mod tests {
                 r#"UNNEST("table".array_col)"#,
             ),
             (make_array(vec![lit(1), lit(2), lit(3)]), "[1, 2, 3]"),
-            (array_element(col("array_col"), lit(1)), "array_col[1]"),
+            (get_field(col("array_col"), 1), "array_col[1]"),
             (
-                array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+                get_field(make_array(vec![lit(1), lit(2), lit(3)]), 1),
                 "[1, 2, 3][1]",
             ),
             (

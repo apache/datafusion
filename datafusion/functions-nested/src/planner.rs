@@ -17,7 +17,6 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, Result, plan_err, utils::list_ndims};
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::expr::ScalarFunction;
@@ -35,11 +34,11 @@ use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use std::sync::Arc;
 
+use crate::extract::array_slice;
 use crate::map::map_udf;
 use crate::{
     array_has::{array_has_all, array_has_udf},
     expr_fn::{array_append, array_concat, array_prepend},
-    extract::{array_element, array_slice},
     make_array::make_array,
 };
 
@@ -142,7 +141,7 @@ impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
-        schema: &DFSchema,
+        _schema: &DFSchema,
     ) -> Result<PlannerResult<RawFieldAccessExpr>> {
         let RawFieldAccessExpr { expr, field_access } = expr;
 
@@ -154,7 +153,8 @@ impl ExprPlanner for FieldAccessPlanner {
             GetFieldAccess::NamedStructField { name } => {
                 Ok(PlannerResult::Planned(get_field(expr, name)))
             }
-            // expr[idx] ==> array_element(expr, idx)
+            // expr[idx] ==> get_field(expr, idx)
+            // Unified field access: get_field handles both struct fields and array indices
             GetFieldAccess::ListIndex { key: index } => {
                 match expr {
                     // Special case for array_agg(expr)[index] to NTH_VALUE(expr, index)
@@ -178,19 +178,13 @@ impl ExprPlanner for FieldAccessPlanner {
                             null_treatment,
                         )),
                     )),
-                    // special case for map access with
-                    _ if matches!(expr.get_type(schema)?, DataType::Map(_, _)) => {
-                        Ok(PlannerResult::Planned(Expr::ScalarFunction(
-                            ScalarFunction::new_udf(
-                                get_field_inner(),
-                                vec![expr, *index],
-                            ),
-                        )))
-                    }
-                    _ => Ok(PlannerResult::Planned(array_element(expr, *index))),
+                    // All other cases (arrays, maps, etc.) use get_field
+                    _ => Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                        ScalarFunction::new_udf(get_field_inner(), vec![expr, *index]),
+                    ))),
                 }
             }
-            // expr[start, stop, stride] ==> array_slice(expr, start, stop, stride)
+            // expr[start:stop:stride] ==> array_slice(expr, start, stop, stride)
             GetFieldAccess::ListRange {
                 start,
                 stop,

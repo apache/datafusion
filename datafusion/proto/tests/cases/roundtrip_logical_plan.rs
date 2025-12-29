@@ -918,7 +918,7 @@ async fn roundtrip_expr_api() -> Result<()> {
             make_array(vec![lit(1), lit(4)]),
         ),
         array_resize(make_array(vec![lit(1), lit(2), lit(3)]), lit(5), lit(0)),
-        array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(2)),
+        get_field(make_array(vec![lit(1), lit(2), lit(3)]), 2),
         array_slice(
             make_array(vec![lit(1), lit(2), lit(3)]),
             lit(1),

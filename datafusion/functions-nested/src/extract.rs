@@ -17,6 +17,9 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
+// Allow deprecated items within this module since we're providing backwards compatibility
+#![allow(deprecated)]
+
 use arrow::array::{
     Array, ArrayRef, Capacities, GenericListArray, GenericListViewArray, Int64Array,
     MutableArrayData, NullArray, NullBufferBuilder, OffsetSizeTrait,
@@ -44,6 +47,7 @@ use datafusion_expr::{
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::core::get_field as get_field_udf;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -51,13 +55,14 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
-make_udf_expr_and_func!(
-    ArrayElement,
-    array_element,
-    array element,
-    "extracts the element with the index n from the array.",
-    array_element_udf
-);
+pub fn array_element(array: Expr, element: Expr) -> Expr {
+    Expr::ScalarFunction(datafusion_expr::expr::ScalarFunction::new_udf(
+        get_field_udf(),
+        vec![array, element],
+    ))
+}
+
+create_func!(ArrayElement, array_element_udf);
 
 create_func!(ArraySlice, array_slice_udf);
 
@@ -87,7 +92,7 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Extracts the element with the index n from the array.",
+    description = "Extracts the element with the index n from the array. Note: `get_field` now handles array element access and is preferred for mixed struct/array access patterns.",
     syntax_example = "array_element(array, index)",
     sql_example = r#"```sql
 > select array_element([1, 2, 3, 4], 3);
@@ -107,6 +112,7 @@ make_udf_expr_and_func!(
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
+#[deprecated(since = "52.0.0", note = "Use get_field instead")]
 pub struct ArrayElement {
     signature: Signature,
     aliases: Vec<String>,
@@ -283,7 +289,6 @@ where
     Ok(arrow::array::make_array(data))
 }
 
-#[doc = "returns a slice of the array."]
 pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) -> Expr {
     let args = match stride {
         Some(stride) => vec![array, begin, end, stride],
@@ -294,7 +299,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns a slice of the array based on 1-indexed start and end positions.",
+    description = "Returns a slice of the array based on 1-indexed start and end positions. Note: `get_field` now handles array slice access and is preferred for mixed struct/array access patterns.",
     syntax_example = "array_slice(array, begin, end)",
     sql_example = r#"```sql
 > select array_slice([1, 2, 3, 4, 5, 6, 7, 8], 3, 6);
@@ -322,6 +327,7 @@ pub fn array_slice(array: Expr, begin: Expr, end: Expr, stride: Option<Expr>) ->
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
+#[deprecated(since = "52.0.0", note = "Use get_field_slice instead")]
 pub(super) struct ArraySlice {
     signature: Signature,
     aliases: Vec<String>,
