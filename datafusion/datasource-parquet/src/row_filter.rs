@@ -80,14 +80,14 @@ use parquet::schema::types::SchemaDescriptor;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::ScalarFunctionExpr;
-use datafusion_physical_expr::expressions::{Column, IsNotNullExpr, IsNullExpr};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
+use super::supported_predicates::supports_list_predicates;
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
 /// row-level filtering during parquet decoding.
@@ -196,7 +196,6 @@ pub(crate) struct FilterCandidate {
 #[derive(Debug, Clone)]
 struct ProjectionColumns {
     /// Root column indices in the Arrow schema.
-    #[allow(dead_code)]
     root_indices: Vec<usize>,
     /// Leaf column indices in the Parquet schema descriptor.
     leaf_indices: Vec<usize>,
@@ -302,14 +301,22 @@ impl<'schema> PushdownChecker<'schema> {
             if DataType::is_nested(self.file_schema.field(idx).data_type()) {
                 self.contains_nested = true;
 
-                if !self.allow_list_columns
-                    || !matches!(
-                        self.file_schema.field(idx).data_type(),
-                        DataType::List(_)
-                            | DataType::LargeList(_)
-                            | DataType::FixedSizeList(_, _)
-                    )
-                {
+                // Check if this is a list type
+                let is_list = matches!(
+                    self.file_schema.field(idx).data_type(),
+                    DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::FixedSizeList(_, _)
+                );
+
+                // List columns are only supported if the expression contains
+                // supported list predicates (e.g., array_has_all)
+                let is_supported = self.allow_list_columns && is_list;
+
+                if !is_supported {
+                    // Block pushdown for unsupported nested types:
+                    // - Structs (regardless of predicate support)
+                    // - Lists without supported predicates
                     self.non_primitive_columns = true;
                     return Some(TreeNodeRecursion::Jump);
                 }
@@ -347,26 +354,6 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
 struct PushdownColumns {
     required_columns: BTreeSet<usize>,
     contains_nested: bool,
-}
-
-/// Checks whether the given physical expression contains a supported nested
-/// predicate (for example, `array_has_all`).
-fn supports_list_predicates(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    if expr.as_any().downcast_ref::<IsNullExpr>().is_some()
-        || expr.as_any().downcast_ref::<IsNotNullExpr>().is_some()
-    {
-        return true;
-    }
-
-    if let Some(fun) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-        if matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any") {
-            return true;
-        }
-    }
-
-    expr.children()
-        .iter()
-        .any(|child| supports_list_predicates(child))
 }
 
 /// Checks if a given expression can be pushed down to the parquet decoder.
@@ -706,6 +693,43 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn mixed_primitive_and_struct_prevents_pushdown() {
+        // Even when a predicate contains both primitive and unsupported nested columns,
+        // the entire predicate should not be pushed down because the struct column
+        // cannot be evaluated during Parquet decoding.
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "struct_col",
+                DataType::Struct(
+                    vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+                ),
+                true,
+            ),
+            Field::new("int_col", DataType::Int32, false),
+        ]));
+
+        // Expression: (struct_col IS NOT NULL) AND (int_col = 5)
+        // Even though int_col is primitive, the presence of struct_col in the
+        // conjunction should prevent pushdown of the entire expression.
+        let expr = col("struct_col")
+            .is_not_null()
+            .and(col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None)));
+        let expr = logical2physical(&expr, &table_schema);
+
+        // The entire expression should not be pushed down
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+
+        // However, just the int_col predicate alone should be pushable
+        let expr_int_only =
+            col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let expr_int_only = logical2physical(&expr_int_only, &table_schema);
+        assert!(can_expr_be_pushed_down_with_schemas(
+            &expr_int_only,
+            &table_schema
+        ));
     }
 
     #[test]
