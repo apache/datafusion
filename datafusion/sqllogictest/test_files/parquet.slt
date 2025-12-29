@@ -928,3 +928,145 @@ DROP TABLE sorted_inferred;
 
 statement ok
 DROP TABLE ordering_src;
+
+###################
+# Test: DESC ordering inference from Parquet sorting_columns metadata
+###################
+
+statement ok
+CREATE TABLE ordering_desc_src AS VALUES (5, 50), (4, 40), (3, 30), (2, 20), (1, 10);
+
+query I
+COPY (SELECT column1 as a, column2 as b FROM ordering_desc_src ORDER BY a DESC NULLS LAST)
+TO 'test_files/scratch/parquet/ordering_desc.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE sorted_desc (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_desc.parquet';
+
+# Verify DESC ordering is inferred - no SortExec needed
+query TT
+EXPLAIN SELECT a, b FROM sorted_desc ORDER BY a DESC NULLS LAST;
+----
+logical_plan
+01)Sort: sorted_desc.a DESC NULLS LAST
+02)--TableScan: sorted_desc projection=[a, b]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/ordering_desc.parquet]]}, projection=[a, b], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE sorted_desc;
+
+statement ok
+DROP TABLE ordering_desc_src;
+
+###################
+# Test: Reverse ordering - file is DESC but query wants ASC
+# Ordering is inferred with reverse_order, but SortExec is still needed
+###################
+
+statement ok
+CREATE TABLE ordering_reverse_src AS VALUES (5, 50), (4, 40), (3, 30), (2, 20), (1, 10);
+
+query I
+COPY (SELECT column1 as a, column2 as b FROM ordering_reverse_src ORDER BY a DESC NULLS LAST)
+TO 'test_files/scratch/parquet/ordering_reverse.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE sorted_reverse (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_reverse.parquet';
+
+# Query wants ASC but file is DESC - ordering is inferred with reverse_order, SortExec preserved
+query TT
+EXPLAIN SELECT a, b FROM sorted_reverse ORDER BY a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: sorted_reverse.a ASC NULLS FIRST
+02)--TableScan: sorted_reverse projection=[a, b]
+physical_plan
+01)SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/ordering_reverse.parquet]]}, projection=[a, b], file_type=parquet, reverse_row_groups=true
+
+statement ok
+DROP TABLE sorted_reverse;
+
+statement ok
+DROP TABLE ordering_reverse_src;
+
+###################
+# Test: Multi-column ordering inference from Parquet sorting_columns metadata
+###################
+
+statement ok
+CREATE TABLE ordering_multi_src AS VALUES (1, 10, 100), (1, 20, 200), (2, 10, 300), (2, 20, 400);
+
+query I
+COPY (SELECT column1 as a, column2 as b, column3 as c FROM ordering_multi_src ORDER BY a ASC NULLS FIRST, b ASC NULLS FIRST)
+TO 'test_files/scratch/parquet/ordering_multi.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE sorted_multi (a INT, b INT, c INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_multi.parquet';
+
+# Verify multi-column ordering is inferred - no SortExec needed
+query TT
+EXPLAIN SELECT a, b, c FROM sorted_multi ORDER BY a ASC NULLS FIRST, b ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: sorted_multi.a ASC NULLS FIRST, sorted_multi.b ASC NULLS FIRST
+02)--TableScan: sorted_multi projection=[a, b, c]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/ordering_multi.parquet]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC], file_type=parquet
+
+statement ok
+DROP TABLE sorted_multi;
+
+statement ok
+DROP TABLE ordering_multi_src;
+
+###################
+# Test: Files with no ordering metadata should not infer ordering
+###################
+
+statement ok
+CREATE TABLE no_ordering_src AS VALUES (3, 30), (1, 10), (2, 20);
+
+# Write Parquet WITHOUT ORDER BY - no sorting_columns metadata
+query I
+COPY (SELECT column1 as a, column2 as b FROM no_ordering_src)
+TO 'test_files/scratch/parquet/no_ordering.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE no_ordering (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/no_ordering.parquet';
+
+# Verify NO ordering is inferred - SortExec IS required
+query TT
+EXPLAIN SELECT a, b FROM no_ordering ORDER BY a ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: no_ordering.a ASC NULLS FIRST
+02)--TableScan: no_ordering projection=[a, b]
+physical_plan
+01)SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/no_ordering.parquet]]}, projection=[a, b], file_type=parquet
+
+statement ok
+DROP TABLE no_ordering;
+
+statement ok
+DROP TABLE no_ordering_src;

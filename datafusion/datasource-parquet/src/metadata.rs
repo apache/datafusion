@@ -218,7 +218,7 @@ impl<'a> DFParquetMetadata<'a> {
     /// extracting ordering, as it only fetches the metadata once.
     ///
     /// # Returns
-    /// A tuple of (Statistics, Option<LexOrdering>) where the ordering is `None` if:
+    /// A tuple of (Statistics, `Option<LexOrdering>`) where the ordering is `None` if:
     /// - No row groups have sorting_columns
     /// - Row groups have inconsistent sorting_columns
     /// - Sorting columns cannot be mapped to the Arrow schema
@@ -578,7 +578,7 @@ pub(crate) fn sort_expr_to_sorting_column(
     })
 }
 
-/// Convert a LexOrdering to Vec<SortingColumn> for Parquet.
+/// Convert a LexOrdering to `Vec<SortingColumn>` for Parquet.
 ///
 /// Returns `Err` if any expression is not a simple column reference.
 pub(crate) fn lex_ordering_to_sorting_columns(
