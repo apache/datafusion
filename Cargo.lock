@@ -2531,6 +2531,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.16.1",
+ "indexmap 2.12.1",
  "itertools 0.14.0",
  "parking_lot",
 ]

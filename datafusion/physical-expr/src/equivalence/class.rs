@@ -308,16 +308,6 @@ pub struct EquivalenceGroup {
     classes: Vec<EquivalenceClass>,
 }
 
-impl Debug for EquivalenceGroup {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-
-        f.debug_struct("EquivalenceGroup")
-            .field("map", &self.map)
-            .field("classes", &self.classes)
-            .finish()
-    }
-}
-
 impl EquivalenceGroup {
     /// Creates an equivalence group from the given equivalence classes.
     pub fn new(classes: impl IntoIterator<Item = EquivalenceClass>) -> Self {
