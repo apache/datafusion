@@ -194,6 +194,7 @@ pub(crate) struct FilterCandidate {
 
 /// Tracks the projection of an expression in both root and leaf coordinates.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), expect(dead_code))]
 struct ProjectionColumns {
     /// Root column indices in the Arrow schema.
     root_indices: Vec<usize>,
@@ -240,7 +241,7 @@ impl FilterCandidateBuilder {
         let leaf_indices = leaf_indices_for_roots(
             &root_indices,
             metadata.file_metadata().schema_descr(),
-            required_columns.contains_nested,
+            required_columns.nested,
         );
 
         let projected_schema = Arc::new(self.file_schema.project(&root_indices)?);
@@ -275,8 +276,8 @@ struct PushdownChecker<'schema> {
     projected_columns: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
     required_columns: BTreeSet<usize>,
-    /// Does this expression reference any nested columns?
-    contains_nested: bool,
+    /// Tracks the nested column behavior found during traversal.
+    nested_behavior: NestedBehavior,
     /// Whether nested list columns are supported by the predicate semantics.
     allow_list_columns: bool,
     /// The Arrow schema of the parquet file.
@@ -289,7 +290,7 @@ impl<'schema> PushdownChecker<'schema> {
             non_primitive_columns: false,
             projected_columns: false,
             required_columns: BTreeSet::default(),
-            contains_nested: false,
+            nested_behavior: NestedBehavior::PrimitiveOnly,
             allow_list_columns,
             file_schema,
         }
@@ -299,8 +300,6 @@ impl<'schema> PushdownChecker<'schema> {
         if let Ok(idx) = self.file_schema.index_of(column_name) {
             self.required_columns.insert(idx);
             if DataType::is_nested(self.file_schema.field(idx).data_type()) {
-                self.contains_nested = true;
-
                 // Check if this is a list type
                 let is_list = matches!(
                     self.file_schema.field(idx).data_type(),
@@ -313,10 +312,16 @@ impl<'schema> PushdownChecker<'schema> {
                 // supported list predicates (e.g., array_has_all)
                 let is_supported = self.allow_list_columns && is_list;
 
-                if !is_supported {
+                if is_supported {
+                    // Update to ListsSupported if we haven't found unsupported types yet
+                    if self.nested_behavior == NestedBehavior::PrimitiveOnly {
+                        self.nested_behavior = NestedBehavior::ListsSupported;
+                    }
+                } else {
                     // Block pushdown for unsupported nested types:
                     // - Structs (regardless of predicate support)
                     // - Lists without supported predicates
+                    self.nested_behavior = NestedBehavior::Unsupported;
                     self.non_primitive_columns = true;
                     return Some(TreeNodeRecursion::Jump);
                 }
@@ -350,10 +355,29 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     }
 }
 
+/// Describes the nested column behavior for filter pushdown.
+///
+/// This enum makes explicit the different states a predicate can be in
+/// with respect to nested column handling during Parquet decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NestedBehavior {
+    /// Expression references only primitive (non-nested) columns.
+    /// These can always be pushed down to the Parquet decoder.
+    PrimitiveOnly,
+    /// Expression references list columns with supported predicates
+    /// (e.g., array_has, array_has_all, IS NULL).
+    /// These can be pushed down to the Parquet decoder.
+    ListsSupported,
+    /// Expression references unsupported nested types (e.g., structs)
+    /// or list columns without supported predicates.
+    /// These cannot be pushed down and must be evaluated after decoding.
+    Unsupported,
+}
+
 #[derive(Debug)]
 struct PushdownColumns {
     required_columns: BTreeSet<usize>,
-    contains_nested: bool,
+    nested: NestedBehavior,
 }
 
 /// Checks if a given expression can be pushed down to the parquet decoder.
@@ -373,19 +397,21 @@ fn pushdown_columns(
     expr.visit(&mut checker)?;
     Ok((!checker.prevents_pushdown()).then_some(PushdownColumns {
         required_columns: checker.required_columns,
-        contains_nested: checker.contains_nested,
+        nested: checker.nested_behavior,
     }))
 }
 
 fn leaf_indices_for_roots(
     root_indices: &[usize],
     schema_descr: &SchemaDescriptor,
-    contains_nested: bool,
+    nested: NestedBehavior,
 ) -> Vec<usize> {
-    if !contains_nested {
+    // For primitive-only columns, root indices ARE the leaf indices
+    if nested == NestedBehavior::PrimitiveOnly {
         return root_indices.to_vec();
     }
 
+    // For nested columns (lists or structs), we need to expand to all leaf columns
     let root_set: BTreeSet<_> = root_indices.iter().copied().collect();
 
     (0..schema_descr.num_columns())
@@ -874,13 +900,13 @@ mod test {
                 .expect("building row filter")
                 .expect("row filter should exist");
 
-        let mut reader = parquet_reader_builder
+        let reader = parquet_reader_builder
             .with_row_filter(row_filter)
             .build()
             .expect("build reader");
 
         let mut total_rows = 0;
-        while let Some(batch) = reader.next() {
+        for batch in reader {
             let batch = batch.expect("record batch");
             total_rows += batch.num_rows();
         }
