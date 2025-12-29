@@ -212,6 +212,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "replace"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "random"
 required-features = ["math_expressions"]
 
@@ -268,4 +273,9 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "translate"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "levenshtein"
 required-features = ["unicode_expressions"]

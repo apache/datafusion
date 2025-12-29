@@ -56,6 +56,10 @@ impl LazyBatchGenerator for Empty {
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>> {
         Ok(None)
     }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        Arc::new(RwLock::new(Empty { name: self.name }))
+    }
 }
 
 impl fmt::Display for Empty {
@@ -397,6 +401,12 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         let array = self.current.create_array(buf)?;
         let batch = RecordBatch::try_new(Arc::clone(&self.schema), vec![array])?;
         Ok(Some(batch))
+    }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        let mut new = self.clone();
+        new.current = new.start.clone();
+        Arc::new(RwLock::new(new))
     }
 }
 
@@ -777,5 +787,42 @@ impl TableFunctionImpl for RangeFunc {
             include_end: false,
         };
         impl_func.call(exprs)
+    }
+}
+
+#[cfg(test)]
+mod generate_series_tests {
+    use std::sync::Arc;
+
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::Result;
+    use datafusion_physical_plan::memory::LazyBatchGenerator;
+
+    use crate::generate_series::GenericSeriesState;
+
+    #[test]
+    fn test_generic_series_state_reset() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let mut state = GenericSeriesState::<i64> {
+            schema,
+            start: 1,
+            end: 5,
+            step: 1,
+            current: 1,
+            batch_size: 8192,
+            include_end: true,
+            name: "test",
+        };
+        let batch = state.generate_next_batch()?.expect("missing batch");
+
+        let state_reset = state.reset_state();
+        let reset_batch = state_reset
+            .write()
+            .generate_next_batch()?
+            .expect("missing reset batch");
+
+        assert_eq!(batch, reset_batch);
+
+        Ok(())
     }
 }
