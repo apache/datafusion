@@ -460,9 +460,11 @@ impl DataFrame {
                     }
                     None => {
                         // qualified_fields_with_unqualified_name returns Vec<(Option<&TableReference>, &FieldRef)>
-                        self.plan.schema().qualified_fields_with_unqualified_name(&column.name)
+                        self.plan
+                            .schema()
+                            .qualified_fields_with_unqualified_name(&column.name)
                             .into_iter()
-                            .map(|field| Ok(field))
+                            .map(Ok)
                             .collect::<Vec<_>>()
                     }
                 }
