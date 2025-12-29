@@ -2822,8 +2822,9 @@ FROM (
 ### `to_time`
 
 Converts a value to a time (`HH:MM:SS.nnnnnnnnn`).
-Supports strings as input.
+Supports strings and timestamps as input.
 Strings are parsed as `HH:MM:SS`, `HH:MM:SS.nnnnnnnnn`, or `HH:MM` if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
+Timestamps will have the time portion extracted.
 Returns the corresponding time.
 
 Note: `to_time` returns Time64(Nanosecond), which represents the time of day in nanoseconds since midnight.
@@ -2834,7 +2835,7 @@ to_time('12:30:45', '%H:%M:%S')
 
 #### Arguments
 
-- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **expression**: String or Timestamp expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **format_n**: Optional [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) strings to use to parse the expression. Formats will be tried in the order
   they appear with the first successful one being returned. If none of the formats successfully parse the expression
   an error will be returned.
@@ -2854,6 +2855,12 @@ to_time('12:30:45', '%H:%M:%S')
 +--------------------------------------------+
 | 12:30:45                                   |
 +--------------------------------------------+
+> select to_time('2024-01-15 14:30:45'::timestamp);
++--------------------------------------------------+
+| to_time(Utf8("2024-01-15 14:30:45"))             |
++--------------------------------------------------+
+| 14:30:45                                         |
++--------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
