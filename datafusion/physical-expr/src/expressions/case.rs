@@ -145,10 +145,13 @@ impl CaseBody {
         }
 
         // Construct a mapping from the original column index to the projected column index.
-        let column_index_map = used_column_indices
-            .iter()
+        let mut sorted_used_column_indices =
+            used_column_indices.into_iter().collect::<Vec<_>>();
+        sorted_used_column_indices.sort_unstable();
+        let column_index_map = sorted_used_column_indices
+            .into_iter()
             .enumerate()
-            .map(|(projected, original)| (*original, projected))
+            .map(|(projected, original)| (original, projected))
             .collect::<HashMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
