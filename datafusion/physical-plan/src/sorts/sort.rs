@@ -541,7 +541,7 @@ impl ExternalSorter {
 
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            let sorted_size = get_reserved_byte_for_record_batch(&batch)?;
+            let sorted_size = get_reserved_bytes_for_record_batch(&batch)?;
             if self.reservation.try_grow(sorted_size).is_err() {
                 // Although the reservation is not enough, the batch is
                 // already in memory, so it's okay to combine it with previously
@@ -667,7 +667,7 @@ impl ExternalSorter {
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
             self.reservation
-                .try_resize(get_reserved_byte_for_record_batch(&batch)?)
+                .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, &metrics, reservation);
@@ -679,7 +679,7 @@ impl ExternalSorter {
                 let metrics = self.metrics.baseline.intermediate();
                 let reservation = self
                     .reservation
-                    .split(get_reserved_byte_for_record_batch(&batch)?);
+                    .split(get_reserved_bytes_for_record_batch(&batch)?);
                 let input = self.sort_batch_stream(batch, &metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
@@ -712,7 +712,7 @@ impl ExternalSorter {
         mut reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
-            get_reserved_byte_for_record_batch(&batch)?,
+            get_reserved_bytes_for_record_batch(&batch)?,
             reservation.size()
         );
 
@@ -795,7 +795,7 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_byte_for_record_batch(input)?;
+        let size = get_reserved_bytes_for_record_batch(input)?;
 
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
@@ -827,21 +827,31 @@ impl ExternalSorter {
     }
 }
 
-/// Calculate how much memory to reserve for sorting a `RecordBatch` from its size,
-/// this can be calculated as the sum of the actual space it takes in memory(which would be larger for a sliced batch),
-/// and the size of the actual data.
-pub(crate) fn get_reserved_byte_for_record_batch_size(
+/// Calculate how much memory to reserve for sorting a `RecordBatch` from its size.
+///
+/// This is used to pre-reserve memory for the sort/merge. The sort/merge process involves
+/// creating sorted copies of sorted columns in record batches for speeding up comparison
+/// in sorting and merging. The sorted copies are in either row format or array format.
+/// Please refer to cursor.rs and stream.rs for more details. No matter what format the
+/// sorted copies are, they will use more memory than the original record batch.
+///
+/// This can basically be calculated as the sum of the actual space it takes in
+/// memory (which would be larger for a sliced batch), and the size of the actual data.
+pub(crate) fn get_reserved_bytes_for_record_batch_size(
     record_batch_size: usize,
     sliced_size: usize,
 ) -> usize {
+    // Even 2x may not be enough for some cases, but it's a good enough estimation as a baseline.
+    // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
+    // to compensate for the extra memory needed.
     record_batch_size + sliced_size
 }
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
-/// This will just call `get_reserved_byte_for_record_batch_size` with the
+/// This will just call `get_reserved_bytes_for_record_batch_size` with the
 /// memory size of the record batch and its sliced size.
-pub(super) fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> Result<usize> {
-    Ok(get_reserved_byte_for_record_batch_size(
+pub(super) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result<usize> {
+    Ok(get_reserved_bytes_for_record_batch_size(
         get_record_batch_memory_size(batch),
         batch.get_sliced_size()?,
     ))
@@ -1682,7 +1692,7 @@ mod tests {
             let temp_ctx = Arc::new(TaskContext::default());
             let mut stream = plan.execute(0, Arc::clone(&temp_ctx))?;
             let first_batch = stream.next().await.unwrap()?;
-            get_reserved_byte_for_record_batch(&first_batch)?
+            get_reserved_bytes_for_record_batch(&first_batch)?
         };
 
         // Set memory limit just short of what we need
@@ -1701,7 +1711,7 @@ mod tests {
         {
             let mut stream = plan.execute(0, Arc::clone(&task_ctx))?;
             let first_batch = stream.next().await.unwrap()?;
-            let batch_reservation = get_reserved_byte_for_record_batch(&first_batch)?;
+            let batch_reservation = get_reserved_bytes_for_record_batch(&first_batch)?;
 
             assert_eq!(batch_reservation, expected_batch_reservation);
             assert!(memory_limit < (merge_reservation + batch_reservation));
@@ -2684,7 +2694,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_reserved_byte_for_record_batch_with_sliced_batches() -> Result<()> {
+    async fn test_get_reserved_bytes_for_record_batch_with_sliced_batches() -> Result<()>
+    {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 
         // Create a larger batch then slice it
@@ -2696,8 +2707,8 @@ mod tests {
         let batch =
             RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(large_array)])?;
 
-        let sliced_reserved = get_reserved_byte_for_record_batch(&sliced_batch)?;
-        let reserved = get_reserved_byte_for_record_batch(&batch)?;
+        let sliced_reserved = get_reserved_bytes_for_record_batch(&sliced_batch)?;
+        let reserved = get_reserved_bytes_for_record_batch(&batch)?;
 
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
