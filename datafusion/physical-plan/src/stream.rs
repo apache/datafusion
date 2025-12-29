@@ -704,6 +704,7 @@ impl RecordBatchStream for BatchSplitStream {
 /// A stream that holds a memory reservation for its lifetime,
 /// shrinking the reservation as batches are consumed.
 /// The original reservation must have its batch sizes calculated using [`get_record_batch_memory_size`]
+/// On error, the reservation is *NOT* freed, until the stream is dropped.
 pub struct ReservationStream {
     schema: SchemaRef,
     inner: SendableRecordBatchStream,
