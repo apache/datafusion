@@ -353,7 +353,7 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// 1. It is non-degenerate, meaning it contains at least one element.
 /// 2. It is duplicate-free, meaning it does not contain multiple entries for
 ///    the same column.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LexOrdering {
     /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
@@ -361,6 +361,15 @@ pub struct LexOrdering {
     /// that the ordering is duplicate-free. Note that the elements in this
     /// set are the same underlying physical expressions as in `exprs`.
     set: HashSet<Arc<dyn PhysicalExpr>>,
+}
+
+impl fmt::Debug for LexOrdering {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LexOrdering")
+            .field("exprs", &self.exprs)
+            .field("set", &self.exprs.iter().map(|e| &e.expr).collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl LexOrdering {
