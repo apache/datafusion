@@ -367,7 +367,10 @@ impl fmt::Debug for LexOrdering {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LexOrdering")
             .field("exprs", &self.exprs)
-            .field("set", &self.exprs.iter().map(|e| &e.expr).collect::<Vec<_>>())
+            .field(
+                "set",
+                &self.exprs.iter().map(|e| &e.expr).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
