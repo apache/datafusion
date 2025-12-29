@@ -3596,9 +3596,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_not_used() {
         assert_eq!(
             dynamic_filter.is_used(),
             expected_is_used,
-            "is_used() should return {} when probe side support is {}",
-            expected_is_used,
-            probe_supports_pushdown
+            "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
         );
     }
 }
