@@ -410,7 +410,7 @@ pub mod test {
 
     #[test]
     fn test_decimal32_to_i32() {
-        let cases: [(i32, i8, Either<i32, String>); _] = [
+        let cases: [(i32, i8, Either<i32, String>); 10] = [
             (123, 0, Either::Left(123)),
             (1230, 1, Either::Left(123)),
             (123000, 3, Either::Left(123)),
@@ -456,7 +456,7 @@ pub mod test {
 
     #[test]
     fn test_decimal64_to_i64() {
-        let cases: [(i64, i8, Either<i64, String>); _] = [
+        let cases: [(i64, i8, Either<i64, String>); 8] = [
             (123, 0, Either::Left(123)),
             (1234567890, 2, Either::Left(12345678)),
             (-1234567890, 2, Either::Left(-12345678)),
