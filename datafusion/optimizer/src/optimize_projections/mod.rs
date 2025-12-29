@@ -588,7 +588,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
+    expr.is_trivial()
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)

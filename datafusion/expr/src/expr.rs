@@ -1933,6 +1933,28 @@ impl Expr {
         }
     }
 
+    /// Returns true if this expression is trivial (cheap to evaluate).
+    ///
+    /// Trivial expressions include column references, literals, and nested
+    /// field access via `get_field`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// let expr = col("foo");
+    /// assert!(expr.is_trivial());
+    /// ```
+    pub fn is_trivial(&self) -> bool {
+        match self {
+            Expr::Column(_) | Expr::Literal(_, _) => true,
+            Expr::ScalarFunction(func) => {
+                func.func.is_trivial()
+                    && func.args.first().is_some_and(|arg| arg.is_trivial())
+            }
+            _ => false,
+        }
+    }
+
     /// Return all references to columns in this expression.
     ///
     /// # Example

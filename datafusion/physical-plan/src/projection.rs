@@ -20,7 +20,7 @@
 //! of a projection on table `t1` where the expressions `a`, `b`, and `a+b` are the
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
-use super::expressions::{Column, Literal};
+use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -255,18 +255,16 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs =
-            self.projector
-                .projection()
-                .as_ref()
-                .iter()
-                .all(|proj_expr| {
-                    proj_expr.expr.as_any().is::<Column>()
-                        || proj_expr.expr.as_any().is::<Literal>()
-                });
-        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
-        // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        vec![!all_simple_exprs]
+        let all_trivial_exprs = self
+            .projector
+            .projection()
+            .as_ref()
+            .iter()
+            .all(|proj_expr| proj_expr.expr.is_trivial());
+        // If expressions are all trivial (columns, literals, or field accessors),
+        // then all computations in this projection are reorder or rename,
+        // and projection would not benefit from the repartition.
+        vec![!all_trivial_exprs]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -713,11 +711,10 @@ pub fn make_with_child(
         .map(|e| Arc::new(e) as _)
 }
 
-/// Returns `true` if all the expressions in the argument are `Column`s.
-pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
-    exprs
-        .iter()
-        .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
+/// Returns `true` if all the expressions in the argument are trivial
+/// (columns, literals, or field accessors).
+pub fn all_trivial(exprs: &[ProjectionExpr]) -> bool {
+    exprs.iter().all(|proj_expr| proj_expr.expr.is_trivial())
 }
 
 /// Updates the given lexicographic ordering according to given projected
@@ -1073,10 +1070,9 @@ fn new_columns_for_join_on(
 }
 
 /// Checks if the given expression is trivial.
-/// An expression is considered trivial if it is either a `Column` or a `Literal`.
+/// An expression is considered trivial if it is a `Column`, `Literal`, or field accessor.
 fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().downcast_ref::<Column>().is_some()
-        || expr.as_any().downcast_ref::<Literal>().is_some()
+    expr.is_trivial()
 }
 
 #[cfg(test)]
