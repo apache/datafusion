@@ -197,7 +197,6 @@ pub(crate) struct FilterCandidate {
 
 /// Tracks the projection of an expression in both root and leaf coordinates.
 #[derive(Debug, Clone)]
-#[cfg_attr(not(test), expect(dead_code))]
 struct ProjectionColumns {
     /// Root column indices in the Arrow schema.
     root_indices: Vec<usize>,
