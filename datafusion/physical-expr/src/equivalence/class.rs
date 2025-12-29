@@ -311,9 +311,22 @@ pub struct EquivalenceGroup {
 impl Debug for EquivalenceGroup {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut map_entries: Vec<_> = self.map.iter().collect();
-        map_entries.sort_by_key(|(expr, _)| format!("{:?}", expr));
+        map_entries.sort_by_key(|(expr, _)| format!("{expr:?}"));
+        let map: BTreeMap<_, _> = map_entries
+            .iter()
+            .map(|(k, v)| (format!("{k:?}"), *v))
+            .collect();
+        struct DeterministicMap<'a>(&'a [(&'a Arc<dyn PhysicalExpr>, &'a usize)]);
+        impl Debug for DeterministicMap<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+                f.debug_map()
+                    .entries(self.0.iter().map(|&(k, v)| (k, v)))
+                    .finish()
+            }
+        }
+
         f.debug_struct("EquivalenceGroup")
-            .field("map", &map_entries)
+            .field("map", &DeterministicMap(&map_entries))
             .field("classes", &self.classes)
             .finish()
     }
