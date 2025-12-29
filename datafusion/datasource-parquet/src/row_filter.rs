@@ -547,7 +547,9 @@ mod test {
     use arrow::array::{ListBuilder, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
     use datafusion_expr::{Expr, col};
-    use datafusion_functions_nested::expr_fn::{array_has_all, make_array};
+    use datafusion_functions_nested::expr_fn::{
+        array_has, array_has_all, array_has_any, make_array,
+    };
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr_adapter::{
         DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
@@ -745,6 +747,28 @@ mod test {
 
     #[test]
     fn array_has_all_pushdown_filters_rows() {
+        // Test array_has_all: checks if array contains all of ["c"]
+        // Rows with "c": row 1 and row 2
+        let expr = array_has_all(
+            col("letters"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        );
+        test_array_predicate_pushdown("array_has_all", expr, 1, 2);
+    }
+
+    /// Helper function to test array predicate pushdown functionality.
+    ///
+    /// Creates a Parquet file with a list column, applies the given predicate,
+    /// and verifies that rows are correctly filtered during decoding.
+    fn test_array_predicate_pushdown(
+        func_name: &str,
+        predicate_expr: Expr,
+        expected_pruned: usize,
+        expected_matched: usize,
+    ) {
         let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
         let schema = Arc::new(Schema::new(vec![Field::new(
             "letters",
@@ -753,13 +777,16 @@ mod test {
         )]));
 
         let mut builder = ListBuilder::new(StringBuilder::new());
+        // Row 0: ["a", "b"]
         builder.values().append_value("a");
         builder.values().append_value("b");
         builder.append(true);
 
+        // Row 1: ["c"]
         builder.values().append_value("c");
         builder.append(true);
 
+        // Row 2: ["c", "d"]
         builder.values().append_value("c");
         builder.values().append_value("d");
         builder.append(true);
@@ -781,17 +808,11 @@ mod test {
         let metadata = parquet_reader_builder.metadata().clone();
         let file_schema = parquet_reader_builder.schema().clone();
 
-        let expr = array_has_all(
-            col("letters"),
-            make_array(vec![Expr::Literal(
-                ScalarValue::Utf8(Some("c".to_string())),
-                None,
-            )]),
-        );
-        let expr = logical2physical(&expr, &file_schema);
+        let expr = logical2physical(&predicate_expr, &file_schema);
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let file_metrics = ParquetFileMetrics::new(0, "array_has_all.parquet", &metrics);
+        let file_metrics =
+            ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
 
         let row_filter =
             build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
@@ -809,9 +830,45 @@ mod test {
             total_rows += batch.num_rows();
         }
 
-        assert_eq!(file_metrics.pushdown_rows_pruned.value(), 1);
-        assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
-        assert_eq!(total_rows, 2);
+        assert_eq!(
+            file_metrics.pushdown_rows_pruned.value(),
+            expected_pruned,
+            "{func_name}: expected {expected_pruned} pruned rows"
+        );
+        assert_eq!(
+            file_metrics.pushdown_rows_matched.value(),
+            expected_matched,
+            "{func_name}: expected {expected_matched} matched rows"
+        );
+        assert_eq!(
+            total_rows, expected_matched,
+            "{func_name}: expected {expected_matched} total rows"
+        );
+    }
+
+    #[test]
+    fn array_has_pushdown_filters_rows() {
+        // Test array_has: checks if "c" is in the array
+        // Rows with "c": row 1 and row 2
+        let expr = array_has(
+            col("letters"),
+            Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
+        );
+        test_array_predicate_pushdown("array_has", expr, 1, 2);
+    }
+
+    #[test]
+    fn array_has_any_pushdown_filters_rows() {
+        // Test array_has_any: checks if array contains any of ["a", "d"]
+        // Row 0 has "a", row 2 has "d" - both should match
+        let expr = array_has_any(
+            col("letters"),
+            make_array(vec![
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
+            ]),
+        );
+        test_array_predicate_pushdown("array_has_any", expr, 1, 2);
     }
 
     #[test]
