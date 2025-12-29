@@ -693,10 +693,14 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
-    /// required to change one sequence into the other.
-    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+    /// required to change one sequence into the other, using a reusable cache buffer.
+    ///
+    /// This is the generic implementation that works with any iterator types.
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    fn generic_levenshtein_with_buffer<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
         a: &'a Iter1,
         b: &'b Iter2,
+        cache: &mut Vec<usize>,
     ) -> usize
     where
         &'a Iter1: IntoIterator<Item = Elem1>,
@@ -709,7 +713,9 @@ pub mod datafusion_strsim {
             return b_len;
         }
 
-        let mut cache: Vec<usize> = (1..b_len + 1).collect();
+        // Resize cache to fit b_len elements
+        cache.clear();
+        cache.extend(1..=b_len);
 
         let mut result = 0;
 
@@ -730,6 +736,21 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
+    /// required to change one sequence into the other.
+    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+        a: &'a Iter1,
+        b: &'b Iter2,
+    ) -> usize
+    where
+        &'a Iter1: IntoIterator<Item = Elem1>,
+        &'b Iter2: IntoIterator<Item = Elem2>,
+        Elem1: PartialEq<Elem2>,
+    {
+        let mut cache = Vec::new();
+        generic_levenshtein_with_buffer(a, b, &mut cache)
+    }
+
+    /// Calculates the minimum number of insertions, deletions, and substitutions
     /// required to change one string into the other.
     ///
     /// ```
@@ -747,35 +768,7 @@ pub mod datafusion_strsim {
     ///
     /// The `cache` buffer will be resized as needed and reused across calls.
     pub fn levenshtein_with_buffer(a: &str, b: &str, cache: &mut Vec<usize>) -> usize {
-        let b_len = b.chars().count();
-        let a_len = a.chars().count();
-
-        if a_len == 0 {
-            return b_len;
-        }
-        if b_len == 0 {
-            return a_len;
-        }
-
-        // Resize cache to fit b_len elements
-        cache.clear();
-        cache.extend(1..=b_len);
-
-        let mut result = 0;
-        for (i, a_char) in a.chars().enumerate() {
-            result = i + 1;
-            let mut distance_b = i;
-
-            for (j, b_char) in b.chars().enumerate() {
-                let cost = if a_char == b_char { 0 } else { 1 };
-                let distance_a = distance_b + cost;
-                distance_b = cache[j];
-                result = min(result + 1, min(distance_a, distance_b + 1));
-                cache[j] = result;
-            }
-        }
-
-        result
+        generic_levenshtein_with_buffer(&StringWrapper(a), &StringWrapper(b), cache)
     }
 
     /// Calculates the normalized Levenshtein distance between two strings.
