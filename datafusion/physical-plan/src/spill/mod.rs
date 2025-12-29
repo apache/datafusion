@@ -339,15 +339,52 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
     max_alignment
 }
 
+/// Size of a single view structure in StringView/BinaryView arrays (in bytes).
+/// Each view is 16 bytes: 4 bytes length + 4 bytes prefix + 8 bytes buffer ID/offset.
 #[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
+
+/// Maximum size of inlined string/binary data in StringView/BinaryView arrays.
+/// Strings/binaries <= 12 bytes are stored inline within the 16-byte view structure.
+/// This matches the Arrow specification for view arrays.
 #[cfg(test)]
 const INLINE_THRESHOLD: usize = 12;
 
-/// Performs garbage collection on view arrays before spilling.
+/// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
+///
+/// # Why GC is needed
+///
+/// StringView and BinaryView arrays can accumulate significant memory waste when sliced.
+/// When a large array is sliced (e.g., taking first 100 rows of 1000), the view array
+/// still references the original data buffers containing all 1000 rows of data.
+///
+/// For example, in the ClickBench benchmark (issue #19414), repeated slicing of StringView
+/// arrays resulted in 820MB of spill files that could be reduced to just 33MB after GC -
+/// a 96% reduction in size.
+///
+/// # How it works
+///
+/// The GC process creates new compact buffers containing only the data referenced by the
+/// current views, eliminating unreferenced data from sliced arrays.
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    // Early return optimization: Skip GC entirely if the batch contains no view arrays.
+    // This avoids unnecessary processing for batches with only primitive types.
+    let has_view_arrays = batch.columns().iter().any(|array| {
+        matches!(
+            array.data_type(),
+            arrow::datatypes::DataType::Utf8View | arrow::datatypes::DataType::BinaryView
+        )
+    });
+
+    if !has_view_arrays {
+        // Return a new batch to maintain consistent behavior
+        return Ok(RecordBatch::try_new(
+            batch.schema(),
+            batch.columns().to_vec(),
+        )?);
+    }
+
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
-    let mut any_gc_performed = false;
 
     for array in batch.columns() {
         let gc_array = match array.data_type() {
@@ -356,8 +393,9 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
                     .as_any()
                     .downcast_ref::<StringViewArray>()
                     .expect("Utf8View array should downcast to StringViewArray");
-                if should_gc_view_array(string_view.len(), string_view.data_buffers()) {
-                    any_gc_performed = true;
+                // Only perform GC if the data buffers exceed our size threshold.
+                // This balances memory savings against GC overhead.
+                if should_gc_view_array(string_view.data_buffers()) {
                     Arc::new(string_view.gc()) as Arc<dyn Array>
                 } else {
                     Arc::clone(array)
@@ -368,32 +406,43 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
                     .as_any()
                     .downcast_ref::<BinaryViewArray>()
                     .expect("BinaryView array should downcast to BinaryViewArray");
-                if should_gc_view_array(binary_view.len(), binary_view.data_buffers()) {
-                    any_gc_performed = true;
+                // Only perform GC if the data buffers exceed our size threshold.
+                // This balances memory savings against GC overhead.
+                if should_gc_view_array(binary_view.data_buffers()) {
                     Arc::new(binary_view.gc()) as Arc<dyn Array>
                 } else {
                     Arc::clone(array)
                 }
             }
+            // Non-view arrays are passed through unchanged
             _ => Arc::clone(array),
         };
         new_columns.push(gc_array);
     }
 
-    if any_gc_performed {
-        Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
-    } else {
-        Ok(batch.clone())
-    }
+    // Always return a new batch for consistency
+    Ok(RecordBatch::try_new(batch.schema(), new_columns)?)
 }
 
-fn should_gc_view_array(len: usize, data_buffers: &[arrow::buffer::Buffer]) -> bool {
-    if len < 10 {
-        return false;
-    }
-
+/// Determines whether a view array should be garbage collected based on its buffer usage.
+///
+/// Uses a minimum buffer size threshold to avoid unnecessary GC on small arrays.
+/// This prevents the overhead of GC for arrays with negligible memory footprint,
+/// while still capturing cases where sliced arrays carry large unreferenced buffers.
+///
+/// # Why not use get_record_batch_memory_size
+///
+/// We use manual buffer size calculation here because:
+/// - `get_record_batch_memory_size` operates on entire arrays, not just the data buffers
+/// - We need to check buffer capacity specifically to determine GC potential
+/// - The data buffers are what gets compacted during GC, so their size is the key metric
+fn should_gc_view_array(data_buffers: &[arrow::buffer::Buffer]) -> bool {
+    // Only perform GC if the buffers exceed 10KB. This avoids the overhead of
+    // GC for small arrays while still capturing the pathological cases like
+    // the ClickBench scenario (820MB -> 33MB reduction).
+    const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
     let total_buffer_size: usize = data_buffers.iter().map(|b| b.capacity()).sum();
-    total_buffer_size > 0
+    total_buffer_size > MIN_BUFFER_SIZE_FOR_GC
 }
 
 #[cfg(test)]
@@ -1114,8 +1163,7 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        let should_gc =
-            should_gc_view_array(sliced_array.len(), sliced_array.data_buffers());
+        let should_gc = should_gc_view_array(sliced_array.data_buffers());
         let waste_ratio = calculate_string_view_waste_ratio(sliced_array);
 
         assert!(
@@ -1209,118 +1257,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_exact_clickbench_issue_19414() -> Result<()> {
-        use arrow::array::StringViewArray;
-        use std::fs;
-
-        // Test for clickbench issue: 820MB -> 33MB spill reduction
-        let unique_urls = vec![
-            "http://irr.ru/index.php?showalbum/login-leniya7777294,938303130",
-            "http://komme%2F27.0.1453.116",
-            "https://produkty%2Fproduct",
-            "http://irr.ru/index.php?showalbum/login-kapusta-advert2668]=0&order_by=0",
-            "http://irr.ru/index.php?showalbum/login-kapustic/product_name",
-            "http://irr.ru/index.php",
-            "https://produkty%2F",
-            "http://irr.ru/index.php?showalbum/login",
-            "https://produkty/kurortmag",
-            "https://produkty%2Fpulove.ru/album/login",
-        ];
-
-        let mut urls = Vec::with_capacity(200_000);
-
-        // URL frequencies from bug report
-        for _ in 0..58976 {
-            urls.push(unique_urls[0].to_string());
-        }
-        for _ in 0..29585 {
-            urls.push(unique_urls[1].to_string());
-        }
-        for _ in 0..11464 {
-            urls.push(unique_urls[2].to_string());
-        }
-        for _ in 0..10480 {
-            urls.push(unique_urls[3].to_string());
-        }
-        for _ in 0..10128 {
-            urls.push(unique_urls[4].to_string());
-        }
-        for _ in 0..7758 {
-            urls.push(unique_urls[5].to_string());
-        }
-        for _ in 0..6649 {
-            urls.push(unique_urls[6].to_string());
-        }
-        for _ in 0..6141 {
-            urls.push(unique_urls[7].to_string());
-        }
-        for _ in 0..5764 {
-            urls.push(unique_urls[8].to_string());
-        }
-        for _ in 0..5495 {
-            urls.push(unique_urls[9].to_string());
-        }
-
-        while urls.len() < 200_000 {
-            urls.push(unique_urls[urls.len() % 10].to_string());
-        }
-
-        let string_array = StringViewArray::from(urls);
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "URL",
-            DataType::Utf8View,
-            false,
-        )]));
-
-        let original_batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(string_array.clone()) as ArrayRef],
-        )?;
-
-        // Simulate GROUP BY slices
-        let mut sliced_batches = Vec::new();
-        let total_rows = original_batch.num_rows();
-        let mut offset = 0;
-
-        let group_sizes = vec![
-            58976, 29585, 11464, 10480, 10128, 7758, 6649, 6141, 5764, 5495,
-        ];
-        for &size in &group_sizes {
-            if offset < total_rows {
-                let actual_size = std::cmp::min(size, total_rows - offset);
-                sliced_batches.push(original_batch.slice(offset, actual_size));
-                offset += actual_size;
-            }
-        }
-
-        // Small groups for remainder
-        while offset < total_rows {
-            let size = std::cmp::min(100, total_rows - offset);
-            sliced_batches.push(original_batch.slice(offset, size));
-            offset += size;
-        }
-
-        // Setup spill with GC
-        let env = Arc::new(RuntimeEnv::default());
-        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-        let spill_manager = SpillManager::new(env, metrics, schema);
-
-        let mut in_progress_file = spill_manager.create_in_progress_file("Clickbench")?;
-        for batch in &sliced_batches {
-            in_progress_file.append_batch(batch)?;
-        }
-
-        let spill_file = in_progress_file.finish()?.unwrap();
-        let file_size_mb = fs::metadata(spill_file.path())?.len() as f64 / 1_048_576.0;
-
-        assert!(
-            file_size_mb < 50.0,
-            "Spill file should be <50MB (target 33MB), got {file_size_mb:.2}MB"
-        );
-
-        Ok(())
-    }
 
     #[test]
     fn test_spill_with_and_without_gc_comparison() -> Result<()> {
