@@ -18,48 +18,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, Scalar};
+use arrow::compute::kernels::comparison::starts_with as arrow_starts_with;
 use arrow::datatypes::DataType;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::binary::{
     binary_to_string_coercion, string_coercion,
 };
 
-use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, Like, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility, cast,
 };
 use datafusion_macros::user_doc;
-
-/// Returns true if string starts with prefix.
-/// starts_with('alphabet', 'alph') = 't'
-fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if let Some(coercion_data_type) =
-        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
-            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
-        })
-    {
-        let arg0 = if args[0].data_type() == &coercion_data_type {
-            Arc::clone(&args[0])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
-        };
-        let arg1 = if args[1].data_type() == &coercion_data_type {
-            Arc::clone(&args[1])
-        } else {
-            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
-        };
-        let result = arrow::compute::kernels::comparison::starts_with(&arg0, &arg1)?;
-        Ok(Arc::new(result) as ArrayRef)
-    } else {
-        internal_err!(
-            "Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View"
-        )
-    }
-}
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -119,13 +92,76 @@ impl ScalarUDFImpl for StartsWithFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        match args.args[0].data_type() {
-            DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(starts_with, vec![])(&args.args)
+        let [str_arg, prefix_arg] = args.args.as_slice() else {
+            return exec_err!(
+                "starts_with was called with {} arguments, expected 2",
+                args.args.len()
+            );
+        };
+
+        // Determine the common type for coercion
+        let coercion_type = string_coercion(
+            &str_arg.data_type(),
+            &prefix_arg.data_type(),
+        )
+        .or_else(|| {
+            binary_to_string_coercion(&str_arg.data_type(), &prefix_arg.data_type())
+        });
+
+        let Some(coercion_type) = coercion_type else {
+            return exec_err!(
+                "Unsupported data types {:?}, {:?} for function `starts_with`.",
+                str_arg.data_type(),
+                prefix_arg.data_type()
+            );
+        };
+
+        // Helper to cast an array if needed
+        let maybe_cast = |arr: &ArrayRef, target: &DataType| -> Result<ArrayRef> {
+            if arr.data_type() == target {
+                Ok(Arc::clone(arr))
+            } else {
+                Ok(arrow::compute::kernels::cast::cast(arr, target)?)
             }
-            _ => internal_err!(
-                "Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View"
-            )?,
+        };
+
+        match (str_arg, prefix_arg) {
+            // Both scalars - just compute directly
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Scalar(prefix_scalar)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let prefix_arr = prefix_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let prefix_arr = maybe_cast(&prefix_arr, &coercion_type)?;
+                let result = arrow_starts_with(&str_arr, &prefix_arr)?;
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &result, 0,
+                )?))
+            }
+            // String is array, prefix is scalar - use Scalar wrapper for optimization
+            (ColumnarValue::Array(str_arr), ColumnarValue::Scalar(prefix_scalar)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let prefix_arr = prefix_scalar.to_array_of_size(1)?;
+                let prefix_arr = maybe_cast(&prefix_arr, &coercion_type)?;
+                let prefix_scalar = Scalar::new(prefix_arr);
+                let result = arrow_starts_with(&str_arr, &prefix_scalar)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // String is scalar, prefix is array - use Scalar wrapper for string
+            (ColumnarValue::Scalar(str_scalar), ColumnarValue::Array(prefix_arr)) => {
+                let str_arr = str_scalar.to_array_of_size(1)?;
+                let str_arr = maybe_cast(&str_arr, &coercion_type)?;
+                let str_scalar = Scalar::new(str_arr);
+                let prefix_arr = maybe_cast(prefix_arr, &coercion_type)?;
+                let result = arrow_starts_with(&str_scalar, &prefix_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            // Both arrays - pass directly
+            (ColumnarValue::Array(str_arr), ColumnarValue::Array(prefix_arr)) => {
+                let str_arr = maybe_cast(str_arr, &coercion_type)?;
+                let prefix_arr = maybe_cast(prefix_arr, &coercion_type)?;
+                let result = arrow_starts_with(&str_arr, &prefix_arr)?;
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
         }
     }
 
@@ -195,16 +231,19 @@ impl ScalarUDFImpl for StartsWithFunc {
 #[cfg(test)]
 mod tests {
     use crate::utils::test::test_function;
-    use arrow::array::{Array, BooleanArray};
+    use arrow::array::{Array, BooleanArray, StringArray};
     use arrow::datatypes::DataType::Boolean;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use std::sync::Arc;
 
     use super::*;
 
     #[test]
-    fn test_functions() -> Result<()> {
-        // Generate test cases for starts_with
+    fn test_scalar_scalar() -> Result<()> {
+        // Test Scalar + Scalar combinations
         let test_cases = vec![
             (Some("alphabet"), Some("alph"), Some(true)),
             (Some("alphabet"), Some("bet"), Some(false)),
@@ -247,5 +286,155 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar() -> Result<()> {
+        // Test Array + Scalar (the optimized path)
+        let array = ColumnarValue::Array(Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ])));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("alph".to_string())));
+
+        let args = vec![array, scalar];
+        test_function!(
+            StartsWithFunc::new(),
+            args,
+            Ok(Some(true)), // First element result
+            bool,
+            Boolean,
+            BooleanArray
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_scalar_full_result() {
+        // Test Array + Scalar and verify all results
+        let func = StartsWithFunc::new();
+        let array = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("alphabet"),
+            Some("beta"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Array(array),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("alph".to_string()))),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(bool_array.value(1)); // "alphabet" starts with "alph"
+        assert!(!bool_array.value(2)); // "beta" does not start with "alph"
+        assert!(bool_array.is_null(3)); // null input -> null output
+    }
+
+    #[test]
+    fn test_scalar_array() {
+        // Test Scalar + Array
+        let func = StartsWithFunc::new();
+        let prefixes = Arc::new(StringArray::from(vec![
+            Some("alph"),
+            Some("bet"),
+            Some("alpha"),
+            None,
+        ]));
+        let args = vec![
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some("alphabet".to_string()))),
+            ColumnarValue::Array(prefixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(!bool_array.value(1)); // "alphabet" does not start with "bet"
+        assert!(bool_array.value(2)); // "alphabet" starts with "alpha"
+        assert!(bool_array.is_null(3)); // null prefix -> null output
+    }
+
+    #[test]
+    fn test_array_array() {
+        // Test Array + Array
+        let func = StartsWithFunc::new();
+        let strings = Arc::new(StringArray::from(vec![
+            Some("alphabet"),
+            Some("rust"),
+            Some("datafusion"),
+            None,
+        ]));
+        let prefixes = Arc::new(StringArray::from(vec![
+            Some("alph"),
+            Some("ru"),
+            Some("hello"),
+            Some("test"),
+        ]));
+        let args = vec![
+            ColumnarValue::Array(strings),
+            ColumnarValue::Array(prefixes),
+        ];
+
+        let result = func
+            .invoke_with_args(ScalarFunctionArgs {
+                args,
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, true).into(),
+                    Field::new("b", DataType::Utf8, true).into(),
+                ],
+                number_rows: 4,
+                return_field: Field::new("f", Boolean, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap();
+
+        let result_array = result.into_array(4).unwrap();
+        let bool_array = result_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+
+        assert!(bool_array.value(0)); // "alphabet" starts with "alph"
+        assert!(bool_array.value(1)); // "rust" starts with "ru"
+        assert!(!bool_array.value(2)); // "datafusion" does not start with "hello"
+        assert!(bool_array.is_null(3)); // null string -> null output
     }
 }

@@ -36,7 +36,6 @@ use datafusion_execution::config::SessionConfig;
 /// value over this version.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_SessionConfig {
     /// Return a hash map from key to value of the config options represented
     /// by string values.
