@@ -3481,8 +3481,6 @@ mod tests {
         );
 
         // Invalid value should error immediately at SET time
-        // Currently this will succeed (no validation), but after adding enum validation,
-        // this should fail with a clear error message
         let result = config.set("datafusion.execution.parquet.writer_version", "3.0");
         assert!(
             result.is_err(),
