@@ -40,12 +40,13 @@ use crate::logical_plan::{
 use crate::select_expr::SelectExpr;
 use crate::utils::{
     can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
-    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair, find_window_exprs,
     group_window_expr_by_sort_keys,
 };
 use crate::{
     DmlStatement, ExplainOption, Expr, ExprSchemable, Operator, RecursiveQuery,
-    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, lit,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp, and, binary_expr, col,
+    lit,
 };
 
 use super::dml::InsertOp;
@@ -55,10 +56,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, NullEquality, Result,
+    ScalarValue, SchemaError, TableReference, ToDFSchema, UnnestOptions, exec_err,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    plan_err, unqualified_field_not_found,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1503,6 +1504,179 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
             .map(Self::new)
+    }
+}
+
+pub trait LogicalPlanBuilderExt: Sized {
+    fn select_exprs(
+        self,
+        expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<Self>;
+    fn select_columns(self, columns: &[&str]) -> Result<Self>;
+    fn drop_columns(self, columns: &[&str]) -> Result<Self>;
+    fn with_column(
+        self,
+        name: &str,
+        expr: Expr,
+        projection_requires_validation: bool,
+    ) -> Result<Self>;
+    fn with_column_renamed(self, old_column: Column, new_name: &str) -> Result<Self>;
+}
+
+impl LogicalPlanBuilderExt for LogicalPlanBuilder {
+    fn select_exprs(
+        self,
+        expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<Self> {
+        let expr_list: Vec<SelectExpr> =
+            expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
+
+        let expressions = expr_list.iter().filter_map(|e| match e {
+            SelectExpr::Expression(expr) => Some(expr),
+            _ => None,
+        });
+
+        let window_func_exprs = find_window_exprs(expressions);
+        let plan = if window_func_exprs.is_empty() {
+            self.plan
+        } else {
+            Arc::new(LogicalPlanBuilder::window_plan(
+                self.plan.as_ref().clone(),
+                window_func_exprs,
+            )?)
+        };
+
+        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
+        Ok(Self::new(project_plan))
+    }
+
+    fn select_columns(self, columns: &[&str]) -> Result<Self> {
+        let schema = self.plan.schema();
+        let fields = columns
+            .iter()
+            .map(|name| {
+                let fields = schema.qualified_fields_with_unqualified_name(name);
+                if fields.is_empty() {
+                    Err(unqualified_field_not_found(name, schema))
+                } else {
+                    Ok(fields)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let expr: Vec<Expr> = fields
+            .into_iter()
+            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .collect();
+        self.select_exprs(expr)
+    }
+
+    fn drop_columns(self, columns: &[&str]) -> Result<Self> {
+        let schema = self.plan.schema();
+        let fields_to_drop = columns
+            .iter()
+            .flat_map(|name| schema.qualified_fields_with_unqualified_name(name))
+            .collect::<Vec<_>>();
+        let expr: Vec<Expr> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| schema.qualified_field(idx))
+            .filter(|(qualifier, f)| !fields_to_drop.contains(&(*qualifier, f)))
+            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .collect();
+        self.select_exprs(expr)
+    }
+
+    fn with_column(
+        self,
+        name: &str,
+        expr: Expr,
+        projection_requires_validation: bool,
+    ) -> Result<Self> {
+        let window_func_exprs = find_window_exprs([&expr]);
+
+        let original_names: HashSet<String> = self
+            .plan
+            .schema()
+            .iter()
+            .map(|(_, f)| f.name().clone())
+            .collect();
+
+        let plan = if window_func_exprs.is_empty() {
+            self.plan
+        } else {
+            Arc::new(LogicalPlanBuilder::window_plan(
+                self.plan.as_ref().clone(),
+                window_func_exprs,
+            )?)
+        };
+
+        let new_column = expr.alias(name);
+        let mut col_exists = false;
+
+        let mut fields: Vec<(Expr, bool)> = plan
+            .schema()
+            .iter()
+            .filter_map(|(qualifier, field)| {
+                if !original_names.contains(field.name()) {
+                    return None;
+                }
+
+                if field.name() == name {
+                    col_exists = true;
+                    Some((new_column.clone(), true))
+                } else {
+                    let e = col(Column::from((qualifier, field)));
+                    Some((e, projection_requires_validation))
+                }
+            })
+            .collect();
+
+        if !col_exists {
+            fields.push((new_column, true));
+        }
+
+        let project_plan = LogicalPlanBuilder::from(plan)
+            .project_with_validation(fields)?
+            .build()?;
+
+        Ok(Self::new(project_plan))
+    }
+
+    fn with_column_renamed(self, old_column: Column, new_name: &str) -> Result<Self> {
+        let plan = self.plan;
+        let schema = plan.schema();
+        let (qualifier_rename, field_rename) =
+            match schema.qualified_field_from_column(&old_column) {
+                Ok(qualifier_and_field) => qualifier_and_field,
+                Err(DataFusionError::SchemaError(e, _))
+                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
+                {
+                    return Ok(Self::new_from_arc(plan));
+                }
+                Err(err) => return Err(err),
+            };
+        let projection = schema
+            .iter()
+            .map(|(qualifier, field)| {
+                if qualifier.eq(&qualifier_rename) && field == field_rename {
+                    (
+                        col(Column::from((qualifier, field)))
+                            .alias_qualified(qualifier.cloned(), new_name),
+                        false,
+                    )
+                } else {
+                    (col(Column::from((qualifier, field))), false)
+                }
+            })
+            .collect::<Vec<_>>();
+        let project_plan = LogicalPlanBuilder::from(plan)
+            .project_with_validation(projection)?
+            .build()?;
+        Ok(Self::new(project_plan))
     }
 }
 
