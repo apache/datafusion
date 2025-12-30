@@ -970,7 +970,7 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, opener::ParquetOpener, RowGroupAccess};
+    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -1880,7 +1880,7 @@ mod test {
             vec![batch0.clone(), batch1, batch2, batch3],
             Some(props),
         )
-            .await;
+        .await;
 
         let schema = batch0.schema();
 
@@ -1890,10 +1890,10 @@ mod test {
         // KEY: Skip RG1 (non-contiguous!)
         // Only scan row groups: [0, 2, 3]
         let mut access_plan = ParquetAccessPlan::new(vec![
-            RowGroupAccess::Scan,      // RG0
-            RowGroupAccess::Skip,      // RG1 - SKIPPED!
-            RowGroupAccess::Scan,      // RG2
-            RowGroupAccess::Scan,      // RG3
+            RowGroupAccess::Scan, // RG0
+            RowGroupAccess::Skip, // RG1 - SKIPPED!
+            RowGroupAccess::Scan, // RG2
+            RowGroupAccess::Scan, // RG3
         ]);
 
         // Add RowSelection for each scanned row group
@@ -1918,7 +1918,7 @@ mod test {
             "test.parquet".to_string(),
             u64::try_from(data_len).unwrap(),
         )
-            .with_extensions(Arc::new(access_plan));
+        .with_extensions(Arc::new(access_plan));
 
         let make_opener = |reverse_scan: bool| {
             ParquetOpenerBuilder::new()
