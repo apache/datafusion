@@ -23,5 +23,46 @@ EXPLAIN ANALYZE SELECT * FROM generate_series(100);
 ----
 Plan with Metrics LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=0, end=100, batch_size=8192], metrics=[output_rows=101, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 
+# --------------------------------------------
+# Test ProjectionExec's per-expression metrics
+# --------------------------------------------
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+# 1 expr
+# Expect metric `expr_0_eval_time` exists in ProjectionExec
+query TT
+EXPLAIN ANALYZE
+SELECT a
+FROM generate_series(1, 100) as t1(a);
+----
+Plan with Metrics
+01)ProjectionExec: expr=[value@0 as a], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=64.0 KB, output_batches=1, expr_0_eval_time=<slt:ignore>]
+<slt:ignore>
+
+# 2 exprs
+# Expect metrics `expr_0_eval_time` and `expr_1_eval_time` exist in ProjectionExec
+query TT
+EXPLAIN ANALYZE
+SELECT a+1, pow(a,2)
+FROM generate_series(1, 100) as t1(a);
+----
+Plan with Metrics
+01)ProjectionExec: expr=[a@0 + 1 as t1.a + Int64(1), power(CAST(a@0 AS Float64), 2) as pow(t1.a,Int64(2))], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=1632.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+<slt:ignore>
+
+# common expressions
+# Expect metrics `expr_0_eval_time` and `expr_1_eval_time` exist in ProjectionExec
+query TT
+EXPLAIN ANALYZE
+SELECT a+1, a+1 as another_a_plus_one
+FROM generate_series(1, 100) as t1(a);
+----
+Plan with Metrics
+01)ProjectionExec: expr=[__common_expr_1@0 as t1.a + Int64(1), __common_expr_1@0 as another_a_plus_one], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>, expr_1_eval_time=<slt:ignore>]
+02)--ProjectionExec: expr=[a@0 + 1 as __common_expr_1], metrics=[output_rows=100, elapsed_compute=<slt:ignore>, output_bytes=800.0 B, output_batches=1, expr_0_eval_time=<slt:ignore>]
+<slt:ignore>
+
 statement ok
 reset datafusion.explain.analyze_level;

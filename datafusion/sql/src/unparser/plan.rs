@@ -499,16 +499,6 @@ impl Unparser<'_> {
                 )
             }
             LogicalPlan::Sort(sort) => {
-                // Sort can be top-level plan for derived table
-                if select.already_projected() {
-                    return self.derive_with_dialect_alias(
-                        "derived_sort",
-                        plan,
-                        relation,
-                        false,
-                        vec![],
-                    );
-                }
                 let Some(query_ref) = query else {
                     return internal_err!(
                         "Sort operator only valid in a statement context."
