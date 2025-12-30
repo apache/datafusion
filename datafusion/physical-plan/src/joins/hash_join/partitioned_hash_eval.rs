@@ -34,6 +34,36 @@ use datafusion_physical_expr_common::physical_expr::{
 
 use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 
+/// RandomState wrapper that preserves the seeds used to create it.
+///
+/// This is needed because ahash's `RandomState` doesn't expose its seeds after creation,
+/// but we need them for serialization (e.g., protobuf serde).
+#[derive(Clone, Debug)]
+pub struct SeededRandomState {
+    random_state: RandomState,
+    seeds: (u64, u64, u64, u64),
+}
+
+impl SeededRandomState {
+    /// Create a new SeededRandomState with the given seeds.
+    pub const fn with_seeds(k0: u64, k1: u64, k2: u64, k3: u64) -> Self {
+        Self {
+            random_state: RandomState::with_seeds(k0, k1, k2, k3),
+            seeds: (k0, k1, k2, k3),
+        }
+    }
+
+    /// Get the inner RandomState.
+    pub fn random_state(&self) -> &RandomState {
+        &self.random_state
+    }
+
+    /// Get the seeds used to create this RandomState.
+    pub fn seeds(&self) -> (u64, u64, u64, u64) {
+        self.seeds
+    }
+}
+
 /// Physical expression that computes hash values for a set of columns
 ///
 /// This expression computes the hash of join key columns using a specific RandomState.
@@ -45,8 +75,8 @@ use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
-    /// Random state for hashing
-    random_state: RandomState,
+    /// Random state for hashing (with seeds preserved for serialization)
+    random_state: SeededRandomState,
     /// Description for display
     description: String,
 }
@@ -56,11 +86,11 @@ impl HashExpr {
     ///
     /// # Arguments
     /// * `on_columns` - Columns to hash
-    /// * `random_state` - RandomState for hashing
+    /// * `random_state` - SeededRandomState for hashing
     /// * `description` - Description for debugging (e.g., "hash_repartition", "hash_join")
-    pub(super) fn new(
+    pub fn new(
         on_columns: Vec<PhysicalExprRef>,
-        random_state: RandomState,
+        random_state: SeededRandomState,
         description: String,
     ) -> Self {
         Self {
@@ -68,6 +98,21 @@ impl HashExpr {
             random_state,
             description,
         }
+    }
+
+    /// Get the columns being hashed.
+    pub fn on_columns(&self) -> &[PhysicalExprRef] {
+        &self.on_columns
+    }
+
+    /// Get the seeds used for hashing.
+    pub fn seeds(&self) -> (u64, u64, u64, u64) {
+        self.random_state.seeds()
+    }
+
+    /// Get the description.
+    pub fn description(&self) -> &str {
+        &self.description
     }
 }
 
@@ -79,7 +124,8 @@ impl std::fmt::Debug for HashExpr {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        write!(f, "{}({})", self.description, cols)
+        let (s1, s2, s3, s4) = self.seeds();
+        write!(f, "{}({cols}, [{s1},{s2},{s3},{s4}])", self.description)
     }
 }
 
@@ -87,12 +133,15 @@ impl Hash for HashExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
+        self.seeds().hash(state);
     }
 }
 
 impl PartialEq for HashExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.on_columns == other.on_columns && self.description == other.description
+        self.on_columns == other.on_columns
+            && self.description == other.description
+            && self.seeds() == other.seeds()
     }
 }
 
@@ -147,7 +196,11 @@ impl PhysicalExpr for HashExpr {
 
         // Compute hashes
         let mut hashes_buffer = vec![0; num_rows];
-        create_hashes(&keys_values, &self.random_state, &mut hashes_buffer)?;
+        create_hashes(
+            &keys_values,
+            self.random_state.random_state(),
+            &mut hashes_buffer,
+        )?;
 
         Ok(ColumnarValue::Array(Arc::new(UInt64Array::from(
             hashes_buffer,
@@ -206,13 +259,29 @@ impl Hash for HashTableLookupExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.hash_expr.dyn_hash(state);
         self.description.hash(state);
+        // Note that we compare hash_map by pointer equality.
+        // Actually comparing the contents of the hash maps would be expensive.
+        // The way these hash maps are used in actuality is that HashJoinExec creates
+        // one per partition per query execution, thus it is never possible for two different
+        // hash maps to have the same content in practice.
+        // Theoretically this is a public API and users could create identical hash maps,
+        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        Arc::as_ptr(&self.hash_map).hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.hash_expr, &other.hash_expr)
+        // Note that we compare hash_map by pointer equality.
+        // Actually comparing the contents of the hash maps would be expensive.
+        // The way these hash maps are used in actuality is that HashJoinExec creates
+        // one per partition per query execution, thus it is never possible for two different
+        // hash maps to have the same content in practice.
+        // Theoretically this is a public API and users could create identical hash maps,
+        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        self.hash_expr.as_ref() == other.hash_expr.as_ref()
             && self.description == other.description
+            && Arc::ptr_eq(&self.hash_map, &other.hash_map)
     }
 }
 
@@ -292,5 +361,267 @@ impl PhysicalExpr for HashTableLookupExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::joins::join_hash_map::JoinHashMapU32;
+    use datafusion_physical_expr::expressions::Column;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+
+    fn compute_hash<T: Hash>(value: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn test_hash_expr_eq_same() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let col_b: PhysicalExprRef = Arc::new(Column::new("b", 1));
+
+        let expr1 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        let expr2 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        assert_eq!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_expr_eq_different_columns() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let col_b: PhysicalExprRef = Arc::new(Column::new("b", 1));
+        let col_c: PhysicalExprRef = Arc::new(Column::new("c", 2));
+
+        let expr1 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        let expr2 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_c)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_expr_eq_different_description() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+
+        let expr1 = HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "hash_one".to_string(),
+        );
+
+        let expr2 = HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "hash_two".to_string(),
+        );
+
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_expr_eq_different_seeds() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+
+        let expr1 = HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        let expr2 = HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(5, 6, 7, 8),
+            "test_hash".to_string(),
+        );
+
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_expr_hash_consistency() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let col_b: PhysicalExprRef = Arc::new(Column::new("b", 1));
+
+        let expr1 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        let expr2 = HashExpr::new(
+            vec![Arc::clone(&col_a), Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "test_hash".to_string(),
+        );
+
+        // Equal expressions should have equal hashes
+        assert_eq!(expr1, expr2);
+        assert_eq!(compute_hash(&expr1), compute_hash(&expr2));
+    }
+
+    #[test]
+    fn test_hash_table_lookup_expr_eq_same() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let hash_expr: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+        let hash_map: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+
+        let expr1 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        let expr2 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        assert_eq!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_table_lookup_expr_eq_different_hash_expr() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let col_b: PhysicalExprRef = Arc::new(Column::new("b", 1));
+
+        let hash_expr1: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+
+        let hash_expr2: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_b)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+
+        let hash_map: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+
+        let expr1 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr1),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        let expr2 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr2),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_table_lookup_expr_eq_different_description() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let hash_expr: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+        let hash_map: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+
+        let expr1 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup_one".to_string(),
+        );
+
+        let expr2 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup_two".to_string(),
+        );
+
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_table_lookup_expr_eq_different_hash_map() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let hash_expr: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+
+        // Two different Arc pointers (even with same content) should not be equal
+        let hash_map1: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+        let hash_map2: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+
+        let expr1 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            hash_map1,
+            "lookup".to_string(),
+        );
+
+        let expr2 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            hash_map2,
+            "lookup".to_string(),
+        );
+
+        // Different Arc pointers means not equal (uses Arc::ptr_eq)
+        assert_ne!(expr1, expr2);
+    }
+
+    #[test]
+    fn test_hash_table_lookup_expr_hash_consistency() {
+        let col_a: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let hash_expr: PhysicalExprRef = Arc::new(HashExpr::new(
+            vec![Arc::clone(&col_a)],
+            SeededRandomState::with_seeds(1, 2, 3, 4),
+            "inner_hash".to_string(),
+        ));
+        let hash_map: Arc<dyn JoinHashMapType> =
+            Arc::new(JoinHashMapU32::with_capacity(10));
+
+        let expr1 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        let expr2 = HashTableLookupExpr::new(
+            Arc::clone(&hash_expr),
+            Arc::clone(&hash_map),
+            "lookup".to_string(),
+        );
+
+        // Equal expressions should have equal hashes
+        assert_eq!(expr1, expr2);
+        assert_eq!(compute_hash(&expr1), compute_hash(&expr2));
     }
 }

@@ -63,9 +63,8 @@ const DEFAULT_VALUE_METADATA_KEY: &str = "example.default_value";
 /// 4. Use the DefaultPhysicalExprAdapter as a fallback for standard schema adaptation
 /// 5. Convert string default values to proper types using `ScalarValue::cast_to()` at planning time
 ///
-/// Important: PhysicalExprAdapter is specifically designed for rewriting filter predicates
-/// that get pushed down to file scans. For handling missing columns in projections,
-/// other mechanisms in DataFusion are used (like SchemaAdapter).
+/// Important: PhysicalExprAdapter handles rewriting both filter predicates and projection
+/// expressions for file scans, including handling missing columns.
 ///
 /// The metadata-based approach provides a flexible way to store default values as strings
 /// and cast them to the appropriate types at planning time, avoiding runtime overhead.
@@ -144,8 +143,6 @@ pub async fn default_column_values() -> Result<()> {
     );
     println!("4. Default values from metadata are cast to proper types at planning time");
     println!("5. The DefaultPhysicalExprAdapter handles other schema adaptations");
-    println!("\nNote: PhysicalExprAdapter is specifically for filter predicates.");
-    println!("For projection columns, different mechanisms handle missing columns.");
 
     Ok(())
 }

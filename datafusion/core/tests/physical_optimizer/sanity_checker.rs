@@ -555,7 +555,7 @@ async fn test_sort_merge_join_satisfied() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
@@ -605,7 +605,7 @@ async fn test_sort_merge_join_order_missing() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]
@@ -653,7 +653,7 @@ async fn test_sort_merge_join_dist_missing() -> Result<()> {
     assert_snapshot!(
         actual,
         @r"
-    SortMergeJoin: join_type=Inner, on=[(c9@0, a@0)]
+    SortMergeJoinExec: join_type=Inner, on=[(c9@0, a@0)]
       RepartitionExec: partitioning=Hash([c9@0], 10), input_partitions=1, maintains_sort_order=true
         SortExec: expr=[c9@0 ASC], preserve_partitioning=[false]
           DataSourceExec: partitions=1, partition_sizes=[0]

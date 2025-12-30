@@ -78,7 +78,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-/// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
@@ -89,7 +88,6 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    table_schema: TableSchema,
-/// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
@@ -98,13 +96,11 @@ use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), schema_adapter_factory: Some(factory)} )) }
-/// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -833,23 +829,10 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        let file_ordering = self.output_ordering.first().cloned();
-
-        if file_ordering.is_none() {
-            return Ok(SortOrderPushdownResult::Unsupported);
-        }
-
-        // Use the trait method instead of downcasting
-        // Try to provide file ordering info to the source
-        // If not supported (e.g., CsvSource), fall back to original source
-        let file_source_with_ordering = self
+        // Delegate to FileSource to check if reverse scanning can satisfy the request.
+        let pushdown_result = self
             .file_source
-            .with_file_ordering_info(file_ordering)
-            .unwrap_or_else(|_| Arc::clone(&self.file_source));
-
-        // Try to reverse the datasource with ordering info,
-        // and currently only ParquetSource supports it with inexact reverse with row groups.
-        let pushdown_result = file_source_with_ordering.try_reverse_output(order)?;
+            .try_reverse_output(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
