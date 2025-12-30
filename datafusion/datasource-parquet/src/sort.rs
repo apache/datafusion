@@ -52,8 +52,14 @@ pub fn reverse_row_selection(
 
     // Build a mapping of row group index to its row range, but ONLY for
     // the row groups that are actually being scanned.
-    // The row numbers in this mapping are relative to the scanned row groups,
-    // not the entire file.
+    //
+    // IMPORTANT: The row numbers in this mapping are RELATIVE to the scanned row groups,
+    // not absolute positions in the file.
+    //
+    // Example: If row_groups_to_scan = [0, 2, 3] and each has 100 rows:
+    //   RG0: rows 0-99 (relative to scanned data)
+    //   RG2: rows 100-199 (relative to scanned data, NOT 200-299 in file!)
+    //   RG3: rows 200-299 (relative to scanned data, NOT 300-399 in file!)
     let mut rg_row_ranges: Vec<(usize, usize, usize)> =
         Vec::with_capacity(row_groups_to_scan.len());
     let mut current_row = 0;
@@ -61,7 +67,7 @@ pub fn reverse_row_selection(
         let rg = &rg_metadata[rg_idx];
         let num_rows = rg.num_rows() as usize;
         rg_row_ranges.push((rg_idx, current_row, current_row + num_rows));
-        current_row += num_rows;
+        current_row += num_rows; // This is relative row number, NOT absolute file position
     }
 
     // Map selections to row groups
@@ -131,9 +137,8 @@ mod tests {
         // Create in-memory parquet file with the specified row groups
         let mut buffer = Vec::new();
         {
-            let props = parquet::file::properties::WriterProperties::builder()
-                .set_max_row_group_size(row_group_sizes[0] as usize)
-                .build();
+            // Don't set max_row_group_size - we'll control it by writing separate batches
+            let props = parquet::file::properties::WriterProperties::builder().build();
 
             let mut writer =
                 ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
@@ -147,6 +152,8 @@ mod tests {
                 )
                 .unwrap();
                 writer.write(&batch).unwrap();
+                // Force flush to create a new row group
+                writer.flush().unwrap();
             }
             writer.close().unwrap();
         }
@@ -155,6 +162,20 @@ mod tests {
         let bytes = Bytes::from(buffer);
         let reader = SerializedFileReader::new(bytes).unwrap();
         reader.metadata().clone()
+    }
+
+    /// Test helper: Reverse a row selection for given row groups
+    ///
+    /// This helper makes tests more readable by clearly showing:
+    /// - Which row groups are being scanned
+    /// - What the original selection is
+    /// - What the reversed selection should be
+    fn reverse_access_plan(
+        row_selection: RowSelection,
+        metadata: &ParquetMetaData,
+        row_groups_to_scan: &[usize],
+    ) -> RowSelection {
+        reverse_row_selection(&row_selection, metadata, row_groups_to_scan).unwrap()
     }
 
     #[test]
@@ -166,10 +187,11 @@ mod tests {
         let selection =
             RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(250)]);
 
+        // Scanning all 3 row groups
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -199,7 +221,7 @@ mod tests {
 
         let row_groups_to_scan = vec![0, 1, 2];
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -225,8 +247,7 @@ mod tests {
 
         let row_groups_to_scan = vec![0, 1, 2];
 
-        let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+        let reversed = reverse_access_plan(selection, &metadata, &row_groups_to_scan);
 
         // Should still select all rows, just in reversed row group order
         let total_selected: usize = reversed
@@ -247,8 +268,7 @@ mod tests {
 
         let row_groups_to_scan = vec![0, 1, 2];
 
-        let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+        let reversed = reverse_access_plan(selection, &metadata, &row_groups_to_scan);
 
         // Should still skip all rows
         let total_selected: usize = reversed
@@ -273,7 +293,7 @@ mod tests {
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         let original_selected: usize = selection
             .iter()
@@ -296,10 +316,11 @@ mod tests {
         let selection =
             RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
 
+        // Only scanning the single row group (RG0)
         let row_groups_to_scan = vec![0];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         // With single row group, selection should remain the same
         let original_selected: usize = selection
@@ -332,7 +353,7 @@ mod tests {
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         let original_selected: usize = selection
             .iter()
@@ -351,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_reverse_with_skipped_row_group() {
-        // This test covers the "no specific selection" code path (lines 90-95)
+        // This test covers the "no specific selection" code path
         let metadata = create_test_metadata(vec![100, 100, 100]);
 
         // Select only from first and third row groups, skip middle one entirely
@@ -364,7 +385,7 @@ mod tests {
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -397,7 +418,7 @@ mod tests {
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         let original_selected: usize = selection
             .iter()
@@ -417,20 +438,22 @@ mod tests {
     #[test]
     fn test_reverse_alternating_row_groups() {
         // Test with more complex skipping pattern
+        // File has 4 row groups, but we only scan first 3
         let metadata = create_test_metadata(vec![100, 100, 100, 100]);
 
-        // Select first and third row groups, skip second and fourth
+        // Select first and third row groups, skip second
+        // Note: Selection only covers first 3 row groups (300 rows)
         let selection = RowSelection::from(vec![
             RowSelector::select(100), // RG0
             RowSelector::skip(100),   // RG1
             RowSelector::select(100), // RG2
-            RowSelector::skip(100),   // RG3
         ]);
 
+        // Only scanning first 3 row groups
         let row_groups_to_scan = vec![0, 1, 2];
 
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         let original_selected: usize = selection
             .iter()
@@ -464,7 +487,7 @@ mod tests {
         // Only scanning RG0, RG2, RG3 (RG1 is not in the scan plan)
         let row_groups_to_scan = vec![0, 2, 3];
         let reversed =
-            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+            reverse_access_plan(selection.clone(), &metadata, &row_groups_to_scan);
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
