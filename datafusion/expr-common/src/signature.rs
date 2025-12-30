@@ -2172,10 +2172,17 @@ mod tests {
         match &sig.type_signature {
             TypeSignature::OneOf(sigs) => {
                 assert_eq!(sigs.len(), 2);
-                assert_eq!(sigs[0], TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]));
+                assert_eq!(
+                    sigs[0],
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64])
+                );
                 assert_eq!(
                     sigs[1],
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64, DataType::Int64])
+                    TypeSignature::Exact(vec![
+                        DataType::Utf8,
+                        DataType::Int64,
+                        DataType::Int64
+                    ])
                 );
             }
             other => panic!("Expected OneOf, got {:?}", other),
@@ -2184,7 +2191,11 @@ mod tests {
         // Names should come from the longest variant
         assert_eq!(
             sig.parameter_names,
-            Some(vec!["str".to_string(), "pos".to_string(), "len".to_string()])
+            Some(vec![
+                "str".to_string(),
+                "pos".to_string(),
+                "len".to_string()
+            ])
         );
     }
 
@@ -2192,10 +2203,7 @@ mod tests {
     fn test_signature_from_parameter_variants_with_nullary() {
         // Test with a Nullary (no arguments) variant
         let sig = Signature::from_parameter_variants(
-            vec![
-                vec![],
-                vec![("flag", DataType::Boolean)],
-            ],
+            vec![vec![], vec![("flag", DataType::Boolean)]],
             Volatility::Stable,
         )
         .unwrap();
@@ -2217,7 +2225,10 @@ mod tests {
     #[test]
     fn test_signature_from_parameter_variants_empty_error() {
         // Test that an empty variant list returns an error
-        let result = Signature::from_parameter_variants::<&str, DataType>(vec![], Volatility::Immutable);
+        let result = Signature::from_parameter_variants::<&str, DataType>(
+            vec![],
+            Volatility::Immutable,
+        );
 
         assert!(result.is_err());
         assert!(
@@ -2231,12 +2242,17 @@ mod tests {
     #[test]
     fn test_signature_from_parameter_variants_with_coercions() {
         // Test with Coercion-based variants for Coercible signatures
-        let string_coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
-        let int64_coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
+        let string_coercion =
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int64_coercion =
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
 
         let sig = Signature::from_parameter_variants(
             vec![
-                vec![("str", string_coercion.clone()), ("pos", int64_coercion.clone())],
+                vec![
+                    ("str", string_coercion.clone()),
+                    ("pos", int64_coercion.clone()),
+                ],
                 vec![
                     ("str", string_coercion.clone()),
                     ("pos", int64_coercion.clone()),
@@ -2268,7 +2284,11 @@ mod tests {
         // Parameter names from longest variant
         assert_eq!(
             sig.parameter_names,
-            Some(vec!["str".to_string(), "pos".to_string(), "len".to_string()])
+            Some(vec![
+                "str".to_string(),
+                "pos".to_string(),
+                "len".to_string()
+            ])
         );
     }
 
@@ -2299,8 +2319,8 @@ mod tests {
 
         let result = Signature::from_parameter_variants(
             vec![vec![
-                ("str", DataType::Utf8),          // DataType
-                ("pos", coercion),                // Coercion - mixed!
+                ("str", ParameterKind::DataType(DataType::Utf8)),
+                ("pos", ParameterKind::Coercion(coercion)),
             ]],
             Volatility::Immutable,
         );
