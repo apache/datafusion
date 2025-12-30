@@ -27,7 +27,7 @@ use crate::error::{DataFusionError, Result};
 /// ensuring only valid versions ("1.0" or "2.0") can be set via `SET` commands
 /// or proto deserialization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DFWriterVersion {
+pub enum DFParquetWriterVersion {
     /// Parquet format version 1.0
     #[default]
     V1_0,
@@ -35,14 +35,14 @@ pub enum DFWriterVersion {
     V2_0,
 }
 
-/// Implement parsing strings to `DFWriterVersion`
-impl FromStr for DFWriterVersion {
+/// Implement parsing strings to `DFParquetWriterVersion`
+impl FromStr for DFParquetWriterVersion {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "1.0" => Ok(DFWriterVersion::V1_0),
-            "2.0" => Ok(DFWriterVersion::V2_0),
+            "1.0" => Ok(DFParquetWriterVersion::V1_0),
+            "2.0" => Ok(DFParquetWriterVersion::V2_0),
             other => Err(DataFusionError::Configuration(format!(
                 "Invalid parquet writer version: {other}. Expected one of: 1.0, 2.0"
             ))),
@@ -50,58 +50,58 @@ impl FromStr for DFWriterVersion {
     }
 }
 
-impl Display for DFWriterVersion {
+impl Display for DFParquetWriterVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            DFWriterVersion::V1_0 => "1.0",
-            DFWriterVersion::V2_0 => "2.0",
+            DFParquetWriterVersion::V1_0 => "1.0",
+            DFParquetWriterVersion::V2_0 => "2.0",
         };
         write!(f, "{s}")
     }
 }
 
-impl ConfigField for DFWriterVersion {
+impl ConfigField for DFParquetWriterVersion {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
         v.some(key, self, description)
     }
 
     fn set(&mut self, _: &str, value: &str) -> Result<()> {
-        *self = DFWriterVersion::from_str(value)?;
+        *self = DFParquetWriterVersion::from_str(value)?;
         Ok(())
     }
 }
 
-/// Convert `DFWriterVersion` to parquet crate's `WriterVersion`
+/// Convert `DFParquetWriterVersion` to parquet crate's `WriterVersion`
 ///
-/// This conversion is infallible since `DFWriterVersion` only contains
+/// This conversion is infallible since `DFParquetWriterVersion` only contains
 /// valid values that have been validated at configuration time.
 #[cfg(feature = "parquet")]
-impl From<DFWriterVersion> for parquet::file::properties::WriterVersion {
-    fn from(value: DFWriterVersion) -> Self {
+impl From<DFParquetWriterVersion> for parquet::file::properties::WriterVersion {
+    fn from(value: DFParquetWriterVersion) -> Self {
         match value {
-            DFWriterVersion::V1_0 => {
+            DFParquetWriterVersion::V1_0 => {
                 parquet::file::properties::WriterVersion::PARQUET_1_0
             }
-            DFWriterVersion::V2_0 => {
+            DFParquetWriterVersion::V2_0 => {
                 parquet::file::properties::WriterVersion::PARQUET_2_0
             }
         }
     }
 }
 
-/// Convert parquet crate's `WriterVersion` to `DFWriterVersion`
+/// Convert parquet crate's `WriterVersion` to `DFParquetWriterVersion`
 ///
 /// This is used when converting from existing parquet writer properties,
 /// such as when reading from proto or test code.
 #[cfg(feature = "parquet")]
-impl From<parquet::file::properties::WriterVersion> for DFWriterVersion {
+impl From<parquet::file::properties::WriterVersion> for DFParquetWriterVersion {
     fn from(version: parquet::file::properties::WriterVersion) -> Self {
         match version {
             parquet::file::properties::WriterVersion::PARQUET_1_0 => {
-                DFWriterVersion::V1_0
+                DFParquetWriterVersion::V1_0
             }
             parquet::file::properties::WriterVersion::PARQUET_2_0 => {
-                DFWriterVersion::V2_0
+                DFParquetWriterVersion::V2_0
             }
         }
     }

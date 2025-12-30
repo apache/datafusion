@@ -23,7 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
-use crate::parquet_config::DFWriterVersion;
+use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -743,7 +743,7 @@ config_namespace! {
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: DFWriterVersion, default = DFWriterVersion::default()
+        pub writer_version: DFParquetWriterVersion, default = DFParquetWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -3459,7 +3459,7 @@ mod tests {
     #[cfg(feature = "parquet")]
     #[test]
     fn test_parquet_writer_version_validation() {
-        use crate::{config::ConfigOptions, parquet_config::DFWriterVersion};
+        use crate::{config::ConfigOptions, parquet_config::DFParquetWriterVersion};
 
         let mut config = ConfigOptions::default();
 
@@ -3469,7 +3469,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             config.execution.parquet.writer_version,
-            DFWriterVersion::V1_0
+            DFParquetWriterVersion::V1_0
         );
 
         config
@@ -3477,34 +3477,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             config.execution.parquet.writer_version,
-            DFWriterVersion::V2_0
+            DFParquetWriterVersion::V2_0
         );
 
         // Invalid value should error immediately at SET time
-        let result = config.set("datafusion.execution.parquet.writer_version", "3.0");
-        assert!(
-            result.is_err(),
-            "Setting invalid writer_version '3.0' should fail at SET time"
-        );
-        let error_msg = result.unwrap_err().to_string();
-        assert!(
-            error_msg.contains("writer version")
-                || error_msg.contains("1.0")
-                || error_msg.contains("2.0"),
-            "Error message should mention valid writer version values. Got: {error_msg}"
-        );
-
-        // Test case-insensitive (should work for valid values)
-        config
-            .set("datafusion.execution.parquet.writer_version", "1.0")
-            .unwrap();
-
-        // Another invalid value
-        let result2 =
-            config.set("datafusion.execution.parquet.writer_version", "invalid");
-        assert!(
-            result2.is_err(),
-            "Setting invalid writer_version 'invalid' should fail at SET time"
+        let err = config
+            .set("datafusion.execution.parquet.writer_version", "3.0")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
         );
     }
 }

@@ -477,6 +477,7 @@ mod parquet {
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,
             write_batch_size: proto.write_batch_size as usize,
+                   // TODO: Consider changing to TryFrom to avoid panic on invalid proto data
             writer_version: proto.writer_version.parse().expect("
                 Invalid parquet writer version in proto, expected '1.0' or '2.0'
             "),

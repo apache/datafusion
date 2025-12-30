@@ -393,7 +393,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
     use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
-    use crate::parquet_config::DFWriterVersion;
+    use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -420,10 +420,11 @@ mod tests {
 
     fn parquet_options_with_non_defaults() -> ParquetOptions {
         let defaults = ParquetOptions::default();
-        let writer_version = if defaults.writer_version.eq(&DFWriterVersion::V1_0) {
-            DFWriterVersion::V2_0
+        let writer_version = if defaults.writer_version.eq(&DFParquetWriterVersion::V1_0)
+        {
+            DFParquetWriterVersion::V2_0
         } else {
-            DFWriterVersion::V1_0
+            DFParquetWriterVersion::V1_0
         };
 
         ParquetOptions {
