@@ -25,7 +25,6 @@ use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use crate::opener::ParquetOpener;
 use crate::opener::build_pruning_predicates;
-use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
@@ -670,7 +669,6 @@ impl FileSource for ParquetSource {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        let table_schema = self.table_schema.table_schema();
         // Determine if based on configs we should push filters down.
         // If either the table / scan itself or the config has pushdown enabled,
         // we will push down the filters.
@@ -685,13 +683,7 @@ impl FileSource for ParquetSource {
         let mut source = self.clone();
         let filters: Vec<PushedDownPredicate> = filters
             .into_iter()
-            .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, table_schema) {
-                    PushedDownPredicate::supported(filter)
-                } else {
-                    PushedDownPredicate::unsupported(filter)
-                }
-            })
+            .map(PushedDownPredicate::supported)
             .collect();
         if filters
             .iter()
