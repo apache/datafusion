@@ -213,21 +213,7 @@ fn collect_formats(args: &[ColumnarValue]) -> Result<Vec<&str>> {
 
 /// Extract time portion from timestamp using Arrow cast kernel
 fn timestamp_to_time(arg: &ColumnarValue) -> Result<ColumnarValue> {
-    let target_type = Time64(arrow::datatypes::TimeUnit::Nanosecond);
-
-    match arg {
-        ColumnarValue::Scalar(scalar) => {
-            // Convert scalar to array of size 1, cast, then extract result
-            let array = scalar.to_array()?;
-            let time_array = cast(&array, &target_type)?;
-            let time_value = ScalarValue::try_from_array(&time_array, 0)?;
-            Ok(ColumnarValue::Scalar(time_value))
-        }
-        ColumnarValue::Array(array) => {
-            let time_array = cast(array, &target_type)?;
-            Ok(ColumnarValue::Array(time_array))
-        }
-    }
+    Ok(arg.cast_to(&Time64(arrow::datatypes::TimeUnit::Nanosecond), None)?)
 }
 
 /// Parse time array using the provided formats
