@@ -219,22 +219,22 @@ where
         .try_for_each(|((string, delimiter), n)| -> Result<(), DataFusionError> {
             match (string, delimiter, n) {
                 (Some(string), Some(delimiter), Some(n)) => {
-                    let split_string: Vec<&str> = string.split(delimiter).collect();
-                    let len = split_string.len();
-
-                    let index = match n.cmp(&0) {
-                        std::cmp::Ordering::Less => len as i64 + n,
+                    let result = match n.cmp(&0) {
+                        std::cmp::Ordering::Greater => {
+                            // Positive index: use nth() to avoid collecting all parts
+                            // This stops iteration as soon as we find the nth element
+                            string.split(delimiter).nth((n - 1) as usize)
+                        }
+                        std::cmp::Ordering::Less => {
+                            // Negative index: use rsplit().nth() to efficiently get from the end
+                            // rsplit iterates in reverse, so -1 means first from rsplit (index 0)
+                            string.rsplit(delimiter).nth((-n - 1) as usize)
+                        }
                         std::cmp::Ordering::Equal => {
                             return exec_err!("field position must not be zero");
                         }
-                        std::cmp::Ordering::Greater => n - 1,
-                    } as usize;
-
-                    if index < len {
-                        builder.append_value(split_string[index]);
-                    } else {
-                        builder.append_value("");
-                    }
+                    };
+                    builder.append_value(result.unwrap_or(""));
                 }
                 _ => builder.append_null(),
             }
