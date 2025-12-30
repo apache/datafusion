@@ -23,7 +23,7 @@ mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
 mod simplify_predicates;
-pub mod simplify_sql_literal;
+pub mod simplify_literal;
 mod unwrap_cast;
 mod utils;
 

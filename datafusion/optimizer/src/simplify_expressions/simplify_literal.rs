@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Parses and simplifies a SQL expression to a literal of a given type.
+//! Parses and simplifies an expression to a literal of a given type.
 //!
-//! This module provides functionality to parse and simplify static SQL expressions
+//! This module provides functionality to parse and simplify static expressions
 //! used in SQL constructs like `FROM TABLE SAMPLE (10 + 50 * 2)`. If they are required
 //! in a planning (not an execution) phase, they need to be reduced to literals of a given type.
 
@@ -32,7 +32,7 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::simplify::SimplifyContext;
 use std::sync::Arc;
 
-/// Parse and simplifies a SQL expression to a numeric literal,
+/// Parse and simplifies an expression to a numeric literal,
 /// corresponding to an arrow primitive type `T` (for example, Float64Type).
 ///
 /// This function simplifies and coerces the expression, then extracts the underlying
@@ -40,9 +40,9 @@ use std::sync::Arc;
 ///
 /// # Example
 /// ```ignore
-/// let value: f64 = parse_sql_literal::<Float64Type>(expr)?;
+/// let value: f64 = parse_literal::<Float64Type>(expr)?;
 /// ```
-pub fn parse_sql_literal<T>(expr: &Expr) -> Result<T::Native>
+pub fn parse_literal<T>(expr: &Expr) -> Result<T::Native>
 where
     T: ArrowPrimitiveType,
     T::Native: TryFrom<ScalarValue, Error = DataFusionError>,
@@ -184,7 +184,7 @@ mod tests {
                 .sql_to_expr(ast_expr, &schema)
                 .expect("sql_to_expr");
 
-            let result: Result<f64> = parse_sql_literal::<Float64Type>(&expr);
+            let result: Result<f64> = parse_literal::<Float64Type>(&expr);
 
             match result {
                 Ok(value) => {
@@ -220,7 +220,7 @@ mod tests {
             .sql_to_expr(ast_expr, &schema)
             .expect("sql_to_expr");
 
-        let result: Result<i64> = parse_sql_literal::<Int64Type>(&expr);
+        let result: Result<i64> = parse_literal::<Int64Type>(&expr);
 
         match result {
             Ok(value) => {
