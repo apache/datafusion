@@ -32,8 +32,8 @@ use datafusion_common::types::{
 };
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -80,25 +80,20 @@ impl SubstrFunc {
             vec![TypeSignatureClass::Native(logical_int32())],
             NativeType::Int64,
         );
-        let parameters = [
-            ("str", string.clone()),
-            ("start_pos", int64.clone()),
-            ("length", int64.clone()),
-        ];
-        let coercions: Vec<_> = parameters
-            .iter()
-            .map(|(_, coercion)| coercion.clone())
-            .collect();
+
         Self {
-            signature: Signature::one_of(
+            signature: Signature::from_parameter_variants(
                 vec![
-                    TypeSignature::Coercible(coercions[..2].to_vec()),
-                    TypeSignature::Coercible(coercions),
+                    vec![("str", string.clone()), ("start_pos", int64.clone())],
+                    vec![
+                        ("str", string.clone()),
+                        ("start_pos", int64.clone()),
+                        ("length", int64.clone()),
+                    ],
                 ],
                 Volatility::Immutable,
             )
-            .with_parameters(&parameters)
-            .expect("valid parameter names"),
+            .expect("valid parameter variants"),
             aliases: vec![String::from("substring")],
         }
     }
