@@ -3708,7 +3708,7 @@ impl ScalarValue {
         // Use name-based struct casting for struct types
         let cast_arr = match (scalar_array.data_type(), target_type) {
             (DataType::Struct(_), DataType::Struct(target_fields)) => {
-                crate::struct_cast::cast_struct_array_by_name(
+                crate::nested_struct::cast_struct_array_by_name(
                     &scalar_array,
                     target_fields,
                     cast_options,

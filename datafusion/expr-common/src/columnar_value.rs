@@ -325,7 +325,7 @@ fn cast_array_by_name(
 
     match (array.data_type(), cast_type) {
         (DataType::Struct(_source_fields), DataType::Struct(target_fields)) => {
-            datafusion_common::struct_cast::cast_struct_array_by_name(
+            datafusion_common::nested_struct::cast_struct_array_by_name(
                 array,
                 target_fields,
                 cast_options,
