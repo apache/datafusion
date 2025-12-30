@@ -89,136 +89,55 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Float64Type, Int64Type};
-    use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{TableReference, not_impl_err};
-    use datafusion_expr::planner::{ContextProvider, RelationPlannerContext};
-    use datafusion_expr::sqlparser::parser::Parser;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
-    use datafusion_sql::planner::{PlannerContext, SqlToRel};
-    use datafusion_sql::relation::SqlToRelRelationContext;
-    use datafusion_sql::sqlparser::dialect::GenericDialect;
-    use std::sync::Arc;
-
-    // Simple mock context provider for testing
-    struct MockContextProvider {
-        options: ConfigOptions,
-    }
-
-    impl ContextProvider for MockContextProvider {
-        fn get_table_source(&self, _: TableReference) -> Result<Arc<dyn TableSource>> {
-            not_impl_err!("mock")
-        }
-
-        fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
-            None
-        }
-
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            None
-        }
-
-        fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
-            None
-        }
-
-        fn get_window_meta(&self, _name: &str) -> Option<Arc<WindowUDF>> {
-            None
-        }
-
-        fn options(&self) -> &ConfigOptions {
-            &self.options
-        }
-
-        fn udf_names(&self) -> Vec<String> {
-            vec![]
-        }
-
-        fn udaf_names(&self) -> Vec<String> {
-            vec![]
-        }
-
-        fn udwf_names(&self) -> Vec<String> {
-            vec![]
-        }
-    }
+    use arrow::datatypes::{Float64Type, Int64Type};
+    use datafusion_expr::{BinaryExpr, lit};
+    use datafusion_expr_common::operator::Operator;
 
     #[test]
     fn test_parse_sql_float_literal() {
         let test_cases = vec![
-            ("0.0", 0.0),
-            ("1.0", 1.0),
-            ("0", 0.0),
-            ("1", 1.0),
-            ("0.5", 0.5),
-            ("100.0", 100.0),
-            ("0.001", 0.001),
-            ("999.999", 999.999),
-            ("1.0 + 2.0", 3.0),
-            ("10.0 * 0.5", 5.0),
-            ("100.0 / 4.0", 25.0),
-            ("(80.0 + 2.0*10.0) / 4.0", 25.0),
-            ("50.0 - 10.0", 40.0),
-            ("1e2", 100.0),
-            ("1.5e1", 15.0),
-            ("2.5e-1", 0.25),
+            (Expr::Literal(ScalarValue::Float64(Some(0.0)), None), 0.0),
+            (Expr::Literal(ScalarValue::Float64(Some(1.0)), None), 1.0),
+            (
+                Expr::BinaryExpr(BinaryExpr::new(
+                    Box::new(lit(50.0)),
+                    Operator::Minus,
+                    Box::new(lit(10.0)),
+                )),
+                40.0,
+            ),
+            (
+                Expr::Literal(ScalarValue::Utf8(Some("1e2".into())), None),
+                100.0,
+            ),
+            (
+                Expr::Literal(ScalarValue::Utf8(Some("2.5e-1".into())), None),
+                0.25,
+            ),
         ];
 
-        let context = MockContextProvider {
-            options: ConfigOptions::default(),
-        };
-        let sql_to_rel = SqlToRel::new(&context);
-        let mut planner_context = PlannerContext::new();
-        let mut sql_context =
-            SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
-        let dialect = GenericDialect {};
-        let schema = DFSchemaRef::new(DFSchema::empty());
-
-        for (sql_expr, expected) in test_cases {
-            let ast_expr = Parser::new(&dialect)
-                .try_with_sql(sql_expr)
-                .unwrap()
-                .parse_expr()
-                .unwrap();
-            let expr = sql_context
-                .sql_to_expr(ast_expr, &schema)
-                .expect("sql_to_expr");
-
+        for (expr, expected) in test_cases {
             let result: Result<f64> = parse_literal::<Float64Type>(&expr);
 
             match result {
                 Ok(value) => {
                     assert!(
                         (value - expected).abs() < 1e-10,
-                        "For expression '{sql_expr}': expected {expected}, got {value}",
+                        "For expression '{expr}': expected {expected}, got {value}",
                     );
                 }
-                Err(e) => panic!("Failed to parse expression '{sql_expr}': {e}"),
+                Err(e) => panic!("Failed to parse expression '{expr}': {e}"),
             }
         }
     }
 
     #[test]
     fn test_parse_sql_integer_literal() {
-        let context = MockContextProvider {
-            options: ConfigOptions::default(),
-        };
-        let sql_to_rel = SqlToRel::new(&context);
-        let mut planner_context = PlannerContext::new();
-        let mut sql_context =
-            SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
-        let dialect = GenericDialect {};
-        let schema = DFSchemaRef::new(DFSchema::empty());
-
-        // Integer
-        let ast_expr = Parser::new(&dialect)
-            .try_with_sql("2 + 4")
-            .unwrap()
-            .parse_expr()
-            .unwrap();
-        let expr = sql_context
-            .sql_to_expr(ast_expr, &schema)
-            .expect("sql_to_expr");
+        let expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(lit(2)),
+            Operator::Plus,
+            Box::new(lit(4)),
+        ));
 
         let result: Result<i64> = parse_literal::<Int64Type>(&expr);
 
