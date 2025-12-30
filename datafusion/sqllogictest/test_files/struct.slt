@@ -870,18 +870,16 @@ SELECT CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
 {a: 4, b: 3}
 
 # Test with missing field - should insert nulls
-# TODO: Optimizer const-folding causes hang - needs special handling
-# query ?
-# SELECT CAST({a: 1} AS STRUCT(a INT, b INT));
-# ----
-# {a: 1, b: }
+query ?
+SELECT CAST({a: 1} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: NULL}
 
 # Test with extra source field - should be ignored
-# TODO: Optimizer const-folding causes hang - needs special handling
-# query ?
-# SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
-# ----
-# {a: 1, b: 2}
+query ?
+SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: 2}
 
 # Test nested struct with field reordering
 query ?
