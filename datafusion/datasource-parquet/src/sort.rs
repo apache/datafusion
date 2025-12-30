@@ -22,6 +22,8 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
 
+// datafusion/datasource-parquet/src/sort.rs
+
 /// Reverse a row selection to match reversed row group order.
 ///
 /// When scanning row groups in reverse order, we need to adjust the row selection
@@ -31,22 +33,34 @@ use std::collections::HashMap;
 /// 3. Reconstructs the row selection for the new order
 ///
 /// # Arguments
-/// * `row_selection` - Original row selection
+/// * `row_selection` - Original row selection (only covers row groups that are scanned)
 /// * `parquet_metadata` - Metadata containing row group information
+/// * `row_groups_to_scan` - Indexes of row groups that will be scanned (in original order)
 ///
 /// # Returns
 /// A new `RowSelection` adjusted for reversed row group order
+///
+/// # Important Notes
+/// The input `row_selection` only covers the row groups specified in `row_groups_to_scan`.
+/// Row groups that are skipped (not in `row_groups_to_scan`) are not represented in the
+/// `row_selection` at all. This function needs `row_groups_to_scan` to correctly map
+/// the selection back to the original row groups.
 pub fn reverse_row_selection(
     row_selection: &RowSelection,
     parquet_metadata: &ParquetMetaData,
+    row_groups_to_scan: &[usize],
 ) -> Result<RowSelection> {
     let rg_metadata = parquet_metadata.row_groups();
 
-    // Build a mapping of row group index to its row range in the file
+    // Build a mapping of row group index to its row range, but ONLY for
+    // the row groups that are actually being scanned.
+    // The row numbers in this mapping are relative to the scanned row groups,
+    // not the entire file.
     let mut rg_row_ranges: Vec<(usize, usize, usize)> =
-        Vec::with_capacity(rg_metadata.len());
+        Vec::with_capacity(row_groups_to_scan.len());
     let mut current_row = 0;
-    for (rg_idx, rg) in rg_metadata.iter().enumerate() {
+    for &rg_idx in row_groups_to_scan {
+        let rg = &rg_metadata[rg_idx];
         let num_rows = rg.num_rows() as usize;
         rg_row_ranges.push((rg_idx, current_row, current_row + num_rows));
         current_row += num_rows;
@@ -82,12 +96,13 @@ pub fn reverse_row_selection(
     }
 
     // Build new selection for reversed row group order
+    // Only iterate over the row groups that are being scanned, in reverse order
     let mut reversed_selectors = Vec::new();
-    for rg_idx in (0..rg_metadata.len()).rev() {
+    for &rg_idx in row_groups_to_scan.iter().rev() {
         if let Some(selectors) = rg_selections.get(&rg_idx) {
             reversed_selectors.extend(selectors.iter().cloned());
         } else {
-            // No specific selection for this row group means select all
+            // No specific selection for this row group means select all rows in it
             if let Some((_, start, end)) =
                 rg_row_ranges.iter().find(|(idx, _, _)| *idx == rg_idx)
             {
@@ -153,7 +168,10 @@ mod tests {
         let selection =
             RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(250)]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -181,7 +199,9 @@ mod tests {
             RowSelector::skip(150),
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -205,7 +225,10 @@ mod tests {
         // Select all rows
         let selection = RowSelection::from(vec![RowSelector::select(300)]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // Should still select all rows, just in reversed row group order
         let total_selected: usize = reversed
@@ -224,7 +247,10 @@ mod tests {
         // Skip all rows
         let selection = RowSelection::from(vec![RowSelector::skip(300)]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // Should still skip all rows
         let total_selected: usize = reversed
@@ -246,7 +272,10 @@ mod tests {
             RowSelector::skip(75),
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         let original_selected: usize = selection
             .iter()
@@ -269,7 +298,10 @@ mod tests {
         let selection =
             RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // With single row group, selection should remain the same
         let original_selected: usize = selection
@@ -299,7 +331,10 @@ mod tests {
             RowSelector::select(100),
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         let original_selected: usize = selection
             .iter()
@@ -328,7 +363,10 @@ mod tests {
             RowSelector::select(50), // Last 50 of RG2
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         // Verify total selected rows remain the same
         let original_selected: usize = selection
@@ -358,7 +396,10 @@ mod tests {
             RowSelector::skip(100),   // Skip RG2
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         let original_selected: usize = selection
             .iter()
@@ -388,7 +429,10 @@ mod tests {
             RowSelector::skip(100),   // RG3
         ]);
 
-        let reversed = reverse_row_selection(&selection, &metadata).unwrap();
+        let row_groups_to_scan = vec![0, 1, 2];
+
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
 
         let original_selected: usize = selection
             .iter()
@@ -403,5 +447,65 @@ mod tests {
 
         assert_eq!(original_selected, reversed_selected);
         assert_eq!(original_selected, 200);
+    }
+
+    #[test]
+    fn test_reverse_with_skipped_row_groups() {
+        // This is the key test case for the bug fix
+        let metadata = create_test_metadata(vec![100, 100, 100, 100]);
+
+        // Scenario: RG0 (scan all), RG1 (completely skipped), RG2 (partial), RG3 (scan all)
+        // The row selection only covers RG0, RG2, RG3 (300 rows total)
+        let selection = RowSelection::from(vec![
+            RowSelector::select(100), // RG0: all 100 rows
+            RowSelector::select(25),  // RG2: select first 25 rows
+            RowSelector::skip(75),    // RG2: skip last 75 rows
+            RowSelector::select(100), // RG3: all 100 rows
+        ]);
+
+        // Only scanning RG0, RG2, RG3 (RG1 is not in the scan plan)
+        let row_groups_to_scan = vec![0, 2, 3];
+        let reversed =
+            reverse_row_selection(&selection, &metadata, &row_groups_to_scan).unwrap();
+
+        // Verify total selected rows remain the same
+        let original_selected: usize = selection
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+        let reversed_selected: usize = reversed
+            .iter()
+            .filter(|s| !s.skip)
+            .map(|s| s.row_count)
+            .sum();
+
+        assert_eq!(original_selected, 225); // 100 + 25 + 100
+        assert_eq!(reversed_selected, 225);
+
+        // Verify the reversed selection structure
+        // After reversal, the order becomes: RG3, RG2, RG0
+        // - RG3: select(100)
+        // - RG2: select(25), skip(75)  (note: internal order preserved, not reversed)
+        // - RG0: select(100)
+        //
+        // After RowSelection::from() merges adjacent selectors of the same type:
+        // - RG3's select(100) + RG2's select(25) = select(125)
+        // - RG2's skip(75) remains as skip(75)
+        // - RG0's select(100) remains as select(100)
+        let selectors: Vec<_> = reversed.iter().collect();
+        assert_eq!(selectors.len(), 3);
+
+        // RG3 (100) + RG2 first part (25) merged into select(125)
+        assert!(!selectors[0].skip);
+        assert_eq!(selectors[0].row_count, 125);
+
+        // RG2: skip last 75 rows
+        assert!(selectors[1].skip);
+        assert_eq!(selectors[1].row_count, 75);
+
+        // RG0: select all 100 rows
+        assert!(!selectors[2].skip);
+        assert_eq!(selectors[2].row_count, 100);
     }
 }
