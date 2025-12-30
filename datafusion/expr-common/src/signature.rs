@@ -1441,7 +1441,7 @@ impl Signature {
     /// - Parameter names are invalid
     /// - Type kinds are inconsistent within a variant
     pub fn from_parameter_variants<N, P>(
-        variants: Vec<Vec<(N, P)>>,
+        variants: &[Vec<(N, P)>],
         volatility: Volatility,
     ) -> Result<Self>
     where
@@ -1452,8 +1452,8 @@ impl Signature {
             return plan_err!("At least one variant must be provided");
         }
 
-        let parameter_names = Self::extract_parameter_names(&variants);
-        let type_signatures = Self::build_type_signatures(&variants)?;
+        let parameter_names = Self::extract_parameter_names(variants);
+        let type_signatures = Self::build_type_signatures(variants)?;
         let type_signature = Self::consolidate_signatures(type_signatures)?;
 
         let mut sig = Self::new(type_signature, volatility);
@@ -2149,7 +2149,7 @@ mod tests {
     fn test_signature_from_parameter_variants_single_variant() {
         // Test with a single variant (Exact signature)
         let sig = Signature::from_parameter_variants(
-            vec![vec![("count", DataType::Int32), ("name", DataType::Utf8)]],
+            &[vec![("count", DataType::Int32), ("name", DataType::Utf8)]],
             Volatility::Immutable,
         )
         .unwrap();
@@ -2169,7 +2169,7 @@ mod tests {
     fn test_signature_from_parameter_variants_two_variants() {
         // Test with two variants creating a OneOf signature
         let sig = Signature::from_parameter_variants(
-            vec![
+            &[
                 vec![("str", DataType::Utf8), ("pos", DataType::Int64)],
                 vec![
                     ("str", DataType::Utf8),
@@ -2198,7 +2198,7 @@ mod tests {
                     ])
                 );
             }
-            other => panic!("Expected OneOf, got {:?}", other),
+            other => panic!("Expected OneOf, got {other:?}"),
         }
 
         // Names should come from the longest variant
@@ -2216,7 +2216,7 @@ mod tests {
     fn test_signature_from_parameter_variants_with_nullary() {
         // Test with a Nullary (no arguments) variant
         let sig = Signature::from_parameter_variants(
-            vec![vec![], vec![("flag", DataType::Boolean)]],
+            &[vec![], vec![("flag", DataType::Boolean)]],
             Volatility::Stable,
         )
         .unwrap();
@@ -2228,7 +2228,7 @@ mod tests {
                 assert_eq!(sigs[0], TypeSignature::Nullary);
                 assert_eq!(sigs[1], TypeSignature::Exact(vec![DataType::Boolean]));
             }
-            other => panic!("Expected OneOf, got {:?}", other),
+            other => panic!("Expected OneOf, got {other:?}"),
         }
 
         // Names should come from the longest variant
@@ -2239,7 +2239,7 @@ mod tests {
     fn test_signature_from_parameter_variants_empty_error() {
         // Test that an empty variant list returns an error
         let result = Signature::from_parameter_variants::<&str, DataType>(
-            vec![],
+            &[],
             Volatility::Immutable,
         );
 
@@ -2261,7 +2261,7 @@ mod tests {
             Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
 
         let sig = Signature::from_parameter_variants(
-            vec![
+            &[
                 vec![
                     ("str", string_coercion.clone()),
                     ("pos", int64_coercion.clone()),
@@ -2283,15 +2283,15 @@ mod tests {
                 // First variant has 2 coercions
                 match &sigs[0] {
                     TypeSignature::Coercible(coercions) => assert_eq!(coercions.len(), 2),
-                    other => panic!("Expected Coercible, got {:?}", other),
+                    other => panic!("Expected Coercible, got {other:?}"),
                 }
                 // Second variant has 3 coercions
                 match &sigs[1] {
                     TypeSignature::Coercible(coercions) => assert_eq!(coercions.len(), 3),
-                    other => panic!("Expected Coercible, got {:?}", other),
+                    other => panic!("Expected Coercible, got {other:?}"),
                 }
             }
-            other => panic!("Expected OneOf, got {:?}", other),
+            other => panic!("Expected OneOf, got {other:?}"),
         }
 
         // Parameter names from longest variant
@@ -2309,7 +2309,7 @@ mod tests {
     fn test_signature_from_parameter_variants_mixed_volatility() {
         // Test that volatility is set correctly
         let volatile_sig = Signature::from_parameter_variants(
-            vec![vec![("x", DataType::Float64)]],
+            &[vec![("x", DataType::Float64)]],
             Volatility::Volatile,
         )
         .unwrap();
@@ -2317,7 +2317,7 @@ mod tests {
         assert_eq!(volatile_sig.volatility, Volatility::Volatile);
 
         let stable_sig = Signature::from_parameter_variants(
-            vec![vec![("y", DataType::Int32)]],
+            &[vec![("y", DataType::Int32)]],
             Volatility::Stable,
         )
         .unwrap();
@@ -2331,7 +2331,7 @@ mod tests {
         let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
 
         let result = Signature::from_parameter_variants(
-            vec![vec![
+            &[vec![
                 ("str", ParameterKind::DataType(DataType::Utf8)),
                 ("pos", ParameterKind::Coercion(coercion)),
             ]],
@@ -2351,7 +2351,7 @@ mod tests {
     fn test_signature_from_parameter_variants_single_variant_single_param() {
         // Test with a single parameter in a single variant
         let sig = Signature::from_parameter_variants(
-            vec![vec![("value", DataType::Float32)]],
+            &[vec![("value", DataType::Float32)]],
             Volatility::Immutable,
         )
         .unwrap();

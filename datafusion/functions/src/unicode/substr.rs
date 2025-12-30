@@ -83,7 +83,7 @@ impl SubstrFunc {
 
         Self {
             signature: Signature::from_parameter_variants(
-                vec![
+                &[
                     vec![("str", string.clone()), ("start_pos", int64.clone())],
                     vec![
                         ("str", string.clone()),
