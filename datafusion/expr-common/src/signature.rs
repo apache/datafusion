@@ -1333,6 +1333,149 @@ impl Signature {
         Signature::arrays(1, Some(ListCoercion::FixedSizedListToList), volatility)
     }
 
+    /// Construct a signature with multiple variants directly from parameter specifications.
+    ///
+    /// This is the recommended way to define functions that accept multiple signatures
+    /// (e.g., optional parameters) as it eliminates duplication and makes the variants
+    /// explicit.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr_common::signature::{Signature, Volatility, Coercion, TypeSignatureClass};
+    /// # use datafusion_common::types::{logical_string, logical_int64, NativeType};
+    /// # use datafusion_common::Result;
+    /// # fn example() -> Result<()> {
+    /// let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+    /// let int64 = Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
+    ///
+    /// // substr(str, pos) OR substr(str, pos, length)
+    /// let sig = Signature::from_parameter_variants(
+    ///     vec![
+    ///         vec![("str", string.clone()), ("start_pos", int64.clone())],
+    ///         vec![("str", string.clone()), ("start_pos", int64.clone()), ("length", int64.clone())],
+    ///     ],
+    ///     Volatility::Immutable
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Parameter Name Inference
+    /// The parameter names for the signature are inferred from the **longest variant**.
+    /// This ensures all parameters are documented. Shorter variants are treated as
+    /// having optional trailing parameters.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - No variants are provided
+    /// - Parameter names are invalid
+    /// - Type kinds are inconsistent within a variant
+    pub fn from_parameter_variants<N, P>(
+        variants: Vec<Vec<(N, P)>>,
+        volatility: Volatility,
+    ) -> Result<Self>
+    where
+        N: AsRef<str>,
+        P: Clone + Into<ParameterKind>,
+    {
+        if variants.is_empty() {
+            return plan_err!("At least one variant must be provided");
+        }
+
+        let parameter_names = Self::extract_parameter_names(&variants);
+        let type_signatures = Self::build_type_signatures(&variants)?;
+        let type_signature = Self::consolidate_signatures(type_signatures)?;
+
+        let mut sig = Self::new(type_signature, volatility);
+        sig.parameter_names = Some(parameter_names);
+        Ok(sig)
+    }
+
+    /// Extract parameter names from the longest variant
+    fn extract_parameter_names<N, P>(variants: &[Vec<(N, P)>]) -> Vec<String>
+    where
+        N: AsRef<str>,
+    {
+        variants
+            .iter()
+            .max_by_key(|v| v.len())
+            .expect("variants is non-empty")
+            .iter()
+            .map(|(name, _)| name.as_ref().to_string())
+            .collect()
+    }
+
+    /// Build TypeSignature for each variant
+    fn build_type_signatures<N, P>(variants: &[Vec<(N, P)>]) -> Result<Vec<TypeSignature>>
+    where
+        P: Clone + Into<ParameterKind>,
+    {
+        variants
+            .iter()
+            .map(|params| Self::build_variant_signature(params))
+            .collect()
+    }
+
+    /// Build a TypeSignature for a single variant
+    fn build_variant_signature<N, P>(params: &[(N, P)]) -> Result<TypeSignature>
+    where
+        P: Clone + Into<ParameterKind>,
+    {
+        if params.is_empty() {
+            return Ok(TypeSignature::Nullary);
+        }
+
+        match params[0].1.clone().into() {
+            ParameterKind::DataType(_) => Self::build_exact_signature(params),
+            ParameterKind::Coercion(_) => Self::build_coercible_signature(params),
+        }
+    }
+
+    /// Build an Exact TypeSignature from DataType parameters
+    fn build_exact_signature<N, P>(params: &[(N, P)]) -> Result<TypeSignature>
+    where
+        P: Clone + Into<ParameterKind>,
+    {
+        let types: Result<Vec<DataType>> = params
+            .iter()
+            .map(|(_, p)| match p.clone().into() {
+                ParameterKind::DataType(dt) => Ok(dt),
+                ParameterKind::Coercion(_) => {
+                    plan_err!("Cannot mix DataType and Coercion in same variant")
+                }
+            })
+            .collect();
+        Ok(TypeSignature::Exact(types?))
+    }
+
+    /// Build a Coercible TypeSignature from Coercion parameters
+    fn build_coercible_signature<N, P>(params: &[(N, P)]) -> Result<TypeSignature>
+    where
+        P: Clone + Into<ParameterKind>,
+    {
+        let coercions: Result<Vec<Coercion>> = params
+            .iter()
+            .map(|(_, p)| match p.clone().into() {
+                ParameterKind::Coercion(c) => Ok(c),
+                ParameterKind::DataType(_) => {
+                    plan_err!("Cannot mix DataType and Coercion in same variant")
+                }
+            })
+            .collect();
+        Ok(TypeSignature::Coercible(coercions?))
+    }
+
+    /// Consolidate multiple TypeSignatures into a single one (or OneOf)
+    fn consolidate_signatures(
+        mut signatures: Vec<TypeSignature>,
+    ) -> Result<TypeSignature> {
+        match signatures.len() {
+            0 => internal_err!("No type signatures provided"),
+            1 => Ok(signatures.pop().unwrap()),
+            _ => Ok(TypeSignature::OneOf(signatures)),
+        }
+    }
+
     /// Add parameter names to this signature, enabling named argument notation.
     ///
     /// # Example
