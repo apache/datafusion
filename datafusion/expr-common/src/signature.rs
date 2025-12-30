@@ -332,6 +332,8 @@ impl TypeSignature {
 /// arguments that can be coerced to a particular class of types.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
+    /// Allows an arbitrary type argument without coercing the argument.
+    Any,
     /// Timestamps, allowing arbitrary (or no) timezones
     Timestamp,
     /// All time types
@@ -367,6 +369,9 @@ impl TypeSignatureClass {
     /// documentation or error messages.
     fn get_example_types(&self) -> Vec<DataType> {
         match self {
+            // TODO: might be too much info to return every single type here
+            //       maybe https://github.com/apache/datafusion/issues/14761 will help here?
+            TypeSignatureClass::Any => vec![],
             TypeSignatureClass::Native(l) => get_data_types(l.native()),
             TypeSignatureClass::Timestamp => {
                 vec![
@@ -409,6 +414,7 @@ impl TypeSignatureClass {
         }
 
         match self {
+            TypeSignatureClass::Any => true,
             TypeSignatureClass::Native(t) if t.native() == logical_type => true,
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
             TypeSignatureClass::Time if logical_type.is_time() => true,
@@ -430,6 +436,7 @@ impl TypeSignatureClass {
         origin_type: &DataType,
     ) -> Result<DataType> {
         match self {
+            TypeSignatureClass::Any => Ok(origin_type.to_owned()),
             TypeSignatureClass::Native(logical_type) => {
                 logical_type.native().default_cast_for(origin_type)
             }

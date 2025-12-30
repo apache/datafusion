@@ -5047,7 +5047,7 @@ arrow_cast(expression, datatype)
 Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.
 
 ```sql
-arrow_metadata(expression, [key])
+arrow_metadata(expression[, key])
 ```
 
 #### Arguments
