@@ -40,6 +40,11 @@ needing to create a virtual environment:
 uv run --with-requirements requirements.txt bash build.sh
 ```
 
+The docs build regenerates the workspace dependency graph via
+`docs/scripts/generate_dependency_graph.sh`, so ensure `cargo`, `cargo-depgraph`
+(`cargo install cargo-depgraph --version ^1.6 --locked`), and Graphviz `dot`
+(`brew install graphviz` or `sudo apt-get install -y graphviz`) are available.
+
 ## Build & Preview
 
 Run the provided script to build the HTML pages.

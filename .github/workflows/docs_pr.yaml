@@ -54,10 +54,15 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install -r docs/requirements.txt
+      - name: Install dependency graph tooling
+        run: |
+          set -x
+          sudo apt-get update
+          sudo apt-get install -y graphviz
+          cargo install cargo-depgraph --version ^1.6 --locked
       - name: Build docs html and check for warnings
         run: |
           set -x
           source venv/bin/activate
           cd docs
           ./build.sh # fails on errors
-
