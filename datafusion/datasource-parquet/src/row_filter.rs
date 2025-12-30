@@ -487,15 +487,13 @@ mod test {
 
         let metadata = reader.metadata();
 
-        let table_schema =
+        let table_schema = Arc::new(
             parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-                .expect("parsing schema");
+                .expect("parsing schema"),
+        );
 
         let expr = col("int64_list").is_not_null();
-        let expr = logical2physical(&expr, &table_schema);
-
-        let table_schema = Arc::new(table_schema.clone());
-
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
         let candidate = FilterCandidateBuilder::new(expr, table_schema)
             .build(metadata)
             .expect("building candidate");
@@ -516,23 +514,23 @@ mod test {
 
         // This is the schema we would like to coerce to,
         // which is different from the physical schema of the file.
-        let table_schema = Schema::new(vec![Field::new(
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
             "timestamp_col",
             DataType::Timestamp(Nanosecond, Some(Arc::from("UTC"))),
             false,
-        )]);
+        )]));
 
         // Test all should fail
         let expr = col("timestamp_col").lt(Expr::Literal(
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
             None,
         ));
-        let expr = logical2physical(&expr, &table_schema);
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
         let expr = DefaultPhysicalExprAdapterFactory {}
-            .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .create(Arc::clone(&table_schema), Arc::clone(&file_schema))
             .rewrite(expr)
             .expect("rewriting expression");
-        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+        let candidate = FilterCandidateBuilder::new(expr, Arc::clone(&file_schema))
             .build(&metadata)
             .expect("building candidate")
             .expect("candidate expected");
@@ -565,10 +563,10 @@ mod test {
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
             None,
         ));
-        let expr = logical2physical(&expr, &table_schema);
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
         // Rewrite the expression to add CastExpr for type coercion
         let expr = DefaultPhysicalExprAdapterFactory {}
-            .create(Arc::new(table_schema), Arc::clone(&file_schema))
+            .create(table_schema, Arc::clone(&file_schema))
             .rewrite(expr)
             .expect("rewriting expression");
         let candidate = FilterCandidateBuilder::new(expr, file_schema)
@@ -594,7 +592,7 @@ mod test {
         let table_schema = Arc::new(get_lists_table_schema());
 
         let expr = col("utf8_list").is_not_null();
-        let expr = logical2physical(&expr, &table_schema);
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
         check_expression_can_evaluate_against_schema(&expr, &table_schema);
 
         assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
@@ -612,22 +610,22 @@ mod test {
 
     #[test]
     fn basic_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
+        let table_schema = Arc::new(get_basic_table_schema());
 
         let expr = col("string_col").is_null();
-        let expr = logical2physical(&expr, &table_schema);
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
 
     #[test]
     fn complex_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
+        let table_schema = Arc::new(get_basic_table_schema());
 
         let expr = col("string_col")
             .is_not_null()
             .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
-        let expr = logical2physical(&expr, &table_schema);
+        let expr = logical2physical(&expr, Arc::clone(&table_schema));
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
     }
