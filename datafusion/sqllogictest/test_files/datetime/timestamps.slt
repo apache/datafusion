@@ -3391,6 +3391,20 @@ select to_time('12:30:61');
 query error does not support zero arguments
 select to_time();
 
+# StringView type support
+
+query D
+select to_time(arrow_cast('08:15:30', 'Utf8View'));
+----
+08:15:30
+
+# LargeUtf8 type support
+
+query D
+select to_time(arrow_cast('14:45:00', 'LargeUtf8'));
+----
+14:45:00
+
 # HH:MM default parsing (no seconds)
 
 query D
