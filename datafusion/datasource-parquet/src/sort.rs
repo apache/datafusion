@@ -120,20 +120,22 @@ pub fn reverse_row_selection(
 
 #[cfg(test)]
 mod tests {
-    use crate::opener::PreparedAccessPlan;
     use crate::ParquetAccessPlan;
     use crate::RowGroupAccess;
+    use crate::opener::PreparedAccessPlan;
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::Bytes;
-    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     use std::sync::Arc;
 
     /// Helper function to create a ParquetMetaData with specified row group sizes
     /// by actually writing a parquet file in memory
-    fn create_test_metadata(row_group_sizes: Vec<i64>) -> parquet::file::metadata::ParquetMetaData {
+    fn create_test_metadata(
+        row_group_sizes: Vec<i64>,
+    ) -> parquet::file::metadata::ParquetMetaData {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
         let mut buffer = Vec::new();
         {
@@ -147,7 +149,7 @@ mod tests {
                     schema.clone(),
                     vec![Arc::new(array)],
                 )
-                    .unwrap();
+                .unwrap();
                 writer.write(&batch).unwrap();
                 writer.flush().unwrap();
             }
@@ -167,8 +169,9 @@ mod tests {
         let access_plan = ParquetAccessPlan::new_all(3);
         let rg_metadata = metadata.row_groups();
 
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 1, 2]);
@@ -201,15 +204,13 @@ mod tests {
         // Select first 50 rows from first row group, skip rest
         access_plan.scan_selection(
             0,
-            RowSelection::from(vec![
-                RowSelector::select(50),
-                RowSelector::skip(50),
-            ]),
+            RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]),
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -249,22 +250,17 @@ mod tests {
         // Create selection that spans RG0 and RG1
         access_plan.scan_selection(
             0,
-            RowSelection::from(vec![
-                RowSelector::skip(50),
-                RowSelector::select(50),
-            ]),
+            RowSelection::from(vec![RowSelector::skip(50), RowSelector::select(50)]),
         );
         access_plan.scan_selection(
             1,
-            RowSelection::from(vec![
-                RowSelector::select(50),
-                RowSelector::skip(50),
-            ]),
+            RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]),
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -300,15 +296,14 @@ mod tests {
 
         // Skip all rows in all row groups
         for i in 0..3 {
-            access_plan.scan_selection(
-                i,
-                RowSelection::from(vec![RowSelector::skip(100)]),
-            );
+            access_plan
+                .scan_selection(i, RowSelection::from(vec![RowSelector::skip(100)]));
         }
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let reversed_plan = prepared_plan
             .reverse(&metadata)
@@ -337,28 +332,18 @@ mod tests {
         // Create complex selection pattern
         access_plan.scan_selection(
             0,
-            RowSelection::from(vec![
-                RowSelector::skip(25),
-                RowSelector::select(25),
-            ]),
+            RowSelection::from(vec![RowSelector::skip(25), RowSelector::select(25)]),
         );
-        access_plan.scan_selection(
-            1,
-            RowSelection::from(vec![
-                RowSelector::select(150),
-            ]),
-        );
+        access_plan.scan_selection(1, RowSelection::from(vec![RowSelector::select(150)]));
         access_plan.scan_selection(
             2,
-            RowSelection::from(vec![
-                RowSelector::select(50),
-                RowSelector::skip(50),
-            ]),
+            RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]),
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -393,15 +378,13 @@ mod tests {
         let mut access_plan = ParquetAccessPlan::new_all(1);
         access_plan.scan_selection(
             0,
-            RowSelection::from(vec![
-                RowSelector::select(50),
-                RowSelector::skip(50),
-            ]),
+            RowSelection::from(vec![RowSelector::select(50), RowSelector::skip(50)]),
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -450,21 +433,14 @@ mod tests {
         );
         access_plan.scan_selection(
             1,
-            RowSelection::from(vec![
-                RowSelector::skip(50),
-                RowSelector::select(50),
-            ]),
+            RowSelection::from(vec![RowSelector::skip(50), RowSelector::select(50)]),
         );
-        access_plan.scan_selection(
-            2,
-            RowSelection::from(vec![
-                RowSelector::select(100),
-            ]),
-        );
+        access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -517,8 +493,8 @@ mod tests {
         access_plan.scan_selection(
             2,
             RowSelection::from(vec![
-                RowSelector::select(25),  // RG2: first 25 rows
-                RowSelector::skip(75),    // RG2: skip last 75 rows
+                RowSelector::select(25), // RG2: first 25 rows
+                RowSelector::skip(75),   // RG2: skip last 75 rows
             ]),
         );
         access_plan.scan_selection(
@@ -529,8 +505,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -582,7 +559,12 @@ mod tests {
         // - RG3's select(100) + RG2's select(25) = select(125)
         // - RG2's skip(75) remains as skip(75)
         // - RG0's select(100) remains as select(100)
-        let selectors: Vec<_> = reversed_plan.row_selection.as_ref().unwrap().iter().collect();
+        let selectors: Vec<_> = reversed_plan
+            .row_selection
+            .as_ref()
+            .unwrap()
+            .iter()
+            .collect();
         assert_eq!(selectors.len(), 3);
 
         // RG3 (100) + RG2 first part (25) merged into select(125)
@@ -611,18 +593,13 @@ mod tests {
             RowGroupAccess::Skip, // RG3
         ]);
 
-        access_plan.scan_selection(
-            0,
-            RowSelection::from(vec![RowSelector::select(100)]),
-        );
-        access_plan.scan_selection(
-            2,
-            RowSelection::from(vec![RowSelector::select(100)]),
-        );
+        access_plan.scan_selection(0, RowSelection::from(vec![RowSelector::select(100)]));
+        access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -673,8 +650,9 @@ mod tests {
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         let original_selected: usize = prepared_plan
             .row_selection
@@ -733,8 +711,8 @@ mod tests {
         access_plan.scan_selection(
             2,
             RowSelection::from(vec![
-                RowSelector::select(25),  // RG2: first 25 rows
-                RowSelector::skip(75),    // RG2: skip last 75 rows
+                RowSelector::select(25), // RG2: first 25 rows
+                RowSelector::skip(75),   // RG2: skip last 75 rows
             ]),
         );
         access_plan.scan_selection(
@@ -745,8 +723,9 @@ mod tests {
         let rg_metadata = metadata.row_groups();
 
         // Step 1: Create PreparedAccessPlan
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         // Verify original plan in detail
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2, 3]);
@@ -764,13 +743,23 @@ mod tests {
         // RG2: select(25), skip(75)
         // RG3: select(100)
         // After merging by RowSelection::from(): select(125), skip(75), select(100)
-        assert_eq!(orig_selectors.len(), 3, "Original should have 3 selectors after merging");
-        assert!(!orig_selectors[0].skip && orig_selectors[0].row_count == 125,
-                "Original: First selector should be select(125) from RG0(100) + RG2(25)");
-        assert!(orig_selectors[1].skip && orig_selectors[1].row_count == 75,
-                "Original: Second selector should be skip(75) from RG2");
-        assert!(!orig_selectors[2].skip && orig_selectors[2].row_count == 100,
-                "Original: Third selector should be select(100) from RG3");
+        assert_eq!(
+            orig_selectors.len(),
+            3,
+            "Original should have 3 selectors after merging"
+        );
+        assert!(
+            !orig_selectors[0].skip && orig_selectors[0].row_count == 125,
+            "Original: First selector should be select(125) from RG0(100) + RG2(25)"
+        );
+        assert!(
+            orig_selectors[1].skip && orig_selectors[1].row_count == 75,
+            "Original: Second selector should be skip(75) from RG2"
+        );
+        assert!(
+            !orig_selectors[2].skip && orig_selectors[2].row_count == 100,
+            "Original: Third selector should be select(100) from RG3"
+        );
 
         let original_selected: usize = orig_selectors
             .iter()
@@ -810,27 +799,34 @@ mod tests {
         // - RG2's skip(75) remains as skip(75)
         // - RG0's select(100) remains as select(100)
 
-        assert_eq!(rev_selectors.len(), 3, "Reversed should have 3 selectors after merging");
+        assert_eq!(
+            rev_selectors.len(),
+            3,
+            "Reversed should have 3 selectors after merging"
+        );
 
         // First selector: RG3 (100) + RG2 first part (25) merged into select(125)
         assert!(
             !rev_selectors[0].skip && rev_selectors[0].row_count == 125,
             "Reversed: First selector should be select(125) from RG3(100) + RG2(25), got skip={} count={}",
-            rev_selectors[0].skip, rev_selectors[0].row_count
+            rev_selectors[0].skip,
+            rev_selectors[0].row_count
         );
 
         // Second selector: RG2 skip last 75 rows
         assert!(
             rev_selectors[1].skip && rev_selectors[1].row_count == 75,
             "Reversed: Second selector should be skip(75) from RG2, got skip={} count={}",
-            rev_selectors[1].skip, rev_selectors[1].row_count
+            rev_selectors[1].skip,
+            rev_selectors[1].row_count
         );
 
         // Third selector: RG0 select all 100 rows
         assert!(
             !rev_selectors[2].skip && rev_selectors[2].row_count == 100,
             "Reversed: Third selector should be select(100) from RG0, got skip={} count={}",
-            rev_selectors[2].skip, rev_selectors[2].row_count
+            rev_selectors[2].skip,
+            rev_selectors[2].row_count
         );
 
         // Verify row selection is also correctly reversed (total count)
@@ -864,21 +860,14 @@ mod tests {
         );
         access_plan.scan_selection(
             1,
-            RowSelection::from(vec![
-                RowSelector::skip(50),
-                RowSelector::select(50),
-            ]),
+            RowSelection::from(vec![RowSelector::skip(50), RowSelector::select(50)]),
         );
-        access_plan.scan_selection(
-            2,
-            RowSelection::from(vec![
-                RowSelector::select(100),
-            ]),
-        );
+        access_plan.scan_selection(2, RowSelection::from(vec![RowSelector::select(100)]));
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         // Verify original selection structure in detail
         let orig_selectors: Vec<_> = prepared_plan
@@ -950,22 +939,17 @@ mod tests {
 
         access_plan.scan_selection(
             0,
-            RowSelection::from(vec![
-                RowSelector::select(30),
-                RowSelector::skip(70),
-            ]),
+            RowSelection::from(vec![RowSelector::select(30), RowSelector::skip(70)]),
         );
         access_plan.scan_selection(
             2,
-            RowSelection::from(vec![
-                RowSelector::skip(20),
-                RowSelector::select(80),
-            ]),
+            RowSelection::from(vec![RowSelector::skip(20), RowSelector::select(80)]),
         );
 
         let rg_metadata = metadata.row_groups();
-        let prepared_plan = PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
-            .expect("Failed to create PreparedAccessPlan");
+        let prepared_plan =
+            PreparedAccessPlan::from_access_plan(access_plan, rg_metadata)
+                .expect("Failed to create PreparedAccessPlan");
 
         // Original: [0, 2]
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 2]);
