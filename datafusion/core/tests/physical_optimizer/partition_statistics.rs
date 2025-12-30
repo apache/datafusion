@@ -655,6 +655,23 @@ mod test {
                 None,
             )?);
 
+        // Test partition_statistics(None) - returns overall statistics
+        // For RightSemi join, output columns come from right side only
+        let full_statistics = nested_loop_join.partition_statistics(None)?;
+        // With empty join columns, estimate_join_statistics returns Inexact row count
+        // based on the outer side (right side for RightSemi)
+        let mut expected_full_statistics = create_partition_statistics(
+            4,
+            32,
+            1,
+            4,
+            Some((DATE_2025_03_01, DATE_2025_03_04)),
+        );
+        expected_full_statistics.num_rows = Precision::Inexact(4);
+        expected_full_statistics.total_byte_size = Precision::Absent;
+        assert_eq!(full_statistics, expected_full_statistics);
+
+        // Test partition_statistics(Some(idx)) - returns partition-specific statistics
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
         let mut expected_statistic_partition_1 = create_partition_statistics(
             2,
