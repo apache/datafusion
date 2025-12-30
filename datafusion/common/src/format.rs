@@ -250,3 +250,89 @@ impl ConfigField for ExplainAnalyzeLevel {
         Ok(())
     }
 }
+
+/// File format types for catalog table providers
+///
+/// These correspond to the table provider factories registered in DataFusion.
+/// The format is used when loading tables for the default schema via
+/// `datafusion.catalog.format` configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CatalogFormat {
+    /// CSV (Comma-Separated Values) formats
+    CSV,
+    #[cfg(feature = "parquet")]
+    /// Parquet format
+    PARQUET,
+    /// JSON (JavaScript Object Notation) format
+    JSON,
+    /// NDJSON (Newline Delimited JSON) format
+    NDJSON,
+    /// Avro format
+    #[cfg(feature = "avro")]
+    AVRO,
+    /// Arrow format
+    ARROW,
+}
+
+impl FromStr for CatalogFormat {
+    type Err = DataFusionError;
+
+    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
+        match format.to_uppercase().as_str() {
+            "CSV" => Ok(CatalogFormat::CSV),
+            #[cfg(feature = "parquet")]
+            "PARQUET" => Ok(CatalogFormat::PARQUET),
+            "JSON" => Ok(CatalogFormat::JSON),
+            "NDJSON" => Ok(CatalogFormat::NDJSON),
+            #[cfg(feature = "avro")]
+            "AVRO" => Ok(CatalogFormat::AVRO),
+            "ARROW" => Ok(CatalogFormat::ARROW),
+            _ => {
+                // Build error message dynamically based on enabled features
+                #[allow(unused_mut)]
+                let mut valid = vec!["CSV", "JSON", "NDJSON", "ARROW"];
+                #[cfg(feature = "parquet")]
+                valid.push("PARQUET");
+                #[cfg(feature = "avro")]
+                valid.push("AVRO");
+                Err(DataFusionError::Configuration(format!(
+                    "Invalid catalog format. Expected one of: {}. Got '{format}'",
+                    valid.join(", ")
+                )))
+            }
+        }
+    }
+}
+
+impl Display for CatalogFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            CatalogFormat::CSV => "CSV",
+            #[cfg(feature = "parquet")]
+            CatalogFormat::PARQUET => "PARQUET",
+            CatalogFormat::JSON => "JSON",
+            CatalogFormat::NDJSON => "NDJSON",
+            #[cfg(feature = "avro")]
+            CatalogFormat::AVRO => "AVRO",
+            CatalogFormat::ARROW => "ARROW",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl Default for CatalogFormat {
+    fn default() -> Self {
+        CatalogFormat::CSV
+    }
+}
+
+impl ConfigField for CatalogFormat {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = CatalogFormat::from_str(value)?;
+        Ok(())
+    }
+}
