@@ -18,9 +18,9 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::{
-    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray, StructArray},
     compute::{CastOptions, kernels, max, min},
-    datatypes::DataType,
+    datatypes::{DataType, Fields},
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
@@ -283,16 +283,88 @@ impl ColumnarValue {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
             ColumnarValue::Array(array) => {
-                ensure_date_array_timestamp_bounds(array, cast_type)?;
-                Ok(ColumnarValue::Array(kernels::cast::cast_with_options(
-                    array,
-                    cast_type,
-                    &cast_options,
-                )?))
+                let casted = cast_array_by_name(array, cast_type, &cast_options)?;
+                Ok(ColumnarValue::Array(casted))
             }
-            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
-                scalar.cast_to_with_options(cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Scalar(scalar) => {
+                if matches!(scalar.data_type(), DataType::Struct(_))
+                    && matches!(cast_type, DataType::Struct(_))
+                {
+                    let array = scalar.to_array()?;
+                    let casted = cast_array_by_name(&array, cast_type, &cast_options)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                        &casted, 0,
+                    )?))
+                } else {
+                    Ok(ColumnarValue::Scalar(
+                        scalar.cast_to_with_options(cast_type, &cast_options)?,
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/// Cast a struct array to another struct type by aligning child arrays using
+/// field names instead of their physical order.
+///
+/// This reorders or permutes the children to match the target schema, inserts
+/// null arrays for missing fields, and applies the requested Arrow cast to each
+/// field. It returns an error for duplicate source field names or if any child
+/// cast fails.
+fn cast_struct_array_by_name(
+    array: &ArrayRef,
+    source_fields: &Fields,
+    target_fields: &Fields,
+    cast_options: &CastOptions<'static>,
+) -> Result<ArrayRef> {
+    let struct_array = array
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| internal_datafusion_err!("Expected StructArray"))?;
+
+    let mut source_by_name = source_fields
+        .iter()
+        .enumerate()
+        .map(|(idx, field)| (field.name().clone(), (idx, field)))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    if source_by_name.len() != source_fields.len() {
+        return internal_err!("Duplicate field name found in struct");
+    }
+
+    let mut reordered_children = Vec::with_capacity(target_fields.len());
+    for target_field in target_fields {
+        let child = if let Some((idx, _)) = source_by_name.remove(target_field.name()) {
+            struct_array.column(idx).clone()
+        } else {
+            Arc::new(NullArray::new(struct_array.len())) as ArrayRef
+        };
+
+        let casted_child =
+            cast_array_by_name(&child, target_field.data_type(), cast_options)?;
+        reordered_children.push(casted_child);
+    }
+
+    Ok(Arc::new(StructArray::new(
+        target_fields.clone(),
+        reordered_children,
+        struct_array.nulls().cloned(),
+    )))
+}
+
+fn cast_array_by_name(
+    array: &ArrayRef,
+    cast_type: &DataType,
+    cast_options: &CastOptions<'static>,
+) -> Result<ArrayRef> {
+    match (array.data_type(), cast_type) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            cast_struct_array_by_name(array, source_fields, target_fields, cast_options)
+        }
+        _ => {
+            ensure_date_array_timestamp_bounds(array, cast_type)?;
+            Ok(kernels::cast::cast_with_options(array, cast_type, cast_options)?)
         }
     }
 }
@@ -551,6 +623,106 @@ mod tests {
                 "+-------------------------+"
             )
         );
+    }
+
+    #[test]
+    fn cast_struct_by_field_name() {
+        use arrow::datatypes::Field;
+
+        let source_fields = Fields::from(vec![
+            Field::new("b", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(Int32Array::from(vec![Some(4)])),
+            ],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_a = struct_array
+            .column_by_name("a")
+            .expect("expected field a in cast result");
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected field b in cast result");
+
+        assert_eq!(
+            field_a
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            4
+        );
+        assert_eq!(
+            field_b
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            3
+        );
+    }
+
+    #[test]
+    fn cast_struct_missing_field_inserts_nulls() {
+        use arrow::datatypes::Field;
+
+        let source_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![Arc::new(Int32Array::from(vec![Some(5)]))],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected missing field to be added");
+
+        assert!(field_b.is_null(0));
     }
 
     #[test]
