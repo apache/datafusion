@@ -199,12 +199,6 @@ impl GroupValues for GroupValuesRows {
             .expect("Can not emit from empty rows");
 
         let mut output = match emit_to {
-            EmitTo::All => {
-                let output = self.row_converter.convert_rows(&group_values)?;
-                group_values.clear();
-                self.map.clear();
-                output
-            }
             EmitTo::First(n) => {
                 let groups_rows = group_values.iter().take(n);
                 let output = self.row_converter.convert_rows(groups_rows)?;
@@ -228,6 +222,30 @@ impl GroupValues for GroupValuesRows {
                         None => false,
                     }
                 });
+
+                output
+            }
+
+            EmitTo::Next(batch_size) => {
+                let n = batch_size.min(group_values.num_rows());
+                if n == 0 {
+                    self.group_values = Some(group_values);
+                    return Ok(vec![]);
+                }
+
+                let rows_iter = group_values.iter().take(n);
+                let output = self.row_converter.convert_rows(rows_iter)?;
+
+                // Remove emitted rows
+                let mut new_group_values = self.row_converter.empty_rows(0, 0);
+                for row in group_values.iter().skip(n) {
+                    new_group_values.push(row);
+                }
+                std::mem::swap(&mut new_group_values, &mut group_values);
+
+                // Map not needed during drain
+                self.map.clear();
+
                 output
             }
         };

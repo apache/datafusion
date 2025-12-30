@@ -1080,15 +1080,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let mut output = match emit_to {
-            EmitTo::All => {
-                let group_values = mem::take(&mut self.group_values);
-                debug_assert!(self.group_values.is_empty());
-
-                group_values
-                    .into_iter()
-                    .map(|v| v.build())
-                    .collect::<Vec<_>>()
-            }
             EmitTo::First(n) => {
                 let output = self
                     .group_values
@@ -1157,6 +1148,39 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
 
                 if !STREAMING {
                     self.group_index_lists.truncate(next_new_list_offset);
+                }
+
+                output
+            }
+
+            EmitTo::Next(batch_size) => {
+                let total = self.len();
+                if total == 0 {
+                    self.group_values.clear();
+                    self.map.clear();
+                    if !STREAMING {
+                        self.group_index_lists.clear();
+                        self.emit_group_index_list_buffer.clear();
+                        self.vectorized_operation_buffers.clear();
+                    }
+                    return Ok(vec![]);
+                }
+
+                let n = batch_size.min(total);
+                let output = self
+                    .group_values
+                    .iter_mut()
+                    .map(|v| v.take_n(n))
+                    .collect::<Vec<_>>();
+
+                if n >= total {
+                    self.group_values.clear();
+                    self.map.clear();
+                    if !STREAMING {
+                        self.group_index_lists.clear();
+                        self.emit_group_index_list_buffer.clear();
+                        self.vectorized_operation_buffers.clear();
+                    }
                 }
 
                 output
@@ -1271,7 +1295,7 @@ mod tests {
             GroupValuesColumn::<false>::try_new(data_set.schema()).unwrap();
 
         data_set.load_to_group_values(&mut group_values);
-        let actual_batch = group_values.emit(EmitTo::All).unwrap();
+        let actual_batch = group_values.emit(EmitTo::Next(usize::MAX)).unwrap();
         let actual_batch = RecordBatch::try_new(data_set.schema(), actual_batch).unwrap();
 
         check_result(&actual_batch, &data_set.expected_batch);

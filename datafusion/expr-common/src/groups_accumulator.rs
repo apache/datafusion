@@ -23,14 +23,19 @@ use datafusion_common::{Result, not_impl_err};
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitTo {
-    /// Emit all groups
-    All,
     /// Emit only the first `n` groups and shift all existing group
     /// indexes down by `n`.
     ///
     /// For example, if `n=10`, group_index `0, 1, ... 9` are emitted
     /// and group indexes `10, 11, 12, ...` become `0, 1, 2, ...`.
     First(usize),
+
+    /// Emit the next `n` groups without shifting indices.
+    ///
+    /// Used during final drain after all input is processed. More efficient than
+    /// `First` for draining because it doesn't update hash table indices.
+    /// Returns empty arrays when all groups have been emitted.
+    Next(usize),
 }
 
 impl EmitTo {
@@ -38,20 +43,26 @@ impl EmitTo {
     /// number of rows, returning a `Vec` with elements taken, and the
     /// remaining values in `v`.
     ///
-    /// This avoids copying if Self::All
+    /// For `Next(n)`, clamps to `v.len()` to handle draining the final elements.
     pub fn take_needed<T>(&self, v: &mut Vec<T>) -> Vec<T> {
+        let n = match self {
+            Self::First(n) => *n,
+            Self::Next(n) => (*n).min(v.len()),
+        };
+
+        if n >= v.len() {
+            std::mem::take(v)
+        } else {
+            let mut t = v.split_off(n);
+            std::mem::swap(v, &mut t);
+            t
+        }
+    }
+
+    /// Returns the batch size for this emit operation.
+    pub fn batch_size(&self) -> usize {
         match self {
-            Self::All => {
-                // Take the entire vector, leave new (empty) vector
-                std::mem::take(v)
-            }
-            Self::First(n) => {
-                // get end n+1,.. values into t
-                let mut t = v.split_off(*n);
-                // leave n+1,.. in v
-                std::mem::swap(v, &mut t);
-                t
-            }
+            Self::First(n) | Self::Next(n) => *n,
         }
     }
 }
@@ -145,16 +156,17 @@ pub trait GroupsAccumulator: Send {
     /// each group, and `evaluate` will produce that running sum as
     /// its output for all groups, in group_index order
     ///
-    /// If `emit_to` is [`EmitTo::All`], the accumulator should
-    /// return all groups and release / reset its internal state
-    /// equivalent to when it was first created.
-    ///
     /// If `emit_to` is [`EmitTo::First`], only the first `n` groups
     /// should be emitted and the state for those first groups
     /// removed. State for the remaining groups must be retained for
     /// future use. The group_indices on subsequent calls to
     /// `update_batch` or `merge_batch` will be shifted down by
     /// `n`. See [`EmitTo::First`] for more details.
+    ///
+    /// If `emit_to` is [`EmitTo::Next`], the first `n` groups should
+    /// be emitted and removed. Unlike `First`, subsequent group indices
+    /// are not shifted (hash table updates are skipped). Used for final
+    /// drain when no more lookups are needed.
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef>;
 
     /// Returns the intermediate aggregate state for this accumulator,

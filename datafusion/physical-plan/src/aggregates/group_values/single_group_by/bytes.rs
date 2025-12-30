@@ -89,10 +89,6 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
-            EmitTo::All => {
-                self.num_groups -= map_contents.len();
-                map_contents
-            }
             EmitTo::First(n) if n == self.len() => {
                 self.num_groups -= map_contents.len();
                 map_contents
@@ -112,6 +108,23 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
 
                 // Verify that the group indexes were assigned in the correct order
                 assert_eq!(0, group_indexes[0]);
+
+                emit_group_values
+            }
+            EmitTo::Next(batch_size) => {
+                let n = batch_size.min(map_contents.len());
+                if n == 0 {
+                    self.num_groups = 0;
+                    return Ok(vec![map_contents.slice(0, 0)]);
+                }
+
+                let emit_group_values = map_contents.slice(0, n);
+                let remaining_group_values =
+                    map_contents.slice(n, map_contents.len() - n);
+
+                self.num_groups = 0;
+                let mut group_indexes = vec![];
+                self.intern(&[remaining_group_values], &mut group_indexes)?;
 
                 emit_group_values
             }

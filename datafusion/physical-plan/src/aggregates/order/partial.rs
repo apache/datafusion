@@ -153,7 +153,8 @@ impl GroupOrderingPartial {
                     Some(EmitTo::First(*current_sort))
                 }
             }
-            State::Complete => Some(EmitTo::All),
+            // When complete, emit all remaining groups using Next with max size
+            State::Complete => Some(EmitTo::Next(usize::MAX)),
         }
     }
 
