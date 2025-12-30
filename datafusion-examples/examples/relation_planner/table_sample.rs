@@ -427,8 +427,7 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
             Some(TableSampleUnit::Percent) => {
-                let percent: f64 =
-                    parse_literal::<Float64Type>(&quantity_value_expr)?;
+                let percent: f64 = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
