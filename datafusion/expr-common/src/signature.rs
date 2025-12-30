@@ -1422,6 +1422,19 @@ impl Signature {
     /// This ensures all parameters are documented. Shorter variants are treated as
     /// having optional trailing parameters.
     ///
+    /// # Supported TypeSignatures
+    /// This method can generate:
+    /// - [`TypeSignature::Nullary`] - via empty parameter list `vec![]`
+    /// - [`TypeSignature::Exact`] - via [`DataType`] parameters
+    /// - [`TypeSignature::Coercible`] - via [`Coercion`] parameters  
+    /// - [`TypeSignature::OneOf`] - when multiple variants are provided
+    ///
+    /// For other signature types (e.g., [`TypeSignature::Variadic`], [`TypeSignature::Uniform`],
+    /// [`TypeSignature::Numeric`], [`TypeSignature::String`], [`TypeSignature::Comparable`],
+    /// [`TypeSignature::Any`], [`TypeSignature::ArraySignature`], [`TypeSignature::UserDefined`]),
+    /// use the corresponding constructor methods like [`Signature::variadic`], [`Signature::uniform`],
+    /// [`Signature::numeric`], etc.
+    ///
     /// # Errors
     /// Returns an error if:
     /// - No variants are provided
@@ -2348,5 +2361,125 @@ mod tests {
             TypeSignature::Exact(vec![DataType::Float32])
         );
         assert_eq!(sig.parameter_names, Some(vec!["value".to_string()]));
+    }
+
+    // Tests demonstrating TypeSignatures NOT supported by from_parameter_variants
+    // These tests show that other constructor methods must be used for these cases
+
+    #[test]
+    fn test_signature_variadic_requires_separate_constructor() {
+        // Variadic signatures require Signature::variadic() constructor
+        // from_parameter_variants cannot express "one or more args of these types"
+        // Note: Variadic signatures don't support parameter names (variable arity)
+        let sig = Signature::variadic(
+            vec![DataType::Utf8, DataType::LargeUtf8],
+            Volatility::Immutable,
+        );
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Variadic(vec![DataType::Utf8, DataType::LargeUtf8])
+        );
+        assert_eq!(sig.parameter_names, None);
+    }
+
+    #[test]
+    fn test_signature_uniform_requires_separate_constructor() {
+        // Uniform signatures require Signature::uniform() constructor
+        // from_parameter_variants cannot express "all args must be same type from list"
+        let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
+            .with_parameter_names(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Uniform(3, vec![DataType::Float64])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_numeric_requires_separate_constructor() {
+        // Numeric signatures require Signature::numeric() constructor
+        // from_parameter_variants cannot express "all numeric types"
+        let sig = Signature::numeric(2, Volatility::Immutable)
+            .with_parameter_names(vec!["a".to_string(), "b".to_string()])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Numeric(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_string_requires_separate_constructor() {
+        // String signatures require Signature::string() constructor
+        // from_parameter_variants cannot express "all string types"
+        let sig = Signature::string(2, Volatility::Immutable)
+            .with_parameter_names(vec!["str1".to_string(), "str2".to_string()])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::String(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["str1".to_string(), "str2".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_comparable_requires_separate_constructor() {
+        // Comparable signatures require Signature::comparable() constructor
+        // from_parameter_variants cannot express "all comparable types"
+        let sig = Signature::comparable(2, Volatility::Immutable)
+            .with_parameter_names(vec!["left".to_string(), "right".to_string()])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Comparable(2));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["left".to_string(), "right".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_any_requires_separate_constructor() {
+        // Any signatures require Signature::any() constructor
+        // from_parameter_variants cannot express "any types"
+        let sig = Signature::any(3, Volatility::Immutable)
+            .with_parameter_names(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+            .unwrap();
+
+        assert_eq!(sig.type_signature, TypeSignature::Any(3));
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_user_defined_requires_separate_constructor() {
+        // UserDefined signatures require Signature::user_defined() constructor
+        // from_parameter_variants cannot express custom coercion logic
+        let sig = Signature::user_defined(Volatility::Immutable);
+
+        assert_eq!(sig.type_signature, TypeSignature::UserDefined);
+        assert_eq!(sig.parameter_names, None);
+    }
+
+    #[test]
+    fn test_signature_array_requires_separate_constructor() {
+        // ArraySignature requires Signature::array() or similar constructors
+        // from_parameter_variants cannot express array-specific signatures
+        let sig = Signature::array(Volatility::Immutable);
+
+        match sig.type_signature {
+            TypeSignature::ArraySignature(_) => {} // Expected
+            other => panic!("Expected ArraySignature, got {:?}", other),
+        }
     }
 }
