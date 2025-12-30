@@ -176,6 +176,9 @@ mod tests {
         // Verify original plan
         assert_eq!(prepared_plan.row_group_indexes, vec![0, 1, 2]);
 
+        // No row selection originally due to scanning all rows
+        assert_eq!(prepared_plan.row_selection, None);
+
         let reversed_plan = prepared_plan
             .reverse(&metadata)
             .expect("Failed to reverse PreparedAccessPlan");
@@ -183,15 +186,9 @@ mod tests {
         // Verify row groups are reversed
         assert_eq!(reversed_plan.row_group_indexes, vec![2, 1, 0]);
 
-        // If no selection originally, after reversal should still select all rows
-        if let Some(selection) = reversed_plan.row_selection {
-            let total_selected: usize = selection
-                .iter()
-                .filter(|s| !s.skip)
-                .map(|s| s.row_count)
-                .sum();
-            assert_eq!(total_selected, 300);
-        }
+        // If no selection originally, after reversal should still select all rows,
+        // and the selection should be None
+        assert_eq!(reversed_plan.row_selection, None);
     }
 
     #[test]
