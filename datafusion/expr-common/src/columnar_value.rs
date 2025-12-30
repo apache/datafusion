@@ -20,7 +20,7 @@
 use arrow::{
     array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
     compute::{CastOptions, kernels, max, min},
-    datatypes::{DataType, Fields},
+    datatypes::DataType,
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
@@ -423,8 +423,8 @@ impl fmt::Display for ColumnarValue {
 mod tests {
     use super::*;
     use arrow::{
-        array::{Date64Array, Int32Array},
-        datatypes::TimeUnit,
+        array::{Date64Array, Int32Array, StructArray},
+        datatypes::{Fields, TimeUnit},
     };
 
     #[test]
