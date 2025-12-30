@@ -43,7 +43,9 @@ name = "datafusion_physical_expr_common"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
 itertools = { workspace = true }
+parking_lot = { workspace = true }
