@@ -824,3 +824,92 @@ NULL
 
 statement ok
 drop table nullable_parent_test;
+
+#############
+## Struct Casting with Field Reordering Tests (Issue #14396)
+#############
+
+# Test struct casting with field reordering - string fields
+query ?
+SELECT CAST(struct('b_value' as b, 'a_value' as a) AS STRUCT<a VARCHAR, b VARCHAR>);
+----
+{a: a_value, b: b_value}
+
+# Test struct casting with field reordering - integer fields
+query ?
+SELECT CAST(struct(3 as b, 4 as a) AS STRUCT<a INT, b INT>);
+----
+{a: 4, b: 3}
+
+# Test with type casting AND field reordering
+query ?
+SELECT CAST(struct(3 as b, 4 as a) AS STRUCT<a BIGINT, b INT>);
+----
+{a: 4, b: 3}
+
+# Test with missing field - should insert nulls
+query ?
+SELECT CAST(struct(1 as a) AS STRUCT<a INT, b INT>);
+----
+{a: 1, b: }
+
+# Test with extra source field - should be ignored
+query ?
+SELECT CAST(struct(1 as a, 2 as b, 3 as extra) AS STRUCT<a INT, b INT>);
+----
+{a: 1, b: 2}
+
+# Test nested struct with field reordering
+query ?
+SELECT CAST(
+  struct(struct(2 as y, 1 as x) as inner) 
+  AS STRUCT<inner STRUCT<x INT, y INT>>
+);
+----
+{inner: {x: 1, y: 2}}
+
+# Test field reordering with table data
+statement ok
+CREATE TABLE struct_reorder_test (
+  data STRUCT<b INT, a VARCHAR>
+) AS VALUES
+  (struct(100, 'first')),
+  (struct(200, 'second')),
+  (struct(300, 'third'))
+;
+
+query ?
+SELECT CAST(data AS STRUCT<a VARCHAR, b INT>) FROM struct_reorder_test ORDER BY data['b'];
+----
+{a: first, b: 100}
+{a: second, b: 200}
+{a: third, b: 300}
+
+statement ok
+drop table struct_reorder_test;
+
+# Test casting struct with multiple levels of nesting and reordering
+query ?
+SELECT CAST(
+  struct(
+    struct(100 as z, 'inner' as y, 1 as x) as level1
+  )
+  AS STRUCT<level1 STRUCT<x INT, y VARCHAR, z INT>>
+);
+----
+{level1: {x: 1, y: inner, z: 100}}
+
+# Test field reordering with nulls in source
+query ?
+SELECT CAST(
+  struct(NULL::INT as b, 42 as a)
+  AS STRUCT<a INT, b INT>
+);
+----
+{a: 42, b: }
+
+# Test casting preserves struct-level nulls
+query ?
+SELECT CAST(NULL::STRUCT<b INT, a INT> AS STRUCT<a INT, b INT>);
+----
+NULL

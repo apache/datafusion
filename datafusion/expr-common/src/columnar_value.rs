@@ -18,7 +18,9 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::{
-    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray, StructArray},
+    array::{
+        Array, ArrayRef, Date32Array, Date64Array, NullArray, StructArray, new_null_array,
+    },
     compute::{CastOptions, kernels, max, min},
     datatypes::{DataType, Fields},
     util::pretty::pretty_format_columns,
@@ -275,6 +277,23 @@ impl ColumnarValue {
     }
 
     /// Cast's this [ColumnarValue] to the specified `DataType`
+    ///
+    /// # Struct Casting Behavior
+    ///
+    /// When casting struct types, fields are matched **by name** rather than position:
+    /// - Source fields are matched to target fields using case-sensitive name comparison
+    /// - Fields are reordered to match the target schema
+    /// - Missing target fields are filled with null arrays
+    /// - Extra source fields are ignored
+    ///
+    /// # Example
+    /// ```text
+    /// Source: {"b": 3, "a": 4}  (schema: {b: Int32, a: Int32})
+    /// Target: {"a": Int32, "b": Int32}
+    /// Result: {"a": 4, "b": 3}  (values matched by field name)
+    /// ```
+    ///
+    /// For non-struct types, uses Arrow's standard positional casting.
     pub fn cast_to(
         &self,
         cast_type: &DataType,
@@ -335,14 +354,15 @@ fn cast_struct_array_by_name(
 
     let mut reordered_children = Vec::with_capacity(target_fields.len());
     for target_field in target_fields {
-        let child = if let Some((idx, _)) = source_by_name.remove(target_field.name()) {
-            struct_array.column(idx).clone()
-        } else {
-            Arc::new(NullArray::new(struct_array.len())) as ArrayRef
-        };
-
         let casted_child =
-            cast_array_by_name(&child, target_field.data_type(), cast_options)?;
+            if let Some((idx, _)) = source_by_name.remove(target_field.name()) {
+                let child = struct_array.column(idx).clone();
+                cast_array_by_name(&child, target_field.data_type(), cast_options)?
+            } else {
+                // Missing field - create a null array of the target type
+                new_null_array(target_field.data_type(), struct_array.len())
+            };
+
         reordered_children.push(casted_child);
     }
 
@@ -364,7 +384,11 @@ fn cast_array_by_name(
         }
         _ => {
             ensure_date_array_timestamp_bounds(array, cast_type)?;
-            Ok(kernels::cast::cast_with_options(array, cast_type, cast_options)?)
+            Ok(kernels::cast::cast_with_options(
+                array,
+                cast_type,
+                cast_options,
+            )?)
         }
     }
 }
