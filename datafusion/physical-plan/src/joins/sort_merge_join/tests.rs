@@ -3071,8 +3071,7 @@ fn test_partition_statistics() -> Result<()> {
         assert_eq!(
             stats.column_statistics.len(),
             expected_cols,
-            "Aggregate stats failed for {:?}",
-            join_type
+            "Aggregate stats failed for {join_type:?}"
         );
 
         // Test partition-specific statistics (partition = Some(0))
@@ -3080,8 +3079,7 @@ fn test_partition_statistics() -> Result<()> {
         assert_eq!(
             partition_stats.column_statistics.len(),
             expected_cols,
-            "Partition stats failed for {:?}",
-            join_type
+            "Partition stats failed for {join_type:?}"
         );
     }
 
