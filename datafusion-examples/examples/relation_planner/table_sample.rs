@@ -410,11 +410,12 @@ impl RelationPlanner for TableSamplePlanner {
                 "TABLESAMPLE requires a quantity (percentage, fraction, or row count)"
             );
         };
+        let quantity_value_expr = context.sql_to_expr(quantity.value, input.schema())?;
 
         match quantity.unit {
             // TABLESAMPLE (N ROWS) - exact row limit
             Some(TableSampleUnit::Rows) => {
-                let rows: i64 = parse_sql_literal::<Int64Type>(&quantity.value, context)?;
+                let rows: i64 = parse_sql_literal::<Int64Type>(&quantity_value_expr)?;
                 if rows < 0 {
                     return plan_err!("row count must be non-negative, got {}", rows);
                 }
@@ -427,7 +428,7 @@ impl RelationPlanner for TableSamplePlanner {
             // TABLESAMPLE (N PERCENT) - percentage sampling
             Some(TableSampleUnit::Percent) => {
                 let percent: f64 =
-                    parse_sql_literal::<Float64Type>(&quantity.value, context)?;
+                    parse_sql_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
@@ -435,7 +436,7 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
             None => {
-                let value = parse_sql_literal::<Float64Type>(&quantity.value, context)?;
+                let value = parse_sql_literal::<Float64Type>(&quantity_value_expr)?;
                 if value < 0.0 {
                     return plan_err!("sample value must be non-negative, got {}", value);
                 }
