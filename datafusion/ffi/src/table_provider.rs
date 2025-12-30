@@ -90,7 +90,6 @@ use crate::{df_result, rresult_return};
 /// side of the interface each object refers to.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_TableProvider {
     /// Return the table schema
     schema: unsafe extern "C" fn(provider: &Self) -> WrappedSchema,
