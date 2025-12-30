@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricType, PruningMetrics,
     RatioMergeStrategy, RatioMetrics, Time,
 };
 
@@ -77,11 +77,11 @@ pub struct ParquetFileMetrics {
     /// Parquet.
     ///
     /// This is the expensive path (IO + Decompression + Decoding).
-    pub predicate_cache_inner_records: Count,
+    pub predicate_cache_inner_records: Gauge,
     /// Predicate Cache: number of records read from the cache. This is the
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
-    pub predicate_cache_records: Count,
+    pub predicate_cache_records: Gauge,
 }
 
 impl ParquetFileMetrics {
@@ -162,11 +162,11 @@ impl ParquetFileMetrics {
 
         let predicate_cache_inner_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("predicate_cache_inner_records", partition);
+            .gauge("predicate_cache_inner_records", partition);
 
         let predicate_cache_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("predicate_cache_records", partition);
+            .gauge("predicate_cache_records", partition);
 
         Self {
             files_ranges_pruned_statistics,
