@@ -261,6 +261,17 @@ impl<'a> BinaryTypeCoercer<'a> {
             })
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
+            // Special case: Date - Date should return Int64 (days difference)
+            // This aligns with PostgreSQL, DuckDB, and MySQL behavior
+            // See: https://www.postgresql.org/docs/current/functions-datetime.html
+            if matches!(self.op, Minus) && is_date_minus_date(lhs, rhs) {
+                return Ok(Signature {
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                    ret: Int64,
+                });
+            }
+
             if let Ok(ret) = self.get_result(lhs, rhs) {
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
@@ -281,6 +292,7 @@ impl<'a> BinaryTypeCoercer<'a> {
                     ret,
                 })
             } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
+
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
@@ -348,6 +360,15 @@ fn is_decimal(data_type: &DataType) -> bool {
             | DataType::Decimal64(..)
             | DataType::Decimal128(..)
             | DataType::Decimal256(..)
+    )
+}
+
+/// Returns true if both operands are Date types (Date32 or Date64)
+/// Used to detect Date - Date operations which should return Int64 (days difference)
+fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
 }
 
