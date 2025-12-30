@@ -3451,6 +3451,33 @@ select arrow_typeof(to_time(to_timestamp('2024-01-15 12:30:45')));
 ----
 Time64(ns)
 
+# Timestamp with non-UTC timezone (America/New_York = -05:00)
+
+query D
+select to_time(to_timestamp('2024-01-15T14:30:45-05:00'));
+----
+19:30:45
+
+# Timezone test using timestamp value directly
+# The timestamp is converted from -05:00 to UTC, so 14:30:45-05:00 = 19:30:45 UTC
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp AT TIME ZONE 'America/Los_Angeles');
+----
+09:15:30
+
+# Timestamp before epoch (1969-12-31 23:30:00 UTC)
+
+query D
+select to_time(to_timestamp('1969-12-31T23:30:00+00:00'));
+----
+23:30:00
+
+query D
+select to_time(to_timestamp('1960-06-15T08:45:30+00:00'));
+----
+08:45:30
+
 ##########
 ## to_char tests
 ##########

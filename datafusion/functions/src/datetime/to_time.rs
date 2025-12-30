@@ -18,12 +18,13 @@
 use crate::datetime::common::*;
 use arrow::array::builder::PrimitiveBuilder;
 use arrow::array::cast::AsArray;
-use arrow::array::temporal_conversions::NANOSECONDS;
+use arrow::array::temporal_conversions::time_to_time64ns;
 use arrow::array::types::Time64NanosecondType;
 use arrow::array::{Array, PrimitiveArray, StringArrayType};
+use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
-use chrono::{NaiveTime, Timelike};
+use chrono::NaiveTime;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -31,15 +32,6 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-
-/// Nanoseconds per second (1 billion)
-const NANOS_PER_SECOND: i64 = NANOSECONDS;
-/// Nanoseconds per minute
-const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
-/// Nanoseconds per hour
-const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
-/// Nanoseconds per day (used for extracting time from timestamp)
-const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 /// Default time formats to try when parsing without an explicit format
 const DEFAULT_TIME_FORMATS: &[&str] = &[
@@ -106,49 +98,6 @@ impl ToTimeFunc {
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
-
-    fn to_time(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let formats: Vec<&str> = if args.len() > 1 {
-            // Collect format strings from arguments
-            args[1..]
-                .iter()
-                .filter_map(|arg| {
-                    if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) = arg
-                    {
-                        Some(s.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            DEFAULT_TIME_FORMATS.to_vec()
-        };
-
-        match &args[0] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(s))
-            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(s))
-            | ColumnarValue::Scalar(ScalarValue::Utf8View(s)) => {
-                let result = s
-                    .as_ref()
-                    .map(|s| parse_time_with_formats(s, &formats))
-                    .transpose()?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(result)))
-            }
-            ColumnarValue::Array(array) => {
-                let result = match array.data_type() {
-                    Utf8 => parse_time_array(&array.as_string::<i32>(), &formats)?,
-                    LargeUtf8 => parse_time_array(&array.as_string::<i64>(), &formats)?,
-                    Utf8View => parse_time_array(&array.as_string_view(), &formats)?,
-                    other => return exec_err!("Unsupported type for to_time: {}", other),
-                };
-                Ok(ColumnarValue::Array(Arc::new(result)))
-            }
-            other => exec_err!("Unsupported argument for to_time: {:?}", other),
-        }
-    }
 }
 
 impl ScalarUDFImpl for ToTimeFunc {
@@ -183,13 +132,10 @@ impl ScalarUDFImpl for ToTimeFunc {
         }
 
         match args[0].data_type() {
-            Utf8View | LargeUtf8 | Utf8 => self.to_time(&args),
+            Utf8View | LargeUtf8 | Utf8 => string_to_time(&args),
             Null => Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(None))),
-            // Support timestamp input by extracting time portion
-            Timestamp(_, _) => {
-                let nanos = extract_time_from_timestamp(&args[0])?;
-                Ok(nanos)
-            }
+            // Support timestamp input by extracting time portion using Arrow cast
+            Timestamp(_, _) => timestamp_to_time(&args[0]),
             other => {
                 exec_err!("Unsupported data type {} for function to_time", other)
             }
@@ -198,6 +144,89 @@ impl ScalarUDFImpl for ToTimeFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+/// Convert string arguments to time (standalone function, not a method on ToTimeFunc)
+fn string_to_time(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let formats = collect_formats(args)?;
+
+    match &args[0] {
+        ColumnarValue::Scalar(ScalarValue::Utf8(s))
+        | ColumnarValue::Scalar(ScalarValue::LargeUtf8(s))
+        | ColumnarValue::Scalar(ScalarValue::Utf8View(s)) => {
+            let result = s
+                .as_ref()
+                .map(|s| parse_time_with_formats(s, &formats))
+                .transpose()?;
+            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(result)))
+        }
+        ColumnarValue::Array(array) => {
+            let result = match array.data_type() {
+                Utf8 => parse_time_array(&array.as_string::<i32>(), &formats)?,
+                LargeUtf8 => parse_time_array(&array.as_string::<i64>(), &formats)?,
+                Utf8View => parse_time_array(&array.as_string_view(), &formats)?,
+                other => return exec_err!("Unsupported type for to_time: {other}"),
+            };
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        other => exec_err!("Unsupported argument for to_time: {other:?}"),
+    }
+}
+
+/// Collect format strings from arguments, erroring on non-scalar inputs
+fn collect_formats(args: &[ColumnarValue]) -> Result<Vec<&str>> {
+    if args.len() <= 1 {
+        return Ok(DEFAULT_TIME_FORMATS.to_vec());
+    }
+
+    let mut formats = Vec::with_capacity(args.len() - 1);
+    for (i, arg) in args[1..].iter().enumerate() {
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(s)))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(s)))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(s))) => {
+                formats.push(s.as_str());
+            }
+            ColumnarValue::Scalar(ScalarValue::Utf8(None))
+            | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None))
+            | ColumnarValue::Scalar(ScalarValue::Utf8View(None)) => {
+                // Skip null format strings
+            }
+            ColumnarValue::Array(_) => {
+                return exec_err!(
+                    "to_time format argument {} must be a scalar, not an array",
+                    i + 2 // argument position (1-indexed, +1 for the first arg)
+                );
+            }
+            other => {
+                return exec_err!(
+                    "to_time format argument {} has unsupported type: {:?}",
+                    i + 2,
+                    other.data_type()
+                );
+            }
+        }
+    }
+    Ok(formats)
+}
+
+/// Extract time portion from timestamp using Arrow cast kernel
+fn timestamp_to_time(arg: &ColumnarValue) -> Result<ColumnarValue> {
+    let target_type = Time64(arrow::datatypes::TimeUnit::Nanosecond);
+
+    match arg {
+        ColumnarValue::Scalar(scalar) => {
+            // Convert scalar to array of size 1, cast, then extract result
+            let array = scalar.to_array()?;
+            let time_array = cast(&array, &target_type)?;
+            let time_value = ScalarValue::try_from_array(&time_array, 0)?;
+            Ok(ColumnarValue::Scalar(time_value))
+        }
+        ColumnarValue::Array(array) => {
+            let time_array = cast(array, &target_type)?;
+            Ok(ColumnarValue::Array(time_array))
+        }
     }
 }
 
@@ -226,7 +255,8 @@ fn parse_time_array<'a, A: StringArrayType<'a>>(
 fn parse_time_with_formats(s: &str, formats: &[&str]) -> Result<i64> {
     for format in formats {
         if let Ok(time) = NaiveTime::parse_from_str(s, format) {
-            return Ok(time_to_nanos(time));
+            // Use Arrow's time_to_time64ns function instead of custom implementation
+            return Ok(time_to_time64ns(time));
         }
     }
     exec_err!(
@@ -234,136 +264,6 @@ fn parse_time_with_formats(s: &str, formats: &[&str]) -> Result<i64> {
         s,
         formats
     )
-}
-
-/// Convert NaiveTime to nanoseconds since midnight
-fn time_to_nanos(time: NaiveTime) -> i64 {
-    let hours = time.hour() as i64;
-    let minutes = time.minute() as i64;
-    let seconds = time.second() as i64;
-    let nanos = time.nanosecond() as i64;
-
-    hours * NANOS_PER_HOUR
-        + minutes * NANOS_PER_MINUTE
-        + seconds * NANOS_PER_SECOND
-        + nanos
-}
-
-/// Extract time portion from timestamp (nanoseconds since midnight)
-fn extract_time_from_timestamp(arg: &ColumnarValue) -> Result<ColumnarValue> {
-    match arg {
-        ColumnarValue::Scalar(scalar) => {
-            let nanos = match scalar {
-                ScalarValue::TimestampNanosecond(Some(ts), _) => *ts % NANOS_PER_DAY,
-                ScalarValue::TimestampMicrosecond(Some(ts), _) => {
-                    (*ts * 1_000) % NANOS_PER_DAY
-                }
-                ScalarValue::TimestampMillisecond(Some(ts), _) => {
-                    (*ts * 1_000_000) % NANOS_PER_DAY
-                }
-                ScalarValue::TimestampSecond(Some(ts), _) => {
-                    (*ts * NANOS_PER_SECOND) % NANOS_PER_DAY
-                }
-                ScalarValue::TimestampNanosecond(None, _)
-                | ScalarValue::TimestampMicrosecond(None, _)
-                | ScalarValue::TimestampMillisecond(None, _)
-                | ScalarValue::TimestampSecond(None, _) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(
-                        None,
-                    )));
-                }
-                _ => return exec_err!("Unsupported timestamp type for to_time"),
-            };
-            // Handle negative timestamps (before epoch) - normalize to positive time
-            let normalized_nanos = if nanos < 0 {
-                nanos + NANOS_PER_DAY
-            } else {
-                nanos
-            };
-            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(
-                normalized_nanos,
-            ))))
-        }
-        ColumnarValue::Array(array) => {
-            let len = array.len();
-            let mut builder: PrimitiveBuilder<Time64NanosecondType> =
-                PrimitiveArray::builder(len);
-
-            match array.data_type() {
-                Timestamp(arrow::datatypes::TimeUnit::Nanosecond, _) => {
-                    let ts_array =
-                        array.as_primitive::<arrow::datatypes::TimestampNanosecondType>();
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let nanos = ts_array.value(i) % NANOS_PER_DAY;
-                            let normalized = if nanos < 0 {
-                                nanos + NANOS_PER_DAY
-                            } else {
-                                nanos
-                            };
-                            builder.append_value(normalized);
-                        }
-                    }
-                }
-                Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) => {
-                    let ts_array = array
-                        .as_primitive::<arrow::datatypes::TimestampMicrosecondType>();
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let nanos = (ts_array.value(i) * 1_000) % NANOS_PER_DAY;
-                            let normalized = if nanos < 0 {
-                                nanos + NANOS_PER_DAY
-                            } else {
-                                nanos
-                            };
-                            builder.append_value(normalized);
-                        }
-                    }
-                }
-                Timestamp(arrow::datatypes::TimeUnit::Millisecond, _) => {
-                    let ts_array = array
-                        .as_primitive::<arrow::datatypes::TimestampMillisecondType>();
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let nanos = (ts_array.value(i) * 1_000_000) % NANOS_PER_DAY;
-                            let normalized = if nanos < 0 {
-                                nanos + NANOS_PER_DAY
-                            } else {
-                                nanos
-                            };
-                            builder.append_value(normalized);
-                        }
-                    }
-                }
-                Timestamp(arrow::datatypes::TimeUnit::Second, _) => {
-                    let ts_array =
-                        array.as_primitive::<arrow::datatypes::TimestampSecondType>();
-                    for i in 0..len {
-                        if ts_array.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            let nanos =
-                                (ts_array.value(i) * NANOS_PER_SECOND) % NANOS_PER_DAY;
-                            let normalized = if nanos < 0 {
-                                nanos + NANOS_PER_DAY
-                            } else {
-                                nanos
-                            };
-                            builder.append_value(normalized);
-                        }
-                    }
-                }
-                _ => return exec_err!("Unsupported timestamp type for to_time"),
-            }
-            Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -399,118 +299,17 @@ mod tests {
     }
 
     #[test]
-    fn test_to_time_without_format() {
-        struct TestCase {
-            name: &'static str,
-            time_str: &'static str,
-            expected_nanos: i64,
-        }
+    fn test_to_time_basic() {
+        // Basic time parsing - more comprehensive tests are in SLT
+        let sv = ScalarValue::Utf8(Some("12:30:45".to_string()));
+        let result = invoke_to_time_with_args(vec![ColumnarValue::Scalar(sv)], 1);
 
-        let test_cases = vec![
-            TestCase {
-                name: "HH:MM:SS format",
-                time_str: "12:30:45",
+        match result {
+            Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(val)))) => {
                 // 12*3600 + 30*60 + 45 = 45045 seconds = 45045000000000 nanos
-                expected_nanos: 45_045_000_000_000,
-            },
-            TestCase {
-                name: "HH:MM:SS.f format with milliseconds",
-                time_str: "12:30:45.123",
-                expected_nanos: 45_045_123_000_000,
-            },
-            TestCase {
-                name: "HH:MM:SS.f format with nanoseconds",
-                time_str: "12:30:45.123456789",
-                expected_nanos: 45_045_123_456_789,
-            },
-            TestCase {
-                name: "Midnight",
-                time_str: "00:00:00",
-                expected_nanos: 0,
-            },
-            TestCase {
-                name: "End of day",
-                time_str: "23:59:59",
-                expected_nanos: 86_399_000_000_000,
-            },
-        ];
-
-        for tc in &test_cases {
-            // Test scalar Utf8
-            let sv = ScalarValue::Utf8(Some(tc.time_str.to_string()));
-            let result = invoke_to_time_with_args(vec![ColumnarValue::Scalar(sv)], 1);
-
-            match result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(val)))) => {
-                    assert_eq!(
-                        val, tc.expected_nanos,
-                        "{}: to_time created wrong value, got {}, expected {}",
-                        tc.name, val, tc.expected_nanos
-                    );
-                }
-                other => panic!(
-                    "{}: Could not convert '{}' to Time: {:?}",
-                    tc.name, tc.time_str, other
-                ),
+                assert_eq!(val, 45_045_000_000_000);
             }
-        }
-    }
-
-    #[test]
-    fn test_to_time_with_format() {
-        struct TestCase {
-            name: &'static str,
-            time_str: &'static str,
-            format_str: &'static str,
-            expected_nanos: i64,
-        }
-
-        let test_cases = vec![
-            TestCase {
-                name: "Custom dash format",
-                time_str: "12-30-45",
-                format_str: "%H-%M-%S",
-                expected_nanos: 45_045_000_000_000,
-            },
-            TestCase {
-                name: "Slash format",
-                time_str: "14/25/30",
-                format_str: "%H/%M/%S",
-                expected_nanos: 51_930_000_000_000,
-            },
-            TestCase {
-                name: "12-hour format with AM/PM",
-                time_str: "02:30:45 PM",
-                format_str: "%I:%M:%S %p",
-                expected_nanos: 52_245_000_000_000, // 14:30:45
-            },
-        ];
-
-        for tc in &test_cases {
-            let time_scalar = ScalarValue::Utf8(Some(tc.time_str.to_string()));
-            let format_scalar = ScalarValue::Utf8(Some(tc.format_str.to_string()));
-
-            let result = invoke_to_time_with_args(
-                vec![
-                    ColumnarValue::Scalar(time_scalar),
-                    ColumnarValue::Scalar(format_scalar),
-                ],
-                1,
-            );
-
-            match result {
-                Ok(ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(Some(val)))) => {
-                    assert_eq!(
-                        val, tc.expected_nanos,
-                        "{}: to_time created wrong value for '{}' with format '{}', got {}, expected {}",
-                        tc.name, tc.time_str, tc.format_str, val, tc.expected_nanos
-                    );
-                }
-                other => panic!(
-                    "{}: Could not convert '{}' with format '{}' to Time: {:?}",
-                    tc.name, tc.time_str, tc.format_str, other
-                ),
-            }
+            other => panic!("Unexpected result: {other:?}"),
         }
     }
 
@@ -578,5 +377,27 @@ mod tests {
             invoke_to_time_with_args(vec![ColumnarValue::Scalar(invalid_scalar)], 1);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_time_format_array_error() {
+        // Format argument as array should error, not be silently ignored
+        let time_scalar = ScalarValue::Utf8(Some("12:30:45".to_string()));
+        let format_array = GenericStringArray::<i32>::from(vec!["%H:%M:%S"]);
+
+        let result = invoke_to_time_with_args(
+            vec![
+                ColumnarValue::Scalar(time_scalar),
+                ColumnarValue::Array(Arc::new(format_array)),
+            ],
+            1,
+        );
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("must be a scalar"),
+            "Expected error about scalar format, got: {err_msg}"
+        );
     }
 }
