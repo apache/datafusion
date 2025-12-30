@@ -360,7 +360,8 @@ impl DisplayAs for SortMergeJoinExec {
                     };
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]{}{}",
+                    "{}: join_type={:?}, on=[{}]{}{}",
+                    Self::static_name(),
                     self.join_type,
                     on,
                     self.filter.as_ref().map_or_else(

@@ -218,6 +218,36 @@ pub trait Dialect: Send + Sync {
     fn timestamp_with_tz_to_string(&self, dt: DateTime<Tz>, _unit: TimeUnit) -> String {
         dt.to_string()
     }
+
+    /// Whether the dialect supports an empty select list such as `SELECT FROM table`.
+    ///
+    /// An empty select list returns rows without any column data, which is useful for:
+    /// - Counting rows: `SELECT FROM users WHERE active = true` (combined with `COUNT(*)`)
+    /// - Testing row existence without retrieving column data
+    /// - Performance optimization when only row counts or existence checks are needed
+    ///
+    /// # Default
+    ///
+    /// Returns `false` for maximum compatibility across SQL dialects. When `false`,
+    /// the unparser falls back to `SELECT 1 FROM table`.
+    ///
+    /// # Implementation Note
+    ///
+    /// Specific dialects should override this method to return `true` if they support
+    /// the empty select list syntax (e.g., PostgreSQL).
+    ///
+    /// # Example SQL Output
+    ///
+    /// ```sql
+    /// -- When supported:
+    /// SELECT FROM users WHERE active = true;
+    ///
+    /// -- Fallback when unsupported:
+    /// SELECT 1 FROM users WHERE active = true;
+    /// ```
+    fn supports_empty_select_list(&self) -> bool {
+        false
+    }
 }
 
 /// `IntervalStyle` to use for unparsing
@@ -268,13 +298,12 @@ impl Dialect for DefaultDialect {
         let id_upper = identifier.to_uppercase();
         // Special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
         // ID is a keyword in ClickHouse, but we don't want to quote it when unparsing SQL here
-        if (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
+        // Also quote identifiers with uppercase letters since unquoted identifiers are
+        // normalized to lowercase by the SQL parser, which would break case-sensitive schemas
+        let needs_quote = (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
             || !identifier_regex.is_match(identifier)
-        {
-            Some('"')
-        } else {
-            None
-        }
+            || identifier.chars().any(|c| c.is_ascii_uppercase());
+        if needs_quote { Some('"') } else { None }
     }
 }
 
@@ -286,6 +315,10 @@ impl Dialect for PostgreSqlDialect {
     }
 
     fn requires_derived_table_alias(&self) -> bool {
+        true
+    }
+
+    fn supports_empty_select_list(&self) -> bool {
         true
     }
 

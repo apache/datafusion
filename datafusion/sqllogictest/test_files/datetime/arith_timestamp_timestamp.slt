@@ -1,0 +1,13 @@
+# timestamp - timestamp → interval
+# Subtract timestamps (converting 24-hour intervals into days, similarly to justify_hours())
+# timestamp '2001-09-29 03:00' - timestamp '2001-07-27 12:00' → 63 days 15:00:00
+
+query ?
+SELECT '2001-09-29T03:00:00'::timestamp - '2001-07-27T12:00:00'::timestamp
+----
+63 days 15 hours 0 mins 0.000000000 secs
+
+query T
+SELECT arrow_typeof('2001-09-29T03:00:00'::timestamp - '2001-07-27T12:00:00'::timestamp)
+----
+Duration(ns)

@@ -988,6 +988,164 @@ mod test {
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
 
+    /// Builder for creating [`ParquetOpener`] instances with sensible defaults for tests.
+    /// This helps reduce code duplication and makes it clear what differs between test cases.
+    struct ParquetOpenerBuilder {
+        store: Option<Arc<dyn ObjectStore>>,
+        table_schema: Option<TableSchema>,
+        partition_index: usize,
+        projection_indices: Option<Vec<usize>>,
+        projection: Option<ProjectionExprs>,
+        batch_size: usize,
+        limit: Option<usize>,
+        predicate: Option<Arc<dyn PhysicalExpr>>,
+        metadata_size_hint: Option<usize>,
+        metrics: ExecutionPlanMetricsSet,
+        pushdown_filters: bool,
+        reorder_filters: bool,
+        force_filter_selections: bool,
+        enable_page_index: bool,
+        enable_bloom_filter: bool,
+        enable_row_group_stats_pruning: bool,
+        coerce_int96: Option<arrow::datatypes::TimeUnit>,
+        max_predicate_cache_size: Option<usize>,
+        reverse_row_groups: bool,
+    }
+
+    impl ParquetOpenerBuilder {
+        /// Create a new builder with sensible defaults for tests.
+        fn new() -> Self {
+            Self {
+                store: None,
+                table_schema: None,
+                partition_index: 0,
+                projection_indices: None,
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                predicate: None,
+                metadata_size_hint: None,
+                metrics: ExecutionPlanMetricsSet::new(),
+                pushdown_filters: false,
+                reorder_filters: false,
+                force_filter_selections: false,
+                enable_page_index: false,
+                enable_bloom_filter: false,
+                enable_row_group_stats_pruning: false,
+                coerce_int96: None,
+                max_predicate_cache_size: None,
+                reverse_row_groups: false,
+            }
+        }
+
+        /// Set the object store (required for building).
+        fn with_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
+            self.store = Some(store);
+            self
+        }
+
+        /// Create a simple table schema from a file schema (for files without partition columns).
+        fn with_schema(mut self, file_schema: SchemaRef) -> Self {
+            self.table_schema = Some(TableSchema::from_file_schema(file_schema));
+            self
+        }
+
+        /// Set a custom table schema (for files with partition columns).
+        fn with_table_schema(mut self, table_schema: TableSchema) -> Self {
+            self.table_schema = Some(table_schema);
+            self
+        }
+
+        /// Set projection by column indices (convenience method for common case).
+        fn with_projection_indices(mut self, indices: &[usize]) -> Self {
+            self.projection_indices = Some(indices.to_vec());
+            self
+        }
+
+        /// Set the predicate.
+        fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+            self.predicate = Some(predicate);
+            self
+        }
+
+        /// Enable pushdown filters.
+        fn with_pushdown_filters(mut self, enable: bool) -> Self {
+            self.pushdown_filters = enable;
+            self
+        }
+
+        /// Enable filter reordering.
+        fn with_reorder_filters(mut self, enable: bool) -> Self {
+            self.reorder_filters = enable;
+            self
+        }
+
+        /// Enable row group stats pruning.
+        fn with_row_group_stats_pruning(mut self, enable: bool) -> Self {
+            self.enable_row_group_stats_pruning = enable;
+            self
+        }
+
+        /// Set reverse row groups flag.
+        fn with_reverse_row_groups(mut self, enable: bool) -> Self {
+            self.reverse_row_groups = enable;
+            self
+        }
+
+        /// Build the ParquetOpener instance.
+        ///
+        /// # Panics
+        ///
+        /// Panics if required fields (store, schema/table_schema) are not set.
+        fn build(self) -> ParquetOpener {
+            let store = self
+                .store
+                .expect("ParquetOpenerBuilder: store must be set via with_store()");
+            let table_schema = self.table_schema.expect(
+                "ParquetOpenerBuilder: table_schema must be set via with_schema() or with_table_schema()",
+            );
+            let file_schema = Arc::clone(table_schema.file_schema());
+
+            let projection = if let Some(projection) = self.projection {
+                projection
+            } else if let Some(indices) = self.projection_indices {
+                ProjectionExprs::from_indices(&indices, &file_schema)
+            } else {
+                // Default: project all columns
+                let all_indices: Vec<usize> = (0..file_schema.fields().len()).collect();
+                ProjectionExprs::from_indices(&all_indices, &file_schema)
+            };
+
+            ParquetOpener {
+                partition_index: self.partition_index,
+                projection,
+                batch_size: self.batch_size,
+                limit: self.limit,
+                predicate: self.predicate,
+                table_schema,
+                metadata_size_hint: self.metadata_size_hint,
+                metrics: self.metrics,
+                parquet_file_reader_factory: Arc::new(
+                    DefaultParquetFileReaderFactory::new(store),
+                ),
+                pushdown_filters: self.pushdown_filters,
+                reorder_filters: self.reorder_filters,
+                force_filter_selections: self.force_filter_selections,
+                enable_page_index: self.enable_page_index,
+                enable_bloom_filter: self.enable_bloom_filter,
+                enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                coerce_int96: self.coerce_int96,
+                #[cfg(feature = "parquet_encryption")]
+                file_decryption_properties: None,
+                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
+                #[cfg(feature = "parquet_encryption")]
+                encryption_factory: None,
+                max_predicate_cache_size: self.max_predicate_cache_size,
+                reverse_row_groups: self.reverse_row_groups,
+            }
+        }
+    }
+
     fn constant_int_stats() -> (Statistics, SchemaRef) {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1181,33 +1339,13 @@ mod test {
         ));
 
         let make_opener = |predicate| {
-            ParquetOpener {
-                partition_index: 0,
-                projection: ProjectionExprs::from_indices(&[0, 1], &schema),
-                batch_size: 1024,
-                limit: None,
-                predicate: Some(predicate),
-                table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
-                metadata_size_hint: None,
-                metrics: ExecutionPlanMetricsSet::new(),
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
-                ),
-                pushdown_filters: false, // note that this is false!
-                reorder_filters: false,
-                force_filter_selections: false,
-                enable_page_index: false,
-                enable_bloom_filter: false,
-                enable_row_group_stats_pruning: true,
-                coerce_int96: None,
-                #[cfg(feature = "parquet_encryption")]
-                file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-                #[cfg(feature = "parquet_encryption")]
-                encryption_factory: None,
-                max_predicate_cache_size: None,
-                reverse_row_groups: false,
-            }
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0, 1])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .build()
         };
 
         // A filter on "a" should not exclude any rows even if it matches the data
@@ -1249,37 +1387,18 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
+        let table_schema_for_opener = TableSchema::new(
+            file_schema.clone(),
+            vec![Arc::new(Field::new("part", DataType::Int32, false))],
+        );
         let make_opener = |predicate| {
-            ParquetOpener {
-                partition_index: 0,
-                projection: ProjectionExprs::from_indices(&[0], &file_schema),
-                batch_size: 1024,
-                limit: None,
-                predicate: Some(predicate),
-                table_schema: TableSchema::new(
-                    file_schema.clone(),
-                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
-                ),
-                metadata_size_hint: None,
-                metrics: ExecutionPlanMetricsSet::new(),
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
-                ),
-                pushdown_filters: false, // note that this is false!
-                reorder_filters: false,
-                force_filter_selections: false,
-                enable_page_index: false,
-                enable_bloom_filter: false,
-                enable_row_group_stats_pruning: true,
-                coerce_int96: None,
-                #[cfg(feature = "parquet_encryption")]
-                file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-                #[cfg(feature = "parquet_encryption")]
-                encryption_factory: None,
-                max_predicate_cache_size: None,
-                reverse_row_groups: false,
-            }
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .build()
         };
 
         // Filter should match the partition value
@@ -1337,37 +1456,18 @@ mod test {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Float32, true),
         ]));
+        let table_schema_for_opener = TableSchema::new(
+            file_schema.clone(),
+            vec![Arc::new(Field::new("part", DataType::Int32, false))],
+        );
         let make_opener = |predicate| {
-            ParquetOpener {
-                partition_index: 0,
-                projection: ProjectionExprs::from_indices(&[0], &file_schema),
-                batch_size: 1024,
-                limit: None,
-                predicate: Some(predicate),
-                table_schema: TableSchema::new(
-                    file_schema.clone(),
-                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
-                ),
-                metadata_size_hint: None,
-                metrics: ExecutionPlanMetricsSet::new(),
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
-                ),
-                pushdown_filters: false, // note that this is false!
-                reorder_filters: false,
-                force_filter_selections: false,
-                enable_page_index: false,
-                enable_bloom_filter: false,
-                enable_row_group_stats_pruning: true,
-                coerce_int96: None,
-                #[cfg(feature = "parquet_encryption")]
-                file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-                #[cfg(feature = "parquet_encryption")]
-                encryption_factory: None,
-                max_predicate_cache_size: None,
-                reverse_row_groups: false,
-            }
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .build()
         };
 
         // Filter should match the partition value and file statistics
@@ -1428,37 +1528,19 @@ mod test {
             Field::new("a", DataType::Int32, false),
         ]));
 
+        let table_schema_for_opener = TableSchema::new(
+            file_schema.clone(),
+            vec![Arc::new(Field::new("part", DataType::Int32, false))],
+        );
         let make_opener = |predicate| {
-            ParquetOpener {
-                partition_index: 0,
-                projection: ProjectionExprs::from_indices(&[0], &file_schema),
-                batch_size: 1024,
-                limit: None,
-                predicate: Some(predicate),
-                table_schema: TableSchema::new(
-                    file_schema.clone(),
-                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
-                ),
-                metadata_size_hint: None,
-                metrics: ExecutionPlanMetricsSet::new(),
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
-                ),
-                pushdown_filters: true, // note that this is true!
-                reorder_filters: true,
-                force_filter_selections: false,
-                enable_page_index: false,
-                enable_bloom_filter: false,
-                enable_row_group_stats_pruning: false, // note that this is false!
-                coerce_int96: None,
-                #[cfg(feature = "parquet_encryption")]
-                file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-                #[cfg(feature = "parquet_encryption")]
-                encryption_factory: None,
-                max_predicate_cache_size: None,
-                reverse_row_groups: false,
-            }
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_pushdown_filters(true) // note that this is true!
+                .with_reorder_filters(true)
+                .build()
         };
 
         // Filter should match the partition value and data value
@@ -1527,37 +1609,17 @@ mod test {
             Field::new("part", DataType::Int32, false),
         ]));
 
+        let table_schema_for_opener = TableSchema::new(
+            file_schema.clone(),
+            vec![Arc::new(Field::new("part", DataType::Int32, false))],
+        );
         let make_opener = |predicate| {
-            ParquetOpener {
-                partition_index: 0,
-                projection: ProjectionExprs::from_indices(&[0], &file_schema),
-                batch_size: 1024,
-                limit: None,
-                predicate: Some(predicate),
-                table_schema: TableSchema::new(
-                    file_schema.clone(),
-                    vec![Arc::new(Field::new("part", DataType::Int32, false))],
-                ),
-                metadata_size_hint: None,
-                metrics: ExecutionPlanMetricsSet::new(),
-                parquet_file_reader_factory: Arc::new(
-                    DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
-                ),
-                pushdown_filters: false, // note that this is false!
-                reorder_filters: false,
-                force_filter_selections: false,
-                enable_page_index: false,
-                enable_bloom_filter: false,
-                enable_row_group_stats_pruning: false, // note that this is false!
-                coerce_int96: None,
-                #[cfg(feature = "parquet_encryption")]
-                file_decryption_properties: None,
-                expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-                #[cfg(feature = "parquet_encryption")]
-                encryption_factory: None,
-                max_predicate_cache_size: None,
-                reverse_row_groups: false,
-            }
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .build()
         };
 
         // This filter could prune based on statistics, but since it's not dynamic it's not applied for pruning
@@ -1633,32 +1695,13 @@ mod test {
             u64::try_from(data_len).unwrap(),
         );
 
-        let make_opener = |reverse_scan: bool| ParquetOpener {
-            partition_index: 0,
-            projection: ProjectionExprs::from_indices(&[0], &schema),
-            batch_size: 1024,
-            limit: None,
-            predicate: None,
-            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
-            metadata_size_hint: None,
-            metrics: ExecutionPlanMetricsSet::new(),
-            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
-                Arc::clone(&store),
-            )),
-            pushdown_filters: false,
-            reorder_filters: false,
-            force_filter_selections: false,
-            enable_page_index: false,
-            enable_bloom_filter: false,
-            enable_row_group_stats_pruning: false,
-            coerce_int96: None,
-            #[cfg(feature = "parquet_encryption")]
-            file_decryption_properties: None,
-            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-            #[cfg(feature = "parquet_encryption")]
-            encryption_factory: None,
-            max_predicate_cache_size: None,
-            reverse_row_groups: reverse_scan,
+        let make_opener = |reverse_scan: bool| {
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_reverse_row_groups(reverse_scan)
+                .build()
         };
 
         // Test normal scan (forward)
@@ -1694,32 +1737,13 @@ mod test {
             u64::try_from(data_size).unwrap(),
         );
 
-        let make_opener = |reverse_scan: bool| ParquetOpener {
-            partition_index: 0,
-            projection: ProjectionExprs::from_indices(&[0], &schema),
-            batch_size: 1024,
-            limit: None,
-            predicate: None,
-            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
-            metadata_size_hint: None,
-            metrics: ExecutionPlanMetricsSet::new(),
-            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
-                Arc::clone(&store),
-            )),
-            pushdown_filters: false,
-            reorder_filters: false,
-            force_filter_selections: false,
-            enable_page_index: false,
-            enable_bloom_filter: false,
-            enable_row_group_stats_pruning: false,
-            coerce_int96: None,
-            #[cfg(feature = "parquet_encryption")]
-            file_decryption_properties: None,
-            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-            #[cfg(feature = "parquet_encryption")]
-            encryption_factory: None,
-            max_predicate_cache_size: None,
-            reverse_row_groups: reverse_scan,
+        let make_opener = |reverse_scan: bool| {
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_reverse_row_groups(reverse_scan)
+                .build()
         };
 
         // With a single row group, forward and reverse should be the same
@@ -1789,32 +1813,13 @@ mod test {
         )
         .with_extensions(Arc::new(access_plan));
 
-        let make_opener = |reverse_scan: bool| ParquetOpener {
-            partition_index: 0,
-            projection: ProjectionExprs::from_indices(&[0], &schema),
-            batch_size: 1024,
-            limit: None,
-            predicate: None,
-            table_schema: TableSchema::from_file_schema(Arc::clone(&schema)),
-            metadata_size_hint: None,
-            metrics: ExecutionPlanMetricsSet::new(),
-            parquet_file_reader_factory: Arc::new(DefaultParquetFileReaderFactory::new(
-                Arc::clone(&store),
-            )),
-            pushdown_filters: false,
-            reorder_filters: false,
-            force_filter_selections: false,
-            enable_page_index: false,
-            enable_bloom_filter: false,
-            enable_row_group_stats_pruning: false,
-            coerce_int96: None,
-            #[cfg(feature = "parquet_encryption")]
-            file_decryption_properties: None,
-            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
-            #[cfg(feature = "parquet_encryption")]
-            encryption_factory: None,
-            max_predicate_cache_size: None,
-            reverse_row_groups: reverse_scan,
+        let make_opener = |reverse_scan: bool| {
+            ParquetOpenerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_reverse_row_groups(reverse_scan)
+                .build()
         };
 
         // Forward scan: RG0(3,4), RG1(5,6,7,8), RG2(9,10)
