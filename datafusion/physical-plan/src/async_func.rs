@@ -363,3 +363,51 @@ impl AsyncMapper {
         Arc::new(Column::new(async_expr.name(), output_idx))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow::array::{RecordBatch, UInt32Array};
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::Result;
+    use datafusion_execution::{TaskContext, config::SessionConfig};
+    use futures::StreamExt;
+
+    use crate::{ExecutionPlan, async_func::AsyncFuncExec, test::TestMemoryExec};
+
+    #[tokio::test]
+    async fn test_async_fn_with_coalescing() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6]))],
+        )?;
+
+        let batches: Vec<RecordBatch> = (0..50).map(|_| batch.clone()).collect();
+
+        let session_config = SessionConfig::new().with_batch_size(200);
+        let task_ctx = TaskContext::default().with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        let test_exec =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let exec = AsyncFuncExec::try_new(vec![], test_exec)?;
+
+        let mut stream = exec.execute(0, Arc::clone(&task_ctx))?;
+        let batch = stream
+            .next()
+            .await
+            .expect("expected to get a record batch")?;
+        assert_eq!(200, batch.num_rows());
+        let batch = stream
+            .next()
+            .await
+            .expect("expected to get a record batch")?;
+        assert_eq!(100, batch.num_rows());
+
+        Ok(())
+    }
+}
