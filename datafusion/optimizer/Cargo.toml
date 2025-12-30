@@ -41,9 +41,7 @@ workspace = true
 name = "datafusion_optimizer"
 
 [features]
-default = ["sql"]
 recursive_protection = ["dep:recursive"]
-sql = ["datafusion-expr/sql"]
 
 [dependencies]
 arrow = { workspace = true }

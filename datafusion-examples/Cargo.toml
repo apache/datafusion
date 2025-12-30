@@ -45,7 +45,7 @@ bytes = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 base64 = "0.22.1"
-datafusion = { workspace = true, default-features = true, features = ["parquet_encryption", "sql"] }
+datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
