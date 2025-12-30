@@ -1094,7 +1094,7 @@ pub struct Signature {
     pub parameter_names: Option<Vec<String>>,
 }
 
-/// A helper enum used by [`Signature::with_parameter`] and [`Signature::with_parameters`]
+/// A helper enum used by [`Signature::from_parameter_variants`]
 /// to accept either concrete [`DataType`]s (for [`TypeSignature::Exact`] and
 /// [`TypeSignature::Uniform`]) or [`Coercion`] rules (for [`TypeSignature::Coercible`]).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
@@ -1499,126 +1499,6 @@ impl Signature {
         Ok(self)
     }
 
-    /// Add a single named parameter to this signature.
-    ///
-    /// This method is useful when constructing signatures alongside parameter
-    /// names and expected coercions. For bulk construction, prefer
-    /// [`Signature::with_parameters`].
-    pub fn with_parameter<N, P>(self, name: N, parameter: P) -> Result<Self>
-    where
-        N: Into<String> + AsRef<str>,
-        P: Into<ParameterKind> + Clone,
-    {
-        self.with_parameters(&[(name, parameter)])
-    }
-
-    /// Add parameter names together with their expected types or coercion rules.
-    ///
-    /// This builder reduces duplication when defining both a [`TypeSignature`]
-    /// and a set of parameter names. It reuses the same arity validation used
-    /// by [`Signature::with_parameter_names`] and rejects unsupported
-    /// combinations such as variadic signatures.
-    ///
-    /// The provided `parameters` slice should contain a tuple for each
-    /// parameter where the first element is the parameter name and the second
-    /// element describes the expected type:
-    ///
-    /// * [`ParameterKind::DataType`] is accepted for [`TypeSignature::Exact`]
-    ///   and [`TypeSignature::Uniform`].
-    /// * [`ParameterKind::Coercion`] is accepted for [`TypeSignature::Coercible`].
-    ///
-    /// For other fixed-arity signatures, the parameter types are ignored but
-    /// the names are still validated and stored. This keeps
-    /// [`Signature::with_parameter_names`] available for backward compatibility
-    /// while allowing new code to migrate to a single API that pairs names with
-    /// types.
-    pub fn with_parameters<N, P>(mut self, parameters: &[(N, P)]) -> Result<Self>
-    where
-        N: AsRef<str>,
-        P: Clone + Into<ParameterKind>,
-    {
-        let names = parameters
-            .iter()
-            .map(|(name, _)| name.as_ref().to_string())
-            .collect::<Vec<_>>();
-
-        match &mut self.type_signature {
-            TypeSignature::Exact(types) => {
-                let new_types = parameters
-                    .iter()
-                    .map(|(_, parameter)| match parameter.clone().into() {
-                        ParameterKind::DataType(data_type) => Ok(data_type),
-                        ParameterKind::Coercion(_) => {
-                            plan_err!("Expected DataType for Exact signature parameters")
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                if !types.is_empty() && types.len() != new_types.len() {
-                    return plan_err!(
-                        "Parameter names count ({}) does not match signature arity ({})",
-                        names.len(),
-                        types.len()
-                    );
-                }
-
-                *types = new_types;
-            }
-            TypeSignature::Coercible(coercions) => {
-                let new_coercions = parameters
-                    .iter()
-                    .map(|(_, parameter)| match parameter.clone().into() {
-                        ParameterKind::Coercion(coercion) => Ok(coercion),
-                        ParameterKind::DataType(_) => plan_err!(
-                            "Expected Coercion for Coercible signature parameters"
-                        ),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                if !coercions.is_empty() && coercions.len() != new_coercions.len() {
-                    return plan_err!(
-                        "Parameter names count ({}) does not match signature arity ({})",
-                        names.len(),
-                        coercions.len()
-                    );
-                }
-
-                *coercions = new_coercions;
-            }
-            TypeSignature::Uniform(arg_count, valid_types) => {
-                let provided_types = parameters
-                    .iter()
-                    .map(|(_, parameter)| match parameter.clone().into() {
-                        ParameterKind::DataType(data_type) => Ok(data_type),
-                        ParameterKind::Coercion(_) => plan_err!(
-                            "Expected DataType for Uniform signature parameters"
-                        ),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                for data_type in &provided_types {
-                    if !valid_types.contains(data_type) {
-                        return plan_err!(
-                            "Parameter type {:?} not permitted for Uniform signature {:?}",
-                            data_type,
-                            valid_types
-                        );
-                    }
-                }
-
-                if provided_types.len() != *arg_count {
-                    // Delegate to arity validation for consistent messaging
-                    self.validate_parameter_names(&names)?;
-                }
-            }
-            _ => {}
-        }
-
-        self.validate_parameter_names(&names)?;
-        self.parameter_names = Some(names);
-        Ok(self)
-    }
-
     /// Validate that parameter names are compatible with this signature
     fn validate_parameter_names(&self, names: &[String]) -> Result<()> {
         match self.type_signature.arity() {
@@ -1870,110 +1750,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("Duplicate parameter name")
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_exact() {
-        let sig = Signature::new(TypeSignature::Exact(vec![]), Volatility::Immutable)
-            .with_parameters(&[("count", DataType::Int32), ("name", DataType::Utf8)])
-            .unwrap();
-
-        assert_eq!(
-            sig.type_signature,
-            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8])
-        );
-        assert_eq!(
-            sig.parameter_names,
-            Some(vec!["count".to_string(), "name".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_coercible() {
-        let sig = Signature::new(TypeSignature::Coercible(vec![]), Volatility::Immutable)
-            .with_parameters(&[
-                (
-                    "str",
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                ),
-                (
-                    "start_pos",
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_int64()),
-                        vec![TypeSignatureClass::Native(logical_int32())],
-                        NativeType::Int64,
-                    ),
-                ),
-            ])
-            .unwrap();
-
-        assert_eq!(sig.type_signature.arity(), Arity::Fixed(2));
-        assert_eq!(
-            sig.parameter_names,
-            Some(vec!["str".to_string(), "start_pos".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_uniform() {
-        let sig = Signature::uniform(3, vec![DataType::Float64], Volatility::Immutable)
-            .with_parameters(&[
-                ("x", DataType::Float64),
-                ("y", DataType::Float64),
-                ("z", DataType::Float64),
-            ])
-            .unwrap();
-
-        assert_eq!(
-            sig.type_signature,
-            TypeSignature::Uniform(3, vec![DataType::Float64])
-        );
-        assert_eq!(
-            sig.parameter_names,
-            Some(vec!["x".to_string(), "y".to_string(), "z".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_mismatched_counts() {
-        let result = Signature::exact(vec![DataType::Int32], Volatility::Immutable)
-            .with_parameters(&[("count", DataType::Int32), ("name", DataType::Utf8)]);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("does not match signature arity")
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_duplicate_names() {
-        let result = Signature::new(TypeSignature::Exact(vec![]), Volatility::Immutable)
-            .with_parameters(&[("count", DataType::Int32), ("count", DataType::Int32)]);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Duplicate parameter name")
-        );
-    }
-
-    #[test]
-    fn test_signature_with_parameters_variadic_error() {
-        let result = Signature::variadic(vec![DataType::Int32], Volatility::Immutable)
-            .with_parameters(&[("arg", DataType::Int32)]);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("variable arity signature")
         );
     }
 
@@ -2354,5 +2130,203 @@ mod tests {
     fn test_type_signature_arity_user_defined() {
         let sig = TypeSignature::UserDefined;
         assert_eq!(sig.arity(), Arity::Variable);
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_single_variant() {
+        // Test with a single variant (Exact signature)
+        let sig = Signature::from_parameter_variants(
+            vec![vec![("count", DataType::Int32), ("name", DataType::Utf8)]],
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Exact(vec![DataType::Int32, DataType::Utf8])
+        );
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["count".to_string(), "name".to_string()])
+        );
+        assert_eq!(sig.volatility, Volatility::Immutable);
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_two_variants() {
+        // Test with two variants creating a OneOf signature
+        let sig = Signature::from_parameter_variants(
+            vec![
+                vec![("str", DataType::Utf8), ("pos", DataType::Int64)],
+                vec![
+                    ("str", DataType::Utf8),
+                    ("pos", DataType::Int64),
+                    ("len", DataType::Int64),
+                ],
+            ],
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        // Should create a OneOf signature with parameter names from longest variant
+        match &sig.type_signature {
+            TypeSignature::OneOf(sigs) => {
+                assert_eq!(sigs.len(), 2);
+                assert_eq!(sigs[0], TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]));
+                assert_eq!(
+                    sigs[1],
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64, DataType::Int64])
+                );
+            }
+            other => panic!("Expected OneOf, got {:?}", other),
+        }
+
+        // Names should come from the longest variant
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["str".to_string(), "pos".to_string(), "len".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_with_nullary() {
+        // Test with a Nullary (no arguments) variant
+        let sig = Signature::from_parameter_variants(
+            vec![
+                vec![],
+                vec![("flag", DataType::Boolean)],
+            ],
+            Volatility::Stable,
+        )
+        .unwrap();
+
+        // Should create a OneOf with Nullary and single-arg signatures
+        match &sig.type_signature {
+            TypeSignature::OneOf(sigs) => {
+                assert_eq!(sigs.len(), 2);
+                assert_eq!(sigs[0], TypeSignature::Nullary);
+                assert_eq!(sigs[1], TypeSignature::Exact(vec![DataType::Boolean]));
+            }
+            other => panic!("Expected OneOf, got {:?}", other),
+        }
+
+        // Names should come from the longest variant
+        assert_eq!(sig.parameter_names, Some(vec!["flag".to_string()]));
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_empty_error() {
+        // Test that an empty variant list returns an error
+        let result = Signature::from_parameter_variants::<&str, DataType>(vec![], Volatility::Immutable);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("At least one variant must be provided")
+        );
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_with_coercions() {
+        // Test with Coercion-based variants for Coercible signatures
+        let string_coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+        let int64_coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_int64()));
+
+        let sig = Signature::from_parameter_variants(
+            vec![
+                vec![("str", string_coercion.clone()), ("pos", int64_coercion.clone())],
+                vec![
+                    ("str", string_coercion.clone()),
+                    ("pos", int64_coercion.clone()),
+                    ("len", int64_coercion),
+                ],
+            ],
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        // Should create OneOf of Coercible signatures
+        match &sig.type_signature {
+            TypeSignature::OneOf(sigs) => {
+                assert_eq!(sigs.len(), 2);
+                // First variant has 2 coercions
+                match &sigs[0] {
+                    TypeSignature::Coercible(coercions) => assert_eq!(coercions.len(), 2),
+                    other => panic!("Expected Coercible, got {:?}", other),
+                }
+                // Second variant has 3 coercions
+                match &sigs[1] {
+                    TypeSignature::Coercible(coercions) => assert_eq!(coercions.len(), 3),
+                    other => panic!("Expected Coercible, got {:?}", other),
+                }
+            }
+            other => panic!("Expected OneOf, got {:?}", other),
+        }
+
+        // Parameter names from longest variant
+        assert_eq!(
+            sig.parameter_names,
+            Some(vec!["str".to_string(), "pos".to_string(), "len".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_mixed_volatility() {
+        // Test that volatility is set correctly
+        let volatile_sig = Signature::from_parameter_variants(
+            vec![vec![("x", DataType::Float64)]],
+            Volatility::Volatile,
+        )
+        .unwrap();
+
+        assert_eq!(volatile_sig.volatility, Volatility::Volatile);
+
+        let stable_sig = Signature::from_parameter_variants(
+            vec![vec![("y", DataType::Int32)]],
+            Volatility::Stable,
+        )
+        .unwrap();
+
+        assert_eq!(stable_sig.volatility, Volatility::Stable);
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_mixed_types_error() {
+        // Test that mixing DataType and Coercion in same variant returns error
+        let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
+
+        let result = Signature::from_parameter_variants(
+            vec![vec![
+                ("str", DataType::Utf8),          // DataType
+                ("pos", coercion),                // Coercion - mixed!
+            ]],
+            Volatility::Immutable,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot mix DataType and Coercion")
+        );
+    }
+
+    #[test]
+    fn test_signature_from_parameter_variants_single_variant_single_param() {
+        // Test with a single parameter in a single variant
+        let sig = Signature::from_parameter_variants(
+            vec![vec![("value", DataType::Float32)]],
+            Volatility::Immutable,
+        )
+        .unwrap();
+
+        assert_eq!(
+            sig.type_signature,
+            TypeSignature::Exact(vec![DataType::Float32])
+        );
+        assert_eq!(sig.parameter_names, Some(vec!["value".to_string()]));
     }
 }
