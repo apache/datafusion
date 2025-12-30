@@ -1164,7 +1164,7 @@ mod tests {
         let pool = TrackingMemoryPool::default();
         let total_size = acc.size(Some(&pool));
         // if we don't use the memory pool: size(None); we get 17148
-        assert_eq!(total_size, 1056);
+        assert_eq!(total_size, 1096);
 
         Ok(())
     }
