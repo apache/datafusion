@@ -1333,6 +1333,63 @@ impl Signature {
         Signature::arrays(1, Some(ListCoercion::FixedSizedListToList), volatility)
     }
 
+    /// Add parameter names to this signature, enabling named argument notation.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr_common::signature::{Signature, Volatility};
+    /// # use arrow::datatypes::DataType;
+    /// let sig =
+    ///     Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
+    ///         .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
+    /// ```
+    ///
+    /// # Errors
+    /// Returns an error if the number of parameter names doesn't match the signature's arity.
+    /// For signatures with variable arity (e.g., `Variadic`, `VariadicAny`), parameter names
+    /// cannot be specified.
+    pub fn with_parameter_names(mut self, names: Vec<impl Into<String>>) -> Result<Self> {
+        let names = names.into_iter().map(Into::into).collect::<Vec<String>>();
+        // Validate that the number of names matches the signature
+        self.validate_parameter_names(&names)?;
+        self.parameter_names = Some(names);
+        Ok(self)
+    }
+
+    /// Validate that parameter names are compatible with this signature
+    fn validate_parameter_names(&self, names: &[String]) -> Result<()> {
+        match self.type_signature.arity() {
+            Arity::Fixed(expected) => {
+                if names.len() != expected {
+                    return plan_err!(
+                        "Parameter names count ({}) does not match signature arity ({})",
+                        names.len(),
+                        expected
+                    );
+                }
+            }
+            Arity::Variable => {
+                // For UserDefined signatures, allow parameter names
+                // The function implementer is responsible for validating the names match the actual arguments
+                if !matches!(self.type_signature, TypeSignature::UserDefined) {
+                    return plan_err!(
+                        "Cannot specify parameter names for variable arity signature: {:?}",
+                        self.type_signature
+                    );
+                }
+            }
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            if !seen.insert(name) {
+                return plan_err!("Duplicate parameter name: '{}'", name);
+            }
+        }
+
+        Ok(())
+    }
+
     /// Construct a signature with multiple variants directly from parameter specifications.
     ///
     /// This is the recommended way to define functions that accept multiple signatures
@@ -1474,63 +1531,6 @@ impl Signature {
             1 => Ok(signatures.pop().unwrap()),
             _ => Ok(TypeSignature::OneOf(signatures)),
         }
-    }
-
-    /// Add parameter names to this signature, enabling named argument notation.
-    ///
-    /// # Example
-    /// ```
-    /// # use datafusion_expr_common::signature::{Signature, Volatility};
-    /// # use arrow::datatypes::DataType;
-    /// let sig =
-    ///     Signature::exact(vec![DataType::Int32, DataType::Utf8], Volatility::Immutable)
-    ///         .with_parameter_names(vec!["count".to_string(), "name".to_string()]);
-    /// ```
-    ///
-    /// # Errors
-    /// Returns an error if the number of parameter names doesn't match the signature's arity.
-    /// For signatures with variable arity (e.g., `Variadic`, `VariadicAny`), parameter names
-    /// cannot be specified.
-    pub fn with_parameter_names(mut self, names: Vec<impl Into<String>>) -> Result<Self> {
-        let names = names.into_iter().map(Into::into).collect::<Vec<String>>();
-        // Validate that the number of names matches the signature
-        self.validate_parameter_names(&names)?;
-        self.parameter_names = Some(names);
-        Ok(self)
-    }
-
-    /// Validate that parameter names are compatible with this signature
-    fn validate_parameter_names(&self, names: &[String]) -> Result<()> {
-        match self.type_signature.arity() {
-            Arity::Fixed(expected) => {
-                if names.len() != expected {
-                    return plan_err!(
-                        "Parameter names count ({}) does not match signature arity ({})",
-                        names.len(),
-                        expected
-                    );
-                }
-            }
-            Arity::Variable => {
-                // For UserDefined signatures, allow parameter names
-                // The function implementer is responsible for validating the names match the actual arguments
-                if !matches!(self.type_signature, TypeSignature::UserDefined) {
-                    return plan_err!(
-                        "Cannot specify parameter names for variable arity signature: {:?}",
-                        self.type_signature
-                    );
-                }
-            }
-        }
-
-        let mut seen = std::collections::HashSet::new();
-        for name in names {
-            if !seen.insert(name) {
-                return plan_err!("Duplicate parameter name: '{}'", name);
-            }
-        }
-
-        Ok(())
     }
 }
 
