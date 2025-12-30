@@ -79,7 +79,8 @@ SELECT substr(Str => 'hello world', Start_Pos => 7);
 ----
 world
 
-# Error: case-sensitive quoted parameter names don't match
+# Error: quoted identifiers are case-sensitive per SQL standards
+# "STR" does not match parameter "str" (wrong case)
 query error DataFusion error: Error during planning: Unknown parameter name 'STR'
 SELECT substr("STR" => 'hello world', "start_pos" => 7);
 

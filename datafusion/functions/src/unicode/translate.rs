@@ -148,34 +148,48 @@ where
     let from_array_iter = ArrayIter::new(from_array);
     let to_array_iter = ArrayIter::new(to_array);
 
+    // Reusable buffers to avoid allocating for each row
+    let mut from_map: HashMap<&str, usize> = HashMap::new();
+    let mut from_graphemes: Vec<&str> = Vec::new();
+    let mut to_graphemes: Vec<&str> = Vec::new();
+    let mut string_graphemes: Vec<&str> = Vec::new();
+    let mut result_graphemes: Vec<&str> = Vec::new();
+
     let result = string_array_iter
         .zip(from_array_iter)
         .zip(to_array_iter)
         .map(|((string, from), to)| match (string, from, to) {
             (Some(string), Some(from), Some(to)) => {
-                // create a hashmap of [char, index] to change from O(n) to O(1) for from list
-                let from_map: HashMap<&str, usize> = from
-                    .graphemes(true)
-                    .collect::<Vec<&str>>()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, c)| (c.to_owned(), index))
-                    .collect();
+                // Clear and reuse buffers
+                from_map.clear();
+                from_graphemes.clear();
+                to_graphemes.clear();
+                string_graphemes.clear();
+                result_graphemes.clear();
 
-                let to = to.graphemes(true).collect::<Vec<&str>>();
+                // Build from_map using reusable buffer
+                from_graphemes.extend(from.graphemes(true));
+                for (index, c) in from_graphemes.iter().enumerate() {
+                    from_map.insert(*c, index);
+                }
 
-                Some(
-                    string
-                        .graphemes(true)
-                        .collect::<Vec<&str>>()
-                        .iter()
-                        .flat_map(|c| match from_map.get(*c) {
-                            Some(n) => to.get(*n).copied(),
-                            None => Some(*c),
-                        })
-                        .collect::<Vec<&str>>()
-                        .concat(),
-                )
+                // Build to_graphemes
+                to_graphemes.extend(to.graphemes(true));
+
+                // Process string and build result
+                string_graphemes.extend(string.graphemes(true));
+                for c in &string_graphemes {
+                    match from_map.get(*c) {
+                        Some(n) => {
+                            if let Some(replacement) = to_graphemes.get(*n) {
+                                result_graphemes.push(*replacement);
+                            }
+                        }
+                        None => result_graphemes.push(*c),
+                    }
+                }
+
+                Some(result_graphemes.concat())
             }
             _ => None,
         })
