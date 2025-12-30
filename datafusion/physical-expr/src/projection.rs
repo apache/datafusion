@@ -622,12 +622,12 @@ impl ProjectionExprs {
                     };
 
                     ColumnStatistics {
-                        min_value: Precision::Absent,
-                        max_value: Precision::Absent,
+                        min_value: Precision::Exact(literal.value().clone()),
+                        max_value: Precision::Exact(literal.value().clone()),
                         distinct_count: Precision::Exact(1),
                         null_count,
-                        sum_value: Precision::Absent,
-                        byte_size: Precision::Absent,
+                        sum_value: Precision::Exact(literal.value().clone()),
+                        byte_size: Precision::Exact(0),
                     }
                 } else {
                     let value = literal.value();
@@ -2790,11 +2790,11 @@ pub(crate) mod tests {
         // First column (NULL literal) should have proper constant NULL statistics
         assert_eq!(
             output_stats.column_statistics[0].min_value,
-            Precision::Absent // NULLs don't have min/max
+            Precision::Exact(ScalarValue::Int64(None))
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
-            Precision::Absent // NULLs don't have min/max
+            Precision::Exact(ScalarValue::Int64(None))
         );
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
@@ -2806,11 +2806,11 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output_stats.column_statistics[0].byte_size,
-            Precision::Absent // NULLs don't take space
+            Precision::Exact(0)
         );
         assert_eq!(
             output_stats.column_statistics[0].sum_value,
-            Precision::Absent // Sum doesn't make sense for NULLs
+            Precision::Exact(ScalarValue::Int64(None))
         );
 
         // Second column (col0) should preserve statistics
