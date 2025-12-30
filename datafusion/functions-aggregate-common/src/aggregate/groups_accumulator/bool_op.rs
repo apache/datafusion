@@ -140,9 +140,9 @@ where
         self.update_batch(values, group_indices, opt_filter, total_num_groups)
     }
 
-    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         // capacity is in bits, so convert to bytes
-        self.values.capacity() / 8 + self.null_state.size(pool)
+        self.values.capacity() / 8 + self.null_state.size()
     }
 
     fn convert_to_state(

@@ -575,8 +575,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
-    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
-        size_of_val(self) + self.distinct_values.size(pool)
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.distinct_values.size()
     }
 }
 

@@ -195,7 +195,7 @@ where
         true
     }
 
-    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
-        self.values.capacity() * size_of::<T::Native>() + self.null_state.size(pool)
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
+        self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }
 }

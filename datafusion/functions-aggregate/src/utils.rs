@@ -24,6 +24,7 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 /// Recursively claims all buffers in an ArrayData and its children with the memory pool.
+/// TODO: remove once https://github.com/apache/arrow-rs/pull/8918 lands.
 pub(crate) fn claim_buffers_recursive(
     data: &arrow::array::ArrayData,
     pool: &dyn arrow_buffer::MemoryPool,

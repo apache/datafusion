@@ -78,7 +78,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
         }
     }
 
-    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
-        size_of_val(self) + self.values.size(pool)
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.values.size()
     }
 }

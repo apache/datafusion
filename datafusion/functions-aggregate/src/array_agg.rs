@@ -801,6 +801,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             }
         }
 
+        // Add size of the `self.ordering_values`
         total += size_of::<Vec<ScalarValue>>() * self.ordering_values.capacity();
         for row in &self.ordering_values {
             total += size_of_val(row) + (size_of::<ScalarValue>() * row.capacity());
@@ -819,12 +820,15 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             }
         }
 
+        // Add size of the `self.datatypes`
         total += size_of::<DataType>() * self.datatypes.capacity();
         for dtype in &self.datatypes {
             total += dtype.size() - size_of_val(dtype);
         }
 
+        // Add size of the `self.ordering_req`
         total += size_of::<PhysicalSortExpr>() * self.ordering_req.capacity();
+        // TODO: Calculate size of each `PhysicalSortExpr` more accurately.
         total
     }
 }

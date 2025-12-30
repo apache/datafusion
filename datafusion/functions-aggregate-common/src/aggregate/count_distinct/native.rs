@@ -162,7 +162,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulato
         Ok(ScalarValue::Int64(Some(self.values.values.len() as i64)))
     }
 
-    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
-        size_of_val(self) + self.values.size(pool)
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) + self.values.size()
     }
 }
