@@ -1220,9 +1220,54 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
+            // Field count must match for coercion
             if lhs_fields.len() != rhs_fields.len() {
                 return None;
             }
+
+            // Try name-based coercion first - match fields by name
+            // Build a map of right-side fields by name for quick lookup
+            let rhs_by_name: std::collections::HashMap<&str, &FieldRef> =
+                rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
+
+            // Check if any fields match by name
+            let has_name_overlap = lhs_fields
+                .iter()
+                .any(|lf| rhs_by_name.contains_key(lf.name().as_str()));
+
+            if has_name_overlap {
+                // Perform name-based coercion
+                let coerced_fields: Option<Vec<FieldRef>> = lhs_fields
+                    .iter()
+                    .map(|lhs_field| {
+                        // Find matching right-side field by name
+                        rhs_by_name
+                            .get(lhs_field.name().as_str())
+                            .and_then(|rhs_field| {
+                                // Coerce the data types of matching fields
+                                comparison_coercion(
+                                    lhs_field.data_type(),
+                                    rhs_field.data_type(),
+                                )
+                                .map(|coerced_type| {
+                                    // Preserve left-side field name, coerce nullability
+                                    let is_nullable = lhs_field.is_nullable()
+                                        || rhs_field.is_nullable();
+                                    Arc::new(Field::new(
+                                        lhs_field.name().clone(),
+                                        coerced_type,
+                                        is_nullable,
+                                    ))
+                                })
+                            })
+                    })
+                    .collect();
+
+                return coerced_fields.map(|fields| Struct(fields.into()));
+            }
+
+            // Fallback: If no names match, try positional coercion
+            // This preserves backward compatibility when field names don't match
 
             let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
                 .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
