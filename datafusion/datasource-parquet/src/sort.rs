@@ -22,8 +22,6 @@ use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
 
-// datafusion/datasource-parquet/src/sort.rs
-
 /// Reverse a row selection to match reversed row group order.
 ///
 /// When scanning row groups in reverse order, we need to adjust the row selection
