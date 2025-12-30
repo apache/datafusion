@@ -1403,9 +1403,8 @@ logical_plan
 03)----TableScan: annotated_data_finite2 projection=[a, b]
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-02)--ProjectionExec: expr=[a@0 as a, a@0 + b@1 as annotated_data_finite2.a + annotated_data_finite2.b]
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, a@1 + b@2 as annotated_data_finite2.a + annotated_data_finite2.b], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # since query below doesn't computation
 # inside projection expr, increasing partitions

@@ -4371,8 +4371,8 @@ logical_plan
 03)----TableScan: unbounded_csv_with_timestamps2 projection=[name, ts]
 physical_plan
 01)SortPreservingMergeExec: [name@0 DESC, time_chunks@1 DESC], fetch=5
-02)--ProjectionExec: expr=[name@0 as name, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@1) as time_chunks]
-03)----RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
+02)--RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1, maintains_sort_order=true
+03)----ProjectionExec: expr=[name@0 as name, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }, ts@1) as time_chunks]
 04)------StreamingTableExec: partition_sizes=1, projection=[name, ts], infinite_source=true, output_ordering=[name@0 DESC, ts@1 DESC]
 
 statement ok
