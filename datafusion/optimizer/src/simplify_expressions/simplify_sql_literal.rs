@@ -29,9 +29,7 @@ use datafusion_common::{
 };
 use datafusion_expr::Expr;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::planner::RelationPlannerContext;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::sqlparser::ast;
 use std::sync::Arc;
 
 /// Parse and simplifies a SQL expression to a numeric literal,
@@ -40,69 +38,50 @@ use std::sync::Arc;
 /// This function simplifies and coerces the expression, then extracts the underlying
 /// native type using `TryFrom<ScalarValue>`.
 ///
-/// # Arguments
-/// * `expr` - A logical AST expression
-/// * `schema` - Schema reference for expression planning
-/// * `context` - `RelationPlannerContext` context
-///
-/// # Returns
-/// A `Result` containing a literal type
-///
 /// # Example
 /// ```ignore
-/// let value: f64 = parse_sql_literal::<Float64Type>(&expr, &schema, &mut relPlannerContext)?;
+/// let value: f64 = parse_sql_literal::<Float64Type>(expr)?;
 /// ```
-pub fn parse_sql_literal<T>(
-    expr: &ast::Expr,
-    context: &mut dyn RelationPlannerContext,
-) -> Result<T::Native>
+pub fn parse_sql_literal<T>(expr: &Expr) -> Result<T::Native>
 where
     T: ArrowPrimitiveType,
-    <T as ArrowPrimitiveType>::Native: TryFrom<ScalarValue, Error = DataFusionError>,
+    T::Native: TryFrom<ScalarValue, Error = DataFusionError>,
 {
     // Empty schema is sufficient because it parses only literal expressions
     let schema = DFSchemaRef::new(DFSchema::empty());
 
-    match context.sql_to_expr(expr.clone(), &schema) {
-        Ok(logical_expr) => {
-            log::debug!("Parsing expr {:?} to type {}", logical_expr, T::DATA_TYPE);
+    log::debug!("Parsing expr {:?} to type {}", expr, T::DATA_TYPE);
 
-            let execution_props = ExecutionProps::new();
-            let simplifier = ExprSimplifier::new(
-                SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
-            );
+    let execution_props = ExecutionProps::new();
+    let simplifier = ExprSimplifier::new(
+        SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
+    );
 
-            // Simplify and coerce expression in case of constant arithmetic operations (e.g., 10 + 5)
-            let simplified_expr: Expr = simplifier
-                .simplify(logical_expr.clone())
-                .map_err(|err| plan_datafusion_err!("Cannot simplify {expr:?}: {err}"))?;
-            let coerced_expr: Expr =
-                simplifier.coerce(simplified_expr, schema.as_ref())?;
-            log::debug!("Coerced expression: {:?}", &coerced_expr);
+    // Simplify and coerce expression in case of constant arithmetic operations (e.g., 10 + 5)
+    let simplified_expr: Expr = simplifier
+        .simplify(expr.clone())
+        .map_err(|err| plan_datafusion_err!("Cannot simplify {expr:?}: {err}"))?;
+    let coerced_expr: Expr = simplifier.coerce(simplified_expr, schema.as_ref())?;
+    log::debug!("Coerced expression: {:?}", &coerced_expr);
 
-            match coerced_expr {
-                Expr::Literal(scalar_value, _) => {
-                    // It is a literal - proceed to the underlying value
-                    // Cast to the target type if needed
-                    let casted_scalar = scalar_value.cast_to(&T::DATA_TYPE)?;
+    match coerced_expr {
+        Expr::Literal(scalar_value, _) => {
+            // It is a literal - proceed to the underlying value
+            // Cast to the target type if needed
+            let casted_scalar = scalar_value.cast_to(&T::DATA_TYPE)?;
 
-                    // Extract the native type
-                    T::Native::try_from(casted_scalar).map_err(|err| {
-                        plan_datafusion_err!(
-                            "Cannot extract {} from scalar value: {err}",
-                            std::any::type_name::<T>()
-                        )
-                    })
-                }
-                actual => {
-                    plan_err!(
-                        "Cannot extract literal from coerced {actual:?} expression given {expr:?} expression"
-                    )
-                }
-            }
+            // Extract the native type
+            T::Native::try_from(casted_scalar).map_err(|err| {
+                plan_datafusion_err!(
+                    "Cannot extract {} from scalar value: {err}",
+                    std::any::type_name::<T>()
+                )
+            })
         }
-        Err(err) => {
-            plan_err!("Cannot construct logical expression from {expr:?}: {err}")
+        actual => {
+            plan_err!(
+                "Cannot extract literal from coerced {actual:?} expression given {expr:?} expression"
+            )
         }
     }
 }
@@ -113,7 +92,7 @@ mod tests {
     use arrow::datatypes::{DataType, Float64Type, Int64Type};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{TableReference, not_impl_err};
-    use datafusion_expr::planner::ContextProvider;
+    use datafusion_expr::planner::{ContextProvider, RelationPlannerContext};
     use datafusion_expr::sqlparser::parser::Parser;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
@@ -193,6 +172,7 @@ mod tests {
         let mut sql_context =
             SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
         let dialect = GenericDialect {};
+        let schema = DFSchemaRef::new(DFSchema::empty());
 
         for (sql_expr, expected) in test_cases {
             let ast_expr = Parser::new(&dialect)
@@ -200,9 +180,11 @@ mod tests {
                 .unwrap()
                 .parse_expr()
                 .unwrap();
+            let expr = sql_context
+                .sql_to_expr(ast_expr, &schema)
+                .expect("sql_to_expr");
 
-            let result: Result<f64> =
-                parse_sql_literal::<Float64Type>(&ast_expr, &mut sql_context);
+            let result: Result<f64> = parse_sql_literal::<Float64Type>(&expr);
 
             match result {
                 Ok(value) => {
@@ -226,6 +208,7 @@ mod tests {
         let mut sql_context =
             SqlToRelRelationContext::new(&sql_to_rel, &mut planner_context);
         let dialect = GenericDialect {};
+        let schema = DFSchemaRef::new(DFSchema::empty());
 
         // Integer
         let ast_expr = Parser::new(&dialect)
@@ -233,9 +216,11 @@ mod tests {
             .unwrap()
             .parse_expr()
             .unwrap();
+        let expr = sql_context
+            .sql_to_expr(ast_expr, &schema)
+            .expect("sql_to_expr");
 
-        let result: Result<i64> =
-            parse_sql_literal::<Int64Type>(&ast_expr, &mut sql_context);
+        let result: Result<i64> = parse_sql_literal::<Int64Type>(&expr);
 
         match result {
             Ok(value) => {
