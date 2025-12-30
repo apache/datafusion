@@ -121,16 +121,16 @@ pub(super) struct ParquetOpener {
 }
 
 /// Represents a prepared access plan with optional row selection
-struct PreparedAccessPlan {
+pub(crate) struct PreparedAccessPlan {
     /// Row group indexes to read
-    row_group_indexes: Vec<usize>,
+    pub(crate) row_group_indexes: Vec<usize>,
     /// Optional row selection for filtering within row groups
-    row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
+    pub(crate) row_selection: Option<parquet::arrow::arrow_reader::RowSelection>,
 }
 
 impl PreparedAccessPlan {
     /// Create a new prepared access plan from a ParquetAccessPlan
-    fn from_access_plan(
+    pub(crate) fn from_access_plan(
         access_plan: ParquetAccessPlan,
         rg_metadata: &[RowGroupMetaData],
     ) -> Result<Self> {
@@ -144,7 +144,7 @@ impl PreparedAccessPlan {
     }
 
     /// Reverse the access plan for reverse scanning
-    fn reverse(
+    pub(crate) fn reverse(
         mut self,
         file_metadata: &parquet::file::metadata::ParquetMetaData,
     ) -> Result<Self> {
