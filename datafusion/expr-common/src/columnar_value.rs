@@ -356,7 +356,7 @@ fn cast_struct_array_by_name(
     for target_field in target_fields {
         let casted_child =
             if let Some((idx, _)) = source_by_name.remove(target_field.name()) {
-                let child = struct_array.column(idx).clone();
+                let child = Arc::clone(struct_array.column(idx));
                 cast_array_by_name(&child, target_field.data_type(), cast_options)?
             } else {
                 // Missing field - create a null array of the target type
