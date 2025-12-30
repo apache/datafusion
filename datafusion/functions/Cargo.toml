@@ -277,6 +277,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "crypto"
+required-features = ["crypto_expressions"]
+
+[[bench]]
+harness = false
 name = "translate"
 required-features = ["unicode_expressions"]
 
