@@ -674,3 +674,50 @@ logical_plan
 physical_plan
 01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=id@0 > 1 AND array_has(tags@1, rust), pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+
+###
+# Struct column filter pushdown tests
+# Tests for pushdown of filters involving struct columns
+###
+
+statement ok
+COPY (
+  SELECT *
+  FROM VALUES ({field: [{nested: 1}]}), ({field: [{nested: 2}]}) AS t(struct_col)
+)
+TO 'test_files/scratch/parquet_filter_pushdown/data/struct.parquet';
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION 'test_files/scratch/parquet_filter_pushdown/data/struct.parquet';
+
+query TT
+explain
+select struct_col['field'][1]['nested']
+from t1
+where struct_col['field'][1]['nested'] > 1;
+----
+logical_plan
+01)Projection: get_field(array_element(get_field(t1.struct_col, Utf8("field")), Int64(1)), Utf8("nested"))
+02)--Filter: get_field(array_element(get_field(t1.struct_col, Utf8("field")), Int64(1)), Utf8("nested")) > Int64(1)
+03)----TableScan: t1 projection=[struct_col], partial_filters=[get_field(array_element(get_field(t1.struct_col, Utf8("field")), Int64(1)), Utf8("nested")) > Int64(1)]
+physical_plan
+01)ProjectionExec: expr=[get_field(array_element(get_field(struct_col@0, field), 1), nested) as t1.struct_col[field][Int64(1)][nested]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/data/struct.parquet]]}, projection=[struct_col], file_type=parquet, predicate=get_field(array_element(get_field(struct_col@0, field), 1), nested) > 1
+
+query ?
+select struct_col
+from t1
+where struct_col['field'][1]['nested'] > 1;
+----
+{field: [{nested: 2}]}
+
+query I
+select struct_col['field'][1]['nested']
+from t1
+where struct_col['field'][1]['nested'] > 1;
+----
+2
