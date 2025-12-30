@@ -21,7 +21,6 @@ use arrow::array::cast::AsArray;
 use arrow::array::temporal_conversions::time_to_time64ns;
 use arrow::array::types::Time64NanosecondType;
 use arrow::array::{Array, PrimitiveArray, StringArrayType};
-use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use chrono::NaiveTime;
@@ -213,7 +212,7 @@ fn collect_formats(args: &[ColumnarValue]) -> Result<Vec<&str>> {
 
 /// Extract time portion from timestamp using Arrow cast kernel
 fn timestamp_to_time(arg: &ColumnarValue) -> Result<ColumnarValue> {
-    Ok(arg.cast_to(&Time64(arrow::datatypes::TimeUnit::Nanosecond), None)?)
+    arg.cast_to(&Time64(arrow::datatypes::TimeUnit::Nanosecond), None)
 }
 
 /// Parse time array using the provided formats
