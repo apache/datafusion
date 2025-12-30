@@ -212,6 +212,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "replace"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "random"
 required-features = ["math_expressions"]
 
@@ -253,4 +258,34 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "find_in_set"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "contains"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "starts_with"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "ends_with"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "crypto"
+required-features = ["crypto_expressions"]
+
+[[bench]]
+harness = false
+name = "translate"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "levenshtein"
 required-features = ["unicode_expressions"]
