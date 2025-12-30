@@ -1407,7 +1407,7 @@ impl Signature {
     ///
     /// // substr(str, pos) OR substr(str, pos, length)
     /// let sig = Signature::from_parameter_variants(
-    ///     vec![
+    ///     &[
     ///         vec![("str", string.clone()), ("start_pos", int64.clone())],
     ///         vec![("str", string.clone()), ("start_pos", int64.clone()), ("length", int64.clone())],
     ///     ],
