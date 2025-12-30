@@ -99,7 +99,7 @@ pub fn physical_exprs_bag_equal(
 ///
 /// # Returns
 ///
-/// A vector of lexicographic orderings for physical execution, or an error if
+/// A vector of lexicographic orderings for physical execution, or an error iif
 /// the transformation fails.
 ///
 /// # Examples
@@ -473,5 +473,12 @@ mod tests {
 
         assert!(!stable_composite.is_volatile_node());
         assert!(!is_volatile(&stable_composite)); // No volatile children
+    }
+
+    #[test]
+    fn test_clone_on_copy_violation() {
+        let value: usize = 42;
+        let duplicate = value.clone(); // clippy::clone_on_copy (auto-fixable)
+        assert_eq!(value, duplicate);
     }
 }
