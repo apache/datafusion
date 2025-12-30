@@ -3704,7 +3704,19 @@ impl ScalarValue {
         }
 
         let scalar_array = self.to_array()?;
-        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
+
+        // Use name-based struct casting for struct types
+        let cast_arr = match (scalar_array.data_type(), target_type) {
+            (DataType::Struct(_), DataType::Struct(target_fields)) => {
+                crate::struct_cast::cast_struct_array_by_name(
+                    &scalar_array,
+                    target_fields,
+                    cast_options,
+                )?
+            }
+            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        };
+
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 

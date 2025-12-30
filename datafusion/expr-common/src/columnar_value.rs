@@ -18,9 +18,7 @@
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
 use arrow::{
-    array::{
-        Array, ArrayRef, Date32Array, Date64Array, NullArray, StructArray, new_null_array,
-    },
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
     compute::{CastOptions, kernels, max, min},
     datatypes::{DataType, Fields},
     util::pretty::pretty_format_columns,
@@ -306,71 +304,13 @@ impl ColumnarValue {
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
-                if matches!(scalar.data_type(), DataType::Struct(_))
-                    && matches!(cast_type, DataType::Struct(_))
-                {
-                    let array = scalar.to_array()?;
-                    let casted = cast_array_by_name(&array, cast_type, &cast_options)?;
-                    Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-                        &casted, 0,
-                    )?))
-                } else {
-                    Ok(ColumnarValue::Scalar(
-                        scalar.cast_to_with_options(cast_type, &cast_options)?,
-                    ))
-                }
+                // For scalars, use ScalarValue's cast which now supports name-based struct casting
+                Ok(ColumnarValue::Scalar(
+                    scalar.cast_to_with_options(cast_type, &cast_options)?,
+                ))
             }
         }
     }
-}
-
-/// Cast a struct array to another struct type by aligning child arrays using
-/// field names instead of their physical order.
-///
-/// This reorders or permutes the children to match the target schema, inserts
-/// null arrays for missing fields, and applies the requested Arrow cast to each
-/// field. It returns an error for duplicate source field names or if any child
-/// cast fails.
-fn cast_struct_array_by_name(
-    array: &ArrayRef,
-    source_fields: &Fields,
-    target_fields: &Fields,
-    cast_options: &CastOptions<'static>,
-) -> Result<ArrayRef> {
-    let struct_array = array
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .ok_or_else(|| internal_datafusion_err!("Expected StructArray"))?;
-
-    let mut source_by_name = source_fields
-        .iter()
-        .enumerate()
-        .map(|(idx, field)| (field.name().clone(), (idx, field)))
-        .collect::<std::collections::HashMap<_, _>>();
-
-    if source_by_name.len() != source_fields.len() {
-        return internal_err!("Duplicate field name found in struct");
-    }
-
-    let mut reordered_children = Vec::with_capacity(target_fields.len());
-    for target_field in target_fields {
-        let casted_child =
-            if let Some((idx, _)) = source_by_name.remove(target_field.name()) {
-                let child = Arc::clone(struct_array.column(idx));
-                cast_array_by_name(&child, target_field.data_type(), cast_options)?
-            } else {
-                // Missing field - create a null array of the target type
-                new_null_array(target_field.data_type(), struct_array.len())
-            };
-
-        reordered_children.push(casted_child);
-    }
-
-    Ok(Arc::new(StructArray::new(
-        target_fields.clone(),
-        reordered_children,
-        struct_array.nulls().cloned(),
-    )))
 }
 
 fn cast_array_by_name(
@@ -378,9 +318,18 @@ fn cast_array_by_name(
     cast_type: &DataType,
     cast_options: &CastOptions<'static>,
 ) -> Result<ArrayRef> {
+    // If types are already equal, no cast needed
+    if array.data_type() == cast_type {
+        return Ok(Arc::clone(array));
+    }
+
     match (array.data_type(), cast_type) {
-        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-            cast_struct_array_by_name(array, source_fields, target_fields, cast_options)
+        (DataType::Struct(_source_fields), DataType::Struct(target_fields)) => {
+            datafusion_common::struct_cast::cast_struct_array_by_name(
+                array,
+                target_fields,
+                cast_options,
+            )
         }
         _ => {
             ensure_date_array_timestamp_bounds(array, cast_type)?;

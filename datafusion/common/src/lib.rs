@@ -57,6 +57,7 @@ pub mod rounding;
 pub mod scalar;
 pub mod spans;
 pub mod stats;
+pub mod struct_cast;
 pub mod test_util;
 pub mod tree_node;
 pub mod types;
