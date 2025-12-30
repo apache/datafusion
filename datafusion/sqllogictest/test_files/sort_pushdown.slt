@@ -884,3 +884,188 @@ DROP TABLE signed_parquet;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
+# Test 1.8: Reverse scan with non-contiguous row groups and row selection
+# This is the key bug fix scenario: when some row groups are skipped (not in scan plan),
+# the row selection must still be correctly reversed
+
+# Create data with 4 row groups, but we'll only scan 3 of them (skipping RG1)
+statement ok
+CREATE TABLE non_contiguous_rg_data(id INT, category VARCHAR, value INT) AS VALUES
+(1, 'alpha', 10),
+(2, 'alpha', 20),
+(3, 'beta', 30),
+(4, 'beta', 40),
+(5, 'gamma', 50),
+(6, 'gamma', 60),
+(7, 'delta', 70),
+(8, 'delta', 80);
+
+# Write with small row groups (2 rows each = 4 row groups: RG0, RG1, RG2, RG3)
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+query I
+COPY (SELECT * FROM non_contiguous_rg_data ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/non_contiguous_rg.parquet';
+----
+8
+
+# Reset row group size
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE non_contiguous_rg_parquet(id INT, category VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/non_contiguous_rg.parquet'
+WITH ORDER (id ASC);
+
+# Enable page index and pushdown filters to create row selection
+statement ok
+SET datafusion.execution.parquet.enable_page_index = true;
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Test case: Filter that skips RG1 entirely (beta category)
+# - RG0 (id=1,2): category=alpha -> SELECT (via filter)
+# - RG1 (id=3,4): category=beta -> SKIP (not in scan plan due to filter)
+# - RG2 (id=5,6): category=gamma -> SELECT (via filter)
+# - RG3 (id=7,8): category=delta -> SELECT (via filter)
+#
+# This creates a scenario where:
+# 1. Row groups to scan: [0, 2, 3] (non-contiguous! RG1 is skipped)
+# 2. Row selection exists for these row groups
+# 3. When reversed, we need to correctly map selections to their row groups
+
+query TT
+EXPLAIN SELECT * FROM non_contiguous_rg_parquet
+WHERE category IN ('alpha', 'gamma', 'delta')
+ORDER BY id DESC;
+----
+logical_plan
+01)Sort: non_contiguous_rg_parquet.id DESC NULLS FIRST
+02)--Filter: non_contiguous_rg_parquet.category = Utf8View("alpha") OR non_contiguous_rg_parquet.category = Utf8View("gamma") OR non_contiguous_rg_parquet.category = Utf8View("delta")
+03)----TableScan: non_contiguous_rg_parquet projection=[id, category, value], partial_filters=[non_contiguous_rg_parquet.category = Utf8View("alpha") OR non_contiguous_rg_parquet.category = Utf8View("gamma") OR non_contiguous_rg_parquet.category = Utf8View("delta")]
+physical_plan
+01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/non_contiguous_rg.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=category@1 = alpha OR category@1 = gamma OR category@1 = delta, reverse_row_groups=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= delta AND delta <= category_max@1, required_guarantees=[category in (alpha, delta, gamma)]
+
+# Verify the results are correct with non-contiguous row groups
+# Expected order (DESC): delta rows (8,7), gamma rows (6,5), alpha rows (2,1)
+query ITI
+SELECT * FROM non_contiguous_rg_parquet
+WHERE category IN ('alpha', 'gamma', 'delta')
+ORDER BY id DESC;
+----
+8 delta 80
+7 delta 70
+6 gamma 60
+5 gamma 50
+2 alpha 20
+1 alpha 10
+
+# Test another pattern: skip first and last row groups
+# Only scan RG1 and RG2
+query ITI
+SELECT * FROM non_contiguous_rg_parquet
+WHERE category IN ('beta', 'gamma')
+ORDER BY id DESC;
+----
+6 gamma 60
+5 gamma 50
+4 beta 40
+3 beta 30
+
+# Test forward scan for comparison (should give same results in ASC order)
+query ITI
+SELECT * FROM non_contiguous_rg_parquet
+WHERE category IN ('alpha', 'gamma', 'delta')
+ORDER BY id ASC;
+----
+1 alpha 10
+2 alpha 20
+5 gamma 50
+6 gamma 60
+7 delta 70
+8 delta 80
+
+# More complex case: Create a filter that results in partial row selection within some row groups
+# This will test the row selection reversal logic more thoroughly
+statement ok
+CREATE TABLE complex_rg_data(id INT, category VARCHAR, subcategory VARCHAR, value INT) AS VALUES
+-- RG0
+(1, 'A', 'x', 100),
+(2, 'A', 'y', 200),
+-- RG1 (will be completely skipped by filter)
+(3, 'B', 'x', 300),
+(4, 'B', 'y', 400),
+-- RG2 (partial selection: only first row matches)
+(5, 'C', 'x', 500),
+(6, 'C', 'z', 600),
+-- RG3
+(7, 'D', 'x', 700),
+(8, 'D', 'y', 800);
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 2;
+
+query I
+COPY (SELECT * FROM complex_rg_data ORDER BY id ASC)
+TO 'test_files/scratch/sort_pushdown/complex_rg.parquet';
+----
+8
+
+statement ok
+SET datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+CREATE EXTERNAL TABLE complex_rg_parquet(id INT, category VARCHAR, subcategory VARCHAR, value INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/sort_pushdown/complex_rg.parquet'
+WITH ORDER (id ASC);
+
+# Filter that creates partial row selection:
+# - RG0: both rows match (category A, subcategory x or y)
+# - RG1: no rows match (category B is excluded)
+# - RG2: only first row matches (category C AND subcategory x)
+# - RG3: both rows match (category D, subcategory x or y)
+#
+# Row groups scanned: [0, 2, 3] (non-contiguous)
+# Row selection for RG2: select(1), skip(1)
+query ITTI
+SELECT * FROM complex_rg_parquet
+WHERE category IN ('A', 'C', 'D') AND subcategory IN ('x', 'y')
+ORDER BY id DESC;
+----
+8 D y 800
+7 D x 700
+5 C x 500
+2 A y 200
+1 A x 100
+
+# Verify forward scan gives same results in ASC order
+query ITTI
+SELECT * FROM complex_rg_parquet
+WHERE category IN ('A', 'C', 'D') AND subcategory IN ('x', 'y')
+ORDER BY id ASC;
+----
+1 A x 100
+2 A y 200
+5 C x 500
+7 D x 700
+8 D y 800
+
+# Cleanup
+statement ok
+DROP TABLE non_contiguous_rg_data;
+
+statement ok
+DROP TABLE non_contiguous_rg_parquet;
+
+statement ok
+DROP TABLE complex_rg_data;
+
+statement ok
+DROP TABLE complex_rg_parquet;
