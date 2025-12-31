@@ -3033,6 +3033,7 @@ async fn test_anti_join_filtered_mask() -> Result<()> {
 #[test]
 fn test_partition_statistics() -> Result<()> {
     use crate::ExecutionPlan;
+    use datafusion_common::stats::Precision;
 
     let left = build_table(
         ("a1", &vec![1, 2, 3]),
@@ -3067,24 +3068,43 @@ fn test_partition_statistics() -> Result<()> {
             join(Arc::clone(&left), Arc::clone(&right), on.clone(), join_type)?;
 
         // Test aggregate statistics (partition = None)
+        // Should return meaningful statistics computed from both inputs
         let stats = join_exec.partition_statistics(None)?;
         assert_eq!(
             stats.column_statistics.len(),
             expected_cols,
-            "Aggregate stats failed for {join_type:?}"
+            "Aggregate stats column count failed for {join_type:?}"
+        );
+        // Verify that aggregate statistics have a meaningful num_rows (not Absent)
+        assert!(
+            !matches!(stats.num_rows, Precision::Absent),
+            "Aggregate stats should have meaningful num_rows for {join_type:?}, got {:?}",
+            stats.num_rows
         );
 
         // Test partition-specific statistics (partition = Some(0))
+        // The implementation correctly passes `partition` to children.
+        // Since the child TestMemoryExec returns unknown stats for specific partitions,
+        // the join output will also have Absent num_rows. This is expected behavior
+        // as the statistics depend on what the children can provide.
         let partition_stats = join_exec.partition_statistics(Some(0))?;
         assert_eq!(
             partition_stats.column_statistics.len(),
             expected_cols,
-            "Partition stats failed for {join_type:?}"
+            "Partition stats column count failed for {join_type:?}"
+        );
+        // When children return unknown stats, the join's partition stats will be Absent
+        assert!(
+            matches!(partition_stats.num_rows, Precision::Absent),
+            "Partition stats should have Absent num_rows when children return unknown for {join_type:?}, got {:?}",
+            partition_stats.num_rows
         );
     }
 
     Ok(())
 }
+
+
 
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
