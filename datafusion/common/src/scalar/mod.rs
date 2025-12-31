@@ -568,10 +568,15 @@ impl PartialEq for ScalarValue {
 impl PartialOrd for ScalarValue {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         use ScalarValue::*;
+
+        if self.is_null() || other.is_null() {
+            return None;
+        }
         // This purposely doesn't have a catch-all "(_, _)" so that
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
+            (Null, _) | (_, Null) => None,
             (Decimal32(v1, p1, s1), Decimal32(v2, p2, s2)) => {
                 if p1.eq(p2) && s1.eq(s2) {
                     v1.partial_cmp(v2)
@@ -723,8 +728,6 @@ impl PartialOrd for ScalarValue {
                 if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
-            (Null, Null) => Some(Ordering::Equal),
-            (Null, _) => None,
         }
     }
 }
@@ -5760,10 +5763,9 @@ mod tests {
             .unwrap(),
             Ordering::Less
         );
-        assert_eq!(
+        assert!(
             ScalarValue::try_cmp(&ScalarValue::Int32(None), &ScalarValue::Int32(Some(2)))
-                .unwrap(),
-            Ordering::Less
+                .is_err()
         );
         assert_starts_with(
             ScalarValue::try_cmp(
@@ -9346,6 +9348,25 @@ mod tests {
                     ScalarValue::Int64(Some(5)),
                 ]),
             ]
+        );
+    }
+    #[test]
+    fn scalar_partial_ordering_nulls() {
+        use ScalarValue::*;
+
+        assert_eq!(
+            Int32(Some(3)).partial_cmp(&Int32(None)),
+            None
+        );
+
+        assert_eq!(
+            Int32(None).partial_cmp(&Int32(Some(3))),
+            None
+        );
+
+        assert_eq!(
+            Int32(None).partial_cmp(&Int32(None)),
+            None
         );
     }
 }
