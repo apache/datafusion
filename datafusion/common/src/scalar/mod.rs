@@ -9369,5 +9369,20 @@ mod tests {
             Int32(None).partial_cmp(&Int32(None)),
             None
         );
+
+        assert_eq!(
+            Null.partial_cmp(&Int32(Some(3))),
+            None
+        );
+
+        assert_eq!(
+            Int32(Some(3)).partial_cmp(&Null),
+            None
+        );
+
+        assert_eq!(
+            Null.partial_cmp(&Null),
+            None
+        );
     }
 }
