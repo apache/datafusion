@@ -426,12 +426,22 @@ directly on the <code class="docutils literal notranslate"><span class="pre">Fie
 <p>In prior versions, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> would issue <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands to
 the underlying object store each time it needed to list files for a query.
 To improve performance, <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> now caches the results of
-<code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands for the lifetime of the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance.</p>
+<code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands for the lifetime of the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance or
+until a cache entry expires.</p>
 <p>Note that by default the cache has no expiration time, so if files are added or removed
 from the underlying object store, the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> will not see
 those changes until the <code class="docutils literal notranslate"><span class="pre">ListingTableProvider</span></code> instance is dropped and recreated.</p>
-<p>You will be able to configure the maximum cache size and cache expiration time via a configuration option:</p>
-<p>See <a class="github reference external" href="https://github.com/apache/datafusion/issues/19056">apache/datafusion#19056</a> for more details.</p>
+<p>You can configure the maximum cache size and cache entry expiration time via configuration options:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion.runtime.list_files_cache_limit</span></code> - Limits the size of the cache in bytes</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">datafusion.runtime.list_files_cache_ttl</span></code> - Limits the TTL (time-to-live) of an entry in seconds</p></li>
+</ul>
+<p>Detailed configuration information can be found in the <a class="reference external" href="https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings">DataFusion Runtime
+Configuration</a> user’s guide.</p>
+<p>Caching can be disabled by setting the limit to 0:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">runtime</span><span class="p">.</span><span class="n">list_files_cache_limit</span><span class="w"> </span><span class="k">TO</span><span class="w"> </span><span class="ss">&quot;0K&quot;</span><span class="p">;</span>
+</pre></div>
+</div>
 <p>Note that the internal API has changed to use a trait <code class="docutils literal notranslate"><span class="pre">ListFilesCache</span></code> instead of a type alias.</p>
 </section>
 <section id="newlines-in-values-moved-from-filescanconfig-to-csvoptions">
