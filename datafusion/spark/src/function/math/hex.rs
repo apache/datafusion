@@ -37,7 +37,43 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
 };
-use std::fmt::Write;
+/// Lookup table for uppercase hex encoding (0-255 -> "00"-"FF")
+const HEX_UPPER: &[u8; 512] = b"\
+000102030405060708090A0B0C0D0E0F\
+101112131415161718191A1B1C1D1E1F\
+202122232425262728292A2B2C2D2E2F\
+303132333435363738393A3B3C3D3E3F\
+404142434445464748494A4B4C4D4E4F\
+505152535455565758595A5B5C5D5E5F\
+606162636465666768696A6B6C6D6E6F\
+707172737475767778797A7B7C7D7E7F\
+808182838485868788898A8B8C8D8E8F\
+909192939495969798999A9B9C9D9E9F\
+A0A1A2A3A4A5A6A7A8A9AAABACADAEAF\
+B0B1B2B3B4B5B6B7B8B9BABBBCBDBEBF\
+C0C1C2C3C4C5C6C7C8C9CACBCCCDCECF\
+D0D1D2D3D4D5D6D7D8D9DADBDCDDDEDF\
+E0E1E2E3E4E5E6E7E8E9EAEBECEDEEEF\
+F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF";
+
+/// Lookup table for lowercase hex encoding (0-255 -> "00"-"ff")
+const HEX_LOWER: &[u8; 512] = b"\
+000102030405060708090a0b0c0d0e0f\
+101112131415161718191a1b1c1d1e1f\
+202122232425262728292a2b2c2d2e2f\
+303132333435363738393a3b3c3d3e3f\
+404142434445464748494a4b4c4d4e4f\
+505152535455565758595a5b5c5d5e5f\
+606162636465666768696a6b6c6d6e6f\
+707172737475767778797a7b7c7d7e7f\
+808182838485868788898a8b8c8d8e8f\
+909192939495969798999a9b9c9d9e9f\
+a0a1a2a3a4a5a6a7a8a9aaabacadaeaf\
+b0b1b2b3b4b5b6b7b8b9babbbcbdbebf\
+c0c1c2c3c4c5c6c7c8c9cacbcccdcecf\
+d0d1d2d3d4d5d6d7d8d9dadbdcdddedf\
+e0e1e2e3e4e5e6e7e8e9eaebecedeeef\
+f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -116,21 +152,24 @@ fn hex_int64(num: i64) -> String {
     format!("{num:X}")
 }
 
+/// Fast hex encoding using a lookup table.
+/// Each byte maps to 2 characters in the lookup table at index `byte * 2`.
 #[inline(always)]
 fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
-    let mut s = String::with_capacity(data.as_ref().len() * 2);
-    if lower_case {
-        for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02x}").unwrap();
-        }
-    } else {
-        for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02X}").unwrap();
-        }
+    let bytes = data.as_ref();
+    let table = if lower_case { HEX_LOWER } else { HEX_UPPER };
+
+    // Pre-allocate the exact size needed
+    let mut result = vec![0u8; bytes.len() * 2];
+
+    for (i, &byte) in bytes.iter().enumerate() {
+        let idx = (byte as usize) * 2;
+        result[i * 2] = table[idx];
+        result[i * 2 + 1] = table[idx + 1];
     }
-    s
+
+    // SAFETY: The lookup table contains only valid ASCII hex characters
+    unsafe { String::from_utf8_unchecked(result) }
 }
 
 #[inline(always)]
