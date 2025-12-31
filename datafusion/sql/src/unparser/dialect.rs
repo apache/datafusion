@@ -298,13 +298,12 @@ impl Dialect for DefaultDialect {
         let id_upper = identifier.to_uppercase();
         // Special case ignore "ID", see https://github.com/sqlparser-rs/sqlparser-rs/issues/1382
         // ID is a keyword in ClickHouse, but we don't want to quote it when unparsing SQL here
-        if (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
+        // Also quote identifiers with uppercase letters since unquoted identifiers are
+        // normalized to lowercase by the SQL parser, which would break case-sensitive schemas
+        let needs_quote = (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
             || !identifier_regex.is_match(identifier)
-        {
-            Some('"')
-        } else {
-            None
-        }
+            || identifier.chars().any(|c| c.is_ascii_uppercase());
+        if needs_quote { Some('"') } else { None }
     }
 }
 

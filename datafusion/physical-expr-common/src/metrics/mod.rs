@@ -20,6 +20,7 @@
 mod baseline;
 mod builder;
 mod custom;
+mod expression;
 mod value;
 
 use datafusion_common::HashMap;
@@ -35,6 +36,7 @@ use std::{
 pub use baseline::{BaselineMetrics, RecordOutput, SpillMetrics, SplitMetrics};
 pub use builder::MetricBuilder;
 pub use custom::CustomMetricValue;
+pub use expression::ExpressionEvaluatorMetrics;
 pub use value::{
     Count, Gauge, MetricValue, PruningMetrics, RatioMergeStrategy, RatioMetrics,
     ScopedTimerGuard, Time, Timestamp,
@@ -47,7 +49,7 @@ pub use value::{
 /// [`ExecutionPlanMetricsSet`].
 ///
 /// ```
-/// use datafusion_execution::metrics::*;
+/// use datafusion_physical_expr_common::metrics::*;
 ///
 /// let metrics = ExecutionPlanMetricsSet::new();
 /// assert!(metrics.clone_inner().output_rows().is_none());

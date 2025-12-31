@@ -30,7 +30,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
@@ -150,15 +150,50 @@ pub trait FileSource: Send + Sync {
 
     /// Try to create a new FileSource that can produce data in the specified sort order.
     ///
+    /// This method attempts to optimize data retrieval to match the requested ordering.
+    /// It receives both the requested ordering and equivalence properties that describe
+    /// the output data from this file source.
+    ///
+    /// # Parameters
+    /// * `order` - The requested sort ordering from the query
+    /// * `eq_properties` - Equivalence properties of the data that will be produced by this
+    ///   file source. These properties describe the ordering, constant columns, and other
+    ///   relationships in the output data, allowing the implementation to determine if
+    ///   optimizations like reversed scanning can help satisfy the requested ordering.
+    ///   This includes information about:
+    ///   - The file's natural ordering (from output_ordering in FileScanConfig)
+    ///   - Constant columns (e.g., from filters like `ticker = 'AAPL'`)
+    ///   - Monotonic functions (e.g., `extract_year_month(timestamp)`)
+    ///   - Other equivalence relationships
+    ///
+    /// # Examples
+    ///
+    /// ## Example 1: Simple reverse
+    /// ```text
+    /// File ordering: [a ASC, b DESC]
+    /// Requested:     [a DESC]
+    /// Reversed file: [a DESC, b ASC]
+    /// Result: Satisfies request (prefix match) → Inexact
+    /// ```
+    ///
+    /// ## Example 2: Monotonic function
+    /// ```text
+    /// File ordering: [extract_year_month(ts) ASC, ts ASC]
+    /// Requested:     [ts DESC]
+    /// Reversed file: [extract_year_month(ts) DESC, ts DESC]
+    /// Result: Through monotonicity, satisfies [ts DESC] → Inexact
+    /// ```
+    ///
     /// # Returns
     /// * `Exact` - Created a source that guarantees perfect ordering
-    /// * `Inexact` - Created a source optimized for ordering (e.g., reordered files) but not perfectly sorted
+    /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
     /// Default implementation returns `Unsupported`.
     fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
+        _eq_properties: &EquivalenceProperties,
     ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
         Ok(SortOrderPushdownResult::Unsupported)
     }
@@ -190,24 +225,6 @@ pub trait FileSource: Send + Sync {
         _projection: &ProjectionExprs,
     ) -> Result<Option<Arc<dyn FileSource>>> {
         Ok(None)
-    }
-
-    /// Set the file ordering information
-    ///
-    /// This allows the file source to know how the files are sorted,
-    /// enabling it to make informed decisions about sort pushdown.
-    ///
-    /// # Default Implementation
-    ///
-    /// Returns `not_impl_err!`. FileSource implementations that support
-    /// sort optimization should override this method.
-    fn with_file_ordering_info(
-        &self,
-        _ordering: Option<LexOrdering>,
-    ) -> Result<Arc<dyn FileSource>> {
-        // Default: clone self without modification
-        // ParquetSource will override this
-        not_impl_err!("with_file_ordering_info not implemented for this FileSource")
     }
 
     /// Deprecated: Set optional schema adapter factory.

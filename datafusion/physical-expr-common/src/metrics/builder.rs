@@ -34,7 +34,7 @@ use super::{
 /// case of constant strings
 ///
 /// ```rust
-/// use datafusion_execution::metrics::*;
+/// use datafusion_physical_expr_common::metrics::*;
 ///
 /// let metrics = ExecutionPlanMetricsSet::new();
 /// let partition = 1;

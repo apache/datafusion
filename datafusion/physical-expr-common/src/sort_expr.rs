@@ -31,7 +31,7 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{HashSet, Result};
 use datafusion_expr_common::columnar_value::ColumnarValue;
-
+use indexmap::IndexSet;
 /// Represents Sort operation for a column in a RecordBatch
 ///
 /// Example:
@@ -353,14 +353,14 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
 /// 1. It is non-degenerate, meaning it contains at least one element.
 /// 2. It is duplicate-free, meaning it does not contain multiple entries for
 ///    the same column.
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct LexOrdering {
     /// Vector of sort expressions representing the lexicographical ordering.
     exprs: Vec<PhysicalSortExpr>,
     /// Set of expressions in the lexicographical ordering, used to ensure
     /// that the ordering is duplicate-free. Note that the elements in this
     /// set are the same underlying physical expressions as in `exprs`.
-    set: HashSet<Arc<dyn PhysicalExpr>>,
+    set: IndexSet<Arc<dyn PhysicalExpr>>,
 }
 
 impl LexOrdering {
@@ -371,7 +371,7 @@ impl LexOrdering {
         let mut candidate = Self {
             // not valid yet; valid publicly-returned instance must be non-empty
             exprs: Vec::new(),
-            set: HashSet::new(),
+            set: IndexSet::new(),
         };
         for expr in exprs {
             candidate.push(expr);
@@ -421,7 +421,7 @@ impl LexOrdering {
             return false;
         }
         for PhysicalSortExpr { expr, .. } in self.exprs[len..].iter() {
-            self.set.remove(expr);
+            self.set.swap_remove(expr);
         }
         self.exprs.truncate(len);
         true

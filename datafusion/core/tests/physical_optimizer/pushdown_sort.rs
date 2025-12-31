@@ -24,14 +24,18 @@
 //! 4. Early termination is enabled for TopK queries
 //! 5. Prefix matching works correctly
 
+use datafusion_physical_expr::expressions;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
+use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
     OptimizationTest, coalesce_batches_exec, coalesce_partitions_exec, parquet_exec,
-    parquet_exec_with_sort, repartition_exec, schema, sort_exec, sort_exec_with_fetch,
-    sort_expr,
+    parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
+    repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
+    sort_expr, sort_expr_named, test_scan_with_ordering,
 };
 
 #[test]
@@ -619,16 +623,14 @@ fn test_pushdown_through_blocking_node() {
     // Middle: Aggregate (blocks pushdown from outer sort)
     // GROUP BY a, COUNT(b)
     let group_by = PhysicalGroupBy::new_single(vec![(
-        Arc::new(datafusion_physical_expr::expressions::Column::new("a", 0)) as _,
+        Arc::new(expressions::Column::new("a", 0)) as _,
         "a".to_string(),
     )]);
 
     let count_expr = Arc::new(
         AggregateExprBuilder::new(
             count_udaf(),
-            vec![
-                Arc::new(datafusion_physical_expr::expressions::Column::new("b", 1)) as _,
-            ],
+            vec![Arc::new(expressions::Column::new("b", 1)) as _],
         )
         .schema(Arc::clone(&schema))
         .alias("COUNT(b)")
@@ -667,6 +669,372 @@ fn test_pushdown_through_blocking_node() {
           -   AggregateExec: mode=Final, gby=[a@0 as a], aggr=[COUNT(b)], ordering_mode=Sorted
           -     SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+// ============================================================================
+// PROJECTION TESTS
+// ============================================================================
+
+#[test]
+fn test_sort_pushdown_through_simple_projection() {
+    // Sort pushes through projection with simple column references
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT a, b (simple column references)
+    let projection = simple_projection_exec(source, vec![0, 1]); // columns a, b
+
+    // Request [a DESC] - should push through projection to source
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_through_projection_with_alias() {
+    // Sort pushes through projection with column aliases
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT a AS id, b AS value
+    let projection = projection_exec_with_alias(source, vec![(0, "id"), (1, "value")]);
+
+    // Request [id DESC] - should map to [a DESC] and push down
+    let id_expr = sort_expr_named("id", 0);
+    let desc_ordering = LexOrdering::new(vec![id_expr.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[id@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as id, b@1 as value]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[id@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 as id, b@1 as value]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+#[test]
+fn test_no_sort_pushdown_through_computed_projection() {
+    use datafusion_expr::Operator;
+
+    // Sort should NOT push through projection with computed columns
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT a+b as sum, c
+    let projection = projection_exec(
+        vec![
+            (
+                Arc::new(expressions::BinaryExpr::new(
+                    Arc::new(expressions::Column::new("a", 0)),
+                    Operator::Plus,
+                    Arc::new(expressions::Column::new("b", 1)),
+                )) as Arc<dyn PhysicalExpr>,
+                "sum".to_string(),
+            ),
+            (
+                Arc::new(expressions::Column::new("c", 2)) as Arc<dyn PhysicalExpr>,
+                "c".to_string(),
+            ),
+        ],
+        source,
+    )
+    .unwrap();
+
+    // Request [sum DESC] - should NOT push down (sum is computed)
+    let sum_expr = sort_expr_named("sum", 0);
+    let desc_ordering = LexOrdering::new(vec![sum_expr.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[sum@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 + b@1 as sum, c@2 as c]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[sum@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 + b@1 as sum, c@2 as c]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_projection_reordered_columns() {
+    // Sort pushes through projection that reorders columns
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT c, b, a (columns reordered)
+    let projection = simple_projection_exec(source, vec![2, 1, 0]); // c, b, a
+
+    // Request [a DESC] where a is now at index 2 in projection output
+    let a_expr_at_2 = sort_expr_named("a", 2);
+    let desc_ordering = LexOrdering::new(vec![a_expr_at_2.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@2 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@2 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_projection_with_limit() {
+    // Sort with LIMIT pushes through simple projection
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT a, b
+    let projection = simple_projection_exec(source, vec![0, 1]);
+
+    // Request [a DESC] with LIMIT 10
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec_with_fetch(desc_ordering, Some(10), projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_through_projection_and_coalesce() {
+    // Sort pushes through both projection and coalesce batches
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    let coalesce = coalesce_batches_exec(source, 1024);
+
+    // Projection: SELECT a, b
+    let projection = simple_projection_exec(coalesce, vec![0, 1]);
+
+    // Request [a DESC]
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+        -     CoalesceBatchesExec: target_batch_size=1024
+        -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+          -     CoalesceBatchesExec: target_batch_size=1024
+          -       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_projection_subset_of_columns() {
+    // Sort pushes through projection that selects subset of columns
+    let schema = schema();
+
+    // Source has [a ASC, b ASC] ordering
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone(), b.clone()]).unwrap();
+    let source = parquet_exec_with_sort(schema.clone(), vec![source_ordering]);
+
+    // Projection: SELECT a (subset of columns)
+    let projection = simple_projection_exec(source, vec![0]);
+
+    // Request [a DESC]
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, projection);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   ProjectionExec: expr=[a@0 as a]
+        -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], file_type=parquet
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   ProjectionExec: expr=[a@0 as a]
+          -     DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, reverse_row_groups=true
+    "
+    );
+}
+
+// ============================================================================
+// TESTSCAN DEMONSTRATION TESTS
+// ============================================================================
+// These tests use TestScan to demonstrate how sort pushdown works more clearly
+// than ParquetExec. TestScan can accept ANY ordering (not just reverse) and
+// displays the requested ordering explicitly in the output.
+
+#[test]
+fn test_sort_pushdown_with_test_scan_basic() {
+    // Demonstrates TestScan showing requested ordering clearly
+    let schema = schema();
+
+    // Source has [a ASC] ordering
+    let a = sort_expr("a", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a DESC] ordering
+    let desc_ordering = LexOrdering::new(vec![a.reverse()]).unwrap();
+    let plan = sort_exec(desc_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC], requested_ordering=[a@0 DESC NULLS LAST]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_with_test_scan_multi_column() {
+    // Demonstrates TestScan with multi-column ordering
+    let schema = schema();
+
+    // Source has [a ASC, b DESC] ordering
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone(), b.clone().reverse()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a DESC, b ASC] ordering (reverse of source)
+    let reverse_ordering = LexOrdering::new(vec![a.reverse(), b]).unwrap();
+    let plan = sort_exec(reverse_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 DESC NULLS LAST, b@1 ASC], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC, b@1 DESC NULLS LAST], requested_ordering=[a@0 DESC NULLS LAST, b@1 ASC]
+    "
+    );
+}
+
+#[test]
+fn test_sort_pushdown_with_test_scan_arbitrary_ordering() {
+    // Demonstrates that TestScan can accept ANY ordering (not just reverse)
+    // This is different from ParquetExec which only supports reverse scans
+    let schema = schema();
+
+    // Source has [a ASC, b ASC] ordering
+    let a = sort_expr("a", &schema);
+    let b = sort_expr("b", &schema);
+    let source_ordering = LexOrdering::new(vec![a.clone(), b.clone()]).unwrap();
+    let source = test_scan_with_ordering(schema.clone(), source_ordering);
+
+    // Request [a ASC, b DESC] - NOT a simple reverse, but TestScan accepts it
+    let mixed_ordering = LexOrdering::new(vec![a, b.reverse()]).unwrap();
+    let plan = sort_exec(mixed_ordering, source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+        -   TestScan: output_ordering=[a@0 ASC, b@1 ASC]
+      output:
+        Ok:
+          - SortExec: expr=[a@0 ASC, b@1 DESC NULLS LAST], preserve_partitioning=[false]
+          -   TestScan: output_ordering=[a@0 ASC, b@1 ASC], requested_ordering=[a@0 ASC, b@1 DESC NULLS LAST]
     "
     );
 }

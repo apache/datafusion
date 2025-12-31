@@ -21,20 +21,16 @@ use std::sync::Arc;
 use crate::utils::make_scalar_function;
 use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::buffer::{Buffer, OffsetBuffer};
-use arrow::datatypes::DataType::{
-    Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Utf8,
-};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int8Type, Int16Type, Int32Type,
     Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::Result;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err};
-
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignature::Exact;
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
 
 /// Hex lookup table for fast conversion
@@ -201,17 +197,8 @@ impl Default for ToHexFunc {
 impl ToHexFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Int8]),
-                    Exact(vec![Int16]),
-                    Exact(vec![Int32]),
-                    Exact(vec![Int64]),
-                    Exact(vec![UInt8]),
-                    Exact(vec![UInt16]),
-                    Exact(vec![UInt32]),
-                    Exact(vec![UInt64]),
-                ],
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Integer)],
                 Volatility::Immutable,
             ),
         }
@@ -231,25 +218,37 @@ impl ScalarUDFImpl for ToHexFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Utf8,
-            _ => {
-                return plan_err!("The to_hex function can only accept integers.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args[0].data_type() {
-            Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args),
-            UInt64 => make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args),
-            Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args),
-            UInt32 => make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args),
-            Int16 => make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args),
-            UInt16 => make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args),
-            Int8 => make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args),
-            UInt8 => make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args),
+            DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+            DataType::Int64 => {
+                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
+            }
+            DataType::UInt64 => {
+                make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args)
+            }
+            DataType::Int32 => {
+                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
+            }
+            DataType::UInt32 => {
+                make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args)
+            }
+            DataType::Int16 => {
+                make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args)
+            }
+            DataType::UInt16 => {
+                make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args)
+            }
+            DataType::Int8 => {
+                make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args)
+            }
+            DataType::UInt8 => {
+                make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args)
+            }
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }

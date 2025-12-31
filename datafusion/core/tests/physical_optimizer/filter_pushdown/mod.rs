@@ -3512,3 +3512,91 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
     ",
     );
 }
+
+#[tokio::test]
+async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
+    use datafusion_common::JoinType;
+    use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
+
+    // Test both cases: probe side with and without filter pushdown support
+    for (probe_supports_pushdown, expected_is_used) in [(false, false), (true, true)] {
+        let build_side_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let build_scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+            .with_support(true)
+            .with_batches(vec![
+                record_batch!(("a", Utf8, ["aa", "ab"]), ("b", Utf8, ["ba", "bb"]))
+                    .unwrap(),
+            ])
+            .build();
+
+        let probe_side_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let probe_scan = TestScanBuilder::new(Arc::clone(&probe_side_schema))
+            .with_support(probe_supports_pushdown)
+            .with_batches(vec![
+                record_batch!(
+                    ("a", Utf8, ["aa", "ab", "ac", "ad"]),
+                    ("b", Utf8, ["ba", "bb", "bc", "bd"])
+                )
+                .unwrap(),
+            ])
+            .build();
+
+        let on = vec![
+            (
+                col("a", &build_side_schema).unwrap(),
+                col("a", &probe_side_schema).unwrap(),
+            ),
+            (
+                col("b", &build_side_schema).unwrap(),
+                col("b", &probe_side_schema).unwrap(),
+            ),
+        ];
+        let plan = Arc::new(
+            HashJoinExec::try_new(
+                build_scan,
+                probe_scan,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                datafusion_common::NullEquality::NullEqualsNothing,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+
+        // Apply filter pushdown optimization
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_dynamic_filter_pushdown = true;
+        let plan = FilterPushdown::new_post_optimization()
+            .optimize(plan, &config)
+            .unwrap();
+
+        // Get the HashJoinExec to check the dynamic filter
+        let hash_join = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("Plan should be HashJoinExec");
+
+        // Verify that a dynamic filter was created
+        let dynamic_filter = hash_join
+            .dynamic_filter_for_test()
+            .expect("Dynamic filter should be created");
+
+        // Verify that is_used() returns the expected value based on probe side support.
+        // When probe_supports_pushdown=false: no consumer holds a reference (is_used=false)
+        // When probe_supports_pushdown=true: probe side holds a reference (is_used=true)
+        assert_eq!(
+            dynamic_filter.is_used(),
+            expected_is_used,
+            "is_used() should return {expected_is_used} when probe side support is {probe_supports_pushdown}"
+        );
+    }
+}

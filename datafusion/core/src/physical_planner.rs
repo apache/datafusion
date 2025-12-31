@@ -62,9 +62,12 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
+use datafusion_common::Column;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeLevel;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
 use datafusion_common::{
     DFSchema, ScalarValue, exec_err, internal_datafusion_err, internal_err, not_impl_err,
     plan_err,
@@ -594,6 +597,58 @@ impl DefaultPhysicalPlanner {
                         .table_provider
                         .insert_into(session_state, input_exec, *insert_op)
                         .await?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Delete,
+                input,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    let filters = extract_dml_filters(input)?;
+                    provider
+                        .table_provider
+                        .delete_from(session_state, filters)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!("DELETE operation on table '{table_name}'"))
+                        })?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Update,
+                input,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    // For UPDATE, the assignments are encoded in the projection of input
+                    // We pass the filters and let the provider handle the projection
+                    let filters = extract_dml_filters(input)?;
+                    // Extract assignments from the projection in input plan
+                    let assignments = extract_update_assignments(input)?;
+                    provider
+                        .table_provider
+                        .update(session_state, assignments, filters)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!("UPDATE operation on table '{table_name}'"))
+                        })?
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -1844,6 +1899,107 @@ fn get_physical_expr_pair(
         create_physical_expr(expr, input_dfschema, session_state.execution_props())?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
+}
+
+/// Extract filter predicates from a DML input plan (DELETE/UPDATE).
+/// Walks the logical plan tree and collects Filter predicates,
+/// splitting AND conjunctions into individual expressions.
+/// Column qualifiers are stripped so expressions can be evaluated against
+/// the TableProvider's schema.
+///
+fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
+    let mut filters = Vec::new();
+
+    input.apply(|node| {
+        if let LogicalPlan::Filter(filter) = node {
+            // Split AND predicates into individual expressions
+            filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    // Strip table qualifiers from column references
+    filters.into_iter().map(strip_column_qualifiers).collect()
+}
+
+/// Strip table qualifiers from column references in an expression.
+/// This is needed because DML filter expressions contain qualified column names
+/// (e.g., "table.column") but the TableProvider's schema only has simple names.
+fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
+    expr.transform(|e| {
+        if let Expr::Column(col) = &e
+            && col.relation.is_some()
+        {
+            // Strip the qualifier
+            return Ok(Transformed::yes(Expr::Column(Column::new_unqualified(
+                col.name.clone(),
+            ))));
+        }
+        Ok(Transformed::no(e))
+    })
+    .map(|t| t.data)
+}
+
+/// Extract column assignments from an UPDATE input plan.
+/// For UPDATE statements, the SQL planner encodes assignments as a projection
+/// over the source table. This function extracts column name and expression pairs
+/// from the projection. Column qualifiers are stripped from the expressions.
+///
+fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
+    // The UPDATE input plan structure is:
+    // Projection(updated columns as expressions with aliases)
+    //   Filter(optional WHERE clause)
+    //     TableScan
+    //
+    // Each projected expression has an alias matching the column name
+    let mut assignments = Vec::new();
+
+    // Find the top-level projection
+    if let LogicalPlan::Projection(projection) = input.as_ref() {
+        for expr in &projection.expr {
+            if let Expr::Alias(alias) = expr {
+                // The alias name is the column name being updated
+                // The inner expression is the new value
+                let column_name = alias.name.clone();
+                // Only include if it's not just a column reference to itself
+                // (those are columns that aren't being updated)
+                if !is_identity_assignment(&alias.expr, &column_name) {
+                    // Strip qualifiers from the assignment expression
+                    let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
+                    assignments.push((column_name, stripped_expr));
+                }
+            }
+        }
+    } else {
+        // Try to find projection deeper in the plan
+        input.apply(|node| {
+            if let LogicalPlan::Projection(projection) = node {
+                for expr in &projection.expr {
+                    if let Expr::Alias(alias) = expr {
+                        let column_name = alias.name.clone();
+                        if !is_identity_assignment(&alias.expr, &column_name) {
+                            let stripped_expr =
+                                strip_column_qualifiers((*alias.expr).clone())?;
+                            assignments.push((column_name, stripped_expr));
+                        }
+                    }
+                }
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+
+    Ok(assignments)
+}
+
+/// Check if an assignment is an identity assignment (column = column)
+/// These are columns that are not being modified in the UPDATE
+fn is_identity_assignment(expr: &Expr, column_name: &str) -> bool {
+    match expr {
+        Expr::Column(col) => col.name == column_name,
+        _ => false,
+    }
 }
 
 /// Check if window bounds are valid after schema information is available, and
@@ -3953,8 +4109,8 @@ digraph {
         let right = LogicalPlanBuilder::scan("right", source, None)?.build()?;
 
         let join_keys = (
-            vec![datafusion_common::Column::new(Some("left"), "a")],
-            vec![datafusion_common::Column::new(Some("right"), "a")],
+            vec![Column::new(Some("left"), "a")],
+            vec![Column::new(Some("right"), "a")],
         );
 
         let join = left.join(right, JoinType::Full, join_keys, None)?.build()?;

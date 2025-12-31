@@ -122,11 +122,9 @@ impl CopyTo {
 /// * `INSERT` - Appends new rows to the existing table. Calls
 ///   [`TableProvider::insert_into`]
 ///
-/// * `DELETE` - Removes rows from the table. Currently NOT supported by the
-///   [`TableProvider`] trait or builtin sources.
+/// * `DELETE` - Removes rows from the table. Calls [`TableProvider::delete_from`]
 ///
-/// * `UPDATE` - Modifies existing rows in the table. Currently NOT supported by
-///   the [`TableProvider`] trait or builtin sources.
+/// * `UPDATE` - Modifies existing rows in the table. Calls [`TableProvider::update`]
 ///
 /// * `CREATE TABLE AS SELECT` - Creates a new table and populates it with data
 ///   from a query. This is similar to the `INSERT` operation, but it creates a new
@@ -136,6 +134,8 @@ impl CopyTo {
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 /// [`TableProvider::insert_into`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.insert_into
+/// [`TableProvider::delete_from`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.delete_from
+/// [`TableProvider::update`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.update
 #[derive(Clone)]
 pub struct DmlStatement {
     /// The table name

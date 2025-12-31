@@ -32,8 +32,11 @@ use datafusion_common::{
     Result, assert_or_internal_err, internal_datafusion_err, plan_err,
 };
 
+use datafusion_physical_expr_common::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
+use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays_with_metrics;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
@@ -481,7 +484,28 @@ impl ProjectionExprs {
         Ok(Projector {
             projection: self.clone(),
             output_schema,
+            expression_metrics: None,
         })
+    }
+
+    pub fn create_expression_metrics(
+        &self,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> ExpressionEvaluatorMetrics {
+        let labels: Vec<String> = self
+            .exprs
+            .iter()
+            .map(|proj_expr| {
+                let expr_sql = fmt_sql(proj_expr.expr.as_ref()).to_string();
+                if proj_expr.expr.to_string() == proj_expr.alias {
+                    expr_sql
+                } else {
+                    format!("{expr_sql} AS {}", proj_expr.alias)
+                }
+            })
+            .collect();
+        ExpressionEvaluatorMetrics::new(metrics, partition, labels)
     }
 
     /// Project statistics according to this projection.
@@ -621,9 +645,30 @@ impl<'a> IntoIterator for &'a ProjectionExprs {
 pub struct Projector {
     projection: ProjectionExprs,
     output_schema: SchemaRef,
+    /// If `Some`, metrics will be tracked for projection evaluation.
+    expression_metrics: Option<ExpressionEvaluatorMetrics>,
 }
 
 impl Projector {
+    /// Construct the projector with metrics. After execution, related metrics will
+    /// be tracked inside `ExecutionPlanMetricsSet`
+    ///
+    /// See [`ExpressionEvaluatorMetrics`] for details.
+    pub fn with_metrics(
+        &self,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        let expr_metrics = self
+            .projection
+            .create_expression_metrics(metrics, partition);
+        Self {
+            expression_metrics: Some(expr_metrics),
+            projection: self.projection.clone(),
+            output_schema: Arc::clone(&self.output_schema),
+        }
+    }
+
     /// Project a record batch according to this projector's expressions.
     ///
     /// # Errors
@@ -631,9 +676,10 @@ impl Projector {
     /// or if the output schema of the resulting record batch does not match
     /// the pre-computed output schema of the projector.
     pub fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let arrays = evaluate_expressions_to_arrays(
+        let arrays = evaluate_expressions_to_arrays_with_metrics(
             self.projection.exprs.iter().map(|p| &p.expr),
             batch,
+            self.expression_metrics.as_ref(),
         )?;
 
         if arrays.is_empty() {

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::cache::CacheAccessor;
 use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use crate::cache::{CacheAccessor, DefaultListFilesCache};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
@@ -190,18 +190,25 @@ impl CacheManager {
         let file_statistic_cache =
             config.table_files_statistics_cache.as_ref().map(Arc::clone);
 
-        let list_files_cache = config
-            .list_files_cache
-            .as_ref()
-            .inspect(|c| {
+        let list_files_cache = match &config.list_files_cache {
+            Some(lfc) if config.list_files_cache_limit > 0 => {
                 // the cache memory limit or ttl might have changed, ensure they are updated
-                c.update_cache_limit(config.list_files_cache_limit);
+                lfc.update_cache_limit(config.list_files_cache_limit);
                 // Only update TTL if explicitly set in config, otherwise preserve the cache's existing TTL
                 if let Some(ttl) = config.list_files_cache_ttl {
-                    c.update_cache_ttl(Some(ttl));
+                    lfc.update_cache_ttl(Some(ttl));
                 }
-            })
-            .map(Arc::clone);
+                Some(Arc::clone(lfc))
+            }
+            None if config.list_files_cache_limit > 0 => {
+                let lfc: Arc<dyn ListFilesCache> = Arc::new(DefaultListFilesCache::new(
+                    config.list_files_cache_limit,
+                    config.list_files_cache_ttl,
+                ));
+                Some(lfc)
+            }
+            _ => None,
+        };
 
         let file_metadata_cache = config
             .file_metadata_cache
@@ -235,7 +242,7 @@ impl CacheManager {
     pub fn get_list_files_cache_limit(&self) -> usize {
         self.list_files_cache
             .as_ref()
-            .map_or(DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, |c| c.cache_limit())
+            .map_or(0, |c| c.cache_limit())
     }
 
     /// Get the TTL (time-to-live) of the list files cache.

@@ -29,7 +29,9 @@ use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 ///
 /// Example:
 /// ```
-/// use datafusion_execution::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_physical_expr_common::metrics::{
+///     BaselineMetrics, ExecutionPlanMetricsSet,
+/// };
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;

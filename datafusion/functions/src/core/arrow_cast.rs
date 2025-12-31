@@ -19,6 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
+use datafusion_common::types::logical_string;
 use datafusion_common::{
     Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err,
 };
@@ -27,8 +28,8 @@ use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
-    ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -102,7 +103,13 @@ impl Default for ArrowCastFunc {
 impl ArrowCastFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Any),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }

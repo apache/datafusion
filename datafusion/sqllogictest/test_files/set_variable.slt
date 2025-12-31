@@ -416,6 +416,24 @@ SHOW datafusion.runtime.metadata_cache_limit
 ----
 datafusion.runtime.metadata_cache_limit 200M
 
+# Test SET and SHOW runtime.list_files_cache_limit
+statement ok
+SET datafusion.runtime.list_files_cache_limit = '2M'
+
+query TT
+SHOW datafusion.runtime.list_files_cache_limit
+----
+datafusion.runtime.list_files_cache_limit 2M
+
+# Test SET and SHOW runtime.list_files_cache_ttl
+statement ok
+SET datafusion.runtime.list_files_cache_ttl = '90s'
+
+query TT
+SHOW datafusion.runtime.list_files_cache_ttl
+----
+datafusion.runtime.list_files_cache_ttl 1m30s
+
 # Note: runtime.temp_directory shows the actual temp directory path with a unique suffix,
 # so we cannot test the exact value. We verify it exists in information_schema instead.
 

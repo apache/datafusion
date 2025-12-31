@@ -509,3 +509,27 @@ SELECT c, f.*  FROM json_table, LATERAL generate_series(1,2) f;
 1 2
 2 1
 2 2
+
+
+# Test generate_series in a recursive CTE to ensure the state is correctly reset
+query I rowsort
+WITH RECURSIVE t AS (
+    SELECT 1 i
+    UNION ALL
+    SELECT g.i
+    FROM generate_series(1, 1) g(i), t
+)
+SELECT *
+FROM t
+LIMIT 10;
+----
+1
+1
+1
+1
+1
+1
+1
+1
+1
+1

@@ -24,8 +24,11 @@ use arrow::array::{AsArray, GenericStringBuilder};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::{DataFusionError, Result, exec_err};
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, TypeSignatureClass, Volatility,
+};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -60,19 +63,16 @@ impl Default for SplitPartFunc {
 
 impl SplitPartFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
-                    TypeSignature::Exact(vec![Utf8View, Utf8, Int64]),
-                    TypeSignature::Exact(vec![Utf8View, LargeUtf8, Int64]),
-                    TypeSignature::Exact(vec![Utf8, Utf8View, Int64]),
-                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8View, Int64]),
-                    TypeSignature::Exact(vec![LargeUtf8, Utf8, Int64]),
-                    TypeSignature::Exact(vec![Utf8, LargeUtf8, Int64]),
-                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Int64,
+                    ),
                 ],
                 Volatility::Immutable,
             ),
