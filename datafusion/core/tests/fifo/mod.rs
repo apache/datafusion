@@ -94,7 +94,6 @@ mod unix_test {
     /// This function creates a writing task for the FIFO file. To verify
     /// incremental processing, it waits for a signal to continue writing after
     /// a certain number of lines are written.
-    #[expect(clippy::disallowed_methods)]
     fn create_writing_task(
         file_path: PathBuf,
         header: String,
@@ -105,6 +104,7 @@ mod unix_test {
         // Timeout for a long period of BrokenPipe error
         let broken_pipe_timeout = Duration::from_secs(10);
         // Spawn a new task to write to the FIFO file
+        #[expect(clippy::disallowed_methods)]
         tokio::spawn(async move {
             let mut file = tokio::fs::OpenOptions::new()
                 .write(true)
