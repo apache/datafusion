@@ -30,6 +30,7 @@ mod test {
     use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
     use datafusion_execution::TaskContext;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::Partitioning;
@@ -52,6 +53,7 @@ mod test {
     use datafusion_physical_plan::repartition::RepartitionExec;
     use datafusion_physical_plan::sorts::sort::SortExec;
     use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
+    use datafusion_physical_plan::windows::{WindowAggExec, create_window_expr};
     use datafusion_physical_plan::{
         ExecutionPlan, ExecutionPlanProperties, execute_stream_partitioned,
         get_plan_string,
@@ -1151,6 +1153,107 @@ mod test {
         }
         assert_eq!(partition_row_counts.len(), 2);
         assert_eq!(partition_row_counts.iter().sum::<usize>(), 4);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_statistic_by_partition_of_window_agg() -> Result<()> {
+        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_owned(),
+            &[col("id", &scan.schema())?],
+            &[], // no partition by
+            &[PhysicalSortExpr::new(
+                col("id", &scan.schema())?,
+                SortOptions::default(),
+            )],
+            Arc::new(WindowFrame::new(Some(false))),
+            scan.schema(),
+            false,
+            false,
+            None,
+        )?;
+
+        let window_agg: Arc<dyn ExecutionPlan> =
+            Arc::new(WindowAggExec::try_new(vec![window_expr], scan, true)?);
+
+        // Verify partition statistics are properly propagated (not unknown)
+        let statistics = (0..window_agg.output_partitioning().partition_count())
+            .map(|idx| window_agg.partition_statistics(Some(idx)))
+            .collect::<Result<Vec<_>>>()?;
+
+        assert_eq!(statistics.len(), 2);
+
+        // Window functions preserve input row counts and column statistics
+        // but add unknown statistics for the new window column
+        let expected_statistic_partition_1 = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_02,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_01,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                ColumnStatistics::new_unknown(), // window column
+            ],
+        };
+
+        let expected_statistic_partition_2 = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(2))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_04,
+                    ))),
+                    min_value: Precision::Exact(ScalarValue::Date32(Some(
+                        DATE_2025_03_03,
+                    ))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(8),
+                },
+                ColumnStatistics::new_unknown(), // window column
+            ],
+        };
+
+        assert_eq!(statistics[0], expected_statistic_partition_1);
+        assert_eq!(statistics[1], expected_statistic_partition_2);
+
+        // Verify the statistics match actual execution results
+        let expected_stats = vec![
+            ExpectedStatistics::NonEmpty(3, 4, 2),
+            ExpectedStatistics::NonEmpty(1, 2, 2),
+        ];
+        validate_statistics_with_data(window_agg, expected_stats, 0).await?;
 
         Ok(())
     }
