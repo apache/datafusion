@@ -31,7 +31,7 @@
 //! statistics, significantly reducing the rows that need to be decoded and
 //! filtered.
 
-use arrow::array::{ArrayRef, ListArray, StringArray};
+use arrow::array::{ArrayRef, ListArray, StringArray, UInt64Array};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -48,7 +48,7 @@ use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Builder, Runtime};
 
 /// Configuration for the benchmark dataset
 #[derive(Clone)]
@@ -78,7 +78,8 @@ impl BenchmarkConfig {
 fn generate_sorted_list_data(
     config: &BenchmarkConfig,
     temp_dir: &TempDir,
-) -> std::io::Result<PathBuf> {
+    target_value: &str,
+) -> std::io::Result<(PathBuf, usize)> {
     let file_path = temp_dir.path().join("data.parquet");
 
     // Define the schema with a List<String> column and an id column
@@ -102,10 +103,13 @@ fn generate_sorted_list_data(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
     let num_groups = config.num_row_groups();
+    let matching_groups =
+        ((num_groups as f64 * config.selectivity).ceil() as usize).clamp(1, num_groups);
     let mut row_id = 0i64;
 
     // Generate row groups with sorted list values
     for group_idx in 0..num_groups {
+        let should_match = group_idx < matching_groups;
         let mut batch_ids = Vec::new();
         let mut all_values = Vec::new();
         let mut offsets = vec![0i32];
@@ -115,19 +119,22 @@ fn generate_sorted_list_data(
             batch_ids.push(row_id);
             row_id += 1;
 
-            // Create lexicographically sorted values
-            // Each row group has values in a contiguous range
-            let base_char = (97 + (group_idx % 26)) as u8; // 'a' + group offset
-            let char1 = base_char as char;
-            let char2 = (97 + ((group_idx / 26) % 26)) as u8 as char;
-            let char3 = (48 + (local_idx % 10)) as u8 as char; // '0' to '9'
-
-            let prefix = format!("{}{}{}", char1, char2, char3);
-
-            // Add 3 values per row
-            all_values.push(format!("{}_value_a", prefix));
-            all_values.push(format!("{}_value_b", prefix));
-            all_values.push(format!("{}_value_c", prefix));
+            // Create lexicographically sorted values. Matching row groups contain the
+            // `target_value`, while non-matching groups use a higher prefix so the
+            // min/max range excludes the target.
+            let prefix = format!("g{:02}{}", group_idx, local_idx);
+            if should_match {
+                all_values.push(format!("{}_before", prefix));
+                all_values.push(target_value.to_string());
+                all_values.push(format!("{}_after", prefix));
+            } else {
+                // Keep all values lexicographically greater than `target_value` to
+                // allow pushdown to skip these row groups when filtering by the
+                // target.
+                all_values.push(format!("zz{}_value_a", prefix));
+                all_values.push(format!("zz{}_value_b", prefix));
+                all_values.push(format!("zz{}_value_c", prefix));
+            }
 
             offsets.push((offsets.last().unwrap() + 3) as i32);
         }
@@ -163,7 +170,7 @@ fn generate_sorted_list_data(
         .finish()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-    Ok(file_path)
+    Ok((file_path, matching_groups))
 }
 
 fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
@@ -205,7 +212,7 @@ fn create_pushdown_context() -> SessionContext {
 /// is active. With selective filters, this should skip ~90% of row groups,
 /// resulting in minimal row decoding.
 fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = build_runtime();
     let mut group = c.benchmark_group("parquet_array_has_pushdown");
 
     // Test configuration: 100K rows, 10 row groups, selective filter (10% match)
@@ -216,7 +223,7 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
     };
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    let file_path = generate_sorted_list_data(&config, &temp_dir)
+    let (file_path, _) = generate_sorted_list_data(&config, &temp_dir, "aa0_value_a")
         .expect("Failed to generate test data");
 
     group.bench_function(
@@ -266,28 +273,40 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
 /// Demonstrates how different selectivity levels (percentage of matching
 /// row groups) affect performance with pushdown enabled.
 fn benchmark_selectivity_comparison(c: &mut Criterion) {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = build_runtime();
     let mut group = c.benchmark_group("parquet_selectivity_impact");
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-    // Pre-generate all test data
+    // Pre-generate all test data. Each selectivity level targets a fraction of the
+    // ten row groups (rounded up), and the target value is injected into every row
+    // within those matching groups:
+    // - 10% => 1 matching row group => 10,000 matching rows
+    // - 30% => 3 matching row groups => 30,000 matching rows
+    // - 50% => 5 matching row groups => 50,000 matching rows
+    // - 90% => 9 matching row groups => 90,000 matching rows
     let test_cases = vec![
-        (0.1, "aa0_value_a"), // 10% - matches first row group
-        (0.3, "ac0_value_a"), // 30% - matches first 3 row groups
-        (0.5, "ae0_value_a"), // 50% - matches first 5 row groups
-        (0.9, "ai0_value_a"), // 90% - matches first 9 row groups
+        (0.1, "aa0_value_a"),
+        (0.3, "ac0_value_a"),
+        (0.5, "ae0_value_a"),
+        (0.9, "ai0_value_a"),
     ];
 
-    for (selectivity, _target_value) in test_cases {
+    for (selectivity, target_value) in test_cases {
         let config = BenchmarkConfig {
             total_rows: 100_000,
             rows_per_group: 10_000,
             selectivity,
         };
 
-        let file_path = generate_sorted_list_data(&config, &temp_dir)
-            .expect("Failed to generate test data");
+        let (file_path, matching_groups) =
+            generate_sorted_list_data(&config, &temp_dir, target_value)
+                .expect("Failed to generate test data");
+
+        // Validate that the generated data matches the expected selectivity so each
+        // benchmark run measures a different pushdown rate.
+        let expected_match_rows = matching_groups * config.rows_per_group;
+        validate_match_rate(&rt, file_path.clone(), target_value, expected_match_rows);
 
         group.bench_function(
             BenchmarkId::from_parameter(format!(
@@ -307,8 +326,11 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
                     .expect("Failed to register parquet");
 
                     // Use a filter that matches the selectivity level
-                    let sql = "SELECT COUNT(*) FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
-                    let df = ctx.sql(sql).await.expect("Failed to create dataframe");
+                    let sql = format!(
+                        "SELECT COUNT(*) FROM test_table WHERE array_has(list_col, '{}')",
+                        target_value
+                    );
+                    let df = ctx.sql(&sql).await.expect("Failed to create dataframe");
 
                     let plan = df
                         .create_physical_plan()
@@ -333,3 +355,46 @@ criterion_group!(
     benchmark_selectivity_comparison
 );
 criterion_main!(benches);
+
+fn validate_match_rate(
+    rt: &Runtime,
+    file_path: PathBuf,
+    target_value: &str,
+    expected_match_rows: usize,
+) {
+    let actual_match_rows = rt.block_on(async {
+        let ctx = SessionContext::new();
+        ctx.register_parquet(
+            "test_table",
+            file_path.to_str().unwrap(),
+            ParquetReadOptions::default(),
+        )
+        .await
+        .expect("Failed to register parquet");
+
+        let sql = format!(
+            "SELECT COUNT(*) FROM test_table WHERE array_has(list_col, '{}')",
+            target_value
+        );
+        let df = ctx.sql(&sql).await.expect("Failed to create dataframe");
+        let results = df.collect().await.expect("Failed to collect");
+        let count_array = results[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("COUNT(*) should be UInt64");
+        count_array.value(0) as usize
+    });
+
+    assert_eq!(
+        actual_match_rows, expected_match_rows,
+        "Generated data did not match expected selectivity"
+    );
+}
+
+fn build_runtime() -> Runtime {
+    Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create runtime")
+}
