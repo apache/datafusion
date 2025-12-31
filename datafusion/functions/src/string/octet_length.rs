@@ -101,7 +101,7 @@ impl ScalarUDFImpl for OctetLengthFunc {
                         if arr.is_null(i) {
                             builder.append_null();
                         } else {
-                            builder.append_value(arr.value_length(i) as i32);
+                            builder.append_value(arr.value_length(i));
                         }
                     }
                     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
@@ -111,7 +111,7 @@ impl ScalarUDFImpl for OctetLengthFunc {
                         if arr.is_null(i) {
                             builder.append_null();
                         } else {
-                            builder.append_value(arr.value_length(i) as i64);
+                            builder.append_value(arr.value_length(i));
                         }
                     }
                     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
