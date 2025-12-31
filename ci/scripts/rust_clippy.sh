@@ -63,14 +63,14 @@ if [[ "$MODE" == "write" && $ALLOW_DIRTY -eq 0 ]]; then
   require_clean_work_tree "$SCRIPT_NAME" || exit 1
 fi
 
+CLIPPY_CMD=(cargo clippy)
 if [[ "$MODE" == "write" ]]; then
-  ALLOW_DIRTY_ARGS=()
+  CLIPPY_CMD+=(--fix)
   if [[ $ALLOW_DIRTY -eq 1 ]]; then
-    ALLOW_DIRTY_ARGS+=(--allow-dirty --allow-staged)
+    CLIPPY_CMD+=(--allow-dirty --allow-staged)
   fi
-  echo "[${SCRIPT_NAME}] \`cargo clippy --fix --all-targets --workspace --features ${CLIPPY_FEATURES} -- -D warnings\`"
-  cargo clippy --fix "${ALLOW_DIRTY_ARGS[@]}" "${CLIPPY_ARGS[@]}" "${CLIPPY_LINT_ARGS[@]}"
-else
-  echo "[${SCRIPT_NAME}] \`cargo clippy --all-targets --workspace --features ${CLIPPY_FEATURES} -- -D warnings\`"
-  cargo clippy "${CLIPPY_ARGS[@]}" "${CLIPPY_LINT_ARGS[@]}"
 fi
+CLIPPY_CMD+=("${CLIPPY_ARGS[@]}" "${CLIPPY_LINT_ARGS[@]}")
+
+echo "[${SCRIPT_NAME}] \`${CLIPPY_CMD[*]}\`"
+"${CLIPPY_CMD[@]}"

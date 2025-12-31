@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -85,7 +85,7 @@ done
 
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 
-ensure_tool "taplo" "cargo install taplo-cli"
+ensure_tool "taplo" "cargo install taplo-cli --locked"
 ensure_tool "hawkeye" "cargo install hawkeye --locked"
 ensure_tool "typos" "cargo install typos-cli --locked"
 
