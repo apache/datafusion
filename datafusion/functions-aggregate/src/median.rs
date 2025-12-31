@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
-    downcast_integer,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -127,12 +126,47 @@ impl AggregateUDFImpl for Median {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        // MEDIAN performs linear interpolation for even-length arrays and should return a float type
+        // For integer inputs, return Float64 (matching PostgreSQL/DuckDB/Spark behavior)
+        // For float/decimal inputs, preserve the input type
+        match &arg_types[0] {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Ok(arg_types[0].clone())
+            }
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => Ok(arg_types[0].clone()),
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok(DataType::Float64),
+            dt => Err(DataFusionError::NotImplemented(format!(
+                "median does not support input type {dt}"
+            ))),
+        }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
+        let input_type = args.input_fields[0].data_type().clone();
+        // For integer types, we store as Float64 internally
+        let storage_type = match &input_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DataType::Float64,
+            _ => input_type,
+        };
+        let field = Field::new_list_field(storage_type.clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -166,20 +200,27 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.expr_fields[0].data_type().clone();
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+        let input_dt = acc_args.expr_fields[0].data_type().clone();
+        match input_dt {
+            // For integer types, use Float64 internally since median returns Float64
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianAccumulator not supported for {} with {}",
-                acc_args.name,
-                dt,
+                acc_args.name, input_dt,
             ))),
         }
     }
@@ -200,7 +241,7 @@ impl AggregateUDFImpl for Median {
             num_args
         );
 
-        let dt = args.expr_fields[0].data_type().clone();
+        let input_dt = args.expr_fields[0].data_type().clone();
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -208,19 +249,26 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+        match input_dt {
+            // For integer types, use Float64 internally since median returns Float64
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianGroupsAccumulator not supported for {} with {}",
-                args.name,
-                dt,
+                args.name, input_dt,
             ))),
         }
     }
@@ -275,7 +323,14 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values.as_primitive::<T>();
         self.all_values.reserve(values.len() - values.null_count());
         self.all_values.extend(values.iter().flatten());
         Ok(())
@@ -367,7 +422,15 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values[0].as_primitive::<T>();
+
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values.as_primitive::<T>();
 
         // Push the `not nulls + not filtered` row into its group
         self.group_values.resize(total_num_groups, Vec::new());
@@ -558,7 +621,13 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.update_batch(values)
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            vec![arrow::compute::cast(&values[0], &self.data_type)?]
+        } else {
+            values.to_vec()
+        };
+        self.distinct_values.update_batch(&values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
