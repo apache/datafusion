@@ -20,7 +20,7 @@ use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use arrow::array::{
-    Array, ArrayRef, Int32Array, Int32Builder, Int64Builder, LargeStringArray,
+    Array, Int32Array, Int32Builder, Int64Builder, LargeStringArray,
     StringArray, StringViewArray,
 };
 use datafusion_common::types::logical_string;
@@ -95,40 +95,37 @@ impl ScalarUDFImpl for OctetLengthFunc {
 
         match array {
             ColumnarValue::Array(v) => {
-                let arr: ArrayRef = v.clone();
-
-                if let Some(arr) = arr.as_any().downcast_ref::<StringArray>() {
-                    let mut builder = Int32Builder::with_capacity(arr.len());
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            builder.append_value(arr.value_length(i) as i32);
-                        }
-                    }
-                    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-                } else if let Some(arr) = arr.as_any().downcast_ref::<LargeStringArray>()
-                {
-                    let mut builder = Int64Builder::with_capacity(arr.len());
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            builder.append_value(arr.value_length(i) as i64);
-                        }
-                    }
-                    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-                } else if let Some(arr) = arr.as_any().downcast_ref::<StringViewArray>() {
-                    let result = arr
-                        .iter()
-                        .map(|s| s.map(|s| s.len() as i32))
-                        .collect::<Int32Array>();
-
-                    Ok(ColumnarValue::Array(Arc::new(result)))
-                } else {
-                    unreachable!("octet_length expects string arrays")
-                }
+    if let Some(arr) = v.as_any().downcast_ref::<StringArray>() {
+        let mut builder = Int32Builder::with_capacity(arr.len());
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(arr.value_length(i) as i32);
             }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+    } else if let Some(arr) = v.as_any().downcast_ref::<LargeStringArray>() {
+        let mut builder = Int64Builder::with_capacity(arr.len());
+        for i in 0..arr.len() {
+            if arr.is_null(i) {
+                builder.append_null();
+            } else {
+                builder.append_value(arr.value_length(i) as i64);
+            }
+        }
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+    } else if let Some(arr) = v.as_any().downcast_ref::<StringViewArray>() {
+        let result = arr
+            .iter()
+            .map(|s| s.map(|s| s.len() as i32))
+            .collect::<Int32Array>();
+
+        Ok(ColumnarValue::Array(Arc::new(result)))
+    } else {
+        unreachable!("octet_length expects string arrays")
+    }
+}
 
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(
