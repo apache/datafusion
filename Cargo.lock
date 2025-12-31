@@ -2165,6 +2165,7 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion",
+ "datafusion",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",

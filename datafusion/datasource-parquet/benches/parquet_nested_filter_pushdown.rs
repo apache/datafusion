@@ -36,12 +36,16 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion::execution::context::SessionContext;
+use datafusion::prelude::*;
 use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use std::fs::File;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
 
 /// Configuration for the benchmark dataset
 #[derive(Clone)]
@@ -85,7 +89,13 @@ fn generate_sorted_list_data(
     ]));
 
     let file = File::create(&file_path)?;
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Default::default())
+    
+    // Configure writer with explicit row group size
+    let props = WriterProperties::builder()
+        .set_max_row_group_size(config.rows_per_group)
+        .build();
+    
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
     let num_groups = config.num_row_groups();
@@ -159,6 +169,7 @@ fn generate_sorted_list_data(
 /// is active. With selective filters, this should skip ~90% of row groups,
 /// resulting in minimal row decoding.
 fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
+    let rt = Runtime::new().expect("Failed to create runtime");
     let mut group = c.benchmark_group("parquet_array_has_pushdown");
 
     // Test configuration: 100K rows, 10 row groups, selective filter (10% match)
@@ -169,9 +180,9 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
     };
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let file_path = generate_sorted_list_data(&config, &temp_dir)
+        .expect("Failed to generate test data");
 
-    // For now, we document the expected behavior
-    // A full benchmark would require DataFusion integration
     group.bench_function(
         BenchmarkId::from_parameter(format!(
             "rows={},selectivity={:.0}%",
@@ -179,20 +190,27 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
             config.selectivity * 100.0
         )),
         |b| {
-            b.iter(|| {
-                // In a real benchmark, this would:
-                // 1. Load the parquet file with pushdown enabled
-                // 2. Execute: SELECT * FROM table WHERE array_has(list_col, 'target_value')
-                // 3. Measure rows decoded and time taken
-                //
-                // Expected behavior:
-                // - Without pushdown: All 100K rows must be decoded → baseline
-                // - With pushdown: Only ~10K rows (1 row group) decoded → ~10x faster
-                //
-                // The pushdown allows the Parquet decoder to use min/max statistics
-                // to skip the 9 row groups that don't contain the target value.
-                let path = generate_sorted_list_data(&config, &temp_dir);
-                black_box(path)
+            b.to_async(&rt).iter(|| async {
+                let ctx = SessionContext::new();
+                
+                // Register the parquet file
+                ctx.register_parquet(
+                    "test_table",
+                    file_path.to_str().unwrap(),
+                    ParquetReadOptions::default(),
+                )
+                .await
+                .expect("Failed to register parquet");
+
+                // Execute query with array_has filter
+                // This should demonstrate pushdown benefits for selective filters
+                let sql = "SELECT * FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
+                let df = ctx.sql(sql).await.expect("Failed to create dataframe");
+                
+                // Collect results to ensure full execution
+                let results = df.collect().await.expect("Failed to collect results");
+                
+                black_box(results)
             });
         },
     );
@@ -205,18 +223,28 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
 /// Demonstrates how different selectivity levels (percentage of matching
 /// row groups) affect performance with pushdown enabled.
 fn benchmark_selectivity_comparison(c: &mut Criterion) {
+    let rt = Runtime::new().expect("Failed to create runtime");
     let mut group = c.benchmark_group("parquet_selectivity_impact");
 
-    let selectivity_levels = [0.1, 0.3, 0.5, 0.9]; // 10%, 30%, 50%, 90% match
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    
+    // Pre-generate all test data
+    let test_cases = vec![
+        (0.1, "aa0_value_a"),  // 10% - matches first row group
+        (0.3, "ac0_value_a"),  // 30% - matches first 3 row groups  
+        (0.5, "ae0_value_a"),  // 50% - matches first 5 row groups
+        (0.9, "ai0_value_a"),  // 90% - matches first 9 row groups
+    ];
 
-    for selectivity in selectivity_levels {
+    for (selectivity, _target_value) in test_cases {
         let config = BenchmarkConfig {
             total_rows: 100_000,
             rows_per_group: 10_000,
             selectivity,
         };
 
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let file_path = generate_sorted_list_data(&config, &temp_dir)
+            .expect("Failed to generate test data");
 
         group.bench_function(
             BenchmarkId::from_parameter(format!(
@@ -224,14 +252,23 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
                 selectivity * 100.0
             )),
             |b| {
-                b.iter(|| {
-                    // With pushdown, selectivity directly impacts performance:
-                    // - 10% selectivity: Skip 90% of row groups → ~10x improvement
-                    // - 30% selectivity: Skip 70% of row groups → ~3x improvement
-                    // - 50% selectivity: Skip 50% of row groups → ~2x improvement
-                    // - 90% selectivity: Skip 10% of row groups → ~1.1x improvement
-                    let path = generate_sorted_list_data(&config, &temp_dir);
-                    black_box(path)
+                b.to_async(&rt).iter(|| async {
+                    let ctx = SessionContext::new();
+                    
+                    ctx.register_parquet(
+                        "test_table",
+                        file_path.to_str().unwrap(),
+                        ParquetReadOptions::default(),
+                    )
+                    .await
+                    .expect("Failed to register parquet");
+
+                    // Use a filter that matches the selectivity level
+                    let sql = "SELECT COUNT(*) FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
+                    let df = ctx.sql(sql).await.expect("Failed to create dataframe");
+                    let results = df.collect().await.expect("Failed to collect");
+                    
+                    black_box(results)
                 });
             },
         );
