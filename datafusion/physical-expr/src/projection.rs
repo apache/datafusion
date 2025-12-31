@@ -37,6 +37,7 @@ use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays_with_metrics;
+use hashbrown::HashSet;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
@@ -800,7 +801,7 @@ pub fn update_expr(
     projected_exprs: &[ProjectionExpr],
     sync_with_child: bool,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    #[derive(Debug, PartialEq)]
+    #[derive(PartialEq)]
     enum RewriteState {
         /// The expression is unchanged.
         Unchanged,
@@ -811,30 +812,46 @@ pub fn update_expr(
         RewrittenInvalid,
     }
 
-    let mut state = RewriteState::Unchanged;
-    let mut new_expr = Arc::clone(expr);
+    // Track columns introduced by pass 1 (by name and index).
+    // These should not be modified by pass 2.
+    let mut valid_columns = HashSet::new();
 
-    // First pass: try to rewrite the expression in terms of the projected expressions
+    // First pass: try to rewrite the expression in terms of the projected expressions.
     // For example, if the expression is `a + b > 5` and the projection is `a + b AS sum_ab`,
     // we can rewrite the expression to `sum_ab > 5` directly.
-    new_expr = new_expr
-        .transform_down(|expr| {
-            // If expr is equal to one of the projected expressions, we can short-circuit the rewrite:
-            for (idx, projected_expr) in projected_exprs.iter().enumerate() {
-                if expr.eq(&projected_expr.expr) {
-                    state = RewriteState::RewrittenValid;
-                    return Ok(Transformed::yes(Arc::new(Column::new(
-                        &projected_expr.alias,
-                        idx,
-                    )) as _));
+    //
+    // This optimization only applies when sync_with_child=false, meaning we want the
+    // expression to use OUTPUT references (e.g., when pushing projection down and the
+    // expression will be above the projection). Pass 1 creates OUTPUT column references.
+    //
+    // When sync_with_child=true, we want INPUT references (expanding OUTPUT to INPUT),
+    // so pass 1 doesn't apply.
+    let new_expr = if !sync_with_child {
+        Arc::clone(expr)
+            .transform_down(&mut |expr: Arc<dyn PhysicalExpr>| {
+                // If expr is equal to one of the projected expressions, we can short-circuit the rewrite:
+                for (idx, projected_expr) in projected_exprs.iter().enumerate() {
+                    if expr.eq(&projected_expr.expr) {
+                        // Track this column so pass 2 doesn't modify it
+                        valid_columns.insert((projected_expr.alias.clone(), idx));
+                        return Ok(Transformed::yes(Arc::new(Column::new(
+                            &projected_expr.alias,
+                            idx,
+                        )) as _));
+                    }
                 }
-            }
-            Ok(Transformed::no(expr))
-        })
-        .data()?;
+                Ok(Transformed::no(expr))
+            })?
+            .data
+    } else {
+        Arc::clone(expr)
+    };
 
-    new_expr = new_expr
-        .transform_up(|expr| {
+    // Second pass: rewrite remaining column references based on the projection.
+    // Skip columns that were introduced by pass 1.
+    let mut state = RewriteState::Unchanged;
+    let new_expr = new_expr
+        .transform_up(&mut |expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -842,6 +859,15 @@ pub fn update_expr(
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
+
+            // Skip columns introduced by pass 1 - they're already valid OUTPUT references.
+            // Mark state as valid since pass 1 successfully handled this column.
+            if valid_columns.contains(&(column.name().to_string(), column.index()))
+            {
+                state = RewriteState::RewrittenValid;
+                return Ok(Transformed::no(expr));
+            }
+
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
@@ -2446,6 +2472,240 @@ pub(crate) mod tests {
             .downcast_ref::<Column>()
             .expect("Right should be a Column");
         assert_eq!(right_col.index(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_matches_projected_expr() -> Result<()> {
+        // Test that when filter expression exactly matches a projected expression,
+        // update_expr short-circuits and rewrites to use the projected column.
+        // e.g., projection: a * 2 AS a_times_2, filter: a * 2 > 4
+        // should become: a_times_2 > 4
+
+        // Create the computed expression: a@0 * 2
+        let computed_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Multiply,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+        ));
+
+        // Create projection with the computed expression aliased as "a_times_2"
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&computed_expr),
+            alias: "a_times_2".to_string(),
+        }];
+
+        // Create filter predicate: a * 2 > 4 (same expression as projection)
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&computed_expr),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+        ));
+
+        // Update the expression - should rewrite a * 2 to a_times_2@0
+        // sync_with_child=false because we want OUTPUT references (filter will be above projection)
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        let binary = result_expr
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .expect("Should be a BinaryExpr");
+        // Left side should now be a column reference to a_times_2@0
+        let left_col = binary
+            .left()
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Left should be rewritten to a Column");
+        assert_eq!(left_col.name(), "a_times_2");
+        assert_eq!(left_col.index(), 0);
+
+        // Right side should still be the literal 4
+        let right_lit = binary
+            .right()
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("Right should be a Literal");
+        assert_eq!(right_lit.value(), &ScalarValue::Int32(Some(4)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_partial_match() -> Result<()> {
+        // Test that when only part of an expression matches, we still handle
+        // the rest correctly. e.g., `a + b > 2 AND c > 3` with projection
+        // `a + b AS sum_ab, c AS c_out` should become `sum_ab > 2 AND c_out > 3`
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab, c AS c_out]
+        let projection = vec![
+            ProjectionExpr {
+                expr: Arc::clone(&sum_expr),
+                alias: "sum_ab".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                alias: "c_out".to_string(),
+            },
+        ];
+
+        // Filter: (a + b > 2) AND (c > 3)
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+            )),
+        ));
+
+        // With sync_with_child=false: columns reference input schema, need to map to output
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        // Should be: sum_ab@0 > 2 AND c_out@1 > 3
+        assert_eq!(result_expr.to_string(), "sum_ab@0 > 2 AND c_out@1 > 3");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_partial_match_with_unresolved_column() -> Result<()> {
+        // Test that when part of an expression matches but other columns can't be
+        // resolved, we return None. e.g., `a + b > 2 AND c > 3` with projection
+        // `a + b AS sum_ab` (note: no 'c' column!) should return None.
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab] - note: NO 'c' column!
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&sum_expr),
+            alias: "sum_ab".to_string(),
+        }];
+
+        // Filter: (a + b > 2) AND (c > 3) - 'c' is not in projection!
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+            )),
+        ));
+
+        // With sync_with_child=false: should return None because 'c' can't be mapped
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when some columns can't be resolved"
+        );
+
+        // On the other hand if the projection is `c AS c_out, a + b AS sum_ab` we should succeed
+        let projection = vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                alias: "c_out".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::clone(&sum_expr),
+                alias: "sum_ab".to_string(),
+            },
+        ];
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid now");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_nested_match() -> Result<()> {
+        // Test matching a sub-expression within a larger expression.
+        // e.g., `(a + b) * 2 > 10` with projection `a + b AS sum_ab`
+        // should become `sum_ab * 2 > 10`
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab]
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&sum_expr),
+            alias: "sum_ab".to_string(),
+        }];
+
+        // Filter: (a + b) * 2 > 10
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Multiply,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // With sync_with_child=false: should rewrite a+b to sum_ab
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        // Should be: sum_ab@0 * 2 > 10
+        assert_eq!(result_expr.to_string(), "sum_ab@0 * 2 > 10");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_no_match_returns_none() -> Result<()> {
+        // Test that when columns can't be resolved, we return None (with sync_with_child=false)
+
+        // Projection: [a AS a_out]
+        let projection = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            alias: "a_out".to_string(),
+        }];
+
+        // Filter references column 'd' which is not in projection
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("d", 3)), // Not in projection
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // With sync_with_child=false: should return None because 'd' can't be mapped
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when column can't be resolved"
+        );
 
         Ok(())
     }

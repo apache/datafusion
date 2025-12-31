@@ -222,6 +222,7 @@ impl FileSource for TestSource {
             let combined_projection = existing_projection.try_merge(projection)?;
             Ok(Some(Arc::new(TestSource {
                 projection: Some(combined_projection),
+                table_schema: self.table_schema.clone(),
                 ..self.clone()
             })))
         } else {
@@ -230,6 +231,10 @@ impl FileSource for TestSource {
                 ..self.clone()
             })))
         }
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        self.projection.as_ref()
     }
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {

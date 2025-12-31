@@ -1802,14 +1802,14 @@ fn test_pushdown_projection_through_repartition_filter() {
         .to_string();
     let actual = after_optimize_string.trim();
 
-    // Projection should be pushed down through RepartitionExec and FilterExec
+    // Projection should be pushed all the way down to the DataSource, and
+    // filter predicate should be rewritten to reference projection's output column
     assert_snapshot!(
         actual,
         @r"
-    ProjectionExec: expr=[get_field(struct@0, a) as a]
-      FilterExec: get_field(struct@0, a) > 2
-        RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
-          DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[struct], file_type=test, pushdown_supported=true
+    FilterExec: a@0 > 2
+      RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[get_field(struct@0, a) as a], file_type=test, pushdown_supported=true
     "
     );
 }
