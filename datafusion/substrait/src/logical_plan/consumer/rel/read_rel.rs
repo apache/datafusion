@@ -19,6 +19,10 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::recursive::{
+    RECURSIVE_SCAN_TYPE_URL, decode_recursive_scan_detail,
+};
+use datafusion::catalog::cte_worktable::CteWorkTable;
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -26,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
+    EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, TableSource, Values,
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -40,12 +44,13 @@ pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
 ) -> datafusion::common::Result<LogicalPlan> {
-    async fn read_with_schema(
+    async fn read_with_source(
         consumer: &impl SubstraitConsumer,
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
         filter: &Option<Box<Expression>>,
+        table_source: Arc<dyn TableSource>,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
@@ -56,20 +61,13 @@ pub async fn from_read_rel(
             vec![]
         };
 
-        let plan = {
-            let provider = match consumer.resolve_table_ref(&table_ref).await? {
-                Some(ref provider) => Arc::clone(provider),
-                _ => return plan_err!("No table named '{table_ref}'"),
-            };
-
-            LogicalPlanBuilder::scan_with_filters(
-                table_ref,
-                provider_as_source(Arc::clone(&provider)),
-                None,
-                filters,
-            )?
-            .build()?
-        };
+        let plan = LogicalPlanBuilder::scan_with_filters(
+            table_ref,
+            table_source,
+            None,
+            filters,
+        )?
+        .build()?;
 
         ensure_schema_compatibility(plan.schema(), schema.clone())?;
 
@@ -83,6 +81,19 @@ pub async fn from_read_rel(
     })?;
 
     let substrait_schema = from_substrait_named_struct(consumer, named_struct)?;
+
+    let recursive_table_name = read
+        .advanced_extension
+        .as_ref()
+        .and_then(|ext| ext.enhancement.as_ref())
+        .and_then(|detail| {
+            if detail.type_url == RECURSIVE_SCAN_TYPE_URL {
+                Some(decode_recursive_scan_detail(&detail.value))
+            } else {
+                None
+            }
+        })
+        .transpose()?;
 
     match &read.read_type {
         Some(ReadType::NamedTable(nt)) => {
@@ -104,12 +115,37 @@ pub async fn from_read_rel(
                 },
             };
 
-            read_with_schema(
+            // Determine the table source: for recursive CTEs, create a CteWorkTable that serves
+            // as a placeholder for the recursive reference during query execution. For regular
+            // tables, resolve the table reference through the catalog.
+            let table_source = if let Some(recursive_name) = recursive_table_name {
+                let table_name = table_reference.table();
+                if table_name != recursive_name {
+                    return substrait_err!(
+                        "Recursive scan name mismatch: expected {recursive_name}, found {table_name}"
+                    );
+                }
+
+                let schema = Arc::new(substrait_schema.as_arrow().clone());
+                provider_as_source(Arc::new(CteWorkTable::new(
+                    recursive_name.as_str(),
+                    schema,
+                )))
+            } else {
+                let provider = match consumer.resolve_table_ref(&table_reference).await? {
+                    Some(provider) => provider,
+                    None => return plan_err!("No table named '{table_reference}'"),
+                };
+                provider_as_source(provider)
+            };
+
+            read_with_source(
                 consumer,
                 table_reference,
                 substrait_schema,
                 &read.projection,
                 &read.filter,
+                table_source,
             )
             .await
         }
@@ -207,12 +243,18 @@ pub async fn from_read_rel(
             // directly use unwrap here since we could determine it is a valid one
             let table_reference = TableReference::Bare { table: name.into() };
 
-            read_with_schema(
+            let provider = match consumer.resolve_table_ref(&table_reference).await? {
+                Some(provider) => provider,
+                None => return plan_err!("No table named '{table_reference}'"),
+            };
+
+            read_with_source(
                 consumer,
                 table_reference,
                 substrait_schema,
                 &read.projection,
                 &read.filter,
+                provider_as_source(provider),
             )
             .await
         }
