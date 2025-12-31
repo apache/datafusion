@@ -3104,8 +3104,6 @@ fn test_partition_statistics() -> Result<()> {
     Ok(())
 }
 
-
-
 /// Returns the column names on the schema
 fn columns(schema: &Schema) -> Vec<String> {
     schema.fields().iter().map(|f| f.name().clone()).collect()
