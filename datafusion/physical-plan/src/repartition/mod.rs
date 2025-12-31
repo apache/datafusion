@@ -34,7 +34,7 @@ use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
-use crate::projection::{ProjectionExec, all_trivial, make_with_child, update_expr};
+use crate::projection::{ProjectionExec, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
@@ -1130,7 +1130,7 @@ impl ExecutionPlan for RepartitionExec {
 
         // If pushdown is not beneficial or applicable, break it.
         if projection.benefits_from_input_partitioning()[0]
-            || !all_trivial(projection.expr())
+            || !projection.projection_expr().is_trivial()
         {
             return Ok(None);
         }

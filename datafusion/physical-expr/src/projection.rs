@@ -233,6 +233,11 @@ impl ProjectionExprs {
         self.exprs.iter()
     }
 
+    /// Checks if all of the projection expressions are trivial.
+    pub fn is_trivial(&self) -> bool {
+        self.exprs.iter().all(|p| p.expr.is_trivial())
+    }
+
     /// Creates a ProjectionMapping from this projection
     pub fn projection_mapping(
         &self,

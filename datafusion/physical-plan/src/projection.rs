@@ -255,16 +255,10 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_trivial_exprs = self
-            .projector
-            .projection()
-            .as_ref()
-            .iter()
-            .all(|proj_expr| proj_expr.expr.is_trivial());
         // If expressions are all trivial (columns, literals, or field accessors),
         // then all computations in this projection are reorder or rename,
         // and projection would not benefit from the repartition.
-        vec![!all_trivial_exprs]
+        vec![!self.projection_expr().is_trivial()]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -709,12 +703,6 @@ pub fn make_with_child(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
         .map(|e| Arc::new(e) as _)
-}
-
-/// Returns `true` if all the expressions in the argument are trivial
-/// (columns, literals, or field accessors).
-pub fn all_trivial(exprs: &[ProjectionExpr]) -> bool {
-    exprs.iter().all(|proj_expr| proj_expr.expr.is_trivial())
 }
 
 /// Updates the given lexicographic ordering according to given projected
