@@ -19,9 +19,9 @@ extern crate criterion;
 
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion_common::config::ConfigOptions;
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_functions::math::factorial;
