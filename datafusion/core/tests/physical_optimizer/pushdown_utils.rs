@@ -113,7 +113,7 @@ pub struct TestSource {
 impl TestSource {
     pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
         let table_schema =
-            datafusion_datasource::TableSchema::new(Arc::clone(&schema), vec![]);
+            datafusion_datasource::TableSchema::new(schema, vec![]);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -359,6 +359,7 @@ pub struct OptimizationTest {
 }
 
 impl OptimizationTest {
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new<O>(
         input_plan: Arc<dyn ExecutionPlan>,
         opt: O,
