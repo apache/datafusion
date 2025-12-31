@@ -3480,6 +3480,14 @@ select to_time('2024-03-20 09:15:30'::timestamp);
 ----
 09:15:30
 
+# Timestamp with timezone (timestamptz) - time is extracted as stored
+# Note: AT TIME ZONE labels the naive timestamp but doesn't convert the time value
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp AT TIME ZONE 'America/Los_Angeles');
+----
+09:15:30
+
 # Timestamp before epoch (1969-12-31 23:30:00 UTC)
 
 query D
