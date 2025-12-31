@@ -38,7 +38,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
 use arrow::datatypes::SchemaRef;
-use arrow_buffer::TrackingMemoryPool;
+use arrow_buffer::{MemoryPool, TrackingMemoryPool};
 use datafusion_common::{
     DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err,
@@ -1069,7 +1069,8 @@ impl GroupedHashAggregateStream {
                 .accumulators
                 .iter()
                 .map(|x| x.size(Some(&self.arrow_pool)))
-                .sum::<usize>();
+                .sum::<usize>()
+            + self.arrow_pool.used();
 
         let reservation_result = self.reservation.try_resize(total_size);
 

@@ -25,7 +25,7 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use arrow_buffer::TrackingMemoryPool;
+use arrow_buffer::{MemoryPool, TrackingMemoryPool};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -437,6 +437,7 @@ fn aggregate_batch(
     arrow_pool: &TrackingMemoryPool,
 ) -> Result<usize> {
     let mut allocated = 0usize;
+    let pool_size_pre = arrow_pool.used();
 
     // 1.1 iterate accumulators and respective expressions together
     // 1.2 filter the batch if necessary
@@ -472,6 +473,9 @@ fn aggregate_batch(
             allocated += size_post.saturating_sub(size_pre);
             res
         })?;
+
+    let pool_size_post = arrow_pool.used();
+    allocated += pool_size_post.saturating_sub(pool_size_pre);
 
     Ok(allocated)
 }
