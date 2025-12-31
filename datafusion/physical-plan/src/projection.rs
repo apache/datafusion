@@ -24,7 +24,7 @@ use super::expressions::{Column, Literal};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
@@ -51,7 +51,9 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr,
+};
 // Re-exported from datafusion-physical-expr for backwards compatibility
 // We recommend updating your imports to use datafusion-physical-expr directly
 pub use datafusion_physical_expr::projection::{
@@ -293,8 +295,10 @@ impl ExecutionPlan for ProjectionExec {
             context.session_id(),
             context.task_id()
         );
+
+        let projector = self.projector.with_metrics(&self.metrics, partition);
         Ok(Box::pin(ProjectionStream::new(
-            self.projector.clone(),
+            projector,
             self.input.execute(partition, context)?,
             BaselineMetrics::new(&self.metrics, partition),
         )?))
@@ -356,6 +360,72 @@ impl ExecutionPlan for ProjectionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        let child = self.input();
+        let mut child_order = Vec::new();
+
+        // Check and transform sort expressions
+        for sort_expr in order {
+            // Recursively transform the expression
+            let mut can_pushdown = true;
+            let transformed = Arc::clone(&sort_expr.expr).transform(|expr| {
+                if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                    // Check if column index is valid.
+                    // This should always be true but fail gracefully if it's not.
+                    if col.index() >= self.expr().len() {
+                        can_pushdown = false;
+                        return Ok(Transformed::no(expr));
+                    }
+
+                    let proj_expr = &self.expr()[col.index()];
+
+                    // Check if projection expression is a simple column
+                    // We cannot push down order by clauses that depend on
+                    // projected computations as they would have nothing to reference.
+                    if let Some(child_col) =
+                        proj_expr.expr.as_any().downcast_ref::<Column>()
+                    {
+                        // Replace with the child column
+                        Ok(Transformed::yes(Arc::new(child_col.clone()) as _))
+                    } else {
+                        // Projection involves computation, cannot push down
+                        can_pushdown = false;
+                        Ok(Transformed::no(expr))
+                    }
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?;
+
+            if !can_pushdown {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            }
+
+            child_order.push(PhysicalSortExpr {
+                expr: transformed.data,
+                options: sort_expr.options,
+            });
+        }
+
+        // Recursively push down to child node
+        match child.try_pushdown_sort(&child_order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Exact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
     }
 }
 
@@ -1002,6 +1072,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::common::collect;
+
     use crate::test;
     use crate::test::exec::StatisticsExec;
 

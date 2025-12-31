@@ -17,10 +17,11 @@
 
 use arrow::array::{MapBuilder, StringBuilder};
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::types::logical_string;
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -29,7 +30,7 @@ use std::sync::Arc;
 #[user_doc(
     doc_section(label = "Other Functions"),
     description = "Returns the metadata of the input expression. If a key is provided, returns the value for that key. If no key is provided, returns a Map of all metadata.",
-    syntax_example = "arrow_metadata(expression, [key])",
+    syntax_example = "arrow_metadata(expression[, key])",
     sql_example = r#"```sql
 > select arrow_metadata(col) from table;
 +----------------------------+
@@ -61,7 +62,18 @@ pub struct ArrowMetadataFunc {
 impl ArrowMetadataFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Any,
+                    )]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Any),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                ],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -105,7 +117,7 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
                 false,
             ))
         } else {
-            exec_err!("arrow_metadata requires 1 or 2 arguments")
+            internal_err!("arrow_metadata requires 1 or 2 arguments")
         }
     }
 
@@ -114,7 +126,7 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
 
         if args.args.len() == 2 {
             let key = match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(k))) => k,
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
                 _ => {
                     return exec_err!(
                         "Second argument to arrow_metadata must be a string literal key"
@@ -142,7 +154,7 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
                 &map_array, 0,
             )?))
         } else {
-            exec_err!("arrow_metadata requires 1 or 2 arguments")
+            internal_err!("arrow_metadata requires 1 or 2 arguments")
         }
     }
 }

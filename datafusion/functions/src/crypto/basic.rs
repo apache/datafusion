@@ -173,26 +173,14 @@ macro_rules! digest_to_array {
     ($METHOD:ident, $INPUT:expr) => {{
         let binary_array: BinaryArray = $INPUT
             .iter()
-            .map(|x| {
-                x.map(|x| {
-                    let mut digest = $METHOD::default();
-                    digest.update(x);
-                    digest.finalize()
-                })
-            })
+            .map(|x| x.map(|x| $METHOD::digest(x)))
             .collect();
         Arc::new(binary_array)
     }};
 }
 
 macro_rules! digest_to_scalar {
-    ($METHOD: ident, $INPUT:expr) => {{
-        ScalarValue::Binary($INPUT.as_ref().map(|v| {
-            let mut digest = $METHOD::default();
-            digest.update(v);
-            digest.finalize().as_slice().to_vec()
-        }))
-    }};
+    ($METHOD: ident, $INPUT:expr) => {{ ScalarValue::Binary($INPUT.map(|v| $METHOD::digest(v).as_slice().to_vec())) }};
 }
 
 impl DigestAlgorithm {
