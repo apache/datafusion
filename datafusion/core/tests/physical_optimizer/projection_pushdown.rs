@@ -18,12 +18,15 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::array::{Int32Array, RecordBatch, StructArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::Fields;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::prelude::get_field;
 use datafusion_common::config::{ConfigOptions, CsvOptions};
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::TableSchema;
@@ -31,12 +34,13 @@ use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
-    Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility, lit,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr, binary, cast, col,
 };
+use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_expr::{Distribution, Partitioning, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
@@ -63,6 +67,8 @@ use datafusion_physical_plan::{ExecutionPlan, displayable};
 
 use insta::assert_snapshot;
 use itertools::Itertools;
+
+use crate::physical_optimizer::pushdown_utils::TestScanBuilder;
 
 /// Mocked UDF
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1722,4 +1728,88 @@ fn test_cooperative_exec_after_projection() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_pushdown_projection_through_repartition_filter() {
+    let struct_fields = Fields::from(vec![Field::new("a", DataType::Int32, false)]);
+    let array = StructArray::new(
+        struct_fields.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+        None,
+    );
+    let batches = vec![
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "struct",
+                DataType::Struct(struct_fields.clone()),
+                true,
+            )])),
+            vec![Arc::new(array)],
+        )
+        .unwrap(),
+    ];
+    let build_side_schema = Arc::new(Schema::new(vec![Field::new(
+        "struct",
+        DataType::Struct(struct_fields),
+        true,
+    )]));
+
+    let scan = TestScanBuilder::new(Arc::clone(&build_side_schema))
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+    let scan_schema = scan.schema();
+    let struct_access = get_field(datafusion_expr::col("struct"), "a");
+    let filter = struct_access.clone().gt(lit(2));
+    let repartition =
+        RepartitionExec::try_new(scan, Partitioning::RoundRobinBatch(32)).unwrap();
+    let filter_exec = FilterExec::try_new(
+        logical2physical(&filter, &scan_schema),
+        Arc::new(repartition),
+    )
+    .unwrap();
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(
+        ProjectionExec::try_new(
+            vec![ProjectionExpr::new(
+                logical2physical(&struct_access, &scan_schema),
+                "a",
+            )],
+            Arc::new(filter_exec),
+        )
+        .unwrap(),
+    ) as _;
+
+    let initial = displayable(projection.as_ref()).indent(true).to_string();
+    let actual = initial.trim();
+
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[get_field(struct@0, a) as a]
+      FilterExec: get_field(struct@0, a) > 2
+        RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
+          DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[struct], file_type=test, pushdown_supported=true
+    "
+    );
+
+    let after_optimize = ProjectionPushdown::new()
+        .optimize(projection, &ConfigOptions::new())
+        .unwrap();
+
+    let after_optimize_string = displayable(after_optimize.as_ref())
+        .indent(true)
+        .to_string();
+    let actual = after_optimize_string.trim();
+
+    // Projection should be pushed down through RepartitionExec and FilterExec
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[get_field(struct@0, a) as a]
+      FilterExec: get_field(struct@0, a) > 2
+        RepartitionExec: partitioning=RoundRobinBatch(32), input_partitions=1
+          DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[struct], file_type=test, pushdown_supported=true
+    "
+    );
 }

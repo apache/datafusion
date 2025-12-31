@@ -812,8 +812,28 @@ pub fn update_expr(
     }
 
     let mut state = RewriteState::Unchanged;
+    let mut new_expr = Arc::clone(expr);
 
-    let new_expr = Arc::clone(expr)
+    // First pass: try to rewrite the expression in terms of the projected expressions
+    // For example, if the expression is `a + b > 5` and the projection is `a + b AS sum_ab`,
+    // we can rewrite the expression to `sum_ab > 5` directly.
+    new_expr = new_expr
+        .transform_down(|expr| {
+            // If expr is equal to one of the projected expressions, we can short-circuit the rewrite:
+            for (idx, projected_expr) in projected_exprs.iter().enumerate() {
+                if expr.eq(&projected_expr.expr) {
+                    state = RewriteState::RewrittenValid;
+                    return Ok(Transformed::yes(Arc::new(Column::new(
+                        &projected_expr.alias,
+                        idx,
+                    )) as _));
+                }
+            }
+            Ok(Transformed::no(expr))
+        })
+        .data()?;
+
+    new_expr = new_expr
         .transform_up(|expr| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));

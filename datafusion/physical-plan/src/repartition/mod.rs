@@ -1123,11 +1123,6 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down.
-        if projection.expr().len() >= projection.input().schema().fields().len() {
-            return Ok(None);
-        }
-
         // If pushdown is not beneficial or applicable, break it.
         if projection.benefits_from_input_partitioning()[0]
             || !projection.projection_expr().is_trivial()
