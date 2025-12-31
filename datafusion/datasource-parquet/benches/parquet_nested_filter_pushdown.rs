@@ -36,7 +36,10 @@ use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion::config::{ConfigOptions, SessionConfig};
+use datafusion::datasource::{file_scan_config::FileScanConfig, source::DataSourceExec};
 use datafusion::execution::context::SessionContext;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -89,12 +92,12 @@ fn generate_sorted_list_data(
     ]));
 
     let file = File::create(&file_path)?;
-    
+
     // Configure writer with explicit row group size
     let props = WriterProperties::builder()
         .set_max_row_group_size(config.rows_per_group)
         .build();
-    
+
     let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
@@ -163,6 +166,39 @@ fn generate_sorted_list_data(
     Ok(file_path)
 }
 
+fn assert_scan_has_row_filter(plan: &Arc<dyn ExecutionPlan>) {
+    let mut stack = vec![Arc::clone(plan)];
+
+    while let Some(plan) = stack.pop() {
+        if let Some(source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(file_scan_config) = source_exec
+                .data_source()
+                .as_any()
+                .downcast_ref::<FileScanConfig>()
+            {
+                assert!(
+                    file_scan_config.file_source().filter().is_some(),
+                    "Expected DataSourceExec to include a pushed-down row filter"
+                );
+                return;
+            }
+        }
+
+        stack.extend(plan.children().into_iter().cloned());
+    }
+
+    panic!("Expected physical plan to contain a DataSourceExec");
+}
+
+fn create_pushdown_context() -> SessionContext {
+    let mut config_options = ConfigOptions::new();
+    config_options.execution.parquet.pushdown_filters = true;
+    config_options.execution.parquet.reorder_filters = true;
+
+    let session_config = SessionConfig::new().with_options(config_options);
+    SessionContext::new_with_config(session_config)
+}
+
 /// Benchmark for array_has filter with pushdown enabled
 ///
 /// This measures the performance of filtering using array_has when pushdown
@@ -191,8 +227,8 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
         )),
         |b| {
             b.to_async(&rt).iter(|| async {
-                let ctx = SessionContext::new();
-                
+                let ctx = create_pushdown_context();
+
                 // Register the parquet file
                 ctx.register_parquet(
                     "test_table",
@@ -204,12 +240,19 @@ fn benchmark_array_has_with_pushdown(c: &mut Criterion) {
 
                 // Execute query with array_has filter
                 // This should demonstrate pushdown benefits for selective filters
-                let sql = "SELECT * FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
+                let sql =
+                    "SELECT * FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
                 let df = ctx.sql(sql).await.expect("Failed to create dataframe");
-                
+
+                let plan = df
+                    .create_physical_plan()
+                    .await
+                    .expect("Failed to create physical plan");
+                assert_scan_has_row_filter(&plan);
+
                 // Collect results to ensure full execution
                 let results = df.collect().await.expect("Failed to collect results");
-                
+
                 black_box(results)
             });
         },
@@ -227,13 +270,13 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("parquet_selectivity_impact");
 
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
-    
+
     // Pre-generate all test data
     let test_cases = vec![
-        (0.1, "aa0_value_a"),  // 10% - matches first row group
-        (0.3, "ac0_value_a"),  // 30% - matches first 3 row groups  
-        (0.5, "ae0_value_a"),  // 50% - matches first 5 row groups
-        (0.9, "ai0_value_a"),  // 90% - matches first 9 row groups
+        (0.1, "aa0_value_a"), // 10% - matches first row group
+        (0.3, "ac0_value_a"), // 30% - matches first 3 row groups
+        (0.5, "ae0_value_a"), // 50% - matches first 5 row groups
+        (0.9, "ai0_value_a"), // 90% - matches first 9 row groups
     ];
 
     for (selectivity, _target_value) in test_cases {
@@ -253,8 +296,8 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
             )),
             |b| {
                 b.to_async(&rt).iter(|| async {
-                    let ctx = SessionContext::new();
-                    
+                    let ctx = create_pushdown_context();
+
                     ctx.register_parquet(
                         "test_table",
                         file_path.to_str().unwrap(),
@@ -266,8 +309,15 @@ fn benchmark_selectivity_comparison(c: &mut Criterion) {
                     // Use a filter that matches the selectivity level
                     let sql = "SELECT COUNT(*) FROM test_table WHERE array_has(list_col, 'aa0_value_a')";
                     let df = ctx.sql(sql).await.expect("Failed to create dataframe");
+
+                    let plan = df
+                        .create_physical_plan()
+                        .await
+                        .expect("Failed to create physical plan");
+                    assert_scan_has_row_filter(&plan);
+
                     let results = df.collect().await.expect("Failed to collect");
-                    
+
                     black_box(results)
                 });
             },
