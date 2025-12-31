@@ -54,7 +54,7 @@ use datafusion_functions_aggregate_common::utils::get_sort_options;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use crate::utils::claim_buffers_recursive;
+use crate::utils::{claim_buffers_recursive, scalar_value_size};
 
 create_func!(FirstValue, first_value_udaf);
 create_func!(LastValue, last_value_udaf);
@@ -859,18 +859,7 @@ impl Accumulator for TrivialFirstValueAccumulator {
 
     fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         let mut total = size_of_val(self) - size_of_val(&self.first);
-        if let Some(array) = self.first.get_array_ref() {
-            total += size_of::<Arc<dyn Array>>();
-            if let Some(pool) = pool {
-                // With pool: claim buffers for accurate accounting with deduplication
-                claim_buffers_recursive(&array.to_data(), pool);
-            } else {
-                // Without pool: count buffer size (potential double accounting)
-                total += self.first.size() - size_of_val(&self.first);
-            }
-        } else {
-            total += self.first.size();
-        }
+        total += scalar_value_size(&self.first, pool);
         total
     }
 }
@@ -1039,28 +1028,10 @@ impl Accumulator for FirstValueAccumulator {
             size_of_val(self) - size_of_val(&self.first) - size_of_val(&self.orderings)
                 + size_of::<ScalarValue>() * self.orderings.capacity();
 
-        if let Some(array) = self.first.get_array_ref() {
-            total += size_of::<Arc<dyn Array>>();
-            if let Some(pool) = pool {
-                claim_buffers_recursive(&array.to_data(), pool);
-            } else {
-                total += self.first.size() - size_of_val(&self.first);
-            }
-        } else {
-            total += self.first.size();
-        }
+        total += scalar_value_size(&self.first, pool);
 
         for scalar in &self.orderings {
-            if let Some(array) = scalar.get_array_ref() {
-                total += size_of::<Arc<dyn Array>>();
-                if let Some(pool) = pool {
-                    claim_buffers_recursive(&array.to_data(), pool);
-                } else {
-                    total += scalar.size() - size_of_val(scalar);
-                }
-            } else {
-                total += scalar.size() - size_of_val(scalar);
-            }
+            total += scalar_value_size(scalar, pool);
         }
 
         total
@@ -1581,28 +1552,10 @@ impl Accumulator for LastValueAccumulator {
             size_of_val(self) - size_of_val(&self.last) - size_of_val(&self.orderings)
                 + size_of::<ScalarValue>() * self.orderings.capacity();
 
-        if let Some(array) = self.last.get_array_ref() {
-            total += size_of::<Arc<dyn Array>>();
-            if let Some(pool) = pool {
-                claim_buffers_recursive(&array.to_data(), pool);
-            } else {
-                total += self.last.size() - size_of_val(&self.last);
-            }
-        } else {
-            total += self.last.size();
-        }
+        total += scalar_value_size(&self.last, pool);
 
         for scalar in &self.orderings {
-            if let Some(array) = scalar.get_array_ref() {
-                total += size_of::<Arc<dyn Array>>();
-                if let Some(pool) = pool {
-                    claim_buffers_recursive(&array.to_data(), pool);
-                } else {
-                    total += scalar.size() - size_of_val(scalar);
-                }
-            } else {
-                total += scalar.size() - size_of_val(scalar);
-            }
+            total += scalar_value_size(scalar, pool);
         }
 
         total

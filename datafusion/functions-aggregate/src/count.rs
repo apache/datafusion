@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::claim_buffers_recursive;
 use ahash::RandomState;
 use arrow::{
     array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array, PrimitiveArray},
@@ -61,6 +60,8 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
+
+use crate::utils::scalar_value_size;
 
 make_udaf_expr_and_func!(
     Count,
@@ -780,16 +781,7 @@ impl DistinctCountAccumulator {
             + size_of::<DataType>();
 
         for scalar in &self.values {
-            if let Some(array) = scalar.get_array_ref() {
-                total += size_of::<Arc<dyn Array>>();
-                if let Some(pool) = pool {
-                    claim_buffers_recursive(&array.to_data(), pool);
-                } else {
-                    total += scalar.size() - size_of_val(scalar);
-                }
-            } else {
-                total += scalar.size() - size_of_val(scalar);
-            }
+            total += scalar_value_size(scalar, pool);
         }
 
         total

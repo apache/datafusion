@@ -37,6 +37,33 @@ pub(crate) fn claim_buffers_recursive(
     }
 }
 
+/// Helper to compute size contribution of a ScalarValue with optional pool tracking.
+///
+/// When a pool is provided, array buffers are claimed in the pool for deduplication.
+/// Otherwise, the buffer size is counted directly.
+pub(crate) fn scalar_value_size(
+    scalar: &ScalarValue,
+    pool: Option<&dyn arrow_buffer::MemoryPool>,
+) -> usize {
+    use arrow::array::Array;
+    use std::mem::size_of;
+
+    if let Some(array) = scalar.get_array_ref() {
+        let mut total = size_of::<Arc<dyn Array>>();
+        if let Some(pool) = pool {
+            // Claim buffers in pool for deduplication
+            claim_buffers_recursive(&array.to_data(), pool);
+        } else {
+            // No pool, count the buffer size directly
+            total += scalar.size() - size_of_val(scalar);
+        }
+        total
+    } else {
+        // Primitive scalar, count directly
+        scalar.size() - size_of_val(scalar)
+    }
+}
+
 /// Evaluates a physical expression to extract its scalar value.
 ///
 /// This is used to extract constant values from expressions (like percentile parameters)
