@@ -201,6 +201,8 @@ uninlined_format_args = "warn"
 inefficient_to_string = "warn"
 # https://github.com/apache/datafusion/issues/18503
 needless_pass_by_value = "warn"
+# https://github.com/apache/datafusion/issues/18881
+allow_attributes = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

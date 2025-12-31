@@ -121,7 +121,7 @@ fn create_args(
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_with_string_type<M: Measurement>(
     group: &mut BenchmarkGroup<'_, M>,
     ltrim: &ScalarUDF,
@@ -159,7 +159,7 @@ fn run_with_string_type<M: Measurement>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_one_group(
     c: &mut Criterion,
     group_name: &str,

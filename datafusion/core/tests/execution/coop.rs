@@ -764,7 +764,7 @@ async fn hash_join_without_repartition_and_no_agg(
 #[derive(Debug)]
 enum Yielded {
     ReadyOrPending,
-    Err(#[allow(dead_code)] DataFusionError),
+    Err(#[expect(dead_code)] DataFusionError),
     Timeout,
 }
 

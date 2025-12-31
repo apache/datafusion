@@ -106,7 +106,7 @@ mod test {
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[cfg_attr(not(target_arch = "wasm32"), expect(dead_code))]
     fn datafusion_test() {
         basic_exprs();
         basic_parse();

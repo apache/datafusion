@@ -88,7 +88,7 @@ fn print_window_docs() -> Result<String> {
 // the migration of UDF documentation generation from code based
 // to attribute based
 // To be removed
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn save_doc_code_text(documentation: &Documentation, name: &str) {
     let attr_text = documentation.to_doc_attribute();
 
@@ -306,8 +306,7 @@ impl DocProvider for WindowUDF {
     }
 }
 
-#[allow(clippy::borrowed_box)]
-#[allow(clippy::ptr_arg)]
+#[expect(clippy::borrowed_box)]
 fn get_names_and_aliases(functions: &Vec<&Box<dyn DocProvider>>) -> Vec<String> {
     functions
         .iter()
