@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::var_provider::{VarProvider, VarType};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use datafusion_common::HashMap;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
@@ -33,7 +33,9 @@ use std::sync::Arc;
 /// done so during predicate pruning and expression simplification
 #[derive(Clone, Debug)]
 pub struct ExecutionProps {
-    pub query_execution_start_time: DateTime<Utc>,
+    /// The time at which the query execution started. If `None`,
+    /// functions like `now()` will not be simplified during optimization.
+    pub query_execution_start_time: Option<DateTime<Utc>>,
     /// Alias generator used by subquery optimizer rules
     pub alias_generator: Arc<AliasGenerator>,
     /// Snapshot of config options when the query started
@@ -52,9 +54,7 @@ impl ExecutionProps {
     /// Creates a new execution props
     pub fn new() -> Self {
         ExecutionProps {
-            // Set this to a fixed sentinel to make it obvious if this is
-            // not being updated / propagated correctly
-            query_execution_start_time: Utc.timestamp_nanos(0),
+            query_execution_start_time: None,
             alias_generator: Arc::new(AliasGenerator::new()),
             config_options: None,
             var_providers: None,
@@ -66,7 +66,7 @@ impl ExecutionProps {
         mut self,
         query_execution_start_time: DateTime<Utc>,
     ) -> Self {
-        self.query_execution_start_time = query_execution_start_time;
+        self.query_execution_start_time = Some(query_execution_start_time);
         self
     }
 
@@ -79,7 +79,7 @@ impl ExecutionProps {
     /// Marks the execution of query started timestamp.
     /// This also instantiates a new alias generator.
     pub fn mark_start_execution(&mut self, config_options: Arc<ConfigOptions>) -> &Self {
-        self.query_execution_start_time = Utc::now();
+        self.query_execution_start_time = Some(Utc::now());
         self.alias_generator = Arc::new(AliasGenerator::new());
         self.config_options = Some(config_options);
         &*self
@@ -126,7 +126,7 @@ mod test {
     fn debug() {
         let props = ExecutionProps::new();
         assert_eq!(
-            "ExecutionProps { query_execution_start_time: 1970-01-01T00:00:00Z, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None }",
+            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None }",
             format!("{props:?}")
         );
     }

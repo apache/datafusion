@@ -42,7 +42,7 @@ use datafusion_common::{
     assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
     not_impl_err, plan_err,
 };
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -699,7 +699,7 @@ impl ScalarUDFImpl for CastToI64UDF {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // DataFusion should have ensured the function is called with just a
         // single argument
@@ -975,7 +975,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 

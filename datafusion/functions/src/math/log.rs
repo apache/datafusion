@@ -36,7 +36,7 @@ use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
@@ -343,7 +343,7 @@ impl ScalarUDFImpl for LogFunc {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let mut arg_types = args
             .iter()
@@ -430,7 +430,6 @@ fn is_pow(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -440,10 +439,8 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
-    use datafusion_common::DFSchema;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
@@ -784,10 +781,7 @@ mod tests {
     #[test]
     // Test log() simplification errors
     fn test_log_simplify_errors() {
-        let props = ExecutionProps::new();
-        let schema =
-            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::default();
         // Expect 0 args to error
         let _ = LogFunc::new().simplify(vec![], &context).unwrap_err();
         // Expect 3 args to error
@@ -799,10 +793,7 @@ mod tests {
     #[test]
     // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
-        let props = ExecutionProps::new();
-        let schema =
-            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::default();
         // One argument with no simplifications
         let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
         let ExprSimplifyResult::Original(args) = result else {

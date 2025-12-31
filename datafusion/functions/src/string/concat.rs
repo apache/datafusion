@@ -28,7 +28,7 @@ use crate::strings::{
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -277,7 +277,7 @@ impl ScalarUDFImpl for ConcatFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         simplify_concat(args)
     }
