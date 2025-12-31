@@ -530,10 +530,8 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
         usage > 1
-            && !is_expr_trivial(
-                &prev_projection.expr
-                    [prev_projection.schema.index_of_column(col).unwrap()],
-            )
+            && !prev_projection.expr[prev_projection.schema.index_of_column(col).unwrap()]
+                .is_trivial()
     }) {
         // no change
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
@@ -584,11 +582,6 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         Projection::try_new_with_schema(new_exprs.data, input, schema)
             .map(Transformed::no)
     }
-}
-
-// Check whether `expr` is trivial; i.e. it doesn't imply any computation.
-fn is_expr_trivial(expr: &Expr) -> bool {
-    expr.is_trivial()
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)

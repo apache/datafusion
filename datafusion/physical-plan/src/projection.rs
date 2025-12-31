@@ -959,7 +959,7 @@ fn try_unifying_projections(
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].expr))
+        *count > 1 && !&child.expr()[column.index()].expr.is_trivial()
     }) {
         return Ok(None);
     }
@@ -1067,12 +1067,6 @@ fn new_columns_for_join_on(
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
-}
-
-/// Checks if the given expression is trivial.
-/// An expression is considered trivial if it is a `Column`, `Literal`, or field accessor.
-fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.is_trivial()
 }
 
 #[cfg(test)]
