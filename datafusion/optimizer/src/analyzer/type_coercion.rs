@@ -931,7 +931,7 @@ fn coerce_arguments_for_signature_with_scalar_udf(
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = fields_with_udf(&current_fields, func)?
+    let coerced_types = fields_with_udf(&current_fields, func)?
         .into_iter()
         .map(|f| f.data_type().clone())
         .collect::<Vec<_>>();
@@ -939,7 +939,7 @@ fn coerce_arguments_for_signature_with_scalar_udf(
     expressions
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
         .collect()
 }
 
@@ -961,7 +961,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = fields_with_udf(&current_fields, func)?
+    let coerced_types = fields_with_udf(&current_fields, func)?
         .into_iter()
         .map(|f| f.data_type().clone())
         .collect::<Vec<_>>();
@@ -969,7 +969,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
     expressions
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
         .collect()
 }
 
