@@ -142,8 +142,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 
     let arg_fields = arg_types
         .iter()
-        .map(|dt| Field::new("f", dt.clone(), true))
-        .map(Arc::new)
+        .map(|dt| Arc::new(Field::new("f", dt.clone(), true)))
         .collect::<Vec<_>>();
     let return_types =
         rresult_return!(fields_with_udf(&arg_fields, udf.inner().as_ref()))
