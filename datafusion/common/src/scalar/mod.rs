@@ -576,7 +576,6 @@ impl PartialOrd for ScalarValue {
         // any newly added enum variant will require editing this list
         // or else face a compile error
         match (self, other) {
-            (Null, _) | (_, Null) => None,
             (Decimal32(v1, p1, s1), Decimal32(v2, p2, s2)) => {
                 if p1.eq(p2) && s1.eq(s2) {
                     v1.partial_cmp(v2)
@@ -728,6 +727,8 @@ impl PartialOrd for ScalarValue {
                 if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
+            // Null is handled by the early return above, but we need this for exhaustiveness
+            (Null, _) => None,
         }
     }
 }
