@@ -20,8 +20,8 @@ use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
 use arrow::array::{
-    Array, ArrayRef, Int32Builder, Int64Builder, LargeStringArray, StringArray,
-    StringViewArray,
+    Array, ArrayRef, Int32Array, Int32Builder, Int64Builder, LargeStringArray,
+    StringArray, StringViewArray,
 };
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
@@ -119,15 +119,12 @@ impl ScalarUDFImpl for OctetLengthFunc {
                     }
                     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
                 } else if let Some(arr) = arr.as_any().downcast_ref::<StringViewArray>() {
-                    let mut builder = Int32Builder::with_capacity(arr.len());
-                    for i in 0..arr.len() {
-                        if arr.is_null(i) {
-                            builder.append_null();
-                        } else {
-                            builder.append_value(arr.value(i).len() as i32);
-                        }
-                    }
-                    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                    let result = arr
+                        .iter()
+                        .map(|s| s.map(|s| s.len() as i32))
+                        .collect::<Int32Array>();
+
+                    Ok(ColumnarValue::Array(Arc::new(result)))
                 } else {
                     unreachable!("octet_length expects string arrays")
                 }
