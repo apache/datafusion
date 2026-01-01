@@ -727,8 +727,10 @@ impl PartialOrd for ScalarValue {
                 if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
-            // Null is handled by the early return above, but we need this for exhaustiveness
-            (Null, _) => None,
+            // Nulls are handled by the early return above
+            (Null, _) | (_, Null) => unreachable!(
+                "Nulls are already handled before entering ScalarValue::partial_cmp match"
+            ),
         }
     }
 }

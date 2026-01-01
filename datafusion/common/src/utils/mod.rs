@@ -1021,29 +1021,33 @@ mod tests {
     fn vector_ord() {
         assert!(vec![1, 0, 0, 0, 0, 0, 0, 1] < vec![1, 0, 0, 0, 0, 0, 0, 2]);
         assert!(vec![1, 0, 0, 0, 0, 0, 1, 1] > vec![1, 0, 0, 0, 0, 0, 0, 2]);
-        assert!(
+        // Vectors containing Null values cannot be compared because
+        // ScalarValue::partial_cmp returns None for null comparisons
+        assert_eq!(
             vec![
                 ScalarValue::Int32(Some(2)),
                 Null,
                 ScalarValue::Int32(Some(0)),
             ]
-            < vec![
+            .partial_cmp(&vec![
                 ScalarValue::Int32(Some(2)),
                 Null,
                 ScalarValue::Int32(Some(1)),
-            ]
+            ]),
+            None
         );
-        assert!(
+        assert_eq!(
             vec![
                 ScalarValue::Int32(Some(2)),
                 ScalarValue::Int32(None),
                 ScalarValue::Int32(Some(0)),
             ]
-            < vec![
+            .partial_cmp(&vec![
                 ScalarValue::Int32(Some(2)),
                 ScalarValue::Int32(None),
                 ScalarValue::Int32(Some(1)),
-            ]
+            ]),
+            None
         );
     }
 
