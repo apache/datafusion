@@ -617,9 +617,8 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
 
     fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
         let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
-            location: Path::parse(val.path.as_str()).map_err(|e| {
-                proto_error(format!("Invalid object_store path: {e}"))
-            })?,
+            location: Path::parse(val.path.as_str())
+                .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
             last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
             size: val.size,
             e_tag: None,

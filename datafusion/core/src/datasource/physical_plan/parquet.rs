@@ -1527,8 +1527,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
         fn file_range(meta: &ObjectMeta, start: i64, end: i64) -> PartitionedFile {
-            PartitionedFile::new_from_meta(meta.clone())
-                .with_range(start, end)
+            PartitionedFile::new_from_meta(meta.clone()).with_range(start, end)
         }
 
         async fn assert_parquet_read(
@@ -1610,14 +1609,15 @@ mod tests {
             .await
             .unwrap();
 
-        let partitioned_file = PartitionedFile::new_from_meta(meta).with_partition_values(vec![
-            ScalarValue::from("2021"),
-            ScalarValue::UInt8(Some(10)),
-            ScalarValue::Dictionary(
-                Box::new(DataType::UInt16),
-                Box::new(ScalarValue::from("26")),
-            ),
-        ]);
+        let partitioned_file = PartitionedFile::new_from_meta(meta)
+            .with_partition_values(vec![
+                ScalarValue::from("2021"),
+                ScalarValue::UInt8(Some(10)),
+                ScalarValue::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(ScalarValue::from("26")),
+                ),
+            ]);
 
         let expected_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
@@ -2356,15 +2356,13 @@ mod tests {
         );
         let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
-                PartitionedFile::new_from_meta(
-                    ObjectMeta {
-                        location: Path::from(name_1),
-                        last_modified: Utc::now(),
-                        size: total_size_1,
-                        e_tag: None,
-                        version: None,
-                    }
-                )
+                PartitionedFile::new_from_meta(ObjectMeta {
+                    location: Path::from(name_1),
+                    last_modified: Utc::now(),
+                    size: total_size_1,
+                    e_tag: None,
+                    version: None,
+                })
                 .with_metadata_size_hint(123),
             )
             .with_file(PartitionedFile::new_from_meta(ObjectMeta {
