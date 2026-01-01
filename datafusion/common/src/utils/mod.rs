@@ -1027,12 +1027,11 @@ mod tests {
                 Null,
                 ScalarValue::Int32(Some(0)),
             ]
-            .partial_cmp(&vec![
+            < vec![
                 ScalarValue::Int32(Some(2)),
                 Null,
                 ScalarValue::Int32(Some(1)),
-            ])
-            .is_none()
+            ]
         );
         assert!(
             vec![
@@ -1040,12 +1039,11 @@ mod tests {
                 ScalarValue::Int32(None),
                 ScalarValue::Int32(Some(0)),
             ]
-            .partial_cmp(&vec![
+            < vec![
                 ScalarValue::Int32(Some(2)),
                 ScalarValue::Int32(None),
                 ScalarValue::Int32(Some(1)),
-            ])
-            .is_none()
+            ]
         );
     }
 
