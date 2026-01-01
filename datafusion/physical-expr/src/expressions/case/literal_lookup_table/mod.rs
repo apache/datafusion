@@ -231,7 +231,9 @@ impl LiteralLookupTable {
 /// ```
 ///
 /// this will map <literal_a> to 0, <literal_b> to 1, <literal_c> to 2, <literal_d> to 3
-pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
+pub(in super::super) trait WhenLiteralIndexMap:
+    Debug + Send + Sync
+{
     /// Given an array of values, returns a vector of WHEN clause indices corresponding to each value in the provided array.
     ///
     /// For example, for this CASE expression:
@@ -260,7 +262,7 @@ pub(super) trait WhenLiteralIndexMap: Debug + Send + Sync {
     ) -> datafusion_common::Result<Vec<u32>>;
 }
 
-fn try_creating_lookup_table(
+pub(in super::super) fn try_creating_lookup_table(
     unique_non_null_literals: Vec<ScalarValue>,
 ) -> datafusion_common::Result<Box<dyn WhenLiteralIndexMap>> {
     assert_ne!(

@@ -239,6 +239,31 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
         );
         b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
     });
+
+    // Benchmark for CASE expr WHEN literal THEN column with many branches
+    // This tests the WithExprLookupTable optimization
+    c.bench_function(
+        format!(
+            "case_when {}x{}: CASE c1 WHEN 0 THEN c2 WHEN 1 THEN c3 ... (20 branches, column THEN)",
+            batch.num_rows(),
+            batch.num_columns()
+        )
+        .as_str(),
+        |b| {
+            // Create 20 branches mapping different literal values to columns
+            let when_thens: Vec<_> = (0..20i32)
+                .map(|i| {
+                    let col_idx = (i as usize % 3) + 1;
+                    let col_name = format!("c{}", col_idx);
+                    (lit(i), col(&col_name, &batch.schema()).unwrap())
+                })
+                .collect();
+            let expr = Arc::new(
+                case(Some(Arc::clone(&c1)), when_thens, Some(Arc::clone(&c2))).unwrap(),
+            );
+            b.iter(|| black_box(expr.evaluate(black_box(batch)).unwrap()))
+        },
+    );
 }
 
 struct Options<T> {

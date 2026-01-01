@@ -19,16 +19,14 @@
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType, StringViewArray,
+    StringViewBuilder,
 };
+use arrow::compute::StringArrayType;
 use arrow::datatypes::DataType;
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
-use datafusion_common::cast::as_binary_array;
-
-use arrow::compute::StringArrayType;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_err, internal_err, plan_err,
-    utils::take_function_args,
+    DataFusionError, Result, ScalarValue, exec_err, plan_err, utils::take_function_args,
 };
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
@@ -138,23 +136,77 @@ impl fmt::Display for DigestAlgorithm {
 /// computes md5 hash digest of the given input
 pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let [data] = take_function_args("md5", args)?;
-    let value = digest_process(data, DigestAlgorithm::Md5)?;
 
-    // md5 requires special handling because of its unique utf8view return type
-    Ok(match value {
-        ColumnarValue::Array(array) => {
-            let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray = binary_array
-                .iter()
-                .map(|opt| opt.map(hex_encode::<_>))
-                .collect();
-            ColumnarValue::Array(Arc::new(string_array))
+    // MD5 returns Utf8View (hex-encoded), so we use optimized fused digest+hex functions
+    // that avoid creating an intermediate BinaryArray
+    match data {
+        ColumnarValue::Array(a) => {
+            let array = match a.data_type() {
+                DataType::Utf8View => md5_hex_string_array(&a.as_string_view()),
+                DataType::Utf8 => md5_hex_string_array(&a.as_string::<i32>()),
+                DataType::LargeUtf8 => md5_hex_string_array(&a.as_string::<i64>()),
+                DataType::Binary => md5_hex_binary_array(&a.as_binary::<i32>()),
+                DataType::LargeBinary => md5_hex_binary_array(&a.as_binary::<i64>()),
+                DataType::BinaryView => md5_hex_binary_array(&a.as_binary_view()),
+                other => {
+                    return exec_err!("Unsupported data type {other:?} for function md5");
+                }
+            };
+            Ok(ColumnarValue::Array(array))
         }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
-            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(hex_encode::<_>)))
+        ColumnarValue::Scalar(scalar) => {
+            let hex_string = match scalar {
+                ScalarValue::Utf8View(a)
+                | ScalarValue::Utf8(a)
+                | ScalarValue::LargeUtf8(a) => {
+                    a.as_ref().map(|s| hex_encode(Md5::digest(s.as_bytes())))
+                }
+                ScalarValue::Binary(a)
+                | ScalarValue::LargeBinary(a)
+                | ScalarValue::BinaryView(a) => {
+                    a.as_ref().map(|v| hex_encode(Md5::digest(v.as_slice())))
+                }
+                other => {
+                    return exec_err!("Unsupported data type {other:?} for function md5");
+                }
+            };
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(hex_string)))
         }
-        _ => return internal_err!("Impossibly got invalid results from digest"),
-    })
+    }
+}
+
+/// Computes MD5 hash and hex-encodes in a single pass for string arrays.
+/// Uses StringViewBuilder for efficient StringViewArray construction.
+#[inline]
+fn md5_hex_string_array<'a, T: StringArrayType<'a>>(input: &T) -> ArrayRef {
+    let mut builder = StringViewBuilder::with_capacity(input.len());
+    for val in input.iter() {
+        match val {
+            Some(s) => {
+                let hash = Md5::digest(s.as_bytes());
+                builder.append_value(hex_encode(hash));
+            }
+            None => builder.append_null(),
+        }
+    }
+    Arc::new(builder.finish())
+}
+
+/// Computes MD5 hash and hex-encodes in a single pass for binary arrays.
+/// Uses StringViewBuilder for efficient StringViewArray construction.
+#[inline]
+fn md5_hex_binary_array<'a, T: BinaryArrayType<'a>>(input: &T) -> ArrayRef {
+    let mut builder = StringViewBuilder::with_capacity(input.len());
+    for val in input.iter() {
+        match val {
+            Some(bytes) => {
+                let hash = Md5::digest(bytes);
+                builder.append_value(hex_encode(hash));
+            }
+            None => builder.append_null(),
+        }
+    }
+    Arc::new(builder.finish())
 }
 
 /// Hex encoding lookup table for fast byte-to-hex conversion
