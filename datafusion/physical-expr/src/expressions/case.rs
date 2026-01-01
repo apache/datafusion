@@ -122,7 +122,6 @@ struct ExpressionLookupTable {
     lookup: Box<dyn WhenLiteralIndexMap>,
     num_branches: usize,
     else_index: u32,
-    projection: Vec<usize>,
 }
 
 impl Hash for ExpressionLookupTable {
@@ -175,13 +174,11 @@ impl ExpressionLookupTable {
         }
 
         let lookup = try_creating_lookup_table(unique_when_literals).ok()?;
-        let projection = build_projection(body);
 
         Some(Self {
             lookup,
             num_branches: body.when_then_expr.len(),
             else_index: body.when_then_expr.len() as u32,
-            projection,
         })
     }
 
@@ -189,32 +186,6 @@ impl ExpressionLookupTable {
         self.lookup
             .map_to_when_indices(base_values, self.else_index)
     }
-}
-
-fn build_projection(body: &CaseBody) -> Vec<usize> {
-    let mut used_column_indices = IndexSet::<usize>::new();
-    let mut collect = |expr: &Arc<dyn PhysicalExpr>| {
-        expr.apply(|e| {
-            if let Some(col) = e.as_any().downcast_ref::<Column>() {
-                used_column_indices.insert(col.index());
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .expect("Closure cannot fail");
-    };
-
-    if let Some(e) = &body.expr {
-        collect(e);
-    }
-    body.when_then_expr.iter().for_each(|(w, t)| {
-        collect(w);
-        collect(t);
-    });
-    if let Some(e) = &body.else_expr {
-        collect(e);
-    }
-
-    used_column_indices.into_iter().collect()
 }
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
@@ -1323,12 +1294,6 @@ impl CaseExpr {
             }
         }
 
-        let working_batch = if lookup_table.projection.len() < batch.num_columns() {
-            Cow::Owned(batch.project(&lookup_table.projection)?)
-        } else {
-            Cow::Borrowed(batch)
-        };
-
         let mut result_builder = ResultBuilder::new(&return_type, row_count);
 
         for (branch_idx, rows) in branch_rows
@@ -1342,7 +1307,7 @@ impl CaseExpr {
 
             let row_indices = Arc::new(UInt32Array::from(rows.clone())) as ArrayRef;
             let filter_predicate = create_filter_from_indices(rows, row_count);
-            let filtered_batch = filter_record_batch(&working_batch, &filter_predicate)?;
+            let filtered_batch = filter_record_batch(batch, &filter_predicate)?;
 
             let then_expr = &self.body.when_then_expr[branch_idx].1;
             let then_value = then_expr.evaluate(&filtered_batch)?;
@@ -1356,7 +1321,7 @@ impl CaseExpr {
         {
             let row_indices = Arc::new(UInt32Array::from(else_rows.clone())) as ArrayRef;
             let filter_predicate = create_filter_from_indices(else_rows, row_count);
-            let filtered_batch = filter_record_batch(&working_batch, &filter_predicate)?;
+            let filtered_batch = filter_record_batch(batch, &filter_predicate)?;
             let else_value = else_expr.evaluate(&filtered_batch)?;
             result_builder.add_branch_result(&row_indices, else_value)?;
         }
