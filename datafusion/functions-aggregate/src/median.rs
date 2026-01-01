@@ -660,4 +660,3 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
         size_of_val(self) + self.distinct_values.size()
     }
 }
-
