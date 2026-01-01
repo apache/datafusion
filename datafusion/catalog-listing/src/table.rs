@@ -34,7 +34,9 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
-use datafusion_execution::cache::cache_manager::FileStatisticsCache;
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadata, FileStatisticsCache,
+};
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
@@ -355,45 +357,85 @@ impl ListingTable {
                 execution_props,
             );
         }
-
-        // Otherwise, try to derive from file orderings
-        Ok(derive_common_ordering_from_files(file_groups))
+        if let Some(ordering) = derive_common_ordering_from_files(file_groups) {
+            return Ok(vec![ordering]);
+        }
+        Ok(vec![])
     }
 }
 
 /// Derives a common ordering from file orderings across all file groups.
 ///
 /// Returns the common ordering if all files have compatible orderings,
-/// otherwise returns an empty Vec (no ordering).
-fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Vec<LexOrdering> {
-    // Collect all file orderings
-    let mut all_orderings: Vec<&LexOrdering> = Vec::new();
+/// otherwise returns None.
+///
+/// The function finds the longest common prefix among all file orderings.
+/// For example, if files have orderings `[a, b, c]` and `[a, b]`, the common
+/// ordering is `[a, b]`.
+fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrdering> {
+    enum CurrentOrderingState {
+        /// Initial state before processing any files
+        FirstFile,
+        /// Some common ordering found so far
+        SomeOrdering(LexOrdering),
+        /// No files have ordering
+        NoOrdering,
+    }
+    let mut state = CurrentOrderingState::FirstFile;
+
+    // Collect file orderings and track counts
     for group in file_groups {
         for file in group.iter() {
-            if let Some(ordering) = &file.ordering {
-                all_orderings.push(ordering);
-            } else {
-                // If any file has no ordering, we can't derive a common ordering
-                return vec![];
-            }
+            state = match (&state, &file.ordering) {
+                // If this is the first file with ordering, set it as current
+                (CurrentOrderingState::FirstFile, Some(ordering)) => {
+                    CurrentOrderingState::SomeOrdering(ordering.clone())
+                }
+                (CurrentOrderingState::FirstFile, None) => {
+                    CurrentOrderingState::NoOrdering
+                }
+                // If we have an existing ordering, find common prefix with new ordering
+                (CurrentOrderingState::SomeOrdering(current), Some(ordering)) => {
+                    // Find common prefix between current and new ordering
+                    let prefix_len = current
+                        .as_ref()
+                        .iter()
+                        .zip(ordering.as_ref().iter())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    if prefix_len == 0 {
+                        log::trace!(
+                            "Cannot derive common ordering: no common prefix between orderings {current:?} and {ordering:?}"
+                        );
+                        return None;
+                    } else {
+                        let ordering =
+                            LexOrdering::new(current.as_ref()[..prefix_len].to_vec())
+                                .expect("prefix_len > 0, so ordering must be valid");
+                        CurrentOrderingState::SomeOrdering(ordering)
+                    }
+                }
+                // If one file has ordering and another doesn't, no common ordering
+                // Return None and log a trace message explaining why
+                (CurrentOrderingState::SomeOrdering(ordering), None)
+                | (CurrentOrderingState::NoOrdering, Some(ordering)) => {
+                    log::trace!(
+                        "Cannot derive common ordering: some files have ordering {ordering:?}, others don't"
+                    );
+                    return None;
+                }
+                // Both have no ordering, remain in NoOrdering state
+                (CurrentOrderingState::NoOrdering, None) => {
+                    CurrentOrderingState::NoOrdering
+                }
+            };
         }
     }
 
-    if all_orderings.is_empty() {
-        return vec![];
+    match state {
+        CurrentOrderingState::SomeOrdering(ordering) => Some(ordering),
+        _ => None,
     }
-
-    // Check that all orderings are identical
-    let first = all_orderings[0];
-    for ordering in &all_orderings[1..] {
-        if *ordering != first {
-            // Orderings don't match, can't derive a common ordering
-            return vec![];
-        }
-    }
-
-    // All orderings match, return the common ordering
-    vec![first.clone()]
 }
 
 // Expressions can be used for partition pruning if they can be evaluated using
@@ -763,26 +805,14 @@ impl ListingTable {
         let path = &part_file.object_meta.location;
         let meta = &part_file.object_meta;
 
-        // Check if statistics are cached
-        if let Some(statistics) = self.collected_statistics.get_with_extra(path, meta) {
-            // Statistics cache hit - check if ordering is also cached
-            if let Some(ordering) = self.collected_statistics.get_ordering(path, meta) {
-                // Both cached - return without any file access
-                return Ok((statistics, ordering));
-            }
-
-            // Statistics cached but ordering not - infer ordering and cache it
-            let ordering = self
-                .options
-                .format
-                .infer_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
-                .await?;
-            self.collected_statistics
-                .put_ordering(path, ordering.clone(), meta);
-            return Ok((statistics, ordering));
+        // Check if statistics and ordering are cached and valid
+        if let Some(cached) = self.collected_statistics.get(path)
+            && cached.is_valid_for(meta)
+        {
+            return Ok((cached.statistics.clone(), cached.ordering.clone()));
         }
 
-        // Cache miss: fetch both statistics and ordering in a single metadata read
+        // Cache miss or invalid: fetch both statistics and ordering in a single metadata read
         let file_meta = self
             .options
             .format
@@ -790,10 +820,14 @@ impl ListingTable {
             .await?;
 
         let statistics = Arc::new(file_meta.statistics);
-        self.collected_statistics
-            .put_with_extra(path, Arc::clone(&statistics), meta);
-        self.collected_statistics
-            .put_ordering(path, file_meta.ordering.clone(), meta);
+        self.collected_statistics.put(
+            path,
+            CachedFileMetadata::new(
+                meta.clone(),
+                Arc::clone(&statistics),
+                file_meta.ordering.clone(),
+            ),
+        );
 
         Ok((statistics, file_meta.ordering))
     }
@@ -924,8 +958,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ordering);
+        assert_eq!(result.unwrap().as_ref(), ordering.as_ref());
     }
 
     #[test]
@@ -941,7 +974,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert!(result.is_empty());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -956,7 +989,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert!(result.is_empty());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -966,7 +999,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert!(result.is_empty());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -976,7 +1009,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert!(result.is_empty());
+        assert!(result.is_none());
     }
 
     #[test]
@@ -991,8 +1024,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ordering);
+        assert_eq!(result.unwrap().as_ref(), ordering.as_ref());
     }
 
     #[test]
@@ -1008,8 +1040,7 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], ordering);
+        assert_eq!(result.unwrap().as_ref(), ordering.as_ref());
     }
 
     #[test]
@@ -1025,6 +1056,6 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
 
-        assert!(result.is_empty());
+        assert!(result.is_none());
     }
 }

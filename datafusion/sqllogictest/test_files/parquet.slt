@@ -1070,3 +1070,81 @@ DROP TABLE no_ordering;
 
 statement ok
 DROP TABLE no_ordering_src;
+
+###################
+# Test: Ordering inference with nested/complex types
+# Parquet can store sorting_columns metadata for nested types.
+# This tests whether DataFusion handles such cases correctly.
+###################
+
+# Test 1: Struct type - Parquet allows sorting on struct columns
+query I
+COPY (SELECT {key: i, value: i * 10} as nested_col FROM generate_series(1, 5) as t(i) ORDER BY nested_col)
+TO 'test_files/scratch/parquet/ordering_struct.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE sorted_struct
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_struct.parquet';
+
+# Query the data to verify it was written
+query ?
+SELECT nested_col FROM sorted_struct;
+----
+{key: 1, value: 10}
+{key: 2, value: 20}
+{key: 3, value: 30}
+{key: 4, value: 40}
+{key: 5, value: 50}
+
+statement ok
+DROP TABLE sorted_struct;
+
+# Test 2: Array type - Arrays can be sorted lexicographically
+query I
+COPY (SELECT make_array(i, i+1, i+2) as arr_col FROM generate_series(1, 3) as t(i) ORDER BY arr_col)
+TO 'test_files/scratch/parquet/ordering_array.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE sorted_array
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_array.parquet';
+
+query ?
+SELECT arr_col FROM sorted_array;
+----
+[1, 2, 3]
+[2, 3, 4]
+[3, 4, 5]
+
+statement ok
+DROP TABLE sorted_array;
+
+# Test 3: Nested struct with array
+query I
+COPY (SELECT {key: i, values: make_array(i, i*2)} as complex_col FROM generate_series(1, 3) as t(i) ORDER BY complex_col)
+TO 'test_files/scratch/parquet/ordering_complex.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE sorted_complex
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/ordering_complex.parquet';
+
+query ?
+SELECT complex_col FROM sorted_complex;
+----
+{key: 1, values: [1, 2]}
+{key: 2, values: [2, 4]}
+{key: 3, values: [3, 6]}
+
+statement ok
+DROP TABLE sorted_complex;

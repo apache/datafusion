@@ -67,3 +67,4 @@ url = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+datafusion-physical-expr = { workspace = true, default-features = false }

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::cache::DefaultListFilesCache;
 use crate::cache::cache_unit::DefaultFilesMetadataCache;
-use crate::cache::{CacheAccessor, DefaultListFilesCache};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -32,45 +32,94 @@ pub use super::list_files_cache::{
     DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
 };
 
-/// A cache for [`Statistics`] and optionally file orderings.
+/// Cached metadata for a file, including statistics and ordering.
+///
+/// This struct embeds the [`ObjectMeta`] used for cache validation,
+/// along with the cached statistics and ordering information.
+#[derive(Debug, Clone)]
+pub struct CachedFileMetadata {
+    /// File metadata used for cache validation (size, last_modified).
+    pub meta: ObjectMeta,
+    /// Cached statistics for the file, if available.
+    pub statistics: Arc<Statistics>,
+    /// Cached ordering for the file.
+    pub ordering: Option<LexOrdering>,
+}
+
+impl CachedFileMetadata {
+    /// Create a new cached file metadata entry.
+    pub fn new(
+        meta: ObjectMeta,
+        statistics: Arc<Statistics>,
+        ordering: Option<LexOrdering>,
+    ) -> Self {
+        Self {
+            meta,
+            statistics,
+            ordering,
+        }
+    }
+
+    /// Check if this cached entry is still valid for the given metadata.
+    ///
+    /// Returns true if the file size and last modified time match.
+    pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
+        self.meta.size == current_meta.size
+            && self.meta.last_modified == current_meta.last_modified
+    }
+}
+
+/// A cache for file statistics and orderings.
+///
+/// This cache stores [`CachedFileMetadata`] which includes:
+/// - File metadata for validation (size, last_modified)
+/// - Statistics for the file
+/// - Ordering information for the file
 ///
 /// If enabled via [`CacheManagerConfig::with_files_statistics_cache`] this
 /// cache avoids inferring the same file statistics repeatedly during the
 /// session lifetime.
 ///
+/// The typical usage pattern is:
+/// 1. Call `get(path)` to check for cached value
+/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 3. If invalid or missing, compute new value and call `put(path, new_value)`
+///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
-pub trait FileStatisticsCache:
-    CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>
-{
+pub trait FileStatisticsCache: Send + Sync {
+    /// Get a cached entry if it exists.
+    ///
+    /// Returns the cached value without any validation. The caller should
+    /// validate the returned value using `cached.is_valid_for(&current_meta)`.
+    fn get(&self, key: &Path) -> Option<CachedFileMetadata>;
+
+    /// Store a value in the cache.
+    ///
+    /// Returns the previous value if one existed.
+    fn put(&self, key: &Path, value: CachedFileMetadata) -> Option<CachedFileMetadata>;
+
+    /// Remove an entry from the cache, returning the value if it existed.
+    fn remove(&self, k: &Path) -> Option<CachedFileMetadata>;
+
+    /// Check if the cache contains a specific key.
+    fn contains_key(&self, k: &Path) -> bool;
+
+    /// Fetch the total number of cache entries.
+    fn len(&self) -> usize;
+
+    /// Check if the cache collection is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Remove all entries from the cache.
+    fn clear(&self);
+
+    /// Return the cache name.
+    fn name(&self) -> String;
+
     /// Retrieves the information about the entries currently cached.
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
-
-    /// Get the cached ordering for a file, if available and still valid.
-    ///
-    /// Returns `None` if the file is not cached or has been modified.
-    /// Returns `Some(None)` if the file is cached but has no ordering.
-    /// Returns `Some(Some(ordering))` if the file is cached and has an ordering.
-    ///
-    /// Default implementation returns `None` (ordering not cached).
-    fn get_ordering(
-        &self,
-        _path: &Path,
-        _meta: &ObjectMeta,
-    ) -> Option<Option<LexOrdering>> {
-        None
-    }
-
-    /// Cache the ordering for a file.
-    ///
-    /// Default implementation does nothing (ordering not cached).
-    fn put_ordering(
-        &self,
-        _path: &Path,
-        _ordering: Option<LexOrdering>,
-        _meta: &ObjectMeta,
-    ) {
-        // Default: no-op
-    }
 }
 
 /// Represents information about a cached statistics entry.
@@ -86,6 +135,39 @@ pub struct FileStatisticsCacheEntry {
     pub table_size_bytes: Precision<usize>,
     /// Size of the statistics entry, in bytes.
     pub statistics_size_bytes: usize,
+    /// Whether ordering information is cached for this file.
+    pub has_ordering: bool,
+}
+
+/// Cached file listing.
+///
+/// TTL expiration is handled internally by the cache implementation.
+#[derive(Debug, Clone)]
+pub struct CachedFileList {
+    /// The cached file list.
+    pub files: Arc<Vec<ObjectMeta>>,
+}
+
+impl CachedFileList {
+    /// Create a new cached file list.
+    pub fn new(files: Vec<ObjectMeta>) -> Self {
+        Self {
+            files: Arc::new(files),
+        }
+    }
+
+    /// Filter the files by prefix.
+    pub fn filter_by_prefix(&self, prefix: &Option<Path>) -> Vec<ObjectMeta> {
+        match prefix {
+            Some(prefix) => self
+                .files
+                .iter()
+                .filter(|meta| meta.location.as_ref().starts_with(prefix.as_ref()))
+                .cloned()
+                .collect(),
+            None => self.files.as_ref().clone(),
+        }
+    }
 }
 
 /// Cache for storing the [`ObjectMeta`]s that result from listing a path
@@ -95,21 +177,43 @@ pub struct FileStatisticsCacheEntry {
 /// especially when done over remote object stores.
 ///
 /// The cache key is always the table's base path, ensuring a stable cache key.
-/// The `Extra` type is `Option<Path>`, representing an optional prefix filter
-/// (relative to the table base path) for partition-aware lookups.
+/// The cached value is a [`CachedFileList`] containing the files and a timestamp.
 ///
-/// When `get_with_extra(key, Some(prefix))` is called:
-/// - The cache entry for `key` (table base path) is fetched
-/// - Results are filtered to only include files matching `key/prefix`
-/// - Filtered results are returned without making a storage call
-///
-/// This enables efficient partition pruning: a single cached listing of the
-/// full table can serve queries for any partition subset.
+/// Partition filtering is done after retrieval using [`CachedFileList::filter_by_prefix`].
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
-pub trait ListFilesCache:
-    CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = Option<Path>>
-{
+pub trait ListFilesCache: Send + Sync {
+    /// Get a cached entry if it exists.
+    ///
+    /// Returns the cached file list. TTL validation is handled internally
+    /// by the implementation - expired entries return `None`.
+    fn get(&self, key: &Path) -> Option<CachedFileList>;
+
+    /// Store a value in the cache.
+    ///
+    /// Returns the previous value if one existed.
+    fn put(&self, key: &Path, value: CachedFileList) -> Option<CachedFileList>;
+
+    /// Remove an entry from the cache, returning the value if it existed.
+    fn remove(&self, k: &Path) -> Option<CachedFileList>;
+
+    /// Check if the cache contains a specific key.
+    fn contains_key(&self, k: &Path) -> bool;
+
+    /// Fetch the total number of cache entries.
+    fn len(&self) -> usize;
+
+    /// Check if the cache collection is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Remove all entries from the cache.
+    fn clear(&self);
+
+    /// Return the cache name.
+    fn name(&self) -> String;
+
     /// Returns the cache's memory limit in bytes.
     fn cache_limit(&self) -> usize;
 
@@ -141,9 +245,44 @@ pub trait FileMetadata: Any + Send + Sync {
     fn extra_info(&self) -> HashMap<String, String>;
 }
 
+/// Cached file metadata entry with validation information.
+#[derive(Clone)]
+pub struct CachedFileMetadataEntry {
+    /// File metadata used for cache validation (size, last_modified).
+    pub meta: ObjectMeta,
+    /// The cached file metadata.
+    pub file_metadata: Arc<dyn FileMetadata>,
+}
+
+impl CachedFileMetadataEntry {
+    /// Create a new cached file metadata entry.
+    pub fn new(meta: ObjectMeta, file_metadata: Arc<dyn FileMetadata>) -> Self {
+        Self {
+            meta,
+            file_metadata,
+        }
+    }
+
+    /// Check if this cached entry is still valid for the given metadata.
+    pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
+        self.meta.size == current_meta.size
+            && self.meta.last_modified == current_meta.last_modified
+    }
+}
+
+impl Debug for CachedFileMetadataEntry {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedFileMetadataEntry")
+            .field("meta", &self.meta)
+            .field("memory_size", &self.file_metadata.memory_size())
+            .finish()
+    }
+}
+
 /// Cache for file-embedded metadata.
 ///
-/// This cache stores per-file metadata in the form of [`FileMetadata`],
+/// This cache stores per-file metadata in the form of [`CachedFileMetadataEntry`],
+/// which includes the [`ObjectMeta`] for validation.
 ///
 /// For example, the built in [`ListingTable`] uses this cache to avoid parsing
 /// Parquet footers multiple times for the same file.
@@ -152,12 +291,50 @@ pub trait FileMetadata: Any + Send + Sync {
 /// and users can also provide their own implementations to implement custom
 /// caching strategies.
 ///
+/// The typical usage pattern is:
+/// 1. Call `get(path)` to check for cached value
+/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 3. If invalid or missing, compute new value and call `put(path, new_value)`
+///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-pub trait FileMetadataCache:
-    CacheAccessor<ObjectMeta, Arc<dyn FileMetadata>, Extra = ObjectMeta>
-{
+pub trait FileMetadataCache: Send + Sync {
+    /// Get a cached entry if it exists.
+    ///
+    /// Returns the cached value without any validation. The caller should
+    /// validate the returned value using `cached.is_valid_for(&current_meta)`.
+    fn get(&self, key: &Path) -> Option<CachedFileMetadataEntry>;
+
+    /// Store a value in the cache.
+    ///
+    /// Returns the previous value if one existed.
+    fn put(
+        &self,
+        key: &Path,
+        value: CachedFileMetadataEntry,
+    ) -> Option<CachedFileMetadataEntry>;
+
+    /// Remove an entry from the cache, returning the value if it existed.
+    fn remove(&self, k: &Path) -> Option<CachedFileMetadataEntry>;
+
+    /// Check if the cache contains a specific key.
+    fn contains_key(&self, k: &Path) -> bool;
+
+    /// Fetch the total number of cache entries.
+    fn len(&self) -> usize;
+
+    /// Check if the cache collection is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Remove all entries from the cache.
+    fn clear(&self);
+
+    /// Return the cache name.
+    fn name(&self) -> String;
+
     /// Returns the cache's memory limit in bytes.
     fn cache_limit(&self) -> usize;
 
