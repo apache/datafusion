@@ -74,14 +74,7 @@ pub(crate) mod test_util {
             .await?;
 
         let file_groups = vec![
-            vec![PartitionedFile {
-                object_meta: meta,
-                partition_values: vec![],
-                range: None,
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            }]
+            vec![PartitionedFile::new_from_meta(meta)]
             .into(),
         ];
 

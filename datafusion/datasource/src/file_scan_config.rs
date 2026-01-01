@@ -1692,10 +1692,9 @@ mod tests {
                         })
                         .collect::<Vec<_>>(),
                 });
-                let mut pf = PartitionedFile::new_from_meta(object_meta)
-                    .with_partition_values(vec![ScalarValue::from(file.date)]);
-                pf.statistics = Some(statistics);
-                pf
+                PartitionedFile::new_from_meta(object_meta)
+                    .with_partition_values(vec![ScalarValue::from(file.date)])
+                    .with_statistics(statistics)
             }
         }
     }
