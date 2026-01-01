@@ -93,6 +93,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     run_benchmarks(c, &make_batch(8192, 100));
 
     benchmark_lookup_table_case_when(c, 8192);
+    benchmark_searched_case_when_many_branches(c, 8192);
 }
 
 fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
@@ -515,6 +516,86 @@ fn benchmark_lookup_table_case_when(c: &mut Criterion, batch_size: usize) {
             }
         }
     }
+}
+
+/// Benchmark for searched CASE WHEN with many branches (vectorized optimization)
+fn benchmark_searched_case_when_many_branches(c: &mut Criterion, batch_size: usize) {
+    let mut group = c.benchmark_group("searched_case_when_many_branches");
+
+    for num_branches in [5, 10, 20] {
+        // Create a batch with a column containing values 0..batch_size
+        let array = Arc::new(Int32Array::from_iter_values(0..batch_size as i32));
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "c1",
+                array.data_type().clone(),
+                false,
+            )])),
+            vec![array],
+        )
+        .unwrap();
+
+        let c1 = col("c1", &batch.schema()).unwrap();
+
+        // CASE WHEN c1 < threshold1 THEN 'a' WHEN c1 < threshold2 THEN 'b' ... ELSE 'z' END
+        // Thresholds are evenly distributed so all branches get some rows
+        let step = batch_size as i32 / num_branches as i32;
+        let when_thens: Vec<_> = (0..num_branches)
+            .map(|i| {
+                let threshold = (i as i32 + 1) * step;
+                (
+                    make_x_cmp_y(&c1, Operator::Lt, threshold),
+                    lit(format!("branch_{}", i)),
+                )
+            })
+            .collect();
+
+        let expr = Arc::new(case(None, when_thens, Some(lit("else_branch"))).unwrap());
+
+        group.bench_function(
+            format!(
+                "{} branches, {} rows, conditions with column refs",
+                num_branches, batch_size
+            ),
+            |b| b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap())),
+        );
+
+        // Also benchmark with column THEN values (not just literals)
+        let c2 = Arc::new(Int32Array::from_iter_values(0..batch_size as i32));
+        let batch_with_c2 = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("c1", c2.data_type().clone(), false),
+                Field::new("c2", c2.data_type().clone(), false),
+            ])),
+            vec![Arc::clone(&c2) as ArrayRef, c2],
+        )
+        .unwrap();
+
+        let c1 = col("c1", &batch_with_c2.schema()).unwrap();
+        let c2_col = col("c2", &batch_with_c2.schema()).unwrap();
+
+        let when_thens: Vec<_> = (0..num_branches)
+            .map(|i| {
+                let threshold = (i as i32 + 1) * step;
+                (
+                    make_x_cmp_y(&c1, Operator::Lt, threshold),
+                    Arc::clone(&c2_col),
+                )
+            })
+            .collect();
+
+        let expr = Arc::new(case(None, when_thens, Some(lit(0))).unwrap());
+
+        group.bench_function(
+            format!(
+                "{} branches, {} rows, column THEN values",
+                num_branches, batch_size
+            ),
+            |b| b.iter(|| black_box(expr.evaluate(black_box(&batch_with_c2)).unwrap())),
+        );
+    }
+
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);
