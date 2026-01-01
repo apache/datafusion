@@ -232,11 +232,16 @@ where
                     let mut char_pos = 0;
                     for (byte_idx, _) in string.char_indices() {
                         char_pos += 1;
-                        if byte_idx + substring_bytes.len() <= string_bytes.len()
-                            && &string_bytes[byte_idx..byte_idx + substring_bytes.len()]
-                                == substring_bytes
-                        {
-                            return T::Native::from_usize(char_pos);
+                        if byte_idx + substring_bytes.len() <= string_bytes.len() {
+                            // SAFETY: We just checked that byte_idx + substring_bytes.len() <= string_bytes.len()
+                            let slice = unsafe {
+                                string_bytes.get_unchecked(
+                                    byte_idx..byte_idx + substring_bytes.len(),
+                                )
+                            };
+                            if slice == substring_bytes {
+                                return T::Native::from_usize(char_pos);
+                            }
                         }
                     }
 
