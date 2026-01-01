@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
-    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray, StringBuilder,
+    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
