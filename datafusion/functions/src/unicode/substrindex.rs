@@ -19,7 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, GenericStringBuilder, OffsetSizeTrait, PrimitiveArray, StringBuilder
+    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
+    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray, StringBuilder,
 };
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
@@ -203,13 +204,15 @@ where
                     let bytes = string.as_bytes();
 
                     if n > 0 {
-                        bytes.iter()
+                        bytes
+                            .iter()
                             .enumerate()
                             .filter(|&(_, &b)| b == d_byte)
                             .nth(occurrences - 1)
                             .map(|(idx, _)| idx)
                     } else {
-                        bytes.iter()
+                        bytes
+                            .iter()
                             .enumerate()
                             .rev()
                             .filter(|&(_, &b)| b == d_byte)
@@ -218,11 +221,13 @@ where
                     }
                 } else {
                     if n > 0 {
-                        string.match_indices(delimiter)
+                        string
+                            .match_indices(delimiter)
                             .nth(occurrences - 1)
                             .map(|(idx, _)| idx)
                     } else {
-                        string.rmatch_indices(delimiter)
+                        string
+                            .rmatch_indices(delimiter)
                             .nth(occurrences - 1)
                             .map(|(idx, _)| idx + delimiter.len())
                     }
