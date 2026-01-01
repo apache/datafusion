@@ -21,13 +21,11 @@ use crate::expr::{
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
     WindowFunctionParams,
 };
-use crate::type_coercion::functions::{
-    data_types_with_scalar_udf, fields_with_aggregate_udf, fields_with_window_udf,
-};
+use crate::type_coercion::functions::fields_with_udf;
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
@@ -169,7 +167,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
-                let new_fields = fields_with_aggregate_udf(&fields, func)
+                let new_fields = fields_with_udf(&fields, func.as_ref())
                     .map_err(|err| {
                         let data_types = fields
                             .iter()
@@ -554,7 +552,7 @@ impl ExprSchemable for Expr {
                     .map(|e| e.to_field(schema).map(|(_, f)| f))
                     .collect::<Result<Vec<_>>>()?;
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_fields = fields_with_aggregate_udf(&fields, func)
+                let new_fields = fields_with_udf(&fields, func.as_ref())
                     .map_err(|err| {
                         let arg_types = fields
                             .iter()
@@ -588,8 +586,8 @@ impl ExprSchemable for Expr {
                     .map(|f| (f.data_type().clone(), f))
                     .unzip();
                 // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_data_types = data_types_with_scalar_udf(&arg_types, func)
-                    .map_err(|err| {
+                let new_fields =
+                    fields_with_udf(&fields, func.as_ref()).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
                             match err {
@@ -603,11 +601,6 @@ impl ExprSchemable for Expr {
                             )
                         )
                     })?;
-                let new_fields = fields
-                    .into_iter()
-                    .zip(new_data_types)
-                    .map(|(f, d)| f.retyped(d))
-                    .collect::<Vec<FieldRef>>();
 
                 let arguments = args
                     .iter()
@@ -727,7 +720,7 @@ impl Expr {
                     .map(|f| f.data_type())
                     .cloned()
                     .collect::<Vec<_>>();
-                let new_fields = fields_with_aggregate_udf(&fields, udaf)
+                let new_fields = fields_with_udf(&fields, udaf.as_ref())
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
@@ -755,7 +748,7 @@ impl Expr {
                     .map(|f| f.data_type())
                     .cloned()
                     .collect::<Vec<_>>();
-                let new_fields = fields_with_window_udf(&fields, udwf)
+                let new_fields = fields_with_udf(&fields, udwf.as_ref())
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
@@ -828,6 +821,7 @@ mod tests {
     use super::*;
     use crate::{and, col, lit, not, or, out_ref_col_with_metadata, when};
 
+    use arrow::datatypes::FieldRef;
     use datafusion_common::{DFSchema, ScalarValue, assert_or_internal_err};
 
     macro_rules! test_is_expr_nullable {
