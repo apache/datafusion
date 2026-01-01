@@ -40,6 +40,18 @@ pub trait SimplifyInfo {
 
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
+
+    /// Returns true if stable expressions (like `now()`) should be evaluated
+    /// during simplification. Defaults to true for backward compatibility.
+    ///
+    /// When false, stable functions are preserved in the expression tree
+    /// rather than being converted to literal values.
+    fn evaluate_stable_expressions(&self) -> bool {
+        self.execution_props()
+            .config_options
+            .as_ref()
+            .is_none_or(|opts| opts.optimizer.evaluate_stable_expressions)
+    }
 }
 
 /// Provides simplification information based on DFSchema and

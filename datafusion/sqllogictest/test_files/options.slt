@@ -282,3 +282,27 @@ select 1e40 + 1e40, arrow_typeof(1e40 + 1e40),
 # Restore option to default value
 statement ok
 set datafusion.sql_parser.parse_float_as_decimal = false;
+
+##
+# test_evaluate_stable_expressions
+##
+
+# By default, now() should be simplified to a literal in the plan
+# Disable stable expression evaluation
+statement ok
+set datafusion.optimizer.evaluate_stable_expressions = false;
+
+# With config disabled, now() should remain as a function call in the plan
+query TT
+explain select now();
+----
+logical_plan
+01)Projection: now()
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[now()]
+02)--PlaceholderRowExec
+
+# Restore default
+statement ok
+set datafusion.optimizer.evaluate_stable_expressions = true;
