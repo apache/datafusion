@@ -134,7 +134,15 @@ pub struct PartitionedFile {
     /// When set via [`Self::with_statistics`], partition column statistics are automatically
     /// computed from [`Self::partition_values`] with exact min/max/null_count/distinct_count.
     pub statistics: Option<Arc<Statistics>>,
-    /// A known ordering of the data in this file.
+    /// The known lexicographical ordering of the rows in this file, if any.
+    ///
+    /// This describes how the data within the file is sorted with respect to one or more
+    /// columns, and is used by the optimizer for planning operations that depend on input
+    /// ordering (e.g. merges, sorts, and certain aggregations).
+    ///
+    /// When available, this is typically inferred from file-level metadata exposed by the
+    /// underlying format (for example, Parquet `sorting_columns`), but it may also be set
+    /// explicitly via [`Self::with_ordering`].
     pub ordering: Option<LexOrdering>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
