@@ -18,7 +18,7 @@
 //! "crypto" DataFusion functions
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType, StringViewArray,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryArrayType,
     StringViewBuilder,
 };
 use arrow::compute::StringArrayType;
