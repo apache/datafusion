@@ -192,15 +192,15 @@ fn spark_second(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use arrow::array::{Array, Int32Array, TimestampMicrosecondArray};
     use arrow::datatypes::TimeUnit;
+    use std::sync::Arc;
 
     #[test]
     fn test_spark_hour() {
         // Create a timestamp array: 2024-01-15 14:30:45 UTC (in microseconds)
         // 14:30:45 -> hour = 14
-        let ts_micros = 1705329045_000_000i64; // 2024-01-15 14:30:45 UTC
+        let ts_micros = 1_705_329_045_000_000_i64; // 2024-01-15 14:30:45 UTC
         let ts_array = TimestampMicrosecondArray::from(vec![Some(ts_micros), None]);
         let ts_array = Arc::new(ts_array) as ArrayRef;
 
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn test_spark_minute() {
         // 14:30:45 -> minute = 30
-        let ts_micros = 1705329045_000_000i64;
+        let ts_micros = 1_705_329_045_000_000_i64;
         let ts_array = TimestampMicrosecondArray::from(vec![Some(ts_micros), None]);
         let ts_array = Arc::new(ts_array) as ArrayRef;
 
@@ -228,7 +228,7 @@ mod tests {
     #[test]
     fn test_spark_second() {
         // 14:30:45 -> second = 45
-        let ts_micros = 1705329045_000_000i64;
+        let ts_micros = 1_705_329_045_000_000_i64;
         let ts_array = TimestampMicrosecondArray::from(vec![Some(ts_micros), None]);
         let ts_array = Arc::new(ts_array) as ArrayRef;
 
