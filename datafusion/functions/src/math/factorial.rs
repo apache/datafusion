@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{ArrayRef, AsArray, Int64Array},
-    error::ArrowError,
-};
+use arrow::array::{ArrayRef, AsArray, Int64Array};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -114,7 +111,7 @@ const FACTORIALS: [i64; 21] = [
     6402373705728000,
     121645100408832000,
     2432902008176640000,
-];
+]; // if return type changes, this constant needs to be updated accordingly
 
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -127,9 +124,7 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
                     } else if a < FACTORIALS.len() as i64 {
                         Ok(FACTORIALS[a as usize])
                     } else {
-                        Err(ArrowError::ComputeError(format!(
-                            "Overflow happened on FACTORIAL({a})"
-                        )))
+                        exec_err!("Overflow happened on FACTORIAL({a})")
                     }
                 })?;
             Ok(Arc::new(result) as ArrayRef)
