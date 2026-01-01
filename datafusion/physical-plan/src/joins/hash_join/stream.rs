@@ -23,6 +23,8 @@
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::joins::Map;
+use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
@@ -34,7 +36,6 @@ use crate::joins::utils::{
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
-    joins::join_hash_map::JoinHashMapOffset,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -154,13 +155,13 @@ pub(super) struct ProcessProbeBatchState {
     /// Probe-side on expressions values
     values: Vec<ArrayRef>,
     /// Starting offset for JoinHashMap lookups
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
 }
 
 impl ProcessProbeBatchState {
-    fn advance(&mut self, offset: JoinHashMapOffset, joined_probe_idx: Option<usize>) {
+    fn advance(&mut self, offset: MapOffset, joined_probe_idx: Option<usize>) {
         self.offset = offset;
         if joined_probe_idx.is_some() {
             self.joined_probe_idx = joined_probe_idx;
@@ -287,10 +288,10 @@ pub(super) fn lookup_join_hashmap(
     null_equality: NullEquality,
     hashes_buffer: &[u64],
     limit: usize,
-    offset: JoinHashMapOffset,
+    offset: MapOffset,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
-) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
+) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
         limit,
@@ -552,9 +553,15 @@ impl HashJoinStream {
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
-                self.hashes_buffer.clear();
-                self.hashes_buffer.resize(batch.num_rows(), 0);
-                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                if let Map::HashMap(_) = self.build_side.try_as_ready()?.left_data.map() {
+                    self.hashes_buffer.clear();
+                    self.hashes_buffer.resize(batch.num_rows(), 0);
+                    create_hashes(
+                        &keys_values,
+                        &self.random_state,
+                        &mut self.hashes_buffer,
+                    )?;
+                }
 
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
@@ -589,7 +596,9 @@ impl HashJoinStream {
         let timer = self.join_metrics.join_time.timer();
 
         // if the left side is empty, we can skip the (potentially expensive) join operation
-        if build_side.left_data.hash_map.is_empty() && self.filter.is_none() {
+        let is_empty = build_side.left_data.map().is_empty();
+
+        if is_empty && self.filter.is_none() {
             let result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
@@ -605,17 +614,34 @@ impl HashJoinStream {
         }
 
         // get the matched by join keys indices
-        let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
-            build_side.left_data.hash_map(),
-            build_side.left_data.values(),
-            &state.values,
-            self.null_equality,
-            &self.hashes_buffer,
-            self.batch_size,
-            state.offset,
-            &mut self.probe_indices_buffer,
-            &mut self.build_indices_buffer,
-        )?;
+        let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
+        {
+            Map::HashMap(map) => lookup_join_hashmap(
+                map.as_ref(),
+                build_side.left_data.values(),
+                &state.values,
+                self.null_equality,
+                &self.hashes_buffer,
+                self.batch_size,
+                state.offset,
+                &mut self.probe_indices_buffer,
+                &mut self.build_indices_buffer,
+            )?,
+            Map::ArrayMap(array_map) => {
+                let next_offset = array_map.get_matched_indices_with_limit_offset(
+                    &state.values,
+                    self.batch_size,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                )?;
+                (
+                    UInt64Array::from(self.build_indices_buffer.clone()),
+                    UInt32Array::from(self.probe_indices_buffer.clone()),
+                    next_offset,
+                )
+            }
+        };
 
         let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);
 

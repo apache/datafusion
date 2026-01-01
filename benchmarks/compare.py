@@ -154,17 +154,17 @@ def compare(
     baseline = BenchmarkRun.load_from_file(baseline_path)
     comparison = BenchmarkRun.load_from_file(comparison_path)
 
-    console = Console()
+    console = Console(width=200)
 
     # use basename as the column names
-    baseline_header = baseline_path.parent.stem
-    comparison_header = comparison_path.parent.stem
+    baseline_header = baseline_path.parent.name
+    comparison_header = comparison_path.parent.name
 
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Query", style="dim", width=12)
-    table.add_column(baseline_header, justify="right", style="dim")
-    table.add_column(comparison_header, justify="right", style="dim")
-    table.add_column("Change", justify="right", style="dim")
+    table.add_column("Query", style="dim", no_wrap=True)
+    table.add_column(baseline_header, justify="right", style="dim", no_wrap=True)
+    table.add_column(comparison_header, justify="right", style="dim", no_wrap=True)
+    table.add_column("Change", justify="right", style="dim", no_wrap=True)
 
     faster_count = 0
     slower_count = 0
@@ -175,12 +175,12 @@ def compare(
 
     for baseline_result, comparison_result in zip(baseline.queries, comparison.queries):
         assert baseline_result.query == comparison_result.query
-        
+
         base_failed = not baseline_result.success
-        comp_failed = not comparison_result.success 
+        comp_failed = not comparison_result.success
         # If a query fails, its execution time is excluded from the performance comparison
         if base_failed or comp_failed:
-            change_text = "incomparable" 
+            change_text = "incomparable"
             failure_count += 1
             table.add_row(
                 f"Q{baseline_result.query}",
