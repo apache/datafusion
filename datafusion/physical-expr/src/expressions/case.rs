@@ -1352,15 +1352,14 @@ impl CaseExpr {
 
         let else_rows = &branch_rows[lookup_table.num_branches];
         if !else_rows.is_empty()
-            && let Some(else_expr) = &self.body.else_expr {
-                let row_indices =
-                    Arc::new(UInt32Array::from(else_rows.clone())) as ArrayRef;
-                let filter_predicate = create_filter_from_indices(else_rows, row_count);
-                let filtered_batch =
-                    filter_record_batch(&working_batch, &filter_predicate)?;
-                let else_value = else_expr.evaluate(&filtered_batch)?;
-                result_builder.add_branch_result(&row_indices, else_value)?;
-            }
+            && let Some(else_expr) = &self.body.else_expr
+        {
+            let row_indices = Arc::new(UInt32Array::from(else_rows.clone())) as ArrayRef;
+            let filter_predicate = create_filter_from_indices(else_rows, row_count);
+            let filtered_batch = filter_record_batch(&working_batch, &filter_predicate)?;
+            let else_value = else_expr.evaluate(&filtered_batch)?;
+            result_builder.add_branch_result(&row_indices, else_value)?;
+        }
 
         result_builder.finish()
     }
