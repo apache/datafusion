@@ -29,7 +29,6 @@ use std::sync::Arc;
 use arrow::array::{
     BinaryArray, BooleanArray, Date32Array, Date64Array, FixedSizeBinaryArray,
     Int32Array, RecordBatch, UInt64Array,
-    builder::{BooleanBuilder, UInt64Builder},
 };
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -51,8 +50,8 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use insta::{allow_duplicates, assert_snapshot};
 
 use crate::{
-    expressions::Column,
-    joins::sort_merge_join::stream::{JoinedRecordBatches, get_corrected_filter_mask},
+    expressions::Column, joins::sort_merge_join::filter::get_corrected_filter_mask,
+    joins::sort_merge_join::stream::JoinedRecordBatches,
 };
 
 use crate::joins::SortMergeJoinExec;
@@ -2375,9 +2374,7 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
 
     let mut batches = JoinedRecordBatches {
         joined_batches: BatchCoalescer::new(Arc::clone(&schema), 8192),
-        filter_mask: BooleanBuilder::new(),
-        row_indices: UInt64Builder::new(),
-        batch_ids: vec![],
+        filter_metadata: crate::joins::sort_merge_join::filter::FilterMetadata::new(),
     };
 
     // Insert already prejoined non-filtered rows
@@ -2432,44 +2429,73 @@ fn build_joined_record_batches() -> Result<JoinedRecordBatches> {
     )?)?;
 
     let streamed_indices = vec![0, 0];
-    batches.batch_ids.extend(vec![0; streamed_indices.len()]);
     batches
+        .filter_metadata
+        .batch_ids
+        .extend(vec![0; streamed_indices.len()]);
+    batches
+        .filter_metadata
         .row_indices
         .extend(&UInt64Array::from(streamed_indices));
 
     let streamed_indices = vec![1];
-    batches.batch_ids.extend(vec![0; streamed_indices.len()]);
     batches
+        .filter_metadata
+        .batch_ids
+        .extend(vec![0; streamed_indices.len()]);
+    batches
+        .filter_metadata
         .row_indices
         .extend(&UInt64Array::from(streamed_indices));
 
     let streamed_indices = vec![0, 0];
-    batches.batch_ids.extend(vec![1; streamed_indices.len()]);
     batches
+        .filter_metadata
+        .batch_ids
+        .extend(vec![1; streamed_indices.len()]);
+    batches
+        .filter_metadata
         .row_indices
         .extend(&UInt64Array::from(streamed_indices));
 
     let streamed_indices = vec![0];
-    batches.batch_ids.extend(vec![2; streamed_indices.len()]);
     batches
+        .filter_metadata
+        .batch_ids
+        .extend(vec![2; streamed_indices.len()]);
+    batches
+        .filter_metadata
         .row_indices
         .extend(&UInt64Array::from(streamed_indices));
 
     let streamed_indices = vec![0, 0];
-    batches.batch_ids.extend(vec![3; streamed_indices.len()]);
     batches
+        .filter_metadata
+        .batch_ids
+        .extend(vec![3; streamed_indices.len()]);
+    batches
+        .filter_metadata
         .row_indices
         .extend(&UInt64Array::from(streamed_indices));
 
     batches
+        .filter_metadata
         .filter_mask
         .extend(&BooleanArray::from(vec![true, false]));
-    batches.filter_mask.extend(&BooleanArray::from(vec![true]));
     batches
+        .filter_metadata
+        .filter_mask
+        .extend(&BooleanArray::from(vec![true]));
+    batches
+        .filter_metadata
         .filter_mask
         .extend(&BooleanArray::from(vec![false, true]));
-    batches.filter_mask.extend(&BooleanArray::from(vec![false]));
     batches
+        .filter_metadata
+        .filter_mask
+        .extend(&BooleanArray::from(vec![false]));
+    batches
+        .filter_metadata
         .filter_mask
         .extend(&BooleanArray::from(vec![false, false]));
 
@@ -2482,8 +2508,8 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
     let schema = joined_batches.joined_batches.schema();
 
     let output = joined_batches.concat_batches(&schema)?;
-    let out_mask = joined_batches.filter_mask.finish();
-    let out_indices = joined_batches.row_indices.finish();
+    let out_mask = joined_batches.filter_metadata.filter_mask.finish();
+    let out_indices = joined_batches.filter_metadata.row_indices.finish();
 
     assert_eq!(
         get_corrected_filter_mask(
@@ -2620,7 +2646,7 @@ async fn test_left_outer_join_filtered_mask() -> Result<()> {
     let corrected_mask = get_corrected_filter_mask(
         Left,
         &out_indices,
-        &joined_batches.batch_ids,
+        &joined_batches.filter_metadata.batch_ids,
         &out_mask,
         output.num_rows(),
     )
@@ -2689,8 +2715,8 @@ async fn test_semi_join_filtered_mask() -> Result<()> {
         let schema = joined_batches.joined_batches.schema();
 
         let output = joined_batches.concat_batches(&schema)?;
-        let out_mask = joined_batches.filter_mask.finish();
-        let out_indices = joined_batches.row_indices.finish();
+        let out_mask = joined_batches.filter_metadata.filter_mask.finish();
+        let out_indices = joined_batches.filter_metadata.row_indices.finish();
 
         assert_eq!(
             get_corrected_filter_mask(
@@ -2791,7 +2817,7 @@ async fn test_semi_join_filtered_mask() -> Result<()> {
         let corrected_mask = get_corrected_filter_mask(
             join_type,
             &out_indices,
-            &joined_batches.batch_ids,
+            &joined_batches.filter_metadata.batch_ids,
             &out_mask,
             output.num_rows(),
         )
@@ -2864,8 +2890,8 @@ async fn test_anti_join_filtered_mask() -> Result<()> {
         let schema = joined_batches.joined_batches.schema();
 
         let output = joined_batches.concat_batches(&schema)?;
-        let out_mask = joined_batches.filter_mask.finish();
-        let out_indices = joined_batches.row_indices.finish();
+        let out_mask = joined_batches.filter_metadata.filter_mask.finish();
+        let out_indices = joined_batches.filter_metadata.row_indices.finish();
 
         assert_eq!(
             get_corrected_filter_mask(
@@ -2966,7 +2992,7 @@ async fn test_anti_join_filtered_mask() -> Result<()> {
         let corrected_mask = get_corrected_filter_mask(
             join_type,
             &out_indices,
-            &joined_batches.batch_ids,
+            &joined_batches.filter_metadata.batch_ids,
             &out_mask,
             output.num_rows(),
         )
