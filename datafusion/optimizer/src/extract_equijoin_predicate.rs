@@ -83,6 +83,8 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 let (equijoin_predicates, non_equijoin_expr) =
                     split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
 
+
+
                 // Equi-join operators like HashJoin support a special behavior
                 // that evaluates `NULL = NULL` as true instead of NULL. Therefore,
                 // we transform `t1.c1 IS NOT DISTINCT FROM t2.c1` into an equi-join

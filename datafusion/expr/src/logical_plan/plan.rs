@@ -2162,6 +2162,7 @@ impl LogicalPlan {
                         join_constraint,
                         join_type,
                         join_kind,
+                        null_equality,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2180,15 +2181,20 @@ impl LogicalPlan {
                         } else {
                             "DelimJoin"
                         };
+                        let null_equality_str = match null_equality {
+                            NullEquality::NullEqualsNull => " Null=Null",
+                            NullEquality::NullEqualsNothing => "",
+                        };
                         match join_constraint {
                             JoinConstraint::On => {
                                 write!(
                                     f,
-                                    "{} Join({}): {}{}",
+                                    "{} Join({}): {}{}{}",
                                     join_type,
                                     join_kind,
                                     join_expr.join(", "),
-                                    filter_expr
+                                    filter_expr,
+                                    null_equality_str,
                                 )
                             }
                             JoinConstraint::Using => {

@@ -1479,6 +1479,14 @@ impl DecorrelateDependentJoin {
         return DecorrelateDependentJoin {};
     }
 }
+macro_rules! debug_println {
+    ($($arg:tt)*) => {
+        if std::env::var("PLAN_DEBUG").is_ok() {
+            println!($($arg)*);
+        }
+    };
+}
+
 
 impl OptimizerRule for DecorrelateDependentJoin {
     fn supports_rewrite(&self) -> bool {
@@ -1498,21 +1506,23 @@ impl OptimizerRule for DecorrelateDependentJoin {
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
 
+        // Only print debug info if PLAN_DEBUG env var is exactly "1"
+
         if rewrite_result.transformed {
-            println!(
+            debug_println!(
                 "dependent join plan\n{}",
                 rewrite_result.data.display_indent()
             );
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
-            println!("{}", ret.display_indent_schema());
+            
+            debug_println!(
+                "dependent join plan\n{}",
+                ret.display_indent_schema(),
+            );
+
             return Ok(Transformed::yes(ret));
-            // return Ok(Transformed::yes(decorrelator.decorrelate(
-            //     &rewrite_result.data,
-            //     true,
-            //     0,
-            // )?));
         }
 
         Ok(rewrite_result)
