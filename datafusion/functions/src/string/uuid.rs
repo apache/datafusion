@@ -56,7 +56,7 @@ impl Default for UuidFunc {
 impl UuidFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         }
     }
 }

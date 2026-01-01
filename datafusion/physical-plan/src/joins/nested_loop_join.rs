@@ -550,17 +550,34 @@ impl ExecutionPlan for NestedLoopJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
+        // NestedLoopJoinExec is designed for joins without equijoin keys in the
+        // ON clause (e.g., `t1 JOIN t2 ON (t1.v1 + t2.v1) % 2 = 0`). Any join
+        // predicates are stored in `self.filter`, but `estimate_join_statistics`
+        // currently doesn't support selectivity estimation for such arbitrary
+        // filter expressions. We pass an empty join column list, which means
+        // the cardinality estimation cannot use column statistics and returns
+        // unknown row counts.
         let join_columns = Vec::new();
-        estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
+
+        // Left side is always a single partition (Distribution::SinglePartition),
+        // so we always request overall stats with `None`. Right side can have
+        // multiple partitions, so we forward the partition parameter to get
+        // partition-specific statistics when requested.
+        let left_stats = self.left.partition_statistics(None)?;
+        let right_stats = match partition {
+            Some(partition) => self.right.partition_statistics(Some(partition))?,
+            None => self.right.partition_statistics(None)?,
+        };
+
+        let stats = estimate_join_statistics(
+            left_stats,
+            right_stats,
             &join_columns,
             &self.join_type,
-            &self.schema(),
-        )
+            &self.join_schema,
+        )?;
+
+        Ok(stats.project(self.projection.as_ref()))
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
