@@ -19,19 +19,21 @@
 
 use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
-use arrow::datatypes::Field;
 use arrow::datatypes::{
     ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
-    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
-    DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
+    Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field, FieldRef,
     Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
+use arrow::error::ArrowError;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
-use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
+use datafusion_common::{
+    HashMap, Result, ScalarValue, exec_err, internal_err, not_impl_err,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
@@ -41,6 +43,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::mem::size_of_val;
@@ -143,50 +146,64 @@ macro_rules! downcast_sum {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Sum {
     signature: Signature,
+    // If true then returns null on overflows
+    try_sum_mode: bool,
 }
 
 impl Sum {
+    fn signature() -> Signature {
+        // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
+        // smallint, int, bigint, real, double precision, decimal, or interval.
+        Signature::one_of(
+            vec![
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Decimal,
+                )]),
+                // Unsigned to u64
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_uint64()),
+                    vec![
+                        TypeSignatureClass::Native(logical_uint8()),
+                        TypeSignatureClass::Native(logical_uint16()),
+                        TypeSignatureClass::Native(logical_uint32()),
+                    ],
+                    NativeType::UInt64,
+                )]),
+                // Signed to i64
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![
+                        TypeSignatureClass::Native(logical_int8()),
+                        TypeSignatureClass::Native(logical_int16()),
+                        TypeSignatureClass::Native(logical_int32()),
+                    ],
+                    NativeType::Int64,
+                )]),
+                // Floats to f64
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_float64()),
+                    vec![TypeSignatureClass::Float],
+                    NativeType::Float64,
+                )]),
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Duration,
+                )]),
+            ],
+            Volatility::Immutable,
+        )
+    }
+
     pub fn new() -> Self {
         Self {
-            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-            // smallint, int, bigint, real, double precision, decimal, or interval.
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Decimal,
-                    )]),
-                    // Unsigned to u64
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_uint64()),
-                        vec![
-                            TypeSignatureClass::Native(logical_uint8()),
-                            TypeSignatureClass::Native(logical_uint16()),
-                            TypeSignatureClass::Native(logical_uint32()),
-                        ],
-                        NativeType::UInt64,
-                    )]),
-                    // Signed to i64
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_int64()),
-                        vec![
-                            TypeSignatureClass::Native(logical_int8()),
-                            TypeSignatureClass::Native(logical_int16()),
-                            TypeSignatureClass::Native(logical_int32()),
-                        ],
-                        NativeType::Int64,
-                    )]),
-                    // Floats to f64
-                    TypeSignature::Coercible(vec![Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
-                        vec![TypeSignatureClass::Float],
-                        NativeType::Float64,
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Duration,
-                    )]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Self::signature(),
+            try_sum_mode: false,
+        }
+    }
+
+    pub fn try_sum() -> Self {
+        Self {
+            signature: Self::signature(),
+            try_sum_mode: true,
         }
     }
 }
@@ -212,9 +229,7 @@ impl AggregateUDFImpl for Sum {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            DataType::Int64 => Ok(DataType::Int64),
-            DataType::UInt64 => Ok(DataType::UInt64),
-            DataType::Float64 => Ok(DataType::Float64),
+            DataType::Null => Ok(DataType::Float64),
             // In the spark, the result type is DECIMAL(min(38,precision+10), s)
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
             DataType::Decimal32(precision, scale) => {
@@ -233,56 +248,126 @@ impl AggregateUDFImpl for Sum {
                 let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
-            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
-            other => {
-                exec_err!("[return_type] SUM not supported for {}", other)
-            }
+            dt => Ok(dt.clone()),
         }
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if args.is_distinct {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
-                };
+        if args.expr_fields[0].data_type() == &DataType::Null {
+            return Ok(Box::new(NoopAccumulator::new(ScalarValue::Float64(None))));
+        }
+        match (args.is_distinct, self.try_sum_mode) {
+            (true, false) => {
+                macro_rules! helper {
+                    ($t:ty, $dt:expr) => {
+                        Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
+                    };
+                }
+                downcast_sum!(args, helper)
             }
-            downcast_sum!(args, helper)
-        } else {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
-                };
+            (false, false) => {
+                macro_rules! helper {
+                    ($t:ty, $dt:expr) => {
+                        Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
+                    };
+                }
+                downcast_sum!(args, helper)
             }
-            downcast_sum!(args, helper)
+            (false, true) => {
+                match args.return_type() {
+                    DataType::UInt64 => Ok(Box::new(
+                        TrySumAccumulator::<UInt64Type>::new(DataType::UInt64),
+                    )),
+                    DataType::Int64 => Ok(Box::new(TrySumAccumulator::<Int64Type>::new(
+                        DataType::Int64,
+                    ))),
+                    DataType::Float64 => Ok(Box::new(
+                        TrySumAccumulator::<Float64Type>::new(DataType::Float64),
+                    )),
+                    DataType::Duration(TimeUnit::Second) => {
+                        Ok(Box::new(TrySumAccumulator::<DurationSecondType>::new(
+                            DataType::Duration(TimeUnit::Second),
+                        )))
+                    }
+                    DataType::Duration(TimeUnit::Millisecond) => {
+                        Ok(Box::new(TrySumAccumulator::<DurationMillisecondType>::new(
+                            DataType::Duration(TimeUnit::Millisecond),
+                        )))
+                    }
+                    DataType::Duration(TimeUnit::Microsecond) => {
+                        Ok(Box::new(TrySumAccumulator::<DurationMicrosecondType>::new(
+                            DataType::Duration(TimeUnit::Microsecond),
+                        )))
+                    }
+                    DataType::Duration(TimeUnit::Nanosecond) => {
+                        Ok(Box::new(TrySumAccumulator::<DurationNanosecondType>::new(
+                            DataType::Duration(TimeUnit::Nanosecond),
+                        )))
+                    }
+                    dt @ DataType::Decimal32(..) => Ok(Box::new(
+                        TrySumDecimalAccumulator::<Decimal32Type>::new(dt.clone()),
+                    )),
+                    dt @ DataType::Decimal64(..) => Ok(Box::new(
+                        TrySumDecimalAccumulator::<Decimal64Type>::new(dt.clone()),
+                    )),
+                    dt @ DataType::Decimal128(..) => Ok(Box::new(
+                        TrySumDecimalAccumulator::<Decimal128Type>::new(dt.clone()),
+                    )),
+                    dt @ DataType::Decimal256(..) => Ok(Box::new(
+                        TrySumDecimalAccumulator::<Decimal256Type>::new(dt.clone()),
+                    )),
+                    dt => internal_err!("Unsupported datatype for sum: {dt}"),
+                }
+            }
+            (true, true) => {
+                not_impl_err!("Try sum mode not supported for distinct sum accumulators")
+            }
         }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        if args.is_distinct {
-            Ok(vec![
-                Field::new_list(
-                    format_state_name(args.name, "sum distinct"),
-                    // See COMMENTS.md to understand why nullable is set to true
-                    Field::new_list_field(args.return_type().clone(), true),
-                    false,
-                )
-                .into(),
-            ])
-        } else {
-            Ok(vec![
+        match (args.is_distinct, self.try_sum_mode) {
+            (true, false) => {
+                Ok(vec![
+                    Field::new_list(
+                        format_state_name(args.name, "sum distinct"),
+                        // See COMMENTS.md to understand why nullable is set to true
+                        Field::new_list_field(args.return_type().clone(), true),
+                        false,
+                    )
+                    .into(),
+                ])
+            }
+            (false, false) => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "sum"),
                     args.return_type().clone(),
                     true,
                 )
                 .into(),
-            ])
+            ]),
+            (false, true) => Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.return_type().clone(),
+                    true,
+                )
+                .into(),
+                Field::new(
+                    format_state_name(args.name, "sum failed"),
+                    DataType::Boolean,
+                    false,
+                )
+                .into(),
+            ]),
+            (true, true) => {
+                not_impl_err!("Try sum mode not supported for distinct sum accumulators")
+            }
         }
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        !args.is_distinct
+        !args.is_distinct && !self.try_sum_mode
     }
 
     fn create_groups_accumulator(
@@ -304,8 +389,12 @@ impl AggregateUDFImpl for Sum {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
+        if self.try_sum_mode {
+            return not_impl_err!(
+                "Try sum mode not supported for sum sliding accumulators"
+            );
+        }
         if args.is_distinct {
-            // distinct path: use our sliding‐window distinct‐sum
             macro_rules! helper_distinct {
                 ($t:ty, $dt:expr) => {
                     Ok(Box::new(SlidingDistinctSumAccumulator::try_new(&$dt)?))
@@ -313,7 +402,6 @@ impl AggregateUDFImpl for Sum {
             }
             downcast_sum!(args, helper_distinct)
         } else {
-            // non‐distinct path: existing sliding sum
             macro_rules! helper {
                 ($t:ty, $dt:expr) => {
                     Ok(Box::new(SlidingSumAccumulator::<$t>::new($dt.clone())))
@@ -336,6 +424,10 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
+        // Can overflow into null
+        if self.try_sum_mode {
+            return SetMonotonicity::NotMonotonic;
+        }
         // `SUM` is only monotonically increasing when its input is unsigned.
         // TODO: Expand these utilizing statistics.
         match data_type {
@@ -389,6 +481,155 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         ScalarValue::new_primitive::<T>(self.sum, &self.data_type)
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum TrySumState<T: ArrowNativeTypeOp> {
+    Initial,
+    ValidSum(T),
+    Overflow,
+}
+
+/// Will return `NULL` if at any point the sum overflows.
+#[derive(Debug)]
+struct TrySumAccumulator<T: ArrowNumericType + std::fmt::Debug> {
+    state: TrySumState<T::Native>,
+    data_type: DataType,
+}
+
+impl<T: ArrowNumericType + std::fmt::Debug> TrySumAccumulator<T> {
+    fn new(data_type: DataType) -> Self {
+        Self {
+            state: TrySumState::Initial,
+            data_type,
+        }
+    }
+}
+
+impl<T: ArrowNumericType + std::fmt::Debug> Accumulator for TrySumAccumulator<T> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        match self.state {
+            TrySumState::Initial => Ok(vec![
+                ScalarValue::try_new_null(&self.data_type)?,
+                ScalarValue::from(false),
+            ]),
+            TrySumState::ValidSum(sum) => Ok(vec![
+                ScalarValue::new_primitive::<T>(Some(sum), &self.data_type)?,
+                ScalarValue::from(false),
+            ]),
+            TrySumState::Overflow => Ok(vec![
+                ScalarValue::try_new_null(&self.data_type)?,
+                ScalarValue::from(true),
+            ]),
+        }
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let v = match self.state {
+            TrySumState::Initial => T::Native::ZERO,
+            TrySumState::ValidSum(sum) => sum,
+            TrySumState::Overflow => return Ok(()),
+        };
+        let values = values[0].as_primitive::<T>();
+        match arrow::compute::sum_checked(values) {
+            Ok(Some(x)) => match v.add_checked(x) {
+                Ok(sum) => {
+                    self.state = TrySumState::ValidSum(sum);
+                }
+                Err(ArrowError::ArithmeticOverflow(_)) => {
+                    self.state = TrySumState::Overflow;
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            },
+            Ok(None) => (),
+            Err(ArrowError::ArithmeticOverflow(_)) => {
+                self.state = TrySumState::Overflow;
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let other_batch_failed = states[1].as_boolean().value(0);
+        if other_batch_failed {
+            self.state = TrySumState::Overflow;
+            return Ok(());
+        }
+        self.update_batch(states)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        match self.state {
+            TrySumState::Initial | TrySumState::Overflow => {
+                ScalarValue::try_new_null(&self.data_type)
+            }
+            TrySumState::ValidSum(sum) => {
+                ScalarValue::new_primitive::<T>(Some(sum), &self.data_type)
+            }
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+}
+
+// Only difference from TrySumAccumulator is that it verifies the resulting sum
+// can fit within the decimals precision; if Rust had specialization we could unify
+// the two types (╥﹏╥)
+#[derive(Debug)]
+struct TrySumDecimalAccumulator<T: DecimalType + std::fmt::Debug> {
+    inner: TrySumAccumulator<T>,
+}
+
+impl<T: DecimalType + std::fmt::Debug> TrySumDecimalAccumulator<T> {
+    fn new(data_type: DataType) -> Self {
+        Self {
+            inner: TrySumAccumulator::new(data_type),
+        }
+    }
+}
+
+impl<T: DecimalType + std::fmt::Debug> Accumulator for TrySumDecimalAccumulator<T> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.inner.state()
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)?;
+        // Check decimal precision overflow
+        let precision = match self.inner.data_type {
+            DataType::Decimal32(precision, _)
+            | DataType::Decimal64(precision, _)
+            | DataType::Decimal128(precision, _)
+            | DataType::Decimal256(precision, _) => precision,
+            _ => unreachable!(),
+        };
+        if let TrySumState::ValidSum(sum) = self.inner.state
+            && !T::is_valid_decimal_precision(sum, precision)
+        {
+            self.inner.state = TrySumState::Overflow;
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.inner.merge_batch(states)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.inner.evaluate()
     }
 
     fn size(&self) -> usize {
