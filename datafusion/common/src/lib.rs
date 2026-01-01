@@ -85,7 +85,7 @@ pub use functional_dependencies::{
     aggregate_functional_dependencies, get_required_group_by_exprs_indices,
     get_target_functional_dependencies,
 };
-use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};
 pub use nested_struct::cast_column;
 pub use null_equality::NullEquality;

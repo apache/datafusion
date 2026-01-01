@@ -539,14 +539,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
                 let list_offset = group_index_view.value() as usize;
                 let group_index_list = &self.group_index_lists[list_offset];
-                for &group_index in group_index_list {
-                    self.vectorized_operation_buffers
-                        .equal_to_row_indices
-                        .push(row);
-                    self.vectorized_operation_buffers
-                        .equal_to_group_indices
-                        .push(group_index);
-                }
+
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .extend_from_slice(group_index_list);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .extend(std::iter::repeat_n(row, group_index_list.len()));
             } else {
                 let group_index = group_index_view.value() as usize;
                 self.vectorized_operation_buffers

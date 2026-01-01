@@ -18,12 +18,10 @@
 use std::sync::Arc;
 
 use abi_stable::StableAbi;
-use arrow::{
-    array::{ArrayRef, make_array},
-    datatypes::{Schema, SchemaRef},
-    error::ArrowError,
-    ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi},
-};
+use arrow::array::{ArrayRef, make_array};
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi, to_ffi};
 use datafusion_common::{DataFusionError, ScalarValue};
 use log::error;
 
