@@ -634,8 +634,15 @@ pub(crate) fn sort_expr_to_sorting_column(
             ))
         })?;
 
+    let column_idx: i32 = column.index().try_into().map_err(|_| {
+        DataFusionError::Plan(format!(
+            "Column index {} is too large to be represented as i32",
+            column.index()
+        ))
+    })?;
+
     Ok(SortingColumn {
-        column_idx: column.index() as i32,
+        column_idx,
         descending: sort_expr.options.descending,
         nulls_first: sort_expr.options.nulls_first,
     })
