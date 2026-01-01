@@ -254,7 +254,7 @@ fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
             let when_thens: Vec<_> = (0..20i32)
                 .map(|i| {
                     let col_idx = (i as usize % 3) + 1;
-                    let col_name = format!("c{}", col_idx);
+                    let col_name = format!("c{col_idx}");
                     (lit(i), col(&col_name, &batch.schema()).unwrap())
                 })
                 .collect();
