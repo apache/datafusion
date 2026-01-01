@@ -41,6 +41,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{self, col};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -54,6 +55,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
@@ -68,7 +70,7 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
-    PlanProperties, displayable,
+    PlanProperties, SortOrderPushdownResult, displayable,
 };
 
 /// Create a non sorted parquet exec
@@ -773,4 +775,207 @@ pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
 
 fn format_lines(s: &str) -> Vec<String> {
     s.trim().split('\n').map(|s| s.to_string()).collect()
+}
+
+/// Create a simple ProjectionExec with column indices (simplified version)
+pub fn simple_projection_exec(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&i| {
+            let field = schema.field(i);
+            (
+                Arc::new(expressions::Column::new(field.name(), i))
+                    as Arc<dyn PhysicalExpr>,
+                field.name().to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a ProjectionExec with column aliases
+pub fn projection_exec_with_alias(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<(usize, &str)>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&(i, alias)| {
+            (
+                Arc::new(expressions::Column::new(schema.field(i).name(), i))
+                    as Arc<dyn PhysicalExpr>,
+                alias.to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a sort expression with custom name and index
+pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: Arc::new(expressions::Column::new(name, index)),
+        options: SortOptions::default(),
+    }
+}
+
+/// A test data source that can display any requested ordering
+/// This is useful for testing sort pushdown behavior
+#[derive(Debug, Clone)]
+pub struct TestScan {
+    schema: SchemaRef,
+    output_ordering: Vec<LexOrdering>,
+    plan_properties: PlanProperties,
+    // Store the requested ordering for display
+    requested_ordering: Option<LexOrdering>,
+}
+
+impl TestScan {
+    /// Create a new TestScan with the given schema and output ordering
+    pub fn new(schema: SchemaRef, output_ordering: Vec<LexOrdering>) -> Self {
+        let eq_properties = if !output_ordering.is_empty() {
+            // Convert Vec<LexOrdering> to the format expected by new_with_orderings
+            // We need to extract the inner Vec<PhysicalSortExpr> from each LexOrdering
+            let orderings: Vec<Vec<PhysicalSortExpr>> = output_ordering
+                .iter()
+                .map(|lex_ordering| {
+                    // LexOrdering implements IntoIterator, so we can collect it
+                    lex_ordering.iter().cloned().collect()
+                })
+                .collect();
+
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+        } else {
+            EquivalenceProperties::new(Arc::clone(&schema))
+        };
+
+        let plan_properties = PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+
+        Self {
+            schema,
+            output_ordering,
+            plan_properties,
+            requested_ordering: None,
+        }
+    }
+
+    /// Create a TestScan with a single output ordering
+    pub fn with_ordering(schema: SchemaRef, ordering: LexOrdering) -> Self {
+        Self::new(schema, vec![ordering])
+    }
+}
+
+impl DisplayAs for TestScan {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "TestScan")?;
+                if !self.output_ordering.is_empty() {
+                    write!(f, ": output_ordering=[")?;
+                    // Format the ordering in a readable way
+                    for (i, sort_expr) in self.output_ordering[0].iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{sort_expr}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                // This is the key part - show what ordering was requested
+                if let Some(ref req) = self.requested_ordering {
+                    write!(f, ", requested_ordering=[")?;
+                    for (i, sort_expr) in req.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{sort_expr}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "TestScan")
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for TestScan {
+    fn name(&self) -> &str {
+        "TestScan"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.plan_properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("TestScan should have no children")
+        }
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        internal_err!("TestScan is for testing optimizer only, not for execution")
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema))
+    }
+
+    // This is the key method - implement sort pushdown
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // For testing purposes, accept ANY ordering request
+        // and create a new TestScan that shows what was requested
+        let requested_ordering = LexOrdering::new(order.to_vec());
+
+        let mut new_scan = self.clone();
+        new_scan.requested_ordering = requested_ordering;
+
+        // Always return Inexact to keep the Sort node (like Phase 1 behavior)
+        Ok(SortOrderPushdownResult::Inexact {
+            inner: Arc::new(new_scan),
+        })
+    }
+}
+
+/// Helper function to create a TestScan with ordering
+pub fn test_scan_with_ordering(
+    schema: SchemaRef,
+    ordering: LexOrdering,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(TestScan::with_ordering(schema, ordering))
 }
