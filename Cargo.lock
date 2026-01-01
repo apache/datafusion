@@ -2164,6 +2164,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
