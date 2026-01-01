@@ -33,6 +33,8 @@ use datafusion_common::{
 };
 use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
 use object_store::path::Path;
@@ -41,6 +43,7 @@ use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+    SortingColumn,
 };
 use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
@@ -611,6 +614,40 @@ impl FileMetadata for CachedParquetMetaData {
             self.0.column_index().is_some() && self.0.offset_index().is_some();
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
+}
+
+/// Convert a [`PhysicalSortExpr`] to a Parquet [`SortingColumn`].
+///
+/// Returns `Err` if the expression is not a simple column reference.
+pub(crate) fn sort_expr_to_sorting_column(
+    sort_expr: &PhysicalSortExpr,
+) -> Result<SortingColumn> {
+    let column = sort_expr
+        .expr
+        .as_any()
+        .downcast_ref::<Column>()
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "Parquet sorting_columns only supports simple column references, \
+                 but got expression: {}",
+                sort_expr.expr
+            ))
+        })?;
+
+    Ok(SortingColumn {
+        column_idx: column.index() as i32,
+        descending: sort_expr.options.descending,
+        nulls_first: sort_expr.options.nulls_first,
+    })
+}
+
+/// Convert a [`LexOrdering`] to `Vec<SortingColumn>` for Parquet.
+///
+/// Returns `Err` if any expression is not a simple column reference.
+pub(crate) fn lex_ordering_to_sorting_columns(
+    ordering: &LexOrdering,
+) -> Result<Vec<SortingColumn>> {
+    ordering.iter().map(sort_expr_to_sorting_column).collect()
 }
 
 #[cfg(test)]
