@@ -125,6 +125,13 @@ impl ScalarUDFImpl for AsyncScalarUDF {
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("async functions should not be called directly")
     }
+
+    fn propagate_set_stats(
+        &self,
+        child_set_stats: &[crate::SetStats],
+    ) -> Result<Option<crate::SetStats>> {
+        self.inner.propagate_set_stats(child_set_stats)
+    }
 }
 
 impl Display for AsyncScalarUDF {

@@ -40,6 +40,13 @@ use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
 
+mod pruning;
+
+pub use pruning::{
+    ColumnStats, NullPresence, NullStats, PruningContext, PruningIntermediate,
+    PruningResult, RangeStats, SetStats,
+};
+
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
@@ -429,6 +436,165 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    // ---------------
+    // Pruning related
+    // ---------------
+    // None means propagation not implemented/supported for this node
+    fn propagate_range_stats(
+        &self,
+        _child_range_stats: &[RangeStats],
+    ) -> Result<Option<RangeStats>> {
+        Ok(None)
+    }
+
+    fn propagate_null_stats(
+        &self,
+        _child_range_stats: &[NullStats],
+    ) -> Result<Option<NullStats>> {
+        Ok(None)
+    }
+
+    fn propagate_set_stats(
+        &self,
+        _child_set_stats: &[SetStats],
+    ) -> Result<Option<SetStats>> {
+        Ok(None)
+    }
+
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        // Default impl for stats-propagation nodes (e.g. arithmetic expressions):
+        // 1) Evaluate pruning for all children.
+        // 2) If every child produced range/null stats, propagate them.
+        // 3) If no stats can be propagated, fall back to `Unsupported`.
+        let children = self.children();
+        if children.is_empty() {
+            return Ok(PruningIntermediate::empty_stats());
+        }
+
+        let mut range_complete = true;
+        let mut null_complete = true;
+        let mut set_complete = true;
+        let mut child_range_stats = Vec::with_capacity(children.len());
+        let mut child_null_stats = Vec::with_capacity(children.len());
+        let mut child_set_stats = Vec::with_capacity(children.len());
+
+        for child in children {
+            match child.evaluate_pruning(Arc::clone(&ctx))? {
+                PruningIntermediate::IntermediateStats(stats) => {
+                    match stats.range_stats {
+                        Some(range_stats) if range_complete => {
+                            child_range_stats.push(range_stats);
+                        }
+                        _ => {
+                            range_complete = false;
+                        }
+                    }
+
+                    match stats.null_stats {
+                        Some(null_stats) if null_complete => {
+                            child_null_stats.push(null_stats);
+                        }
+                        _ => {
+                            null_complete = false;
+                        }
+                    }
+
+                    match stats.set_stats {
+                        Some(set_stats) if set_complete => {
+                            child_set_stats.push(set_stats);
+                        }
+                        _ => {
+                            set_complete = false;
+                        }
+                    }
+                }
+                // Without node-specific semantics, we can't combine a final pruning result here.
+                other => return Ok(other),
+            }
+        }
+
+        let range_stats = if range_complete && !child_range_stats.is_empty() {
+            if let Some((first, rest)) = child_range_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Range stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_range_stats(&child_range_stats)?
+        } else {
+            None
+        };
+
+        let null_stats = if null_complete && !child_null_stats.is_empty() {
+            if let Some((first, rest)) = child_null_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Null stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_null_stats(&child_null_stats)?
+        } else {
+            None
+        };
+
+        let set_stats = if set_complete && !child_set_stats.is_empty() {
+            if let Some((first, rest)) = child_set_stats.split_first() {
+                for stats in rest {
+                    assert_eq_or_internal_err!(
+                        first.len(),
+                        stats.len(),
+                        "Set stats length mismatch between pruning children"
+                    );
+                }
+            }
+            self.propagate_set_stats(&child_set_stats)?
+        } else {
+            None
+        };
+
+        if let (Some(range_stats), Some(null_stats)) =
+            (range_stats.as_ref(), null_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                range_stats.len(),
+                null_stats.len(),
+                "Range and null stats length mismatch for pruning"
+            );
+        }
+
+        if let (Some(range_stats), Some(set_stats)) =
+            (range_stats.as_ref(), set_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                range_stats.len(),
+                set_stats.len(),
+                "Range and set stats length mismatch for pruning"
+            );
+        }
+
+        if let (Some(null_stats), Some(set_stats)) =
+            (null_stats.as_ref(), set_stats.as_ref())
+        {
+            assert_eq_or_internal_err!(
+                null_stats.len(),
+                set_stats.len(),
+                "Null and set stats length mismatch for pruning"
+            );
+        }
+
+        Ok(PruningIntermediate::IntermediateStats(ColumnStats {
+            range_stats,
+            null_stats,
+            set_stats,
+        }))
     }
 }
 

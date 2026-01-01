@@ -36,6 +36,8 @@ use crate::{ColumnStatistics, ScalarValue};
 ///
 /// 3. Whether the values in a column are contained in a set of literals
 ///
+/// 4. Known value sets for columns, on a per-container basis
+///
 /// # Vectorized Interface
 ///
 /// Information for containers / files are returned as Arrow [`ArrayRef`], so
@@ -104,6 +106,19 @@ pub trait PruningStatistics {
     ///
     /// [`UInt64Array`]: arrow::array::UInt64Array
     fn row_counts(&self, column: &Column) -> Option<ArrayRef>;
+
+    /// Return the known set of values for the named column in each container.
+    ///
+    /// The returned vector must contain [`Self::num_containers`] entries.
+    /// Each entry corresponds to a container and can be:
+    /// * `Some(HashSet<ScalarValue>)` if the values for that container are known
+    /// * `None` if the set is unknown for that container.
+    ///
+    /// If set statistics are not available for any container, return `None`
+    /// (the default).
+    fn value_sets(&self, _column: &Column) -> Option<Vec<Option<HashSet<ScalarValue>>>> {
+        None
+    }
 
     /// Returns [`BooleanArray`] where each row represents information known
     /// about specific literal `values` in a column.

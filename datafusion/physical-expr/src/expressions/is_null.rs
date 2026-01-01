@@ -25,6 +25,9 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::{
+    NullPresence, PruningContext, PruningIntermediate,
+};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -89,6 +92,31 @@ impl PhysicalExpr for IsNullExpr {
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(scalar.is_null())),
             )),
+        }
+    }
+
+    fn evaluate_pruning(&self, ctx: Arc<PruningContext>) -> Result<PruningIntermediate> {
+        use datafusion_physical_expr_common::physical_expr::PruningResult::*;
+
+        let child = self.arg.evaluate_pruning(ctx)?;
+        match child {
+            PruningIntermediate::IntermediateStats(stats) => {
+                if let Some(null_stats) = stats.null_stats() {
+                    let results = null_stats
+                        .presence()
+                        .iter()
+                        .map(|presence| match presence {
+                            NullPresence::AllNull => KeepAll,
+                            NullPresence::NoNull => SkipAll,
+                            NullPresence::Unknown => Unknown,
+                        })
+                        .collect();
+
+                    return Ok(PruningIntermediate::IntermediateResult(results));
+                }
+                Ok(PruningIntermediate::IntermediateResult(vec![Unknown]))
+            }
+            other => Ok(other),
         }
     }
 
