@@ -24,10 +24,10 @@ use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+#[cfg(debug_assertions)]
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    ExprSchema, Result, ScalarValue, assert_or_internal_err, not_impl_err,
-};
+use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
