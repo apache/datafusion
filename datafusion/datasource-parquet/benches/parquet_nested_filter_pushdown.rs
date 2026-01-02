@@ -18,7 +18,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use arrow::array::{BooleanArray, ListBuilder, RecordBatch, StringBuilder};
+use arrow::array::{
+    BinaryBuilder, BooleanArray, ListBuilder, RecordBatch, StringBuilder,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -27,8 +29,8 @@ use datafusion_expr::{Expr, col};
 use datafusion_functions_nested::expr_fn::array_has;
 use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
 
@@ -37,6 +39,9 @@ const TOTAL_ROW_GROUPS: usize = 10;
 const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
 const TARGET_VALUE: &str = "target_value";
 const COLUMN_NAME: &str = "list_col";
+const PAYLOAD_COLUMN_NAME: &str = "payload";
+// Large binary payload to emphasize decoding overhead when pushdown is disabled.
+const PAYLOAD_BYTES: usize = 8 * 1024;
 
 struct BenchmarkDataset {
     _tempdir: TempDir,
@@ -82,6 +87,7 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let metadata = builder.metadata().clone();
     let file_schema = builder.schema();
+    let projection = ProjectionMask::all();
 
     let predicate = array_has(
         col(COLUMN_NAME),
@@ -104,7 +110,7 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
         builder
     };
 
-    let reader = builder.build()?;
+    let reader = builder.with_projection(projection).build()?;
 
     let mut matched_rows = 0usize;
     for batch in reader {
@@ -142,11 +148,10 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     let file_path = tempdir.path().join("nested_lists.parquet");
 
     let field = Arc::new(Field::new("item", DataType::Utf8, true));
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        COLUMN_NAME,
-        DataType::List(field),
-        false,
-    )]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(COLUMN_NAME, DataType::List(field), false),
+        Field::new(PAYLOAD_COLUMN_NAME, DataType::Binary, false),
+    ]));
 
     let writer_props = WriterProperties::builder()
         .set_max_row_group_size(ROW_GROUP_SIZE)
@@ -197,15 +202,19 @@ fn build_list_batch(
     len: usize,
 ) -> datafusion_common::Result<RecordBatch> {
     let mut builder = ListBuilder::new(StringBuilder::new());
+    let mut payload_builder = BinaryBuilder::new();
+    let payload = vec![1u8; PAYLOAD_BYTES];
     for _ in 0..len {
         builder.values().append_value(value);
         builder.append(true);
+        payload_builder.append_value(&payload);
     }
 
     let array = builder.finish();
+    let payload_array = payload_builder.finish();
     Ok(RecordBatch::try_new(
         Arc::clone(schema),
-        vec![Arc::new(array)],
+        vec![Arc::new(array), Arc::new(payload_array)],
     )?)
 }
 
