@@ -249,11 +249,13 @@ Considering you already have TPCDS data locally
 ```shell
 export DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/
 export PR_NUMBER=19464
-gh pr checkout $PR_NUMBER --repo apache/datafusion -b pr-$PR_NUMBER
+git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER
 git checkout main
 git pull
 ./benchmarks/compare_tpcds.sh main pr-$PR_NUMBER
 ```
+
+Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead of `git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER`
 
 ### Running Benchmarks Manually
 
