@@ -1376,8 +1376,8 @@ mod tests {
         // NULL arrays still get length 0, but empty arrays get length 1
         verify_longest_length_with_options(
             &[Arc::clone(&list_array)],
-            false, // preserve_nulls
-            true,  // preserve_empty_as_null
+            false,                  // preserve_nulls
+            true,                   // preserve_empty_as_null
             vec![3, 1, 0, 1, 0, 2], // index 1 (empty []) now gets length 1
         )?;
 
@@ -1385,8 +1385,8 @@ mod tests {
         // Both NULL arrays and empty arrays get length 1
         verify_longest_length_with_options(
             &[Arc::clone(&list_array)],
-            true, // preserve_nulls
-            true, // preserve_empty_as_null
+            true,                   // preserve_nulls
+            true,                   // preserve_empty_as_null
             vec![3, 1, 1, 1, 1, 2], // index 1 (empty []) gets length 1, NULLs also get 1
         )?;
 
