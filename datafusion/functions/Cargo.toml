@@ -294,3 +294,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "levenshtein"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "split_part"
+required-features = ["string_expressions"]
