@@ -25,7 +25,6 @@
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 // https://github.com/apache/datafusion/issues/18881
-#![deny(clippy::allow_attributes)]
 
 //! Window Function packages for [DataFusion].
 //!

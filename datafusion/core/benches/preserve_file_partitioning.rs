@@ -322,7 +322,7 @@ async fn save_plans(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn run_benchmark(
     c: &mut Criterion,
     rt: &Runtime,
