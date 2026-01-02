@@ -294,3 +294,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "levenshtein"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "left"
+required-features = ["unicode_expressions"]
