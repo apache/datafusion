@@ -34,6 +34,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
+use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::dml::InsertOp;
@@ -565,7 +566,11 @@ impl TableProvider for ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let _ = lfc.remove(table_path.prefix());
+            let key = TableScopedPath(
+                table_path.get_table_ref().clone(),
+                table_path.prefix().clone(),
+            );
+            let _ = lfc.remove(&key);
         }
 
         // Sink related option, apart from format

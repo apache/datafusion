@@ -17,6 +17,7 @@
 
 use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::list_files_cache::ListFilesEntry;
+use crate::cache::list_files_cache::TableScopedPath;
 use crate::cache::{CacheAccessor, DefaultListFilesCache};
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
@@ -81,7 +82,7 @@ pub struct FileStatisticsCacheEntry {
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 pub trait ListFilesCache:
-    CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = Option<Path>>
+    CacheAccessor<TableScopedPath, Arc<Vec<ObjectMeta>>, Extra = Option<Path>>
 {
     /// Returns the cache's memory limit in bytes.
     fn cache_limit(&self) -> usize;
@@ -96,7 +97,7 @@ pub trait ListFilesCache:
     fn update_cache_ttl(&self, ttl: Option<Duration>);
 
     /// Retrieves the information about the entries currently cached.
-    fn list_entries(&self) -> HashMap<Path, ListFilesEntry>;
+    fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry>;
 }
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
