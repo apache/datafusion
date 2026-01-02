@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct]
+//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct|cache_factory]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:

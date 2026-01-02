@@ -106,10 +106,11 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand            | File Path                                                                           | Description                                            |
-| --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| dataframe             | [`dataframe/dataframe.rs`](examples/dataframe/dataframe.rs)                         | Query DataFrames from various sources and write output |
-| deserialize_to_struct | [`dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs) | Convert Arrow arrays into Rust structs                 |
+| Subcommand            | File Path                                                                           | Description                                             |
+| --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| cache_factory         | [`dataframe/cache_factory.rs`](examples/dataframe/cache_factory.rs)                 | Custom lazy caching for DataFrames using `CacheFactory` |
+| dataframe             | [`dataframe/dataframe.rs`](examples/dataframe/dataframe.rs)                         | Query DataFrames from various sources and write output  |
+| deserialize_to_struct | [`dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs) | Convert Arrow arrays into Rust structs                  |
 
 ## Execution Monitoring Examples
 

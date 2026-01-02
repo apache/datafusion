@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
@@ -31,10 +32,10 @@ use datafusion::{
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
-    test_util::aggr_test_schema,
 };
 
 use datafusion::datasource::physical_plan::FileScanConfigBuilder;
+use datafusion_examples::utils::datasets::cars;
 use futures::StreamExt;
 use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory};
 
@@ -50,12 +51,12 @@ pub async fn csv_json_opener() -> Result<()> {
 
 async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
-    let schema = aggr_test_schema();
+    let schema = cars::schema();
 
-    let testdata = datafusion::test_util::arrow_test_data();
-    let path = format!("{testdata}/csv/aggregate_test_100.csv");
-
-    let path = std::path::Path::new(&path).canonicalize()?;
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("csv")
+        .join("cars.csv");
 
     let options = CsvOptions {
         has_header: Some(true),
@@ -71,9 +72,9 @@ async fn csv_opener() -> Result<()> {
 
     let scan_config =
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
-            .with_projection_indices(Some(vec![12, 0]))?
+            .with_projection_indices(Some(vec![0, 1]))?
             .with_limit(Some(5))
-            .with_file(PartitionedFile::new(path.display().to_string(), 10))
+            .with_file(PartitionedFile::new(csv_path.display().to_string(), 10))
             .build();
 
     let opener =
@@ -89,15 +90,15 @@ async fn csv_opener() -> Result<()> {
     }
     assert_batches_eq!(
         &[
-            "+--------------------------------+----+",
-            "| c13                            | c1 |",
-            "+--------------------------------+----+",
-            "| 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW | c  |",
-            "| C2GT5KVyOPZpgKVl110TyZO0NcJ434 | d  |",
-            "| AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz | b  |",
-            "| 0keZ5G8BffGwgF2RwQD59TFzMStxCB | a  |",
-            "| Ig1QcuKsjHXkproePdERo2w0mYzIqd | b  |",
-            "+--------------------------------+----+",
+            "+-----+-------+",
+            "| car | speed |",
+            "+-----+-------+",
+            "| red | 20.0  |",
+            "| red | 20.3  |",
+            "| red | 21.4  |",
+            "| red | 21.5  |",
+            "| red | 19.0  |",
+            "+-----+-------+",
         ],
         &result
     );

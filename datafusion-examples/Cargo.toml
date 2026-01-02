@@ -35,6 +35,13 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[dependencies]
+arrow = { workspace = true }
+datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
+datafusion-common = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
+
 [dev-dependencies]
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
