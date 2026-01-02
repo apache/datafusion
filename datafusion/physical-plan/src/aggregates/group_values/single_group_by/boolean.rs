@@ -99,43 +99,48 @@ impl GroupValues for GroupValuesBoolean {
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let len = self.len();
-        let mut builder = BooleanBufferBuilder::new(len);
-        let emit_count = match emit_to {
-            EmitTo::All => len,
+        let n = match emit_to {
             EmitTo::First(n) => n,
+            EmitTo::Next(batch_size) => batch_size.min(len),
         };
+
+        if n == 0 || len == 0 {
+            return Ok(vec![Arc::new(BooleanArray::from(Vec::<bool>::new())) as _]);
+        }
+
+        let emit_count = n.min(len);
+        let mut builder = BooleanBufferBuilder::new(emit_count);
         builder.append_n(emit_count, false);
-        if let Some(idx) = self.true_group.as_mut() {
-            if *idx < emit_count {
-                builder.set_bit(*idx, true);
+
+        if let Some(idx) = self.true_group {
+            if idx < emit_count {
+                builder.set_bit(idx, true);
                 self.true_group = None;
             } else {
-                *idx -= emit_count;
+                self.true_group = Some(idx - emit_count);
             }
         }
 
-        if let Some(idx) = self.false_group.as_mut() {
-            if *idx < emit_count {
-                // already false, no need to set
+        if let Some(idx) = self.false_group {
+            if idx < emit_count {
                 self.false_group = None;
             } else {
-                *idx -= emit_count;
+                self.false_group = Some(idx - emit_count);
             }
         }
 
         let values = builder.finish();
 
-        let nulls = if let Some(idx) = self.null_group.as_mut() {
-            if *idx < emit_count {
-                let mut buffer = NullBufferBuilder::new(len);
-                buffer.append_n_non_nulls(*idx);
+        let nulls = if let Some(idx) = self.null_group {
+            if idx < emit_count {
+                let mut buffer = NullBufferBuilder::new(emit_count);
+                buffer.append_n_non_nulls(idx);
                 buffer.append_null();
-                buffer.append_n_non_nulls(emit_count - *idx - 1);
-
+                buffer.append_n_non_nulls(emit_count - idx - 1);
                 self.null_group = None;
                 Some(buffer.finish().unwrap())
             } else {
-                *idx -= emit_count;
+                self.null_group = Some(idx - emit_count);
                 None
             }
         } else {

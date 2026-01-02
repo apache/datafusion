@@ -68,6 +68,9 @@ pub(crate) enum ExecutionState {
     ///
     /// See "partial aggregation" discussion on [`GroupedHashAggregateStream`]
     SkippingAggregation,
+    /// Incrementally draining groups after all input has been consumed.
+    /// Emits groups in batch_size chunks to improve time-to-first-row latency.
+    Draining,
     /// All input has been consumed and all groups have been emitted
     Done,
 }
@@ -881,6 +884,33 @@ impl Stream for GroupedHashAggregateStream {
                     )));
                 }
 
+                ExecutionState::Draining => {
+                    let timer = elapsed_compute.timer();
+                    let batch_size = self.batch_size;
+                    let batch = self.emit(EmitTo::Next(batch_size), false)?;
+                    timer.done();
+
+                    match batch {
+                        Some(batch) if batch.num_rows() > 0 => {
+                            if let Some(reduction_factor) = self.reduction_factor.as_ref()
+                            {
+                                reduction_factor.add_part(batch.num_rows());
+                            }
+
+                            if self.group_values.is_empty() {
+                                self.exec_state = ExecutionState::Done;
+                            }
+
+                            return Poll::Ready(Some(Ok(
+                                batch.record_output(&self.baseline_metrics)
+                            )));
+                        }
+                        _ => {
+                            self.exec_state = ExecutionState::Done;
+                        }
+                    }
+                }
+
                 ExecutionState::Done => {
                     // Sanity check: all groups should have been emitted by now
                     if !self.group_values.is_empty() {
@@ -1121,7 +1151,8 @@ impl GroupedHashAggregateStream {
     /// read back with streaming merge.
     fn spill(&mut self) -> Result<()> {
         // Emit and sort intermediate aggregation state
-        let Some(emit) = self.emit(EmitTo::All, true)? else {
+        // Use Next with a large batch size to emit all at once for spilling
+        let Some(emit) = self.emit(EmitTo::Next(usize::MAX), true)? else {
             return Ok(());
         };
         let sorted = sort_batch(&emit, &self.spill_state.spill_expr, None)?;
@@ -1183,13 +1214,8 @@ impl GroupedHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         self.exec_state = if self.spill_state.spills.is_empty() {
-            // Input has been entirely processed without spilling to disk.
-
-            // Flush any remaining group values.
-            let batch = self.emit(EmitTo::All, false)?;
-
-            // If there are none, we're done; otherwise switch to emitting them
-            batch.map_or(ExecutionState::Done, ExecutionState::ProducingOutput)
+            // No spilling - drain groups incrementally
+            ExecutionState::Draining
         } else {
             // Spill any remaining data to disk. There is some performance overhead in
             // writing out this last chunk of data and reading it back. The benefit of
@@ -1254,7 +1280,8 @@ impl GroupedHashAggregateStream {
     fn switch_to_skip_aggregation(&mut self) -> Result<Option<ExecutionState>> {
         if let Some(probe) = self.skip_aggregation_probe.as_mut()
             && probe.should_skip()
-            && let Some(batch) = self.emit(EmitTo::All, false)?
+            // Note: We use Next(usize::MAX) to emit all groups at once
+            && let Some(batch) = self.emit(EmitTo::Next(usize::MAX), false)?
         {
             return Ok(Some(ExecutionState::ProducingOutput(batch)));
         };

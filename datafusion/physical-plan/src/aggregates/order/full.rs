@@ -92,7 +92,8 @@ impl GroupOrderingFull {
                     Some(EmitTo::First(*current))
                 }
             }
-            State::Complete => Some(EmitTo::All),
+            // When complete, emit all remaining groups using Next with max size
+            State::Complete => Some(EmitTo::Next(usize::MAX)),
         }
     }
 

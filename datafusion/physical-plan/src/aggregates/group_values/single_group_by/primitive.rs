@@ -177,11 +177,8 @@ where
         }
 
         let array: PrimitiveArray<T> = match emit_to {
-            EmitTo::All => {
-                self.map.clear();
-                build_primitive(std::mem::take(&mut self.values), self.null_group.take())
-            }
             EmitTo::First(n) => {
+                // Emit first n groups and shift remaining indices
                 self.map.retain(|entry| {
                     // Decrement group index by n
                     let group_idx = entry.0;
@@ -203,6 +200,30 @@ where
                     Some(_) => self.null_group.take(),
                     None => None,
                 };
+                let mut split = self.values.split_off(n);
+                std::mem::swap(&mut self.values, &mut split);
+                build_primitive(split, null_group)
+            }
+            EmitTo::Next(batch_size) => {
+                let n = batch_size.min(self.values.len());
+                if n == 0 {
+                    return Ok(vec![Arc::new(
+                        PrimitiveArray::<T>::new_null(0)
+                            .with_data_type(self.data_type.clone()),
+                    )]);
+                }
+
+                self.map.clear();
+
+                let null_group = match &mut self.null_group {
+                    Some(v) if *v >= n => {
+                        *v -= n;
+                        None
+                    }
+                    Some(_) => self.null_group.take(),
+                    None => None,
+                };
+
                 let mut split = self.values.split_off(n);
                 std::mem::swap(&mut self.values, &mut split);
                 build_primitive(split, null_group)

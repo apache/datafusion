@@ -108,7 +108,6 @@ where
         let values = self.values.finish();
 
         let values = match emit_to {
-            EmitTo::All => values,
             EmitTo::First(n) => {
                 let first_n: BooleanBuffer = values.iter().take(n).collect();
                 // put n+1 back into self.values
@@ -116,6 +115,22 @@ where
                     self.values.append(v);
                 }
                 first_n
+            }
+            EmitTo::Next(batch_size) => {
+                // For Next, we take up to batch_size from the current position
+                let len = values.len();
+                let n = batch_size.min(len);
+                if n == len {
+                    // Taking everything
+                    values
+                } else {
+                    // Take first n and keep the rest
+                    let first_n: BooleanBuffer = values.iter().take(n).collect();
+                    for v in values.iter().skip(n) {
+                        self.values.append(v);
+                    }
+                    first_n
+                }
             }
         };
 

@@ -274,22 +274,23 @@ impl MinMaxStructState {
     /// - `data_capacity`: the total length of all strings and their contents,
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<StructArray>>) {
-        match emit_to {
-            EmitTo::All => {
-                (
-                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
-                    std::mem::take(&mut self.min_max),
-                )
-            }
-            EmitTo::First(n) => {
-                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
-                let first_data_capacity: usize = first_min_maxes
-                    .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum();
-                self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
-            }
+        let n = emit_to.batch_size().min(self.min_max.len());
+
+        if n == self.min_max.len() {
+            // Taking all
+            (
+                std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
+                std::mem::take(&mut self.min_max),
+            )
+        } else {
+            // Taking first n
+            let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+            let first_data_capacity: usize = first_min_maxes
+                .iter()
+                .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                .sum();
+            self.total_data_bytes -= first_data_capacity;
+            (first_data_capacity, first_min_maxes)
         }
     }
 
@@ -362,8 +363,8 @@ mod tests {
         max_accumulator
             .update_batch(&values, &group_indices, None, 1)
             .unwrap();
-        let min_result = min_accumulator.evaluate(EmitTo::All).unwrap();
-        let max_result = max_accumulator.evaluate(EmitTo::All).unwrap();
+        let min_result = min_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
+        let max_result = max_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 
@@ -400,8 +401,8 @@ mod tests {
         max_accumulator
             .update_batch(&values, &group_indices, None, 1)
             .unwrap();
-        let min_result = min_accumulator.evaluate(EmitTo::All).unwrap();
-        let max_result = max_accumulator.evaluate(EmitTo::All).unwrap();
+        let min_result = min_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
+        let max_result = max_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 
@@ -440,8 +441,8 @@ mod tests {
         max_accumulator
             .update_batch(&values, &group_indices, None, 1)
             .unwrap();
-        let min_result = min_accumulator.evaluate(EmitTo::All).unwrap();
-        let max_result = max_accumulator.evaluate(EmitTo::All).unwrap();
+        let min_result = min_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
+        let max_result = max_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 
@@ -478,8 +479,8 @@ mod tests {
         max_accumulator
             .update_batch(&values, &group_indices, None, 2)
             .unwrap();
-        let min_result = min_accumulator.evaluate(EmitTo::All).unwrap();
-        let max_result = max_accumulator.evaluate(EmitTo::All).unwrap();
+        let min_result = min_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
+        let max_result = max_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 
@@ -523,8 +524,8 @@ mod tests {
         max_accumulator
             .update_batch(&values, &group_indices, Some(&filter), 1)
             .unwrap();
-        let min_result = min_accumulator.evaluate(EmitTo::All).unwrap();
-        let max_result = max_accumulator.evaluate(EmitTo::All).unwrap();
+        let min_result = min_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
+        let max_result = max_accumulator.evaluate(EmitTo::Next(usize::MAX)).unwrap();
         let min_result = min_result.as_struct();
         let max_result = max_result.as_struct();
 

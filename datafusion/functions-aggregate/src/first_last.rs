@@ -429,10 +429,13 @@ where
         let result = emit_to.take_needed(&mut self.orderings);
 
         match emit_to {
-            EmitTo::All => self.size_of_orderings = 0,
             EmitTo::First(_) => {
                 self.size_of_orderings -=
                     result.iter().map(ScalarValue::size_of_vec).sum::<usize>()
+            }
+            EmitTo::Next(_) => {
+                // During drain, just reset the size tracking
+                self.size_of_orderings = 0;
             }
         }
 
@@ -444,20 +447,22 @@ where
         emit_to: EmitTo,
     ) -> BooleanBuffer {
         let bool_buf = bool_buf_builder.finish();
-        match emit_to {
-            EmitTo::All => bool_buf,
-            EmitTo::First(n) => {
-                // split off the first N values in seen_values
-                //
-                // TODO make this more efficient rather than two
-                // copies and bitwise manipulation
-                let first_n: BooleanBuffer = bool_buf.iter().take(n).collect();
-                // reset the existing buffer
-                for b in bool_buf.iter().skip(n) {
-                    bool_buf_builder.append(b);
-                }
-                first_n
+        let n = emit_to.batch_size().min(bool_buf.len());
+
+        if n == bool_buf.len() {
+            // Taking all - just return the buffer
+            bool_buf
+        } else {
+            // split off the first N values in seen_values
+            //
+            // TODO make this more efficient rather than two
+            // copies and bitwise manipulation
+            let first_n: BooleanBuffer = bool_buf.iter().take(n).collect();
+            // reset the existing buffer
+            for b in bool_buf.iter().skip(n) {
+                bool_buf_builder.append(b);
             }
+            first_n
         }
     }
 
@@ -1728,7 +1733,7 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
-        let state = group_acc.state(EmitTo::All)?;
+        let state = group_acc.state(EmitTo::Next(usize::MAX))?;
 
         let expected_state: Vec<Arc<dyn Array>> = vec![
             Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
@@ -1760,7 +1765,7 @@ mod tests {
 
         group_acc.update_batch(&val_with_orderings, &[1, 2], None, 4)?;
 
-        let binding = group_acc.evaluate(EmitTo::All)?;
+        let binding = group_acc.evaluate(EmitTo::Next(usize::MAX))?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
         let expect: PrimitiveArray<Int64Type> =
@@ -1829,7 +1834,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            let s = group_acc.state(EmitTo::All)?;
+            let s = group_acc.state(EmitTo::Next(usize::MAX))?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1847,7 +1852,7 @@ mod tests {
                 group_acc.compute_size_of_orderings()
             );
 
-            group_acc.evaluate(EmitTo::All)?;
+            group_acc.evaluate(EmitTo::Next(usize::MAX))?;
             assert_eq!(
                 group_acc.size_of_orderings,
                 group_acc.compute_size_of_orderings()
@@ -1899,7 +1904,7 @@ mod tests {
             3,
         )?;
 
-        let state = group_acc.state(EmitTo::All)?;
+        let state = group_acc.state(EmitTo::Next(usize::MAX))?;
 
         let expected_state: Vec<Arc<dyn Array>> = vec![
             Arc::new(Int64Array::from(vec![Some(1), Some(-6), None])),
@@ -1921,7 +1926,7 @@ mod tests {
 
         group_acc.update_batch(&val_with_orderings, &[1, 2], None, 4)?;
 
-        let binding = group_acc.evaluate(EmitTo::All)?;
+        let binding = group_acc.evaluate(EmitTo::Next(usize::MAX))?;
         let eval_result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
         let expect: PrimitiveArray<Int64Type> =

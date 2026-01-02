@@ -412,8 +412,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
+            EmitTo::First(n) | EmitTo::Next(n) => n.min(self.count.len()),
         };
 
         let mut values = Vec::with_capacity(n);
@@ -471,8 +470,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
+            EmitTo::First(n) | EmitTo::Next(n) => n.min(self.count.len()),
         };
 
         Ok(vec![

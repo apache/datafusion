@@ -438,15 +438,15 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 pub enum FFI_EmitTo {
-    All,
     First(usize),
+    Next(usize),
 }
 
 impl From<EmitTo> for FFI_EmitTo {
     fn from(value: EmitTo) -> Self {
         match value {
-            EmitTo::All => Self::All,
             EmitTo::First(v) => Self::First(v),
+            EmitTo::Next(v) => Self::Next(v),
         }
     }
 }
@@ -454,8 +454,8 @@ impl From<EmitTo> for FFI_EmitTo {
 impl From<FFI_EmitTo> for EmitTo {
     fn from(value: FFI_EmitTo) -> Self {
         match value {
-            FFI_EmitTo::All => Self::All,
             FFI_EmitTo::First(v) => Self::First(v),
+            FFI_EmitTo::Next(v) => Self::Next(v),
         }
     }
 }
@@ -491,7 +491,7 @@ mod tests {
             3,
         )?;
 
-        let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
+        let groups_bool = foreign_accum.evaluate(EmitTo::Next(usize::MAX))?;
         let groups_bool = groups_bool.as_any().downcast_ref::<BooleanArray>().unwrap();
 
         assert_eq!(
@@ -499,7 +499,7 @@ mod tests {
             create_array!(Boolean, vec![Some(true), Some(false), None]).as_ref()
         );
 
-        let state = foreign_accum.state(EmitTo::All)?;
+        let state = foreign_accum.state(EmitTo::Next(usize::MAX))?;
         assert_eq!(state.len(), 1);
 
         // To verify merging batches works, create a second state to add in
@@ -509,7 +509,7 @@ mod tests {
 
         let opt_filter = create_array!(Boolean, vec![true]);
         foreign_accum.merge_batch(&second_states, &[0], Some(opt_filter.as_ref()), 1)?;
-        let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
+        let groups_bool = foreign_accum.evaluate(EmitTo::Next(usize::MAX))?;
         assert_eq!(groups_bool.len(), 1);
         assert_eq!(
             groups_bool.as_ref(),
@@ -540,7 +540,7 @@ mod tests {
     /// This test ensures all enum values are properly translated
     #[test]
     fn test_all_emit_to_round_trip() -> Result<()> {
-        test_emit_to_round_trip(EmitTo::All)?;
+        test_emit_to_round_trip(EmitTo::Next(usize::MAX))?;
         test_emit_to_round_trip(EmitTo::First(10))?;
 
         Ok(())

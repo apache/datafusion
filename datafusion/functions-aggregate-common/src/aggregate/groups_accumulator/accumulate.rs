@@ -215,7 +215,6 @@ impl NullState {
         let nulls: BooleanBuffer = self.seen_values.finish();
 
         let nulls = match emit_to {
-            EmitTo::All => nulls,
             EmitTo::First(n) => {
                 // split off the first N values in seen_values
                 let first_n_null: BooleanBuffer = nulls.slice(0, n);
@@ -223,6 +222,21 @@ impl NullState {
                 self.seen_values
                     .append_buffer(&nulls.slice(n, nulls.len() - n));
                 first_n_null
+            }
+            EmitTo::Next(batch_size) => {
+                // For Next, we take up to batch_size from the current position
+                // Since the internal buffer is already finished, we take from the front
+                let len = nulls.len();
+                let n = batch_size.min(len);
+                if n == len {
+                    // Taking everything
+                    nulls
+                } else {
+                    // Take first n and keep the rest
+                    let first_n_null: BooleanBuffer = nulls.slice(0, n);
+                    self.seen_values.append_buffer(&nulls.slice(n, len - n));
+                    first_n_null
+                }
             }
         };
         NullBuffer::new(nulls)
@@ -840,7 +854,7 @@ mod test {
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All);
+            let null_buffer = null_state.build(EmitTo::Next(usize::MAX));
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
@@ -961,7 +975,7 @@ mod test {
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
-            let null_buffer = null_state.build(EmitTo::All);
+            let null_buffer = null_state.build(EmitTo::Next(usize::MAX));
 
             assert_eq!(null_buffer, expected_null_buffer);
         }
