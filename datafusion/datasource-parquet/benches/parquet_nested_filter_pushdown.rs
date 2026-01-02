@@ -87,14 +87,14 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
         col(COLUMN_NAME),
         Expr::Literal(ScalarValue::Utf8(Some(TARGET_VALUE.to_string())), None),
     );
-    let predicate = logical2physical(&predicate, &file_schema);
+    let predicate = logical2physical(&predicate, file_schema);
 
     let metrics = ExecutionPlanMetricsSet::new();
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
         if let Some(row_filter) =
-            build_row_filter(&predicate, &file_schema, &metadata, false, &file_metrics)?
+            build_row_filter(&predicate, file_schema, &metadata, false, &file_metrics)?
         {
             builder.with_row_filter(row_filter)
         } else {
@@ -113,7 +113,7 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
     }
 
     if pushdown {
-        let pruned_rows = file_metrics.pushdown_rows_pruned.value() as usize;
+        let pruned_rows = file_metrics.pushdown_rows_pruned.value();
         assert_eq!(
             pruned_rows,
             TOTAL_ROWS - matched_rows,
