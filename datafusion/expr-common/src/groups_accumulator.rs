@@ -18,6 +18,7 @@
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, not_impl_err};
 
 /// Describes how many rows should be emitted during grouping.
@@ -244,10 +245,31 @@ pub trait GroupsAccumulator: Send {
         false
     }
 
-    /// Amount of memory used to store the state of this accumulator,
-    /// in bytes.
+    /// Returns the allocated memory size required by this accumulator, in bytes.
     ///
-    /// This function is called once per batch, so it should be `O(n)` to
-    /// compute, not `O(num_groups)`
-    fn size(&self) -> usize;
+    /// This value is used to calculate the memory used during execution so
+    /// DataFusion can stay within its allocated memory limit.
+    ///
+    /// # Memory Pool for Shared Buffers
+    ///
+    /// When `pool` is `None`:
+    /// - Returns the total memory size including Arrow buffers
+    /// - This is the default behavior and works for most use cases
+    ///
+    /// When `pool` is `Some`:
+    /// - Returns only the structural size (the accumulator struct, Vec capacities, etc.)
+    /// - Claims Arrow buffers with the provided [`MemoryPool`] for tracking
+    /// - It is recommended when accumulators may share Arrow array buffers, as the pool
+    ///   automatically deduplicates shared buffers to provide accurate memory accounting
+    /// - Callers should add `pool.used()` to this return value for the total memory
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // With memory pool for accurate tracking when buffers may be shared
+    /// let pool = TrackingMemoryPool::default();
+    /// let structural_size = accumulator.size(Some(&pool));
+    /// let total_memory = structural_size + pool.used();
+    /// ```
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize;
 }

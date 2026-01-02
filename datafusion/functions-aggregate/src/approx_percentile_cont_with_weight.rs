@@ -24,6 +24,7 @@ use std::sync::Arc;
 use arrow::compute::{and, filter, is_not_null};
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow_buffer::MemoryPool;
 use datafusion_common::ScalarValue;
 use datafusion_common::{Result, not_impl_err, plan_err};
 use datafusion_expr::Volatility::Immutable;
@@ -341,8 +342,8 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.approx_percentile_cont_accumulator)
-            + self.approx_percentile_cont_accumulator.size()
+            + self.approx_percentile_cont_accumulator.size(pool)
     }
 }

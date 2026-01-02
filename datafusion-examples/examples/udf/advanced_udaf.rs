@@ -18,6 +18,7 @@
 //! See `main.rs` for how to run it.
 
 use arrow::datatypes::{Field, Schema};
+use arrow_buffer::MemoryPool;
 use datafusion::physical_expr::NullState;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::{any::Any, sync::Arc};
@@ -195,7 +196,7 @@ impl Accumulator for GeometricMean {
         })
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -362,7 +363,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         ])
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.counts.capacity() * size_of::<u32>()
             + self.prods.capacity() * size_of::<Float64Type>()
     }

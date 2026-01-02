@@ -17,6 +17,7 @@
 
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::downcast_dictionary_array;
+use arrow_buffer::MemoryPool;
 use datafusion_common::internal_err;
 use datafusion_common::{ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
@@ -56,8 +57,8 @@ impl Accumulator for DictionaryCountAccumulator {
         self.inner.evaluate()
     }
 
-    fn size(&self) -> usize {
-        self.inner.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.inner.size(pool)
     }
 
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {

@@ -20,6 +20,7 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DataType, Decimal128Type, Field, FieldRef, Float64Type,
     Int64Type,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue, downcast_value, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -116,7 +117,7 @@ impl<T: ArrowNumericType> Accumulator for TrySumAccumulator<T> {
         evaluate_internal(self)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }

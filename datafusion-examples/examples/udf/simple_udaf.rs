@@ -17,6 +17,7 @@
 
 //! See `main.rs` for how to run it.
 //!
+use arrow_buffer::MemoryPool;
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
 use datafusion::arrow::{
@@ -132,7 +133,7 @@ impl Accumulator for GeometricMean {
         })
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }

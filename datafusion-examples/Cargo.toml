@@ -37,6 +37,7 @@ workspace = true
 
 [dev-dependencies]
 arrow = { workspace = true }
+arrow-buffer = { workspace = true, features = ["pool"] }
 # arrow_schema is required for record_batch! macro :sad:
 arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }

@@ -30,6 +30,7 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     plan_err,
@@ -479,7 +480,7 @@ impl Accumulator for ApproxPercentileAccumulator {
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.digest.size() - size_of_val(&self.digest)
             + self.return_type.size()
             - size_of_val(&self.return_type)

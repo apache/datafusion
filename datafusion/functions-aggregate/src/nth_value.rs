@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, StructArray, new_empty_array};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::utils::{SingleRowListArrayBuilder, get_row_at_idx};
 use datafusion_common::{
     Result, ScalarValue, assert_or_internal_err, exec_err, not_impl_err,
@@ -308,7 +309,7 @@ impl Accumulator for TrivialNthValueAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
             - size_of_val(&self.values)
             + size_of::<DataType>()
@@ -522,7 +523,7 @@ impl Accumulator for NthValueAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         let mut total = size_of_val(self) + ScalarValue::size_of_vec_deque(&self.values)
             - size_of_val(&self.values);
 

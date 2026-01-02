@@ -27,6 +27,7 @@ use arrow::datatypes::{
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
     Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::types::{
     NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
     logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
@@ -391,7 +392,7 @@ impl<T: ArrowNumericType> Accumulator for SumAccumulator<T> {
         ScalarValue::new_primitive::<T>(self.sum, &self.data_type)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -451,7 +452,7 @@ impl<T: ArrowNumericType> Accumulator for SlidingSumAccumulator<T> {
         ScalarValue::new_primitive::<T>(v, &self.data_type)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -515,7 +516,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
         Ok(ScalarValue::Int64(Some(self.sum)))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 

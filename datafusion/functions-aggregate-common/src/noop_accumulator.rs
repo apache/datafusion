@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::ArrayRef;
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 
@@ -54,7 +55,7 @@ impl Accumulator for NoopAccumulator {
         Ok(self.evaluate_value.clone())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 

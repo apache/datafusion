@@ -7,6 +7,12 @@ disallowed-types = [
     { path = "std::time::Instant", reason = "Use `datafusion_common::instant::Instant` instead for WASM compatibility" },
 ]
 
+ignore-interior-mutability = [
+    # arrow_buffer::Bytes contains Mutex<MemoryReservation> for memory pool tracking,
+    # but this doesn't affect Hash/Eq implementations (those only depend on data content).
+    "arrow_buffer::bytes::Bytes",
+]
+
 # Lowering the threshold to help prevent stack overflows (default is 16384)
 # See: https://rust-lang.github.io/rust-clippy/master/index.html#/large_futures
 future-size-threshold = 10000

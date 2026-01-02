@@ -23,6 +23,7 @@ use arrow::{
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
 };
@@ -434,7 +435,7 @@ impl Accumulator for CovarianceAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }

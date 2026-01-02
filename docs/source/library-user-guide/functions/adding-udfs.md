@@ -1118,7 +1118,7 @@ impl Accumulator for GeometricMean {
         })
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         std::mem::size_of_val(self)
     }
 }
@@ -1199,7 +1199,7 @@ There is a lower level API with more functionality but is more complex, that is 
 #         })
 #     }
 #
-#     fn size(&self) -> usize {
+#     fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
 #         std::mem::size_of_val(self)
 #     }
 # }
@@ -1307,7 +1307,7 @@ The `create_udaf` has six arguments to check:
 #         })
 #     }
 #
-#     fn size(&self) -> usize {
+#     fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
 #         std::mem::size_of_val(self)
 #     }
 # }

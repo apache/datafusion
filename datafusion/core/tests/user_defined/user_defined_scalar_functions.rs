@@ -365,7 +365,7 @@ async fn udaf_as_window_func() -> Result<()> {
             unimplemented!()
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
             unimplemented!()
         }
     }

@@ -27,6 +27,7 @@ use arrow::compute::bool_or as compute_bool_or;
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::internal_err;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{downcast_value, not_impl_err};
@@ -215,7 +216,7 @@ impl Accumulator for BoolAndAccumulator {
         Ok(ScalarValue::Boolean(self.acc))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -353,7 +354,7 @@ impl Accumulator for BoolOrAccumulator {
         Ok(ScalarValue::Boolean(self.acc))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 

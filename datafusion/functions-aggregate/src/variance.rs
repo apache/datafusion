@@ -25,6 +25,7 @@ use arrow::{
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue, downcast_value, not_impl_err, plan_err};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
@@ -407,7 +408,7 @@ impl Accumulator for VarianceAccumulator {
         }))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -574,7 +575,7 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         ])
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()
             + self.counts.capacity() * size_of::<u64>()

@@ -23,6 +23,7 @@ use arrow::array::{
 };
 use arrow::compute::sum;
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow_buffer::MemoryPool;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -199,7 +200,7 @@ impl Accumulator for AvgAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -347,7 +348,7 @@ where
         ])
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
     }
 }

@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_common::{ScalarValue, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -329,8 +330,8 @@ impl Accumulator for StddevAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
-        align_of_val(self) - align_of_val(&self.variance) + self.variance.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        align_of_val(self) - align_of_val(&self.variance) + self.variance.size(pool)
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -384,8 +385,8 @@ impl GroupsAccumulator for StddevGroupsAccumulator {
         self.variance.state(emit_to)
     }
 
-    fn size(&self) -> usize {
-        self.variance.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.variance.size(pool)
     }
 }
 

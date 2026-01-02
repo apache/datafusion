@@ -49,6 +49,7 @@ name = "datafusion_physical_plan"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-buffer = { workspace = true, features = ["pool"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }

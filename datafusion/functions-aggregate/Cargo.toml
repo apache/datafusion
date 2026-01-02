@@ -43,6 +43,7 @@ name = "datafusion_functions_aggregate"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-buffer = { workspace = true, features = ["pool"] }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
