@@ -21,18 +21,17 @@ use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use ahash::RandomState;
 use arrow::{
-    array::{BooleanArray, UInt64Array},
-    buffer::MutableBuffer,
+    array::UInt64Array,
     datatypes::{DataType, Schema},
-    util::bit_util,
 };
+use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
     DynHash, PhysicalExpr, PhysicalExprRef,
 };
 
-use crate::{hash_utils::create_hashes, joins::utils::JoinHashMapType};
+use crate::joins::utils::JoinHashMapType;
 
 /// RandomState wrapper that preserves the seeds used to create it.
 ///
@@ -342,13 +341,9 @@ impl PhysicalExpr for HashTableLookupExpr {
         )?;
 
         // Check each hash against the hash table
-        let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
-        self.hash_map
-            .set_bits_if_exists(hash_array.values(), buf.as_slice_mut());
+        let array = self.hash_map.contain_hashes(hash_array.values());
 
-        Ok(ColumnarValue::Array(Arc::new(
-            BooleanArray::new_from_packed(buf, 0, num_rows),
-        )))
+        Ok(ColumnarValue::Array(Arc::new(array)))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
