@@ -107,7 +107,23 @@ impl ScalarUDFImpl for NanvlFunc {
                 .cast_to(args.return_type(), None);
         }
 
-        make_scalar_function(nanvl, vec![])(&args.args)
+        let target_type = if args
+            .args
+            .iter()
+            .all(|arg| matches!(arg.data_type(), Float32))
+        {
+            Float32
+        } else {
+            Float64
+        };
+
+        let casted_args = args
+            .args
+            .iter()
+            .map(|arg| arg.cast_to(&target_type, None))
+            .collect::<Result<Vec<_>>>()?;
+
+        make_scalar_function(nanvl, vec![])(&casted_args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
