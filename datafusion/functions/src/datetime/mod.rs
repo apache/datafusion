@@ -22,6 +22,7 @@ use std::sync::Arc;
 use datafusion_expr::ScalarUDF;
 
 pub mod common;
+pub use common::adjust_to_local_time;
 pub mod current_date;
 pub mod current_time;
 pub mod date_bin;
