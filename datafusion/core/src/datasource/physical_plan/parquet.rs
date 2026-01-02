@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -1527,14 +1527,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
         fn file_range(meta: &ObjectMeta, start: i64, end: i64) -> PartitionedFile {
-            PartitionedFile {
-                object_meta: meta.clone(),
-                partition_values: vec![],
-                range: Some(FileRange { start, end }),
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            }
+            PartitionedFile::new_from_meta(meta.clone()).with_range(start, end)
         }
 
         async fn assert_parquet_read(
@@ -1616,21 +1609,15 @@ mod tests {
             .await
             .unwrap();
 
-        let partitioned_file = PartitionedFile {
-            object_meta: meta,
-            partition_values: vec![
+        let partitioned_file = PartitionedFile::new_from_meta(meta)
+            .with_partition_values(vec![
                 ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
                 ScalarValue::Dictionary(
                     Box::new(DataType::UInt16),
                     Box::new(ScalarValue::from("26")),
                 ),
-            ],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+            ]);
 
         let expected_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
@@ -1711,20 +1698,13 @@ mod tests {
             .unwrap()
             .child("invalid.parquet");
 
-        let partitioned_file = PartitionedFile {
-            object_meta: ObjectMeta {
-                location,
-                last_modified: Utc.timestamp_nanos(0),
-                size: 1337,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
+            location,
+            last_modified: Utc.timestamp_nanos(0),
+            size: 1337,
+            e_tag: None,
+            version: None,
+        });
 
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
@@ -2376,36 +2356,22 @@ mod tests {
         );
         let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
-                PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(name_1),
-                        last_modified: Utc::now(),
-                        size: total_size_1,
-                        e_tag: None,
-                        version: None,
-                    },
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                }
-                .with_metadata_size_hint(123),
-            )
-            .with_file(PartitionedFile {
-                object_meta: ObjectMeta {
-                    location: Path::from(name_2),
+                PartitionedFile::new_from_meta(ObjectMeta {
+                    location: Path::from(name_1),
                     last_modified: Utc::now(),
-                    size: total_size_2,
+                    size: total_size_1,
                     e_tag: None,
                     version: None,
-                },
-                partition_values: vec![],
-                range: None,
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            })
+                })
+                .with_metadata_size_hint(123),
+            )
+            .with_file(PartitionedFile::new_from_meta(ObjectMeta {
+                location: Path::from(name_2),
+                last_modified: Utc::now(),
+                size: total_size_2,
+                e_tag: None,
+                version: None,
+            }))
             .build();
 
         let exec = DataSourceExec::from_data_source(config);

@@ -220,8 +220,9 @@ mod tests {
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
         test_util::parquet_test_data,
     };
-    use datafusion_execution::cache::CacheAccessor;
-    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+    use datafusion_execution::cache::cache_manager::{
+        CacheManagerConfig, FileStatisticsCache,
+    };
     use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;

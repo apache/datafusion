@@ -1829,7 +1829,7 @@ async fn test_topk_dynamic_filter_pushdown_integration() {
 COPY  (
   SELECT 1372708800 + value AS t
   FROM generate_series(0, 99999)
-  ORDER BY t
+  ORDER BY t + 1
  ) TO 'memory:///1.parquet'
 STORED AS PARQUET;
   ",

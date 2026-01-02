@@ -160,16 +160,8 @@ impl TestParquetFile {
                 .with_table_parquet_options(parquet_options.clone()),
         );
         let scan_config_builder =
-            FileScanConfigBuilder::new(self.object_store_url.clone(), source).with_file(
-                PartitionedFile {
-                    object_meta: self.object_meta.clone(),
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                },
-            );
+            FileScanConfigBuilder::new(self.object_store_url.clone(), source)
+                .with_file(PartitionedFile::new_from_meta(self.object_meta.clone()));
 
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 
@@ -228,4 +220,92 @@ impl TestParquetFile {
     pub fn path(&self) -> &std::path::Path {
         self.path.as_path()
     }
+}
+
+/// Specification for a sorting column in a Parquet file.
+///
+/// This is used by [`create_sorted_parquet_file`] to define the sort order
+/// when creating test Parquet files with sorting metadata.
+#[derive(Debug, Clone)]
+pub struct SortColumnSpec {
+    /// The column index in the schema (0-based)
+    pub column_idx: usize,
+    /// If true, the column is sorted in descending order
+    pub descending: bool,
+    /// If true, nulls come before non-null values
+    pub nulls_first: bool,
+}
+
+impl SortColumnSpec {
+    /// Create a new sort column specification
+    pub fn new(column_idx: usize, descending: bool, nulls_first: bool) -> Self {
+        Self {
+            column_idx,
+            descending,
+            nulls_first,
+        }
+    }
+
+    /// Create an ascending, nulls-first sort column
+    pub fn asc_nulls_first(column_idx: usize) -> Self {
+        Self::new(column_idx, false, true)
+    }
+
+    /// Create an ascending, nulls-last sort column
+    pub fn asc_nulls_last(column_idx: usize) -> Self {
+        Self::new(column_idx, false, false)
+    }
+
+    /// Create a descending, nulls-first sort column
+    pub fn desc_nulls_first(column_idx: usize) -> Self {
+        Self::new(column_idx, true, true)
+    }
+
+    /// Create a descending, nulls-last sort column
+    pub fn desc_nulls_last(column_idx: usize) -> Self {
+        Self::new(column_idx, true, false)
+    }
+}
+
+/// Creates a test Parquet file with sorting_columns metadata.
+///
+/// This is useful for testing ordering inference from Parquet files.
+///
+/// # Arguments
+/// * `path` - The path where the Parquet file will be written
+/// * `batches` - The record batches to write to the file
+/// * `sorting_columns` - The sorting column specifications (defines the sort order)
+///
+/// # Example
+/// ```ignore
+/// use datafusion::test_util::parquet::{create_sorted_parquet_file, SortColumnSpec};
+///
+/// let batches = vec![batch1, batch2];
+/// let sorting = vec![
+///     SortColumnSpec::asc_nulls_first(0),  // First column ascending
+///     SortColumnSpec::desc_nulls_last(1),  // Second column descending
+/// ];
+/// let test_file = create_sorted_parquet_file(path, batches, sorting)?;
+/// ```
+pub fn create_sorted_parquet_file(
+    path: PathBuf,
+    batches: impl IntoIterator<Item = RecordBatch>,
+    sorting_columns: Vec<SortColumnSpec>,
+) -> Result<TestParquetFile> {
+    use parquet::file::metadata::SortingColumn;
+
+    let parquet_sorting_columns: Vec<SortingColumn> = sorting_columns
+        .into_iter()
+        .map(|spec| SortingColumn {
+            column_idx: spec.column_idx as i32,
+            descending: spec.descending,
+            nulls_first: spec.nulls_first,
+        })
+        .collect();
+
+    let props = WriterProperties::builder()
+        .set_sorting_columns(Some(parquet_sorting_columns))
+        .build();
+
+    TestParquetFile::try_new(path, props, batches)
 }

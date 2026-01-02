@@ -573,6 +573,9 @@ impl DefaultPhysicalPlanner {
                     file_extension,
                 };
 
+                // Note that because the input is an arbitrary execution plan, this ordering may involve expressions
+                // e.g. `ORDER BY random()`.
+                // In this case the file format probably cannot encode the ordering and it will be ignored.
                 let ordering = input_exec.properties().output_ordering().cloned();
 
                 sink_format
