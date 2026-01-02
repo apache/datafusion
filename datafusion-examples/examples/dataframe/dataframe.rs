@@ -86,7 +86,7 @@ async fn read_parquet(ctx: &SessionContext) -> Result<()> {
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let parquet_temp = write_csv_to_parquet(ctx, &csv_path).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
