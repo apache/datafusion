@@ -15,22 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query I
+query T
 SELECT space(1::INT);
 ----
 ' '
 
-query I
+query T
 SELECT space(0::INT);
 ----
 ''
 
-query I
+query T
 SELECT space(-1::INT);
 ----
 ''
 
-query I
+query T
 SELECT space(5::INT);
 ----
 '     '
