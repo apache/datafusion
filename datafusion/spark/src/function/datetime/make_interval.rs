@@ -21,12 +21,12 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, IntervalMonthDayNanoBuilder, PrimitiveArray};
 use arrow::datatypes::DataType::Interval;
 use arrow::datatypes::IntervalUnit::MonthDayNano;
-use arrow::datatypes::{DataType, IntervalMonthDayNano};
+use arrow::datatypes::{DataType, Field, FieldRef, IntervalMonthDayNano};
 use datafusion_common::types::{NativeType, logical_float64, logical_int32};
 use datafusion_common::{DataFusionError, Result, ScalarValue, plan_datafusion_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -120,6 +120,19 @@ impl ScalarUDFImpl for SparkMakeInterval {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(Interval(MonthDayNano))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        // Spark make_interval semantics:
+        // Output is nullable if ANY input argument is nullable.
+        // With no arguments, returns a non-null zero interval.
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+
+        Ok(Arc::new(Field::new(
+            "make_interval",
+            Interval(MonthDayNano),
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
