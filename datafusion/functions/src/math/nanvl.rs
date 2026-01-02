@@ -23,7 +23,8 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{DataFusionError, Result, exec_err};
+use datafusion_common::types::NativeType;
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -66,7 +67,11 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
-        let float = Coercion::new_exact(TypeSignatureClass::Float);
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
             signature: Signature::coercible(
                 vec![float.clone(), float],
@@ -97,6 +102,11 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args.arg_fields.iter().any(|f| f.data_type().is_null()) {
+            return ColumnarValue::Scalar(ScalarValue::Null)
+                .cast_to(args.return_type(), None);
+        }
+
         make_scalar_function(nanvl, vec![])(&args.args)
     }
 
