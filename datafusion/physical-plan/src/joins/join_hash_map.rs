@@ -23,6 +23,7 @@ use std::fmt::{self, Debug};
 use std::ops::Sub;
 
 use arrow::datatypes::ArrowNativeType;
+use arrow::util::bit_util;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
@@ -124,6 +125,9 @@ pub trait JoinHashMapType: Send + Sync {
         match_indices: &mut Vec<u64>,
     ) -> Option<JoinHashMapOffset>;
 
+    /// Sets bits in the provided buffer if the corresponding hash exists in the map.
+    fn set_bits_if_exists(&self, hash_values: &[u64], buffer: &mut [u8]);
+
     /// Returns `true` if the join hash map contains no entries.
     fn is_empty(&self) -> bool;
 
@@ -194,6 +198,10 @@ impl JoinHashMapType for JoinHashMapU32 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn set_bits_if_exists(&self, hash_values: &[u64], buffer: &mut [u8]) {
+        set_bits_if_exists::<u32>(&self.map, hash_values, buffer);
     }
 
     fn is_empty(&self) -> bool {
@@ -268,6 +276,10 @@ impl JoinHashMapType for JoinHashMapU64 {
             input_indices,
             match_indices,
         )
+    }
+
+    fn set_bits_if_exists(&self, hash_values: &[u64], buffer: &mut [u8]) {
+        set_bits_if_exists::<u64>(&self.map, hash_values, buffer);
     }
 
     fn is_empty(&self) -> bool {
@@ -495,4 +507,47 @@ where
         }
     }
     None
+}
+
+pub fn set_bits_if_exists<T>(
+    map: &HashTable<(u64, T)>,
+    hash_values: &[u64],
+    buffer: &mut [u8],
+) {
+    for (i, &hash) in hash_values.iter().enumerate() {
+        if map.find(hash, |(h, _)| hash == *h).is_some() {
+            bit_util::set_bit(buffer, i);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_bits_if_exists() {
+        let mut hash_map = JoinHashMapU32::with_capacity(10);
+        // Build side: insert 10, 20, 30
+        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
+
+        // Probe side: test both existing and non-existing hashes
+        let probe_hashes = vec![10, 11, 20, 21, 30, 31];
+        let mut buffer = vec![0u8; 1];
+        hash_map.set_bits_if_exists(&probe_hashes, &mut buffer);
+
+        for (i, &hash) in probe_hashes.iter().enumerate() {
+            if matches!(hash, 10 | 20 | 30) {
+                assert!(
+                    bit_util::get_bit(&buffer, i),
+                    "Hash {hash} should exist in the map"
+                );
+            } else {
+                assert!(
+                    !bit_util::get_bit(&buffer, i),
+                    "Hash {hash} should NOT exist in the map"
+                );
+            }
+        }
+    }
 }

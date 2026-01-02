@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::joins::join_hash_map::{
     JoinHashMapOffset, get_matched_indices, get_matched_indices_with_limit_offset,
-    update_from_iter,
+    set_bits_if_exists, update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
@@ -92,6 +92,10 @@ impl JoinHashMapType for PruningJoinHashMap {
             input_indices,
             match_indices,
         )
+    }
+
+    fn set_bits_if_exists(&self, hash_values: &[u64], buffer: &mut [u8]) {
+        set_bits_if_exists::<u64>(&self.map, hash_values, buffer);
     }
 
     fn is_empty(&self) -> bool {

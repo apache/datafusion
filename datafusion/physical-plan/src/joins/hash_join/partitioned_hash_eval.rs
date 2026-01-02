@@ -343,16 +343,8 @@ impl PhysicalExpr for HashTableLookupExpr {
 
         // Check each hash against the hash table
         let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(num_rows, 8));
-        for (idx, hash_value) in hash_array.values().iter().enumerate() {
-            // Use get_matched_indices to check - if it returns any indices, the hash exists
-            let (matched_indices, _) = self
-                .hash_map
-                .get_matched_indices(Box::new(std::iter::once((idx, hash_value))), None);
-
-            if !matched_indices.is_empty() {
-                bit_util::set_bit(buf.as_slice_mut(), idx);
-            }
-        }
+        self.hash_map
+            .set_bits_if_exists(hash_array.values(), buf.as_slice_mut());
 
         Ok(ColumnarValue::Array(Arc::new(
             BooleanArray::new_from_packed(buf, 0, num_rows),
