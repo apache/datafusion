@@ -24,7 +24,7 @@ use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, Result, TableReference};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -107,7 +107,7 @@ fn rewrite_in_terms_of_projection(
         for proj_expr in proj_exprs {
             proj_expr.apply(|e| {
                 if expr_match(&search_col, e) {
-                    found = Some(e.clone());
+                    found = Some(proj_expr.clone());
                     return Ok(TreeNodeRecursion::Stop);
                 }
                 Ok(TreeNodeRecursion::Continue)
@@ -115,16 +115,56 @@ fn rewrite_in_terms_of_projection(
         }
 
         if let Some(found) = found {
+            // Determine what to return based on the original expression type
+            let result_expr = if let Expr::Column(original_col) = &expr {
+                // For plain columns, preserve the original qualification status
+                Expr::Column(Column::new(
+                    original_col.relation.clone(),
+                    search_col.try_as_col().unwrap().name.clone(),
+                ))
+            } else {
+                // For other expressions (aggregates, etc.), return a column reference
+                // to the projection output, unless it's wrapped in a cast
+                match &normalized_expr {
+                    Expr::Cast(_) | Expr::TryCast(_) => {
+                        // For casts, use the projection expression to preserve aliases
+                        found
+                    }
+                    _ => {
+                        // For aggregates and other expressions, create a column reference
+                        // Split the column name at the last dot to handle legacy qualified names
+                        let col_name = search_col.try_as_col().unwrap().name.as_str();
+                        let col_ref = if let Some((relation, field_name)) =
+                            col_name.rsplit_once('.')
+                        {
+                            Expr::Column(Column::new(
+                                Some(TableReference::bare(relation)),
+                                field_name,
+                            ))
+                        } else {
+                            search_col
+                        };
+
+                        // If the projection expression has an alias, preserve it
+                        if let Expr::Alias(Alias { name, .. }) = &found {
+                            col_ref.alias(name.clone())
+                        } else {
+                            col_ref
+                        }
+                    }
+                }
+            };
+
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, data_type }) => Expr::Cast(Cast {
-                    expr: Box::new(found),
+                    expr: Box::new(result_expr),
                     data_type,
                 }),
                 Expr::TryCast(TryCast { expr: _, data_type }) => Expr::TryCast(TryCast {
-                    expr: Box::new(found),
+                    expr: Box::new(result_expr),
                     data_type,
                 }),
-                _ => found,
+                _ => result_expr,
             }));
         }
 
