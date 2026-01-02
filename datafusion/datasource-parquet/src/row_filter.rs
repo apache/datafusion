@@ -60,22 +60,20 @@
 //!    still be sorted by size.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use arrow::array::BooleanArray;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
+use itertools::Itertools;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
@@ -212,11 +210,12 @@ impl FilterCandidateBuilder {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some(required_column_indices) =
-            pushdown_columns(&self.expr, &self.file_schema)?
-        else {
-            return Ok(None);
-        };
+        let required_column_indices = collect_columns(&self.expr)
+            .into_iter()
+            .map(|c| c.index())
+            .sorted_unstable()
+            .dedup()
+            .collect_vec();
 
         let projected_schema =
             Arc::new(self.file_schema.project(&required_column_indices)?);
@@ -234,87 +233,6 @@ impl FilterCandidateBuilder {
     }
 }
 
-/// Traverses a `PhysicalExpr` tree to determine if any column references would
-/// prevent the expression from being pushed down to the parquet decoder.
-///
-/// An expression cannot be pushed down if it references:
-/// - Non-primitive columns (like structs or lists)
-/// - Columns that don't exist in the file schema
-struct PushdownChecker<'schema> {
-    /// Does the expression require any non-primitive columns (like structs)?
-    non_primitive_columns: bool,
-    /// Does the expression reference any columns not present in the file schema?
-    projected_columns: bool,
-    /// Indices into the file schema of columns required to evaluate the expression.
-    required_columns: BTreeSet<usize>,
-    /// The Arrow schema of the parquet file.
-    file_schema: &'schema Schema,
-}
-
-impl<'schema> PushdownChecker<'schema> {
-    fn new(file_schema: &'schema Schema) -> Self {
-        Self {
-            non_primitive_columns: false,
-            projected_columns: false,
-            required_columns: BTreeSet::default(),
-            file_schema,
-        }
-    }
-
-    fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.file_schema.index_of(column_name) {
-            self.required_columns.insert(idx);
-            if DataType::is_nested(self.file_schema.field(idx).data_type()) {
-                self.non_primitive_columns = true;
-                return Some(TreeNodeRecursion::Jump);
-            }
-        } else {
-            // Column does not exist in the file schema, so we can't push this down.
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        }
-
-        None
-    }
-
-    #[inline]
-    fn prevents_pushdown(&self) -> bool {
-        self.non_primitive_columns || self.projected_columns
-    }
-}
-
-impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
-    type Node = Arc<dyn PhysicalExpr>;
-
-    fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>()
-            && let Some(recursion) = self.check_single_column(column.name())
-        {
-            return Ok(recursion);
-        }
-
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
-/// Checks if a given expression can be pushed down to the parquet decoder.
-///
-/// Returns `Some(column_indices)` if the expression can be pushed down,
-/// where `column_indices` are the indices into the file schema of all columns
-/// required to evaluate the expression.
-///
-/// Returns `None` if the expression cannot be pushed down (e.g., references
-/// non-primitive types or columns not in the file).
-fn pushdown_columns(
-    expr: &Arc<dyn PhysicalExpr>,
-    file_schema: &Schema,
-) -> Result<Option<Vec<usize>>> {
-    let mut checker = PushdownChecker::new(file_schema);
-    expr.visit(&mut checker)?;
-    Ok((!checker.prevents_pushdown())
-        .then_some(checker.required_columns.into_iter().collect()))
-}
-
 /// Checks if a predicate expression can be pushed down to the parquet decoder.
 ///
 /// Returns `true` if all columns referenced by the expression:
@@ -325,14 +243,15 @@ fn pushdown_columns(
 /// * `expr` - The filter expression to check
 /// * `file_schema` - The Arrow schema of the parquet file (or table schema when
 ///   the file schema is not yet available during planning)
+#[deprecated(
+    since = "52.0.0",
+    note = "Parquet accepts arbitrary expressions for pushdown now; this function will always return true"
+)]
 pub fn can_expr_be_pushed_down_with_schemas(
-    expr: &Arc<dyn PhysicalExpr>,
-    file_schema: &Schema,
+    _expr: &Arc<dyn PhysicalExpr>,
+    _file_schema: &Schema,
 ) -> bool {
-    match pushdown_columns(expr, file_schema) {
-        Ok(Some(_)) => true,
-        Ok(None) | Err(_) => false,
-    }
+    true
 }
 
 /// Calculate the total compressed size of all `Column`'s required for
@@ -462,6 +381,7 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
 
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
@@ -587,84 +507,5 @@ mod test {
 
         let filtered = row_filter.evaluate(first_rb);
         assert!(matches!(filtered, Ok(a) if a == BooleanArray::from(vec![true; 8])));
-    }
-
-    #[test]
-    fn nested_data_structures_prevent_pushdown() {
-        let table_schema = Arc::new(get_lists_table_schema());
-
-        let expr = col("utf8_list").is_not_null();
-        let expr = logical2physical(&expr, &table_schema);
-        check_expression_can_evaluate_against_schema(&expr, &table_schema);
-
-        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
-    }
-
-    #[test]
-    fn projected_columns_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
-        let expr =
-            Arc::new(Column::new("nonexistent_column", 0)) as Arc<dyn PhysicalExpr>;
-
-        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
-    }
-
-    #[test]
-    fn basic_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
-        let expr = col("string_col").is_null();
-        let expr = logical2physical(&expr, &table_schema);
-
-        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
-    }
-
-    #[test]
-    fn complex_expr_doesnt_prevent_pushdown() {
-        let table_schema = get_basic_table_schema();
-
-        let expr = col("string_col")
-            .is_not_null()
-            .or(col("bigint_col").gt(Expr::Literal(ScalarValue::Int64(Some(5)), None)));
-        let expr = logical2physical(&expr, &table_schema);
-
-        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
-    }
-
-    fn get_basic_table_schema() -> Schema {
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
-            .expect("opening file");
-
-        let reader = SerializedFileReader::new(file).expect("creating reader");
-
-        let metadata = reader.metadata();
-
-        parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-            .expect("parsing schema")
-    }
-
-    fn get_lists_table_schema() -> Schema {
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file = std::fs::File::open(format!("{testdata}/list_columns.parquet"))
-            .expect("opening file");
-
-        let reader = SerializedFileReader::new(file).expect("creating reader");
-
-        let metadata = reader.metadata();
-
-        parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-            .expect("parsing schema")
-    }
-
-    /// Sanity check that the given expression could be evaluated against the given schema without any errors.
-    /// This will fail if the expression references columns that are not in the schema or if the types of the columns are incompatible, etc.
-    fn check_expression_can_evaluate_against_schema(
-        expr: &Arc<dyn PhysicalExpr>,
-        table_schema: &Arc<Schema>,
-    ) -> bool {
-        let batch = RecordBatch::new_empty(Arc::clone(table_schema));
-        expr.evaluate(&batch).is_ok()
     }
 }
