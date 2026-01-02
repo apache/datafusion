@@ -287,13 +287,6 @@ mod tests {
             version: None,
         };
 
-        PartitionedFile {
-            object_meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        }
+        PartitionedFile::new_from_meta(object_meta)
     }
 }
