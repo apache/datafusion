@@ -24,7 +24,6 @@ use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{DataFusionError, Result, exec_err};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -66,10 +65,10 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+            signature: Signature::uniform(
+                2,
+                vec![Float32, Float64],
                 Volatility::Immutable,
             ),
         }
