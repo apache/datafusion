@@ -16,26 +16,26 @@
 # under the License.
 
 query I
-SELECT space(1);
+SELECT space(1::INT);
 ----
 ' '
 
 query I
-SELECT space(0);
+SELECT space(0::INT);
 ----
 ''
 
 query I
-SELECT space(-1);
+SELECT space(-1::INT);
 ----
 ''
 
 query I
-SELECT space(5);
+SELECT space(5::INT);
 ----
 '     '
 
-query I
+query T
 SELECT space(NULL);
 ----
 NULL
