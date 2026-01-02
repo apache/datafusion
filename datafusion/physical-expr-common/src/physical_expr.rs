@@ -40,6 +40,13 @@ use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
 
+mod pruning;
+
+pub use pruning::{
+    ColumnStats, NullPresence, NullStats, PruningContext, PruningIntermediate,
+    PruningOutcome, PruningResults, RangeStats,
+};
+
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
@@ -429,6 +436,36 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    /// Evaluates pruning statistics via propagation. See the pruning module
+    /// docs for background.
+    ///
+    /// This default implementation is for `PhysicalExpr`s that have not yet
+    /// implemented pruning; returning `None` signals that no pruning statistics
+    /// are available.
+    ///
+    /// In the future, propagation may expose dedicated APIs such as:
+    /// ```text
+    /// trait PhysicalExpr {
+    ///     fn propagate_range_stats()...
+    ///     fn propagate_set_stats()...
+    ///     fn propagate_null_stats()...
+    /// }
+    /// ```
+    /// with `evaluate_pruning` combining the individual statistic types.
+    ///
+    /// # Returns
+    /// - `None` if the `PhysicalExpr` has not implemented the statistics propagation
+    /// - For predicate expressions (boolean outputs), implementations should return
+    ///   `Some(PruningIntermediate::PruningResults)`
+    /// - For arithmetic expressions, implementations should propagate stats and
+    ///   return `Some(PruningIntermediate::IntermediateStats)`
+    fn evaluate_pruning(
+        &self,
+        _ctx: Arc<PruningContext>,
+    ) -> Result<Option<PruningIntermediate>> {
+        Ok(None)
     }
 }
 
