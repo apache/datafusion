@@ -599,15 +599,8 @@ impl<T: DecimalType + std::fmt::Debug> TrySumDecimalAccumulator<T> {
             inner: TrySumAccumulator::new(data_type),
         }
     }
-}
 
-impl<T: DecimalType + std::fmt::Debug> Accumulator for TrySumDecimalAccumulator<T> {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        self.inner.state()
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.inner.update_batch(values)?;
+    fn validate_decimal(&mut self) {
         // Check decimal precision overflow
         let precision = match self.inner.data_type {
             DataType::Decimal32(precision, _)
@@ -621,11 +614,24 @@ impl<T: DecimalType + std::fmt::Debug> Accumulator for TrySumDecimalAccumulator<
         {
             self.inner.state = TrySumState::Overflow;
         }
+    }
+}
+
+impl<T: DecimalType + std::fmt::Debug> Accumulator for TrySumDecimalAccumulator<T> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.inner.state()
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.update_batch(values)?;
+        self.validate_decimal();
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.inner.merge_batch(states)
+        self.inner.merge_batch(states)?;
+        self.validate_decimal();
+        Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
