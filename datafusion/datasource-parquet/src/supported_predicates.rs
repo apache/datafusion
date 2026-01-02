@@ -26,6 +26,11 @@ use std::sync::Arc;
 use datafusion_physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
+// `ScalarUDFExpr` is currently an alias of `ScalarFunctionExpr` in this crate,
+// but keep a separate type to support potential future divergence.
+#[allow(dead_code)]
+type ScalarUDFExpr = ScalarFunctionExpr;
+
 /// Trait for physical expressions that support list column pushdown during
 /// Parquet decoding.
 ///
@@ -79,11 +84,20 @@ fn is_null_check(expr: &dyn PhysicalExpr) -> bool {
 /// Returns `true` if the expression is a `ScalarFunctionExpr` whose function
 /// is in the registry of supported operations.
 fn is_supported_scalar_function(expr: &dyn PhysicalExpr) -> bool {
+    scalar_function_name(expr).is_some_and(|name| {
+        // Registry of verified array functions
+        matches!(name, "array_has" | "array_has_all" | "array_has_any")
+    })
+}
+
+fn scalar_function_name(expr: &dyn PhysicalExpr) -> Option<&str> {
     expr.as_any()
         .downcast_ref::<ScalarFunctionExpr>()
-        .is_some_and(|fun| {
-            // Registry of verified array functions
-            matches!(fun.name(), "array_has" | "array_has_all" | "array_has_any")
+        .map(ScalarFunctionExpr::name)
+        .or_else(|| {
+            expr.as_any()
+                .downcast_ref::<ScalarUDFExpr>()
+                .map(ScalarUDFExpr::name)
         })
 }
 

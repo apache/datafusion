@@ -640,6 +640,9 @@ mod test {
     use arrow::array::{ListBuilder, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
     use datafusion_expr::{Expr, col};
+    use datafusion_functions_nested::array_has::{
+        array_has_all_udf, array_has_any_udf, array_has_udf,
+    };
     use datafusion_functions_nested::expr_fn::{
         array_has, array_has_all, array_has_any, make_array,
     };
@@ -848,7 +851,7 @@ mod test {
                 None,
             )]),
         );
-        test_array_predicate_pushdown("array_has_all", expr, 1, 2);
+        test_array_predicate_pushdown("array_has_all", expr, 1, 2, true);
     }
 
     /// Helper function to test array predicate pushdown functionality.
@@ -860,6 +863,7 @@ mod test {
         predicate_expr: Expr,
         expected_pruned: usize,
         expected_matched: usize,
+        expect_list_support: bool,
     ) {
         let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -901,6 +905,9 @@ mod test {
         let file_schema = parquet_reader_builder.schema().clone();
 
         let expr = logical2physical(&predicate_expr, &file_schema);
+        if expect_list_support {
+            assert!(supports_list_predicates(&expr));
+        }
 
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
@@ -946,7 +953,7 @@ mod test {
             col("letters"),
             Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
         );
-        test_array_predicate_pushdown("array_has", expr, 1, 2);
+        test_array_predicate_pushdown("array_has", expr, 1, 2, true);
     }
 
     #[test]
@@ -960,7 +967,43 @@ mod test {
                 Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
             ]),
         );
-        test_array_predicate_pushdown("array_has_any", expr, 1, 2);
+        test_array_predicate_pushdown("array_has_any", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_udf_pushdown_filters_rows() {
+        let expr = array_has_udf().call(vec![
+            col("letters"),
+            Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
+        ]);
+
+        test_array_predicate_pushdown("array_has_udf", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_all_udf_pushdown_filters_rows() {
+        let expr = array_has_all_udf().call(vec![
+            col("letters"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        ]);
+
+        test_array_predicate_pushdown("array_has_all_udf", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_any_udf_pushdown_filters_rows() {
+        let expr = array_has_any_udf().call(vec![
+            col("letters"),
+            make_array(vec![
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
+            ]),
+        ]);
+
+        test_array_predicate_pushdown("array_has_any_udf", expr, 1, 2, true);
     }
 
     #[test]
