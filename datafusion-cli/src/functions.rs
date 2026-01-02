@@ -771,6 +771,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             Field::new("metadata", DataType::Struct(nested_fields.clone()), true);
 
         let schema = Arc::new(Schema::new(vec![
+            Field::new("table", DataType::Utf8, false),
             Field::new("path", DataType::Utf8, false),
             Field::new("metadata_size_bytes", DataType::UInt64, false),
             // expires field in ListFilesEntry has type Instant when set, from which we cannot get "the number of seconds", hence using Duration instead of Timestamp as data type.
@@ -786,6 +787,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             ),
         ]));
 
+        let mut table_arr = vec![];
         let mut path_arr = vec![];
         let mut metadata_size_bytes_arr = vec![];
         let mut expires_arr = vec![];
@@ -802,7 +804,8 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             let mut current_offset: i32 = 0;
 
             for (path, entry) in list_files_cache.list_entries() {
-                path_arr.push(path.to_string());
+                table_arr.push(path.0.map_or("NULL".to_string(), |t| t.to_string()));
+                path_arr.push(path.1.to_string());
                 metadata_size_bytes_arr.push(entry.size_bytes as u64);
                 // calculates time left before entry expires
                 expires_arr.push(
@@ -841,6 +844,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(StringArray::from(table_arr)),
                 Arc::new(StringArray::from(path_arr)),
                 Arc::new(UInt64Array::from(metadata_size_bytes_arr)),
                 Arc::new(DurationMillisecondArray::from(expires_arr)),
