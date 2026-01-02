@@ -28,7 +28,6 @@ use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
 // `ScalarUDFExpr` is currently an alias of `ScalarFunctionExpr` in this crate,
 // but keep a separate type to support potential future divergence.
-#[allow(dead_code)]
 type ScalarUDFExpr = ScalarFunctionExpr;
 
 /// Trait for physical expressions that support list column pushdown during
