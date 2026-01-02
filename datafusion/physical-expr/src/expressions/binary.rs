@@ -247,13 +247,9 @@ fn duration_to_days(array: &ArrayRef) -> Result<ArrayRef> {
                 .collect();
             Ok(Arc::new(result))
         }
-        other => internal_err!(
-            "duration_to_days expected Duration type, got: {}",
-            other
-        ),
+        other => internal_err!("duration_to_days expected Duration type, got: {}", other),
     }
 }
-
 
 impl PhysicalExpr for BinaryExpr {
     /// Return a reference to Any that can be used for downcasting
