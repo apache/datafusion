@@ -3286,6 +3286,221 @@ query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int32\), Int
 select make_time(arrow_cast(22, 'Float64'), 1, '');
 
 ##########
+## to_time tests
+##########
+
+# Basic time parsing
+
+query D
+select to_time('12:30:45');
+----
+12:30:45
+
+query D
+select to_time('00:00:00');
+----
+00:00:00
+
+query D
+select to_time('23:59:59');
+----
+23:59:59
+
+query D
+select to_time('08:15:30');
+----
+08:15:30
+
+# Time with fractional seconds
+
+query D
+select to_time('12:30:45.123');
+----
+12:30:45.123
+
+query D
+select to_time('12:30:45.123456789');
+----
+12:30:45.123456789
+
+# Time with custom format
+
+query D
+select to_time('12-30-45', '%H-%M-%S');
+----
+12:30:45
+
+query D
+select to_time('14/25/30', '%H/%M/%S');
+----
+14:25:30
+
+query D
+select to_time('02:30:45 PM', '%I:%M:%S %p');
+----
+14:30:45
+
+# Null handling
+
+query D
+select to_time(null);
+----
+NULL
+
+# Return type check
+
+query T
+select arrow_typeof(to_time('12:30:45'));
+----
+Time64(ns)
+
+# Table input
+
+statement ok
+create table time_strings (time_str varchar) as values
+    ('12:30:45'),
+    ('23:59:59'),
+    ('00:00:00');
+
+query D
+select to_time(time_str) from time_strings;
+----
+12:30:45
+23:59:59
+00:00:00
+
+statement ok
+drop table time_strings;
+
+# Error cases
+
+query error Error parsing 'not_a_time' as time
+select to_time('not_a_time');
+
+query error Error parsing '25:00:00' as time
+select to_time('25:00:00');
+
+# Out of range minutes
+query error Error parsing '12:60:00' as time
+select to_time('12:60:00');
+
+# Out of range seconds (61 is invalid, 60 is allowed as leap second)
+query error Error parsing '12:30:61' as time
+select to_time('12:30:61');
+
+query error does not support zero arguments
+select to_time();
+
+# StringView type support
+
+query D
+select to_time(arrow_cast('08:15:30', 'Utf8View'));
+----
+08:15:30
+
+# LargeUtf8 type support
+
+query D
+select to_time(arrow_cast('14:45:00', 'LargeUtf8'));
+----
+14:45:00
+
+# HH:MM default parsing (no seconds)
+
+query D
+select to_time('14:30');
+----
+14:30:00
+
+query D
+select to_time('09:05');
+----
+09:05:00
+
+query D
+select to_time('00:00');
+----
+00:00:00
+
+# Timestamp input - extract time portion
+
+query D
+select to_time(to_timestamp('2024-01-15 14:30:45'));
+----
+14:30:45
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp);
+----
+09:15:30
+
+query D
+select to_time('2024-06-15 23:59:59.123456789'::timestamp);
+----
+23:59:59.123456789
+
+query D
+select to_time('2024-01-01 00:00:00'::timestamp);
+----
+00:00:00
+
+# Timestamp with timezone
+
+query D
+select to_time(to_timestamp('2024-01-15T14:30:45+00:00'));
+----
+14:30:45
+
+# Null timestamp
+
+query D
+select to_time(null::timestamp);
+----
+NULL
+
+# Return type check with timestamp input
+
+query T
+select arrow_typeof(to_time(to_timestamp('2024-01-15 12:30:45')));
+----
+Time64(ns)
+
+# Timestamp with timezone offset - to_timestamp parses and normalizes to UTC
+# 14:30:45 in UTC-5 = 19:30:45 in UTC, and Arrow stores as UTC internally
+
+query D
+select to_time(to_timestamp('2024-01-15T14:30:45-05:00'));
+----
+19:30:45
+
+# Timestamp without timezone - time portion is extracted as-is
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp);
+----
+09:15:30
+
+# Timestamp with timezone (timestamptz) - time is extracted as stored
+# Note: AT TIME ZONE labels the naive timestamp but doesn't convert the time value
+
+query D
+select to_time('2024-03-20 09:15:30'::timestamp AT TIME ZONE 'America/Los_Angeles');
+----
+09:15:30
+
+# Timestamp before epoch (1969-12-31 23:30:00 UTC)
+
+query D
+select to_time(to_timestamp('1969-12-31T23:30:00+00:00'));
+----
+23:30:00
+
+query D
+select to_time(to_timestamp('1960-06-15T08:45:30+00:00'));
+----
+08:45:30
+
+##########
 ## to_char tests
 ##########
 

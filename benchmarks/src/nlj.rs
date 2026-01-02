@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
+use clap::Args;
 use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, exec_datafusion_err, exec_err};
-use structopt::StructOpt;
 
 use futures::StreamExt;
 
@@ -40,19 +40,19 @@ use futures::StreamExt;
 /// - Input size: Different combinations of left (build) side and right (probe)
 ///   side sizes
 /// - Selectivity of join filters
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number (between 1 and 10). If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// If present, write results json here
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<std::path::PathBuf>,
 }
 

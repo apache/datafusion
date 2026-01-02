@@ -21,10 +21,10 @@
 //! Another `Sort` benchmark focus on single core execution. This benchmark
 //! runs end-to-end sort queries and test the performance on multiple CPU cores.
 
+use clap::Args;
 use futures::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use structopt::StructOpt;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -42,35 +42,35 @@ use datafusion_common::utils::get_available_parallelism;
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct RunOpt {
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Sort query number. If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub query: Option<usize>,
 
     /// Path to data files (lineitem). Only parquet format is supported
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// Path to JSON benchmark result to be compare using `compare.py`
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
-    #[structopt(short = "t", long = "sorted")]
+    #[arg(short = 't', long = "sorted")]
     sorted: bool,
 
     /// Append a `LIMIT n` clause to the query
-    #[structopt(short = "l", long = "limit")]
+    #[arg(short = 'l', long = "limit")]
     limit: Option<usize>,
 }
 

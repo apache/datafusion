@@ -17,7 +17,7 @@
 
 use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{Field, FieldRef};
 use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
@@ -39,6 +39,61 @@ use datafusion_expr_common::{
 use itertools::Itertools as _;
 use std::sync::Arc;
 
+/// Extension trait to unify common functionality between [`ScalarUDF`], [`AggregateUDF`]
+/// and [`WindowUDF`] for use by signature coercion functions.
+pub trait UDFCoercionExt {
+    /// Should delegate to [`ScalarUDF::name`], [`AggregateUDF::name`] or [`WindowUDF::name`].
+    fn name(&self) -> &str;
+    /// Should delegate to [`ScalarUDF::signature`], [`AggregateUDF::signature`]
+    /// or [`WindowUDF::signature`].
+    fn signature(&self) -> &Signature;
+    /// Should delegate to [`ScalarUDF::coerce_types`], [`AggregateUDF::coerce_types`]
+    /// or [`WindowUDF::coerce_types`].
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>>;
+}
+
+impl UDFCoercionExt for ScalarUDF {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.coerce_types(arg_types)
+    }
+}
+
+impl UDFCoercionExt for AggregateUDF {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.coerce_types(arg_types)
+    }
+}
+
+impl UDFCoercionExt for WindowUDF {
+    fn name(&self) -> &str {
+        self.name()
+    }
+
+    fn signature(&self) -> &Signature {
+        self.signature()
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        self.coerce_types(arg_types)
+    }
+}
+
 /// Performs type coercion for scalar function arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
@@ -46,38 +101,19 @@ use std::sync::Arc;
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
 pub fn data_types_with_scalar_udf(
     current_types: &[DataType],
     func: &ScalarUDF,
 ) -> Result<Vec<DataType>> {
-    let signature = func.signature();
-    let type_signature = &signature.type_signature;
-
-    if current_types.is_empty() && type_signature != &TypeSignature::UserDefined {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
-        } else if type_signature.used_to_support_zero_arguments() {
-            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
-                "'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
-                func.name()
-            );
-        } else {
-            return plan_err!("'{}' does not support zero arguments", func.name());
-        }
-    }
-
-    let valid_types =
-        get_valid_types_with_scalar_udf(type_signature, current_types, func)?;
-
-    if valid_types
+    let current_fields = current_types
         .iter()
-        .any(|data_type| data_type == current_types)
-    {
-        return Ok(current_types.to_vec());
-    }
-
-    try_coerce_types(func.name(), valid_types, current_types, type_signature)
+        .map(|dt| Arc::new(Field::new("f", dt.clone(), true)))
+        .collect::<Vec<_>>();
+    Ok(fields_with_udf(&current_fields, func)?
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect())
 }
 
 /// Performs type coercion for aggregate function arguments.
@@ -87,52 +123,12 @@ pub fn data_types_with_scalar_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
 pub fn fields_with_aggregate_udf(
     current_fields: &[FieldRef],
     func: &AggregateUDF,
 ) -> Result<Vec<FieldRef>> {
-    let signature = func.signature();
-    let type_signature = &signature.type_signature;
-
-    if current_fields.is_empty() && type_signature != &TypeSignature::UserDefined {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
-        } else if type_signature.used_to_support_zero_arguments() {
-            // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
-                "'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
-                func.name()
-            );
-        } else {
-            return plan_err!("'{}' does not support zero arguments", func.name());
-        }
-    }
-    let current_types = current_fields
-        .iter()
-        .map(|f| f.data_type())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let valid_types =
-        get_valid_types_with_aggregate_udf(type_signature, &current_types, func)?;
-    if valid_types
-        .iter()
-        .any(|data_type| data_type == &current_types)
-    {
-        return Ok(current_fields.to_vec());
-    }
-
-    let updated_types =
-        try_coerce_types(func.name(), valid_types, &current_types, type_signature)?;
-
-    Ok(current_fields
-        .iter()
-        .zip(updated_types)
-        .map(|(current_field, new_type)| {
-            current_field.as_ref().clone().with_data_type(new_type)
-        })
-        .map(Arc::new)
-        .collect())
+    fields_with_udf(current_fields, func)
 }
 
 /// Performs type coercion for window function arguments.
@@ -142,9 +138,24 @@ pub fn fields_with_aggregate_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
 pub fn fields_with_window_udf(
     current_fields: &[FieldRef],
     func: &WindowUDF,
+) -> Result<Vec<FieldRef>> {
+    fields_with_udf(current_fields, func)
+}
+
+/// Performs type coercion for UDF arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+pub fn fields_with_udf<F: UDFCoercionExt>(
+    current_fields: &[FieldRef],
+    func: &F,
 ) -> Result<Vec<FieldRef>> {
     let signature = func.signature();
     let type_signature = &signature.type_signature;
@@ -162,14 +173,13 @@ pub fn fields_with_window_udf(
             return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
-
     let current_types = current_fields
         .iter()
         .map(|f| f.data_type())
         .cloned()
         .collect::<Vec<_>>();
-    let valid_types =
-        get_valid_types_with_window_udf(type_signature, &current_types, func)?;
+
+    let valid_types = get_valid_types_with_udf(type_signature, &current_types, func)?;
     if valid_types
         .iter()
         .any(|data_type| data_type == &current_types)
@@ -197,6 +207,7 @@ pub fn fields_with_window_udf(
 ///
 /// For more details on coercion in general, please see the
 /// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
 pub fn data_types(
     function_name: impl AsRef<str>,
     current_types: &[DataType],
@@ -239,20 +250,23 @@ pub fn data_types(
 }
 
 fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
-    if let TypeSignature::OneOf(signatures) = type_signature {
-        return signatures.iter().all(is_well_supported_signature);
-    }
-
-    matches!(
-        type_signature,
+    match type_signature {
+        TypeSignature::OneOf(type_signatures) => {
+            type_signatures.iter().all(is_well_supported_signature)
+        }
         TypeSignature::UserDefined
-            | TypeSignature::Numeric(_)
-            | TypeSignature::String(_)
-            | TypeSignature::Coercible(_)
-            | TypeSignature::Any(_)
-            | TypeSignature::Nullary
-            | TypeSignature::Comparable(_)
-    )
+        | TypeSignature::Numeric(_)
+        | TypeSignature::String(_)
+        | TypeSignature::Coercible(_)
+        | TypeSignature::Any(_)
+        | TypeSignature::Nullary
+        | TypeSignature::Comparable(_) => true,
+        TypeSignature::Variadic(_)
+        | TypeSignature::VariadicAny
+        | TypeSignature::Uniform(_, _)
+        | TypeSignature::Exact(_)
+        | TypeSignature::ArraySignature(_) => false,
+    }
 }
 
 fn try_coerce_types(
@@ -293,25 +307,27 @@ fn try_coerce_types(
     )
 }
 
-fn get_valid_types_with_scalar_udf(
+fn get_valid_types_with_udf<F: UDFCoercionExt>(
     signature: &TypeSignature,
     current_types: &[DataType],
-    func: &ScalarUDF,
+    func: &F,
 ) -> Result<Vec<Vec<DataType>>> {
-    match signature {
+    let valid_types = match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => Ok(vec![coerced_types]),
-            Err(e) => exec_err!(
-                "Function '{}' user-defined coercion failed with {:?}",
-                func.name(),
-                e.strip_backtrace()
-            ),
+            Ok(coerced_types) => vec![coerced_types],
+            Err(e) => {
+                return exec_err!(
+                    "Function '{}' user-defined coercion failed with {:?}",
+                    func.name(),
+                    e.strip_backtrace()
+                );
+            }
         },
         TypeSignature::OneOf(signatures) => {
             let mut res = vec![];
             let mut errors = vec![];
             for sig in signatures {
-                match get_valid_types_with_scalar_udf(sig, current_types, func) {
+                match get_valid_types_with_udf(sig, current_types, func) {
                     Ok(valid_types) => {
                         res.extend(valid_types);
                     }
@@ -323,69 +339,15 @@ fn get_valid_types_with_scalar_udf(
 
             // Every signature failed, return the joined error
             if res.is_empty() {
-                internal_err!(
+                return internal_err!(
                     "Function '{}' failed to match any signature, errors: {}",
                     func.name(),
                     errors.join(",")
-                )
+                );
             } else {
-                Ok(res)
+                res
             }
         }
-        _ => get_valid_types(func.name(), signature, current_types),
-    }
-}
-
-fn get_valid_types_with_aggregate_udf(
-    signature: &TypeSignature,
-    current_types: &[DataType],
-    func: &AggregateUDF,
-) -> Result<Vec<Vec<DataType>>> {
-    let valid_types = match signature {
-        TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => vec![coerced_types],
-            Err(e) => {
-                return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
-                    func.name(),
-                    e.strip_backtrace()
-                );
-            }
-        },
-        TypeSignature::OneOf(signatures) => signatures
-            .iter()
-            .filter_map(|t| {
-                get_valid_types_with_aggregate_udf(t, current_types, func).ok()
-            })
-            .flatten()
-            .collect::<Vec<_>>(),
-        _ => get_valid_types(func.name(), signature, current_types)?,
-    };
-
-    Ok(valid_types)
-}
-
-fn get_valid_types_with_window_udf(
-    signature: &TypeSignature,
-    current_types: &[DataType],
-    func: &WindowUDF,
-) -> Result<Vec<Vec<DataType>>> {
-    let valid_types = match signature {
-        TypeSignature::UserDefined => match func.coerce_types(current_types) {
-            Ok(coerced_types) => vec![coerced_types],
-            Err(e) => {
-                return exec_err!(
-                    "Function '{}' user-defined coercion failed with {:?}",
-                    func.name(),
-                    e.strip_backtrace()
-                );
-            }
-        },
-        TypeSignature::OneOf(signatures) => signatures
-            .iter()
-            .filter_map(|t| get_valid_types_with_window_udf(t, current_types, func).ok())
-            .flatten()
-            .collect::<Vec<_>>(),
         _ => get_valid_types(func.name(), signature, current_types)?,
     };
 
@@ -1158,10 +1120,27 @@ mod tests {
 
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
+        struct MockUdf(Signature);
+
+        impl UDFCoercionExt for MockUdf {
+            fn name(&self) -> &str {
+                "test"
+            }
+            fn signature(&self) -> &Signature {
+                &self.0
+            }
+            fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+                unimplemented!()
+            }
+        }
+
         let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
-        let current_types = vec![
-            DataType::FixedSizeList(Arc::clone(&inner), 2), // able to coerce for any size
-        ];
+        // able to coerce for any size
+        let current_fields = vec![Arc::new(Field::new(
+            "t",
+            DataType::FixedSizeList(Arc::clone(&inner), 2),
+            true,
+        ))];
 
         let signature = Signature::exact(
             vec![DataType::FixedSizeList(
@@ -1171,24 +1150,25 @@ mod tests {
             Volatility::Stable,
         );
 
-        let coerced_data_types = data_types("test", &current_types, &signature)?;
-        assert_eq!(coerced_data_types, current_types);
+        let coerced_fields = fields_with_udf(&current_fields, &MockUdf(signature))?;
+        assert_eq!(coerced_fields, current_fields);
 
         // make sure it can't coerce to a different size
         let signature = Signature::exact(
             vec![DataType::FixedSizeList(Arc::clone(&inner), 3)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types("test", &current_types, &signature);
-        assert!(coerced_data_types.is_err());
+        let coerced_fields = fields_with_udf(&current_fields, &MockUdf(signature));
+        assert!(coerced_fields.is_err());
 
         // make sure it works with the same type.
         let signature = Signature::exact(
             vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
-        assert_eq!(coerced_data_types, current_types);
+        let coerced_fields =
+            fields_with_udf(&current_fields, &MockUdf(signature)).unwrap();
+        assert_eq!(coerced_fields, current_fields);
 
         Ok(())
     }

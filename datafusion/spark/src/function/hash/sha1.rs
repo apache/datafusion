@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StringArray};
@@ -95,11 +94,16 @@ impl ScalarUDFImpl for SparkSha1 {
     }
 }
 
+/// Hex encoding lookup table for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+#[inline]
 fn spark_sha1_digest(value: &[u8]) -> String {
     let result = Sha1::digest(value);
     let mut s = String::with_capacity(result.len() * 2);
-    for b in result.as_slice() {
-        write!(&mut s, "{b:02x}").unwrap();
+    for &b in result.as_slice() {
+        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
     }
     s
 }
