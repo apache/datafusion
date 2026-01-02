@@ -277,6 +277,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "regexp_count"
+required-features = ["regex_expressions"]
+
+[[bench]]
+harness = false
 name = "crypto"
 required-features = ["crypto_expressions"]
 
