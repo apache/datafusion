@@ -17,6 +17,7 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use clap::Args;
 use datafusion::{
     execution::{
         disk_manager::DiskManagerBuilder,
@@ -26,40 +27,39 @@ use datafusion::{
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
-use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
-#[derive(Debug, StructOpt, Clone)]
+#[derive(Debug, Args, Clone)]
 pub struct CommonOpt {
     /// Number of iterations of each test run
-    #[structopt(short = "i", long = "iterations", default_value = "3")]
+    #[arg(short = 'i', long = "iterations", default_value = "3")]
     pub iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
-    #[structopt(short = "n", long = "partitions")]
+    #[arg(short = 'n', long = "partitions")]
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size")]
+    #[arg(short = 's', long = "batch-size")]
     pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
-    #[structopt(long = "mem-pool-type", default_value = "fair")]
+    #[arg(long = "mem-pool-type", default_value = "fair")]
     pub mem_pool_type: String,
 
     /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query
     /// if there's any, otherwise run with no memory limit.
-    #[structopt(long = "memory-limit", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "memory-limit", value_parser = parse_memory_limit)]
     pub memory_limit: Option<usize>,
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[structopt(long = "sort-spill-reservation-bytes", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_memory_limit)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub debug: bool,
 }
 
