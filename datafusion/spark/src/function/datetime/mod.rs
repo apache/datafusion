@@ -17,6 +17,7 @@
 
 pub mod date_add;
 pub mod date_sub;
+pub mod extract;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
@@ -28,6 +29,9 @@ use std::sync::Arc;
 
 make_udf_function!(date_add::SparkDateAdd, date_add);
 make_udf_function!(date_sub::SparkDateSub, date_sub);
+make_udf_function!(extract::SparkHour, hour);
+make_udf_function!(extract::SparkMinute, minute);
+make_udf_function!(extract::SparkSecond, second);
 make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
@@ -45,6 +49,17 @@ pub mod expr_fn {
         date_sub,
         "Returns the date that is days days before start. The function returns NULL if at least one of the input parameters is NULL.",
         arg1 arg2
+    ));
+    export_functions!((hour, "Extracts the hour component of a timestamp.", arg1));
+    export_functions!((
+        minute,
+        "Extracts the minute component of a timestamp.",
+        arg1
+    ));
+    export_functions!((
+        second,
+        "Extracts the second component of a timestamp.",
+        arg1
     ));
     export_functions!((
         last_day,
@@ -74,6 +89,9 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         date_add(),
         date_sub(),
+        hour(),
+        minute(),
+        second(),
         last_day(),
         make_dt_interval(),
         make_interval(),
