@@ -230,12 +230,12 @@ async fn create_context() -> Result<SessionContext> {
     // declare a new context. In spark API, this corresponds to a new spark SQL session
     let ctx = SessionContext::new();
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
 
-    ctx.register_csv("cars", path.to_str().unwrap(), CsvReadOptions::new())
+    ctx.register_csv("cars", csv_path.to_str().unwrap(), CsvReadOptions::new())
         .await?;
 
     Ok(ctx)

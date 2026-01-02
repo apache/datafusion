@@ -33,13 +33,17 @@ use datafusion::prelude::*;
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
 pub async fn regexp() -> Result<()> {
     let ctx = SessionContext::new();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("regex.csv");
 
-    ctx.register_csv("examples", path.to_str().unwrap(), CsvReadOptions::new())
-        .await?;
+    ctx.register_csv(
+        "examples",
+        csv_path.to_str().unwrap(),
+        CsvReadOptions::new(),
+    )
+    .await?;
 
     //
     //

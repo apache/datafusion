@@ -26,40 +26,25 @@ use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::logical_expr::{col, lit};
 use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
 use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
-use datafusion::prelude::CsvReadOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion_examples::utils::write_csv_to_parquet;
 use tempfile::TempDir;
-use tokio::fs::create_dir_all;
 
 /// Read and write encrypted Parquet files using DataFusion
 pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // Read the sample parquet file
     let parquet_df = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     // Show information from the dataframe
@@ -73,6 +58,7 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     let (encrypt, decrypt) = setup_encryption(&parquet_df)?;
 
     // Create a temporary file location for the encrypted parquet file
+    let tmp_source = TempDir::new()?;
     let tempfile = tmp_source.path().join("cars_encrypted");
 
     // Write encrypted parquet

@@ -20,7 +20,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::config::CsvOptions;
 use datafusion::{
     assert_batches_eq,
@@ -35,6 +35,7 @@ use datafusion::{
 };
 
 use datafusion::datasource::physical_plan::FileScanConfigBuilder;
+use datafusion_examples::utils::datasets::cars;
 use futures::StreamExt;
 use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory};
 
@@ -50,17 +51,9 @@ pub async fn csv_json_opener() -> Result<()> {
 
 async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("car", DataType::Utf8, false),
-        Field::new("speed", DataType::Float64, false),
-        Field::new(
-            "time",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        ),
-    ]));
+    let schema = cars::schema();
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
@@ -81,7 +74,7 @@ async fn csv_opener() -> Result<()> {
         FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
             .with_projection_indices(Some(vec![0, 1]))?
             .with_limit(Some(5))
-            .with_file(PartitionedFile::new(path.display().to_string(), 10))
+            .with_file(PartitionedFile::new(csv_path.display().to_string(), 10))
             .build();
 
     let opener =

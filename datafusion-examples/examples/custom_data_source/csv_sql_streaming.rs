@@ -28,7 +28,7 @@ pub async fn csv_sql_streaming() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
@@ -42,7 +42,7 @@ pub async fn csv_sql_streaming() -> Result<()> {
     // register csv file with the execution context
     ctx.register_csv(
         "ordered_table",
-        path.to_str().unwrap(),
+        csv_path.to_str().unwrap(),
         CsvReadOptions::new().file_sort_order(vec![sort_expr]),
     )
     .await?;

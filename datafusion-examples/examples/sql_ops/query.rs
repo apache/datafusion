@@ -25,14 +25,12 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::MemTable;
 use datafusion::common::{assert_batches_eq, exec_datafusion_err};
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
+use datafusion_examples::utils::write_csv_to_parquet;
 use object_store::local::LocalFileSystem;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
 
 /// Examples of various ways to execute queries using SQL
 ///
@@ -117,33 +115,19 @@ async fn query_parquet() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options =
         ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
-    let table_path = format!("file://{}", out_dir.to_str().unwrap());
+    let table_path = parquet_temp.file_uri()?;
 
     // First example were we use an absolute path, which requires no additional setup.
     ctx.register_listing_table(
@@ -153,8 +137,7 @@ async fn query_parquet() -> Result<()> {
         None,
         None,
     )
-    .await
-    .unwrap();
+    .await?;
 
     // execute the query
     let df = ctx
@@ -183,8 +166,9 @@ async fn query_parquet() -> Result<()> {
     // register a local filesystem object store. This demonstrates how listing tables
     // resolve paths via an ObjectStore, even when using filesystem-backed data.
     let cur_dir = std::env::current_dir()?;
-
-    let test_data_path_parent = out_dir
+    let test_data_path_parent = parquet_temp
+        .tmp_dir
+        .path()
         .parent()
         .ok_or(exec_datafusion_err!("test_data path needs a parent"))?;
 
@@ -192,15 +176,15 @@ async fn query_parquet() -> Result<()> {
 
     let local_fs = Arc::new(LocalFileSystem::default());
 
-    let u = url::Url::parse("file://./")
+    let url = url::Url::parse("file://./")
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    ctx.register_object_store(&u, local_fs);
+    ctx.register_object_store(&url, local_fs);
 
     // Register a listing table - this will use all files in the directory as data sources
     // for the query
     ctx.register_listing_table(
         "relative_table",
-        out_dir.to_str().unwrap(),
+        parquet_temp.path_str()?,
         listing_options.clone(),
         None,
         None,

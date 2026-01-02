@@ -33,6 +33,7 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
+use datafusion_examples::utils::write_csv_to_parquet;
 use tempfile::{TempDir, tempdir};
 use tokio::fs::create_dir_all;
 
@@ -80,30 +81,16 @@ pub async fn dataframe_example() -> Result<()> {
 /// 2. Show the schema
 /// 3. Select columns and rows
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     // show its schema using 'describe'
@@ -354,12 +341,12 @@ async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_cars_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
 
-    ctx.register_csv(name, path.to_str().unwrap(), CsvReadOptions::default())
+    ctx.register_csv(name, csv_path.to_str().unwrap(), CsvReadOptions::default())
         .await?;
     Ok(())
 }

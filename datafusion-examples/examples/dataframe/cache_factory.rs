@@ -20,34 +20,26 @@
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
-use datafusion::execution::SessionState;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
-use datafusion::logical_expr::Extension;
-use datafusion::logical_expr::LogicalPlan;
-use datafusion::logical_expr::UserDefinedLogicalNode;
-use datafusion::logical_expr::UserDefinedLogicalNodeCore;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::collect_partitioned;
-use datafusion::physical_planner::DefaultPhysicalPlanner;
-use datafusion::physical_planner::ExtensionPlanner;
-use datafusion::physical_planner::PhysicalPlanner;
-use datafusion::prelude::ParquetReadOptions;
-use datafusion::prelude::SessionContext;
+use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
+use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
+use datafusion::physical_planner::{
+    DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+};
 use datafusion::prelude::*;
 use datafusion_common::HashMap;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
+use datafusion_examples::utils::write_csv_to_parquet;
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
 /// By default, [DataFrame::cache] in Datafusion is eager and creates an in-memory table. This example shows a basic alternative implementation for lazy caching.
@@ -63,30 +55,16 @@ pub async fn cache_dataframe_with_custom_logic() -> Result<()> {
         .build();
     let ctx = SessionContext::new_with_state(session_state);
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     let df_cached = parquet_df

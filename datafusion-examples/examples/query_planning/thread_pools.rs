@@ -42,15 +42,13 @@ use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::runtime::JoinSet;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::*;
+use datafusion_examples::utils::write_csv_to_parquet;
 use futures::stream::StreamExt;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::http::HttpBuilder;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 use url::Url;
@@ -76,28 +74,14 @@ pub async fn thread_pools() -> Result<()> {
     // lets us treat filenames as tables in SQL.
     let ctx = SessionContext::new().enable_url_table();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
-    let sql = format!("SELECT * FROM '{}'", out_dir.to_str().unwrap());
+    let sql = format!("SELECT * FROM '{}'", parquet_temp.path_str()?);
 
     // Run a query on the current runtime. Calling `await` means the future
     // (in this case the `async` function and all spawned work in DataFusion

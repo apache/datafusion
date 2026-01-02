@@ -21,12 +21,10 @@ use std::path::PathBuf;
 
 use arrow::array::{Array, Float64Array, StringViewArray};
 use datafusion::common::assert_batches_eq;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_examples::utils::write_csv_to_parquet;
 use futures::StreamExt;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
 
 /// This example shows how to convert query results into Rust structs by using
 /// the Arrow APIs to convert the results into Rust native types.
@@ -39,30 +37,16 @@ pub async fn deserialize_to_struct() -> Result<()> {
     // Run a query that returns two columns of data
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     ctx.register_parquet(
         "cars",
-        out_dir.to_str().unwrap(),
+        parquet_temp.path_str()?,
         ParquetReadOptions::default(),
     )
     .await?;

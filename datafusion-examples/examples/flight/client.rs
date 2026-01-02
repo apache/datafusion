@@ -27,10 +27,8 @@ use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::{FlightDescriptor, Ticket};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty;
-use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::prelude::{CsvReadOptions, SessionContext};
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
+use datafusion::prelude::SessionContext;
+use datafusion_examples::utils::write_csv_to_parquet;
 use tonic::transport::Endpoint;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -39,26 +37,12 @@ use tonic::transport::Endpoint;
 pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // Create Flight client
     let endpoint = Endpoint::new("http://localhost:50051")?;
@@ -69,7 +53,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: Default::default(),
-        path: vec![format!("{}", out_dir.to_str().unwrap())],
+        path: vec![format!("{}", parquet_temp.path_str()?)],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();

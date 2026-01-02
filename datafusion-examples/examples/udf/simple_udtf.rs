@@ -17,13 +17,17 @@
 
 //! See `main.rs` for how to run it.
 
+use std::fs::File;
+use std::io::Seek;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use arrow::csv::ReaderBuilder;
 use arrow::csv::reader::Format;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::Session;
-use datafusion::catalog::TableFunctionImpl;
+use datafusion::catalog::{Session, TableFunctionImpl};
 use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -34,11 +38,7 @@ use datafusion::logical_expr::{Expr, TableType};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use std::fs::File;
-use std::io::Seek;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
+
 // To define your own table function, you only need to do the following 3 things:
 // 1. Implement your own [`TableProvider`]
 // 2. Implement your own [`TableFunctionImpl`] and return your [`TableProvider`]
@@ -52,7 +52,7 @@ pub async fn simple_udtf() -> Result<()> {
     // register the table function that will be called in SQL statements by `read_csv`
     ctx.register_udtf("read_csv", Arc::new(LocalCsvTableFunc {}));
 
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
@@ -62,7 +62,7 @@ pub async fn simple_udtf() -> Result<()> {
         .sql(
             format!(
                 "SELECT * FROM read_csv('{}', 1 + 1);",
-                path.to_str().unwrap()
+                csv_path.to_str().unwrap()
             )
             .as_str(),
         )
@@ -71,7 +71,9 @@ pub async fn simple_udtf() -> Result<()> {
 
     // just run, return all rows
     let df = ctx
-        .sql(format!("SELECT * FROM read_csv('{}');", path.to_str().unwrap()).as_str())
+        .sql(
+            format!("SELECT * FROM read_csv('{}');", csv_path.to_str().unwrap()).as_str(),
+        )
         .await?;
     df.show().await?;
 

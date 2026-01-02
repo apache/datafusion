@@ -56,15 +56,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::common::runtime::{JoinSetTracer, set_join_set_tracer};
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_examples::utils::write_csv_to_parquet;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
 use tracing::{Instrument, Level, Span, info, instrument};
 
 /// Demonstrates the tracing injection feature for the DataFusion runtime
@@ -131,35 +129,21 @@ async fn run_instrumented_query() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options =
         ListingOptions::new(Arc::new(file_format)).with_file_extension(".parquet");
 
-    info!("Registering table 'cars' from {}", path.to_str().unwrap());
+    info!("Registering table 'cars' from {}", parquet_temp.path_str()?);
     ctx.register_listing_table(
         "cars",
-        out_dir.to_str().unwrap(),
+        parquet_temp.path_str()?,
         listing_options,
         None,
         None,

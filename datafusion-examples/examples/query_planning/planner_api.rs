@@ -19,14 +19,12 @@
 
 use std::path::PathBuf;
 
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
+use datafusion_examples::utils::write_csv_to_parquet;
 
 /// This example demonstrates the process of converting logical plan
 /// into physical execution plans using DataFusion.
@@ -43,29 +41,15 @@ pub async fn planner_api() -> Result<()> {
     // Set up a DataFusion context and load a Parquet file
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     let df = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     // Construct the input logical plan using DataFrame API

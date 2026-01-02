@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use datafusion::common::DFSchemaRef;
 use datafusion::common::ScalarValue;
-use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::Statement;
 use datafusion::logical_expr::{
@@ -41,8 +40,7 @@ use datafusion::sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
 use datafusion::sql::unparser::{Unparser, plan_to_sql};
-use tempfile::TempDir;
-use tokio::fs::create_dir_all;
+use datafusion_examples::utils::write_csv_to_parquet;
 
 /// This example demonstrates the programmatic construction of SQL strings using
 /// the DataFusion Expr [`Expr`] and LogicalPlan [`LogicalPlan`] API.
@@ -120,29 +118,15 @@ fn simple_expr_to_sql_demo_escape_mysql_style() -> Result<()> {
 async fn simple_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     let df = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?
         .select_columns(&["car", "speed", "time"])?;
 
@@ -162,31 +146,17 @@ async fn simple_plan_to_sql_demo() -> Result<()> {
 async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     // register parquet file with the execution context
     ctx.register_parquet(
         "cars",
-        out_dir.to_str().unwrap(),
+        parquet_temp.path_str()?,
         ParquetReadOptions::default(),
     )
     .await?;
@@ -251,6 +221,7 @@ impl UserDefinedLogicalNodeCore for MyLogicalPlan {
 }
 
 struct PlanToStatement {}
+
 impl UserDefinedLogicalNodeUnparser for PlanToStatement {
     fn unparse_to_statement(
         &self,
@@ -272,29 +243,15 @@ impl UserDefinedLogicalNodeUnparser for PlanToStatement {
 async fn unparse_my_logical_plan_as_statement() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     let inner_plan = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?
         .select_columns(&["car", "speed", "time"])?
         .into_unoptimized_plan();
@@ -343,29 +300,15 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
 async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // Load CSV into an in-memory DataFrame, then materialize it to Parquet.
-    // This replaces a static parquet fixture and makes the example self-contained
-    // without requiring DataFusion test files.
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("data")
         .join("csv")
         .join("cars.csv");
-    let csv_df = ctx
-        .read_csv(path.to_str().unwrap(), CsvReadOptions::default())
-        .await?;
-    let tmp_source = TempDir::new()?;
-    let out_dir = tmp_source.path().join("parquet_source");
-    create_dir_all(&out_dir).await?;
-    csv_df
-        .write_parquet(
-            out_dir.to_str().unwrap(),
-            DataFrameWriteOptions::default(),
-            None,
-        )
-        .await?;
+    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
 
     let inner_plan = ctx
-        .read_parquet(out_dir.to_str().unwrap(), ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?
         .select_columns(&["car", "speed", "time"])?
         .into_unoptimized_plan();
