@@ -18,6 +18,7 @@
 //! Math function: `isnan()`.
 
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{Coercion, ColumnarValue, ScalarFunctionArgs, TypeSignatureClass};
 
@@ -54,11 +55,14 @@ impl Default for IsNanFunc {
 
 impl IsNanFunc {
     pub fn new() -> Self {
+        // Accept any numeric type and coerce to float
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Float)],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![float], Volatility::Immutable),
         }
     }
 }

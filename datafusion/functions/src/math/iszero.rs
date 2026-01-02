@@ -22,6 +22,7 @@ use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
+use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
 use datafusion_expr::{
@@ -59,11 +60,14 @@ impl Default for IsZeroFunc {
 
 impl IsZeroFunc {
     pub fn new() -> Self {
+        // Accept any numeric type and coerce to float
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Float)],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![float], Volatility::Immutable),
         }
     }
 }
