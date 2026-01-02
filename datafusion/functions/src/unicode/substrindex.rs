@@ -200,6 +200,7 @@ where
 
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
                 let result_idx = if delimiter.len() == 1 {
+                    // Fast path: use byte-level search for single-character delimiters
                     let d_byte = delimiter.as_bytes()[0];
                     let bytes = string.as_bytes();
 
@@ -219,18 +220,18 @@ where
                             .nth(occurrences - 1)
                             .map(|(idx, _)| idx + 1)
                     }
+                } else if n > 0 {
+                    // Multi-byte path: forward search for n-th occurrence
+                    string
+                        .match_indices(delimiter)
+                        .nth(occurrences - 1)
+                        .map(|(idx, _)| idx)
                 } else {
-                    if n > 0 {
-                        string
-                            .match_indices(delimiter)
-                            .nth(occurrences - 1)
-                            .map(|(idx, _)| idx)
-                    } else {
-                        string
-                            .rmatch_indices(delimiter)
-                            .nth(occurrences - 1)
-                            .map(|(idx, _)| idx + delimiter.len())
-                    }
+                    // Multi-byte path: backward search for n-th occurrence from the right
+                    string
+                        .rmatch_indices(delimiter)
+                        .nth(occurrences - 1)
+                        .map(|(idx, _)| idx + delimiter.len())
                 };
                 match result_idx {
                     Some(idx) => {
@@ -346,7 +347,6 @@ mod tests {
             Utf8,
             StringArray
         );
-
         Ok(())
     }
 }

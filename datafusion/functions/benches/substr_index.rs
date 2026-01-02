@@ -149,20 +149,17 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     for batch_size in batch_sizes {
         group.bench_function(
-            &format!("substr_index_{}_single_delimiter", batch_size),
+            format!("substr_index_{batch_size}_single_delimiter"),
             |b| {
                 let (strings, delimiters, counts) = data(batch_size, true);
                 run_benchmark(b, strings, delimiters, counts, batch_size);
             },
         );
 
-        group.bench_function(
-            &format!("substr_index_{}_long_delimiter", batch_size),
-            |b| {
-                let (strings, delimiters, counts) = data(batch_size, false);
-                run_benchmark(b, strings, delimiters, counts, batch_size);
-            },
-        );
+        group.bench_function(format!("substr_index_{batch_size}_long_delimiter"), |b| {
+            let (strings, delimiters, counts) = data(batch_size, false);
+            run_benchmark(b, strings, delimiters, counts, batch_size);
+        });
     }
 
     group.finish();
