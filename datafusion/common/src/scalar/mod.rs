@@ -727,10 +727,7 @@ impl PartialOrd for ScalarValue {
                 if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
-            // Nulls are handled by the early return above
-            (Null, _) | (_, Null) => unreachable!(
-                "Nulls are already handled before entering ScalarValue::partial_cmp match"
-            ),
+            _ => None,
         }
     }
 }
@@ -4023,7 +4020,7 @@ impl ScalarValue {
         arr1 == &right
     }
 
-   /// Compare two `ScalarValue`s.
+    /// Compare two `ScalarValue`s.
     ///
     /// Returns an error if:
     /// * the values are of incompatible types, or
@@ -4031,7 +4028,7 @@ impl ScalarValue {
     ///
     /// This differs from `partial_cmp`, which returns `None` for NULL inputs
     /// instead of an error.
-        pub fn try_cmp(&self, other: &Self) -> Result<Ordering> {
+    pub fn try_cmp(&self, other: &Self) -> Result<Ordering> {
         self.partial_cmp(other).ok_or_else(|| {
             _internal_datafusion_err!("Uncomparable values: {self:?}, {other:?}")
         })
@@ -9361,34 +9358,16 @@ mod tests {
     fn scalar_partial_ordering_nulls() {
         use ScalarValue::*;
 
-        assert_eq!(
-            Int32(Some(3)).partial_cmp(&Int32(None)),
-            None
-        );
+        assert_eq!(Int32(Some(3)).partial_cmp(&Int32(None)), None);
 
-        assert_eq!(
-            Int32(None).partial_cmp(&Int32(Some(3))),
-            None
-        );
+        assert_eq!(Int32(None).partial_cmp(&Int32(Some(3))), None);
 
-        assert_eq!(
-            Int32(None).partial_cmp(&Int32(None)),
-            None
-        );
+        assert_eq!(Int32(None).partial_cmp(&Int32(None)), None);
 
-        assert_eq!(
-            Null.partial_cmp(&Int32(Some(3))),
-            None
-        );
+        assert_eq!(Null.partial_cmp(&Int32(Some(3))), None);
 
-        assert_eq!(
-            Int32(Some(3)).partial_cmp(&Null),
-            None
-        );
+        assert_eq!(Int32(Some(3)).partial_cmp(&Null), None);
 
-        assert_eq!(
-            Null.partial_cmp(&Null),
-            None
-        );
+        assert_eq!(Null.partial_cmp(&Null), None);
     }
 }
