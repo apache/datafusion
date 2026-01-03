@@ -102,46 +102,15 @@ impl LogFunc {
     }
 }
 
-/// Checks if the base is valid for the efficient integer logarithm algorithm.
-#[inline]
-fn is_valid_integer_base(base: f64) -> bool {
-    base.trunc() == base && base >= 2.0 && base <= u32::MAX as f64
-}
-
 /// Generic function to calculate logarithm of a decimal value using the given base.
 ///
-/// For integer bases >= 2 with non-negative scale, uses the efficient integer `ilog` algorithm.
-/// For all other cases (non-integer bases, negative bases, non-finite bases),
-/// falls back to f64 computation which naturally returns NaN for invalid inputs,
-/// matching the behavior of `f64::log`.
+/// Uses f64 computation which naturally returns NaN for invalid inputs
+/// (base <= 1, non-finite, value <= 0), matching the behavior of `f64::log`.
 fn log_decimal<T>(value: T, scale: i8, base: f64) -> Result<f64, ArrowError>
 where
     T: ToPrimitive + Copy,
 {
-    // For integer bases >= 2 and non-negative scale, try the efficient integer algorithm
-    if is_valid_integer_base(base)
-        && scale >= 0
-        && let Some(unscaled) = unscale_decimal_value(&value, scale)
-    {
-        return if unscaled > 0 {
-            Ok(unscaled.ilog(base as u128) as f64)
-        } else {
-            Ok(f64::NAN)
-        };
-    }
-
-    // Fallback to f64 computation for non-integer bases, negative scale, etc.
-    // This naturally returns NaN for invalid inputs (base <= 1, non-finite, value <= 0)
     decimal_to_f64(&value, scale).map(|v| v.log(base))
-}
-
-/// Unscale a decimal value by dividing by 10^scale, returning the result as u128.
-/// Returns None if the value is negative or the conversion fails.
-#[inline]
-fn unscale_decimal_value<T: ToPrimitive>(value: &T, scale: i8) -> Option<u128> {
-    let value_u128 = value.to_u128()?;
-    let divisor = 10u128.checked_pow(scale as u32)?;
-    Some(value_u128 / divisor)
 }
 
 /// Convert a scaled decimal value to f64.
@@ -408,13 +377,10 @@ mod tests {
     #[test]
     fn test_log_decimal_native() {
         let value = 10_i128.pow(35);
-        assert_eq!((value as f64).log2(), 116.26748332105768);
-        assert_eq!(
-            log_decimal(value, 0, 2.0).unwrap(),
-            // TODO: see we're losing our decimal points compared to above
-            //       https://github.com/apache/datafusion/issues/18524
-            116.0
-        );
+        let expected = (value as f64).log2();
+        assert_eq!(expected, 116.26748332105768);
+        // Now using f64 computation, we get the precise value
+        assert!((log_decimal(value, 0, 2.0).unwrap() - expected).abs() < 1e-10);
     }
 
     #[test]
@@ -982,7 +948,8 @@ mod tests {
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
-                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding
+                // log10(12600) ≈ 4.1003 (not truncated to 4)
+                assert!((floats.value(4) - 12600f64.log10()).abs() < 1e-10);
                 assert!(floats.value(5).is_nan());
             }
             ColumnarValue::Scalar(_) => {
@@ -1117,43 +1084,11 @@ mod tests {
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
-                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding for float log
-                assert!((floats.value(5) - 38.0).abs() < 1e-10);
+                // log10(12600) ≈ 4.1003 (not truncated to 4)
+                assert!((floats.value(4) - 12600f64.log10()).abs() < 1e-10);
+                // log10(i128::MAX - 1000) ≈ 38.23 (not truncated to 38)
+                assert!((floats.value(5) - ((i128::MAX - 1000) as f64).log10()).abs() < 1e-10);
                 assert!(floats.value(6).is_nan());
-            }
-            ColumnarValue::Scalar(_) => {
-                panic!("Expected an array value")
-            }
-        }
-    }
-
-    #[test]
-    fn test_log_decimal128_invalid_base() {
-        // Invalid base (-2.0) should return NaN, matching f64::log behavior
-        let arg_fields = vec![
-            Field::new("b", DataType::Float64, false).into(),
-            Field::new("x", DataType::Decimal128(38, 0), false).into(),
-        ];
-        let args = ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(-2.0))), // base
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(64), 38, 0)), // num
-            ],
-            arg_fields,
-            number_rows: 1,
-            return_field: Field::new("f", DataType::Float64, true).into(),
-            config_options: Arc::new(ConfigOptions::default()),
-        };
-        let result = LogFunc::new()
-            .invoke_with_args(args)
-            .expect("should not error on invalid base");
-
-        match result {
-            ColumnarValue::Array(arr) => {
-                let floats = as_float64_array(&arr)
-                    .expect("failed to convert result to a Float64Array");
-                assert_eq!(floats.len(), 1);
-                assert!(floats.value(0).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
