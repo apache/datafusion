@@ -1366,7 +1366,7 @@ This is critical because:
 
 **Incorrect implementation** (consumes state):
 
-```rust
+```rust,ignore
 fn evaluate(&mut self) -> Result<ScalarValue> {
     // BAD: std::mem::take() consumes the values, leaving an empty Vec
     let values = std::mem::take(&mut self.values);
@@ -1378,7 +1378,7 @@ fn evaluate(&mut self) -> Result<ScalarValue> {
 
 **Correct implementation** (preserves state):
 
-```rust
+```rust,ignore
 fn evaluate(&mut self) -> Result<ScalarValue> {
     // GOOD: Use a reference or clone to preserve state
     calculate_result(&mut self.values)
@@ -1391,7 +1391,7 @@ fn evaluate(&mut self) -> Result<ScalarValue> {
 For more efficient sliding window calculations, you can implement the `retract_batch` method.
 This allows DataFusion to remove values that have "left" the window frame instead of recalculating from scratch:
 
-```rust
+```rust,ignore
 impl Accumulator for MyAccumulator {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Remove the given values from the accumulator state
