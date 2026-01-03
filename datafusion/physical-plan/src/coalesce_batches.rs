@@ -57,6 +57,8 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`LimitedBatchCoalescer`] for more information
+
+#[deprecated(since = "52.0.0", note = "We now use BatchCoalescer from arrow-rs instead of a dedicated operator")]
 #[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
