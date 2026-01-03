@@ -683,17 +683,9 @@ mod test {
             let num_groups: usize = rng.random_range(2..1000);
             let max_group = num_groups - 1;
 
-            let mut group_indices: Vec<usize> = (0..num_values)
+            let group_indices: Vec<usize> = (0..num_values)
                 .map(|_| rng.random_range(0..max_group))
                 .collect();
-
-            // ensure all groups are seen at least once to match DataFusion behavior
-            // where total_num_groups is the number of groups seen so far
-            for (i, group_index) in group_indices.iter_mut().enumerate() {
-                if i < num_groups {
-                    *group_index = i;
-                }
-            }
 
             let values: Vec<u32> = (0..num_values).map(|_| rng.random()).collect();
 

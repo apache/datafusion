@@ -919,6 +919,7 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
+                // SAFETY: group_index is guaranteed to be in bounds
                 let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
             },
