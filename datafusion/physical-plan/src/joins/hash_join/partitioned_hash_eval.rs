@@ -21,10 +21,11 @@ use std::{any::Any, fmt::Display, hash::Hash, sync::Arc};
 
 use ahash::RandomState;
 use arrow::{
-    array::UInt64Array,
+    array::{ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
+    record_batch::RecordBatch,
 };
-use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::hash_utils::{create_hashes, with_hashes};
 use datafusion_common::{Result, internal_datafusion_err, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
@@ -113,6 +114,15 @@ impl HashExpr {
     pub fn description(&self) -> &str {
         &self.description
     }
+
+    /// Evaluate the columns to be hashed.
+    fn evaluate_on_columns(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+        let num_rows = batch.num_rows();
+        self.on_columns
+            .iter()
+            .map(|c| c.evaluate(batch)?.into_array(num_rows))
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for HashExpr {
@@ -180,18 +190,11 @@ impl PhysicalExpr for HashExpr {
         Ok(false)
     }
 
-    fn evaluate(
-        &self,
-        batch: &arrow::record_batch::RecordBatch,
-    ) -> Result<ColumnarValue> {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
 
         // Evaluate columns
-        let keys_values = self
-            .on_columns
-            .iter()
-            .map(|c| c.evaluate(batch)?.into_array(num_rows))
-            .collect::<Result<Vec<_>>>()?;
+        let keys_values = self.evaluate_on_columns(batch)?;
 
         // Compute hashes
         let mut hashes_buffer = vec![0; num_rows];
@@ -326,11 +329,23 @@ impl PhysicalExpr for HashTableLookupExpr {
         Ok(false)
     }
 
-    fn evaluate(
-        &self,
-        batch: &arrow::record_batch::RecordBatch,
-    ) -> Result<ColumnarValue> {
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
+
+        // Optimization: if hash_expr is HashExpr, compute hashes directly into callback
+        // to avoid redundant allocations and copies.
+        if let Some(hash_expr) = self.hash_expr.as_any().downcast_ref::<HashExpr>() {
+            let keys_values = hash_expr.evaluate_on_columns(batch)?;
+
+            return with_hashes(
+                &keys_values,
+                hash_expr.random_state.random_state(),
+                |hashes| {
+                    let array = self.hash_map.contain_hashes(hashes);
+                    Ok(ColumnarValue::Array(Arc::new(array)))
+                },
+            );
+        }
 
         // Evaluate hash expression to get hash values
         let hash_array = self.hash_expr.evaluate(batch)?.into_array(num_rows)?;
