@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod abs;
+pub mod decimal_div;
 pub mod expm1;
 pub mod factorial;
 pub mod hex;
@@ -27,6 +28,9 @@ pub mod width_bucket;
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
+
+// Re-export decimal division types for use by callers
+pub use decimal_div::{SparkDecimalDiv, SparkDecimalIntegralDiv};
 
 make_udf_function!(abs::SparkAbs, abs);
 make_udf_function!(expm1::SparkExpm1, expm1);
