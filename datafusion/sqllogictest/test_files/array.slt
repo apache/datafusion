@@ -4834,9 +4834,9 @@ from array_intersect_table_1D_NULL;
 [1, 2, 3, 4]
 [2, 3]
 [3, 4]
-[3, 4]
-[1, 2]
-[]
+NULL
+NULL
+NULL
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
@@ -6793,9 +6793,9 @@ from array_intersect_table_1D_NULL;
 [2, 3]
 [3]
 [3]
-[]
-[]
-[]
+NULL
+NULL
+NULL
 
 query ??
 select array_intersect(column1, column2),
