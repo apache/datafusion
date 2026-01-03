@@ -48,28 +48,58 @@ impl fmt::Display for StringArrayType {
     }
 }
 
-/// returns an array of strings, and `characters` as a ScalarValue
-pub fn create_string_array_and_characters(
+#[derive(Clone, Copy)]
+pub enum TrimType {
+    Ltrim,
+    Rtrim,
+    Btrim,
+}
+
+impl fmt::Display for TrimType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TrimType::Ltrim => f.write_str("ltrim"),
+            TrimType::Rtrim => f.write_str("rtrim"),
+            TrimType::Btrim => f.write_str("btrim"),
+        }
+    }
+}
+
+/// Returns an array of strings with trim characters positioned according to trim type,
+/// and `characters` as a ScalarValue.
+///
+/// For ltrim: trim characters are at the start (prefix)
+/// For rtrim: trim characters are at the end (suffix)
+/// For btrim: trim characters are at both start and end
+fn create_string_array_and_characters(
     size: usize,
     characters: &str,
     trimmed: &str,
     remaining_len: usize,
     string_array_type: StringArrayType,
+    trim_type: TrimType,
 ) -> (ArrayRef, ScalarValue) {
     let rng = &mut StdRng::seed_from_u64(42);
 
     // Create `size` rows:
     //   - 10% rows will be `None`
-    //   - Other 90% will be strings with same `remaining_len` lengths
-    // We will build the string array on it later.
+    //   - Other 90% will be strings with `remaining_len` content length
     let string_iter = (0..size).map(|_| {
         if rng.random::<f32>() < 0.1 {
             None
         } else {
-            let mut value = trimmed.as_bytes().to_vec();
-            let generated = rng.sample_iter(&Alphanumeric).take(remaining_len);
-            value.extend(generated);
-            Some(String::from_utf8(value).unwrap())
+            let content: String = rng
+                .sample_iter(&Alphanumeric)
+                .take(remaining_len)
+                .map(char::from)
+                .collect();
+
+            let value = match trim_type {
+                TrimType::Ltrim => format!("{trimmed}{content}"),
+                TrimType::Rtrim => format!("{content}{trimmed}"),
+                TrimType::Btrim => format!("{trimmed}{content}{trimmed}"),
+            };
+            Some(value)
         }
     });
 
@@ -90,23 +120,14 @@ pub fn create_string_array_and_characters(
     }
 }
 
-/// Create args for the ltrim benchmark
-/// Inputs:
-///   - size: rows num of the test array
-///   - characters: the characters we need to trim
-///   - trimmed: the part in the testing string that will be trimmed
-///   - remaining_len: the len of the remaining part of testing string after trimming
-///   - string_array_type: the method used to store the testing strings
-///
-/// Outputs:
-///   - testing string array
-///   - trimmed characters
+/// Create args for the trim benchmark
 fn create_args(
     size: usize,
     characters: &str,
     trimmed: &str,
     remaining_len: usize,
     string_array_type: StringArrayType,
+    trim_type: TrimType,
 ) -> Vec<ColumnarValue> {
     let (string_array, pattern) = create_string_array_and_characters(
         size,
@@ -114,6 +135,7 @@ fn create_args(
         trimmed,
         remaining_len,
         string_array_type,
+        trim_type,
     );
     vec![
         ColumnarValue::Array(string_array),
@@ -124,15 +146,23 @@ fn create_args(
 #[allow(clippy::too_many_arguments)]
 fn run_with_string_type<M: Measurement>(
     group: &mut BenchmarkGroup<'_, M>,
-    ltrim: &ScalarUDF,
+    trim_func: &ScalarUDF,
+    trim_type: TrimType,
     size: usize,
-    len: usize,
+    total_len: usize,
     characters: &str,
     trimmed: &str,
     remaining_len: usize,
     string_type: StringArrayType,
 ) {
-    let args = create_args(size, characters, trimmed, remaining_len, string_type);
+    let args = create_args(
+        size,
+        characters,
+        trimmed,
+        remaining_len,
+        string_type,
+        trim_type,
+    );
     let arg_fields = args
         .iter()
         .enumerate()
@@ -142,12 +172,12 @@ fn run_with_string_type<M: Measurement>(
 
     group.bench_function(
         format!(
-            "{string_type} [size={size}, len_before={len}, len_after={remaining_len}]",
+            "{trim_type} {string_type} [size={size}, len={total_len}, remaining={remaining_len}]",
         ),
         |b| {
             b.iter(|| {
                 let args_cloned = args.clone();
-                black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
+                black_box(trim_func.invoke_with_args(ScalarFunctionArgs {
                     args: args_cloned,
                     arg_fields: arg_fields.clone(),
                     number_rows: size,
@@ -160,13 +190,14 @@ fn run_with_string_type<M: Measurement>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_one_group(
+fn run_trim_benchmark(
     c: &mut Criterion,
     group_name: &str,
-    ltrim: &ScalarUDF,
+    trim_func: &ScalarUDF,
+    trim_type: TrimType,
     string_types: &[StringArrayType],
     size: usize,
-    len: usize,
+    total_len: usize,
     characters: &str,
     trimmed: &str,
     remaining_len: usize,
@@ -178,9 +209,10 @@ fn run_one_group(
     for string_type in string_types {
         run_with_string_type(
             &mut group,
-            ltrim,
+            trim_func,
+            trim_type,
             size,
-            len,
+            total_len,
             characters,
             trimmed,
             remaining_len,
@@ -193,6 +225,9 @@ fn run_one_group(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let ltrim = string::ltrim();
+    let rtrim = string::rtrim();
+    let btrim = string::btrim();
+
     let characters = ",!()";
 
     let string_types = [
@@ -200,54 +235,69 @@ fn criterion_benchmark(c: &mut Criterion) {
         StringArrayType::Utf8,
         StringArrayType::LargeUtf8,
     ];
-    for size in [1024, 4096, 8192] {
-        // len=12, trimmed_len=4, len_after_ltrim=8
-        let len = 12;
-        let trimmed = characters;
-        let remaining_len = len - trimmed.len();
-        run_one_group(
-            c,
-            "INPUT LEN <= 12",
-            &ltrim,
-            &string_types,
-            size,
-            len,
-            characters,
-            trimmed,
-            remaining_len,
-        );
 
-        // len=64, trimmed_len=4, len_after_ltrim=60
-        let len = 64;
-        let trimmed = characters;
-        let remaining_len = len - trimmed.len();
-        run_one_group(
-            c,
-            "INPUT LEN > 12, OUTPUT LEN > 12",
-            &ltrim,
-            &string_types,
-            size,
-            len,
-            characters,
-            trimmed,
-            remaining_len,
-        );
+    let trim_funcs = [
+        (&ltrim, TrimType::Ltrim),
+        (&rtrim, TrimType::Rtrim),
+        (&btrim, TrimType::Btrim),
+    ];
 
-        // len=64, trimmed_len=56, len_after_ltrim=8
-        let len = 64;
-        let trimmed = characters.repeat(15);
-        let remaining_len = len - trimmed.len();
-        run_one_group(
-            c,
-            "INPUT LEN > 12, OUTPUT LEN <= 12",
-            &ltrim,
-            &string_types,
-            size,
-            len,
-            characters,
-            &trimmed,
-            remaining_len,
-        );
+    for size in [4096] {
+        for (trim_func, trim_type) in &trim_funcs {
+            // Scenario 1: Short strings (len <= 12, inline in StringView)
+            // trimmed_len=4, remaining_len=8
+            let total_len = 12;
+            let trimmed = characters;
+            let remaining_len = total_len - trimmed.len();
+            run_trim_benchmark(
+                c,
+                "short strings (len <= 12)",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                total_len,
+                characters,
+                trimmed,
+                remaining_len,
+            );
+
+            // Scenario 2: Long strings, short trim (len > 12, output > 12)
+            // trimmed_len=4, remaining_len=60
+            let total_len = 64;
+            let trimmed = characters;
+            let remaining_len = total_len - trimmed.len();
+            run_trim_benchmark(
+                c,
+                "long strings, short trim",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                total_len,
+                characters,
+                trimmed,
+                remaining_len,
+            );
+
+            // Scenario 3: Long strings, long trim (len > 12, output <= 12)
+            // trimmed_len=56, remaining_len=8
+            let total_len = 64;
+            let trimmed = characters.repeat(14);
+            let remaining_len = total_len - trimmed.len();
+            run_trim_benchmark(
+                c,
+                "long strings, long trim",
+                trim_func,
+                *trim_type,
+                &string_types,
+                size,
+                total_len,
+                characters,
+                &trimmed,
+                remaining_len,
+            );
+        }
     }
 }
 
