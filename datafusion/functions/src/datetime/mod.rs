@@ -35,6 +35,7 @@ pub mod planner;
 pub mod to_char;
 pub mod to_date;
 pub mod to_local_time;
+pub mod to_time;
 pub mod to_timestamp;
 pub mod to_unixtime;
 
@@ -50,6 +51,7 @@ make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
 make_udf_function!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
+make_udf_function!(to_time::ToTimeFunc, to_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
 make_udf_function!(to_timestamp::ToTimestampFunc, to_timestamp);
 make_udf_function!(to_timestamp::ToTimestampSecondsFunc, to_timestamp_seconds);
@@ -109,6 +111,10 @@ pub mod expr_fn {
     (
         to_unixtime,
         "converts a value to seconds since the unix epoch",
+        args,
+    ),(
+        to_time,
+        "converts a string and optional formats to a `Time64(Nanoseconds)`",
         args,
     ),(
         to_timestamp,
@@ -278,6 +284,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         to_char(),
         to_date(),
         to_local_time(),
+        to_time(),
         to_unixtime(),
         to_timestamp(),
         to_timestamp_seconds(),
