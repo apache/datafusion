@@ -385,7 +385,9 @@ impl Accumulator for SimpleStringAggAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         if self.has_value {
-            Ok(ScalarValue::LargeUtf8(Some(self.accumulated_string.clone())))
+            Ok(ScalarValue::LargeUtf8(Some(
+                self.accumulated_string.clone(),
+            )))
         } else {
             Ok(ScalarValue::LargeUtf8(None))
         }

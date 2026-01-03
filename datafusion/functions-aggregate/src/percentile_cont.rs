@@ -812,12 +812,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut values: Vec<T::Native> = self
-            .distinct_values
-            .values
-            .iter()
-            .map(|v| v.0)
-            .collect();
+        let mut values: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
         let value = calculate_percentile::<T>(&mut values, self.percentile);
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
