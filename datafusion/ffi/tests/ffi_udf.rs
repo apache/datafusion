@@ -19,13 +19,13 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::datatypes::DataType;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::{ScalarUDF, ScalarUDFImpl};
     use datafusion::prelude::{SessionContext, col};
-    use std::sync::Arc;
-
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
 

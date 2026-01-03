@@ -151,12 +151,18 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             DataType::Utf8View => {
                 let str1_array = as_string_view_array(&str1)?;
                 let str2_array = as_string_view_array(&str2)?;
+
+                // Reusable buffer to avoid allocating for each row
+                let mut cache = Vec::new();
+
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                            Some(datafusion_strsim::levenshtein_with_buffer(
+                                string1, string2, &mut cache,
+                            ) as i32)
                         }
                         _ => None,
                     })
@@ -166,12 +172,18 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             DataType::Utf8 => {
                 let str1_array = as_generic_string_array::<T>(&str1)?;
                 let str2_array = as_generic_string_array::<T>(&str2)?;
+
+                // Reusable buffer to avoid allocating for each row
+                let mut cache = Vec::new();
+
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein(string1, string2) as i32)
+                            Some(datafusion_strsim::levenshtein_with_buffer(
+                                string1, string2, &mut cache,
+                            ) as i32)
                         }
                         _ => None,
                     })
@@ -181,12 +193,18 @@ fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             DataType::LargeUtf8 => {
                 let str1_array = as_generic_string_array::<T>(&str1)?;
                 let str2_array = as_generic_string_array::<T>(&str2)?;
+
+                // Reusable buffer to avoid allocating for each row
+                let mut cache = Vec::new();
+
                 let result = str1_array
                     .iter()
                     .zip(str2_array.iter())
                     .map(|(string1, string2)| match (string1, string2) {
                         (Some(string1), Some(string2)) => {
-                            Some(datafusion_strsim::levenshtein(string1, string2) as i64)
+                            Some(datafusion_strsim::levenshtein_with_buffer(
+                                string1, string2, &mut cache,
+                            ) as i64)
                         }
                         _ => None,
                     })

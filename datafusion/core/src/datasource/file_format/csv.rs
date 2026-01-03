@@ -1536,4 +1536,32 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_infer_schema_with_zero_max_records() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let root = format!("{}/csv", arrow_test_data());
+        let format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(0); // Set to 0 to disable inference
+        let exec = scan_format(
+            &state,
+            &format,
+            None,
+            &root,
+            "aggregate_test_100.csv",
+            None,
+            None,
+        )
+        .await?;
+
+        // related to https://github.com/apache/datafusion/issues/19417
+        for f in exec.schema().fields() {
+            assert_eq!(*f.data_type(), DataType::Utf8);
+        }
+
+        Ok(())
+    }
 }
