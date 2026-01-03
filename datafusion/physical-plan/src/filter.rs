@@ -93,37 +93,106 @@ pub struct FilterExec {
     fetch: Option<usize>,
 }
 
+/// Builder for [`FilterExec`] to set optional parameters
+pub struct FilterExecBuilder {
+    predicate: Arc<dyn PhysicalExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    projection: Option<Vec<usize>>,
+    default_selectivity: u8,
+    batch_size: usize,
+    fetch: Option<usize>,
+}
+
+impl FilterExecBuilder {
+    /// Create a new builder with required parameters (predicate and input)
+    pub fn new(predicate: Arc<dyn PhysicalExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            predicate,
+            input,
+            projection: None,
+            default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
+            batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
+            fetch: None,
+        }
+    }
+
+    /// Set the projection
+    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    /// Set the default selectivity
+    pub fn with_default_selectivity(mut self, default_selectivity: u8) -> Self {
+        self.default_selectivity = default_selectivity;
+        self
+    }
+
+    /// Set the batch size
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Set the fetch limit
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    /// Build the FilterExec, computing properties once with all configured parameters
+    pub fn build(self) -> Result<FilterExec> {
+        // Validate predicate type
+        match self.predicate.data_type(self.input.schema().as_ref())? {
+            DataType::Boolean => {}
+            other => {
+                return plan_err!(
+                    "Filter predicate must return BOOLEAN values, got {other:?}"
+                )
+            }
+        }
+
+        // Validate selectivity
+        if self.default_selectivity > 100 {
+            return plan_err!(
+                "Default filter selectivity value needs to be less than or equal to 100"
+            );
+        }
+
+        // Validate projection if provided
+        if let Some(ref proj) = self.projection {
+            can_project(&self.input.schema(), Some(proj))?;
+        }
+
+        // Compute properties once with all parameters
+        let cache = FilterExec::compute_properties(
+            &self.input,
+            &self.predicate,
+            self.default_selectivity,
+            self.projection.as_ref(),
+        )?;
+
+        Ok(FilterExec {
+            predicate: self.predicate,
+            input: self.input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            default_selectivity: self.default_selectivity,
+            cache,
+            projection: self.projection,
+            batch_size: self.batch_size,
+            fetch: self.fetch,
+        })
+    }
+}
+
 impl FilterExec {
-    /// Create a FilterExec on an input
+    /// Create a FilterExec on an input using the builder pattern
     #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-        match predicate.data_type(input.schema().as_ref())? {
-            DataType::Boolean => {
-                let default_selectivity = FILTER_EXEC_DEFAULT_SELECTIVITY;
-                let cache = Self::compute_properties(
-                    &input,
-                    &predicate,
-                    default_selectivity,
-                    None,
-                )?;
-                Ok(Self {
-                    predicate,
-                    input: Arc::clone(&input),
-                    metrics: ExecutionPlanMetricsSet::new(),
-                    default_selectivity,
-                    cache,
-                    projection: None,
-                    batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
-                    fetch: None,
-                })
-            }
-            other => {
-                plan_err!("Filter predicate must return BOOLEAN values, got {other:?}")
-            }
-        }
+        FilterExecBuilder::new(predicate, input).build()
     }
 
     pub fn with_default_selectivity(
@@ -1586,4 +1655,238 @@ mod tests {
 
         Ok(())
     }
-}
+
+    #[tokio::test]
+    async fn test_builder_with_projection() -> Result<()> {
+        // Create a schema with multiple columns
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a filter predicate: a > 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // Create filter with projection [0, 2] (columns a and c) using builder
+        let projection = Some(vec![0, 2]);
+        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .with_projection(projection.clone())
+            .build()?;
+
+        // Verify projection is set correctly
+        assert_eq!(filter.projection(), Some(&vec![0, 2]));
+
+        // Verify schema contains only projected columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "c");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_without_projection() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // Create filter without projection using builder
+        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .build()?;
+
+        // Verify no projection is set
+        assert_eq!(filter.projection(), None);
+
+        // Verify schema contains all columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_invalid_projection() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // Try to create filter with invalid projection (index out of bounds) using builder
+        let result = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .with_projection(Some(vec![0, 5])) // 5 is out of bounds
+            .build();
+
+        // Should return an error
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_vs_with_projection() -> Result<()> {
+        // This test verifies that the builder with projection produces the same result
+        // as try_new().with_projection(), but more efficiently (one compute_properties call)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(4000),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        ..Default::default()
+                    },
+                ],
+            },
+            Arc::clone(&schema),
+        ));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+
+        let projection = Some(vec![0, 2]);
+
+        // Method 1: Builder with projection (one call to compute_properties)
+        let filter1 = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .with_projection(projection.clone())
+            .build()?;
+
+        // Method 2: try_new().with_projection() (two calls to compute_properties)
+        let filter2 = FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&input))?
+            .with_projection(projection)?;
+
+        // Both methods should produce equivalent results
+        assert_eq!(filter1.schema(), filter2.schema());
+        assert_eq!(filter1.projection(), filter2.projection());
+
+        // Verify statistics are the same
+        let stats1 = filter1.partition_statistics(None)?;
+        let stats2 = filter2.partition_statistics(None)?;
+        assert_eq!(stats1.num_rows, stats2.num_rows);
+        assert_eq!(stats1.total_byte_size, stats2.total_byte_size);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_statistics_with_projection() -> Result<()> {
+        // Test that statistics are correctly computed when using builder with projection
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                num_rows: Precision::Inexact(1000),
+                total_byte_size: Precision::Inexact(12000),
+                column_statistics: vec![
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(200))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+                        max_value: Precision::Inexact(ScalarValue::Int32(Some(50))),
+                        ..Default::default()
+                    },
+                ],
+            },
+            Arc::clone(&schema),
+        ));
+
+        // Filter: a < 50, Project: [0, 2]
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
+        ));
+
+        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+            .with_projection(Some(vec![0, 2]))
+            .build()?;
+
+        let statistics = filter.partition_statistics(None)?;
+
+        // Verify statistics reflect both filtering and projection
+        assert!(matches!(statistics.num_rows, Precision::Inexact(_)));
+
+        // Schema should only have 2 columns after projection
+        assert_eq!(filter.schema().fields().len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_builder_predicate_validation() -> Result<()> {
+        // Test that builder validates predicate type correctly
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a predicate that doesn't return boolean (returns Int32)
+        let invalid_predicate = Arc::new(Column::new("a", 0));
+
+        // Should fail because predicate doesn't return boolean
+        let result = FilterExecBuilder::new(invalid_predicate, Arc::clone(&input))
+            .with_projection(Some(vec![0]))
+            .build();
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
