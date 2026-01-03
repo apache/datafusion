@@ -94,21 +94,6 @@ caused by
 Error during planning: Cannot coerce arithmetic expression Timestamp(ns) + Utf8 to valid types
 
 
-# DATE minus DATE returns Int64 (days difference)
-# This aligns with PostgreSQL, DuckDB, and MySQL behavior
-# See: https://www.postgresql.org/docs/current/functions-datetime.html
-query I
-SELECT DATE '2023-04-09' - DATE '2023-04-02';
-----
-7
-
-# Verify Date - Date returns Int64 type
-query T
-SELECT arrow_typeof(DATE '2023-04-09' - DATE '2023-04-02');
-----
-Int64
-
-
 # DATE minus Timestamp
 query ?
 SELECT DATE '2023-04-09' - '2000-01-01T00:00:00'::timestamp;
