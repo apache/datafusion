@@ -253,7 +253,6 @@ impl NullState {
 
         let nulls = match emit_to {
             EmitTo::All => {
-                self.all_seen = true;
                 nulls
             }
             EmitTo::First(n) => {
