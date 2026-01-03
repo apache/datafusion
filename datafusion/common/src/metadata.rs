@@ -18,9 +18,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use hashbrown::HashMap;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 
-use crate::{DataFusionError, ScalarValue, error::_plan_err};
+use crate::types::{LogicalTypeRef, NativeType};
+use crate::{error::_plan_err, DataFusionError, ScalarValue};
 
 /// A [`ScalarValue`] with optional [`FieldMetadata`]
 #[derive(Debug, Clone)]
@@ -179,6 +180,8 @@ pub struct FieldMetadata {
     /// Note this is not a `HashMap` because `HashMap` does not provide
     /// implementations for traits like `Debug` and `Hash`.
     inner: Arc<BTreeMap<String, String>>,
+    /// The logical type that can be resolved by consulting an extension type registry.
+    logical_type: Option<LogicalTypeRef>,
 }
 
 impl Default for FieldMetadata {
@@ -192,6 +195,7 @@ impl FieldMetadata {
     pub fn new_empty() -> Self {
         Self {
             inner: Arc::new(BTreeMap::new()),
+            logical_type: None,
         }
     }
 
@@ -265,13 +269,20 @@ impl FieldMetadata {
             .collect();
         Self {
             inner: Arc::new(inner),
+            logical_type: try_create_logical_type_ref(
+                field.data_type(),
+                field.extension_type_name(),
+            ),
         }
     }
 
     /// Create a new metadata instance from a map of string keys to string values.
-    pub fn new(inner: BTreeMap<String, String>) -> Self {
+    pub fn new(inner: BTreeMap<String, String>, data_type: &DataType) -> Self {
+        let extension_type_name = inner.get(EXTENSION_TYPE_NAME_KEY).map(|e| e.as_str());
+        let logical_type = try_create_logical_type_ref(data_type, extension_type_name);
         Self {
             inner: Arc::new(inner),
+            logical_type,
         }
     }
 
@@ -304,6 +315,23 @@ impl FieldMetadata {
         self.inner.len()
     }
 
+    /// Returns the logical type associated with this metadata.
+    pub fn logical_type(&self) -> Option<&LogicalTypeRef> {
+        self.logical_type.as_ref()
+    }
+
+    /// Returns the extension type name associated.
+    pub fn extension_type_name(&self) -> Option<&str> {
+        self.inner.get(EXTENSION_TYPE_NAME_KEY).map(|e| e.as_str())
+    }
+
+    /// Returns the extension type metadata associated.
+    pub fn extension_type_metadata(&self) -> Option<&str> {
+        self.inner
+            .get(EXTENSION_TYPE_METADATA_KEY)
+            .map(|e| e.as_str())
+    }
+
     /// Convert this `FieldMetadata` into a `HashMap<String, String>`
     pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
         self.inner
@@ -330,6 +358,14 @@ impl FieldMetadata {
         Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
         field_ref
     }
+
+    /// Updates the logical type for this instance.
+    pub fn with_logical_type(self, logical_type: Option<LogicalTypeRef>) -> Self {
+        Self {
+            logical_type,
+            ..self
+        }
+    }
 }
 
 impl From<&Field> for FieldMetadata {
@@ -338,43 +374,18 @@ impl From<&Field> for FieldMetadata {
     }
 }
 
-impl From<BTreeMap<String, String>> for FieldMetadata {
-    fn from(inner: BTreeMap<String, String>) -> Self {
-        Self::new(inner)
-    }
-}
-
-impl From<std::collections::HashMap<String, String>> for FieldMetadata {
-    fn from(map: std::collections::HashMap<String, String>) -> Self {
-        Self::new(map.into_iter().collect())
-    }
-}
-
-/// From reference
-impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
-    fn from(map: &std::collections::HashMap<String, String>) -> Self {
-        let inner = map
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(inner)
-    }
-}
-
-/// From hashbrown map
-impl From<HashMap<String, String>> for FieldMetadata {
-    fn from(map: HashMap<String, String>) -> Self {
-        let inner = map.into_iter().collect();
-        Self::new(inner)
-    }
-}
-
-impl From<&HashMap<String, String>> for FieldMetadata {
-    fn from(map: &HashMap<String, String>) -> Self {
-        let inner = map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(inner)
+/// Tries to create a logical type reference from a field.
+///
+/// If no extension type is found in the metadata, the native data type is used to create a logical
+/// type reference. Otherwise, the function returns [`None`] as it does not have access to an
+/// extension type registry.
+fn try_create_logical_type_ref(
+    data_type: &DataType,
+    extension_type_name: Option<&str>,
+) -> Option<LogicalTypeRef> {
+    if extension_type_name.is_some() {
+        None
+    } else {
+        Some(Arc::new(NativeType::from(data_type.clone())))
     }
 }
