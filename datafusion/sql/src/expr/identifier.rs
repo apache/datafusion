@@ -37,7 +37,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let id_span = id.span;
-        if id.value.starts_with('@') {
+        if id.value.starts_with('@') && id.quote_style.is_none() {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
             let field = self

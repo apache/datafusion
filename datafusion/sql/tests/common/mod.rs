@@ -227,6 +227,11 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "quoted_column_name_table" => Ok(Schema::new(vec![Field::new(
+                "@column",
+                DataType::UInt32,
+                false,
+            )])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 

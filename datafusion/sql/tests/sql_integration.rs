@@ -4523,6 +4523,29 @@ fn test_parse_escaped_string_literal_value() {
 }
 
 #[test]
+fn test_parse_quoted_column_name_with_at_sign() {
+    let sql = r"SELECT `@column` FROM quoted_column_name_table";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: quoted_column_name_table.@column
+      TableScan: quoted_column_name_table
+    "#
+    );
+
+    let sql = r"SELECT quoted_column_name_table.`@column` FROM quoted_column_name_table";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: quoted_column_name_table.@column
+      TableScan: quoted_column_name_table
+    "#
+    );
+}
+
+#[test]
 fn plan_create_index() {
     let sql =
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
