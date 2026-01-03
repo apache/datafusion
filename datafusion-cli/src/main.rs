@@ -32,7 +32,7 @@ use datafusion::logical_expr::ExplainFormat;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
 use datafusion_cli::functions::{
-    MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
+    ListFilesCacheFunc, MetadataCacheFunc, ParquetMetadataFunc, StatisticsCacheFunc,
 };
 use datafusion_cli::object_storage::instrumented::{
     InstrumentedObjectStoreMode, InstrumentedObjectStoreRegistry,
@@ -253,6 +253,13 @@ async fn main_inner() -> Result<()> {
         )),
     );
 
+    ctx.register_udtf(
+        "list_files_cache",
+        Arc::new(ListFilesCacheFunc::new(
+            ctx.task_ctx().runtime_env().cache_manager.clone(),
+        )),
+    );
+
     let mut print_options = PrintOptions {
         format: args.format,
         quiet: args.quiet,
@@ -431,15 +438,20 @@ pub fn extract_disk_limit(size: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use datafusion::{
         common::test_util::batches_to_string,
         execution::cache::{
-            cache_manager::CacheManagerConfig, cache_unit::DefaultFileStatisticsCache,
+            DefaultListFilesCache, cache_manager::CacheManagerConfig,
+            cache_unit::DefaultFileStatisticsCache,
         },
-        prelude::ParquetReadOptions,
+        prelude::{ParquetReadOptions, col, lit, split_part},
     };
     use insta::assert_snapshot;
+    use object_store::memory::InMemory;
+    use url::Url;
 
     fn assert_conversion(input: &str, expected: Result<usize, String>) {
         let result = extract_memory_pool_size(input);
@@ -737,6 +749,132 @@ mod tests {
         | alltypes_tiny_pages.parquet       | 454233          | Exact(7300)  | 13          | Absent           |
         | lz4_raw_compressed_larger.parquet | 380836          | Exact(10000) | 1           | Absent           |
         +-----------------------------------+-----------------+--------------+-------------+------------------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_cache() -> Result<(), DataFusionError> {
+        let list_files_cache = Arc::new(DefaultListFilesCache::new(
+            1024,
+            Some(Duration::from_secs(1)),
+        ));
+
+        let rt = RuntimeEnvBuilder::new()
+            .with_cache_manager(
+                CacheManagerConfig::default()
+                    .with_list_files_cache(Some(list_files_cache)),
+            )
+            .build_arc()
+            .unwrap();
+
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+
+        ctx.register_object_store(
+            &Url::parse("mem://test_table").unwrap(),
+            Arc::new(InMemory::new()),
+        );
+
+        ctx.register_udtf(
+            "list_files_cache",
+            Arc::new(ListFilesCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE src_table
+            STORED AS PARQUET
+            LOCATION '../parquet-testing/data/alltypes_plain.parquet'",
+        )
+        .await?
+        .collect()
+        .await?;
+
+        ctx.sql("COPY (SELECT * FROM src_table) TO 'mem://test_table/0.parquet' STORED AS PARQUET").await?.collect().await?;
+
+        ctx.sql("COPY (SELECT * FROM src_table) TO 'mem://test_table/1.parquet' STORED AS PARQUET").await?.collect().await?;
+
+        ctx.sql(
+            "CREATE EXTERNAL TABLE test_table 
+            STORED AS PARQUET
+            LOCATION 'mem://test_table/'
+        ",
+        )
+        .await?
+        .collect()
+        .await?;
+
+        let sql = "SELECT metadata_size_bytes, expires_in, metadata_list FROM list_files_cache()";
+        let df = ctx
+            .sql(sql)
+            .await?
+            .unnest_columns(&["metadata_list"])?
+            .with_column_renamed("metadata_list", "metadata")?
+            .unnest_columns(&["metadata"])?;
+
+        assert_eq!(
+            2,
+            df.clone()
+                .filter(col("expires_in").is_not_null())?
+                .count()
+                .await?
+        );
+
+        let df = df
+            .with_column_renamed(r#""metadata.file_size_bytes""#, "file_size_bytes")?
+            .with_column_renamed(r#""metadata.e_tag""#, "etag")?
+            .with_column(
+                "filename",
+                split_part(col(r#""metadata.file_path""#), lit("/"), lit(-1)),
+            )?
+            .select_columns(&[
+                "metadata_size_bytes",
+                "filename",
+                "file_size_bytes",
+                "etag",
+            ])?
+            .sort(vec![col("filename").sort(true, false)])?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +---------------------+-----------+-----------------+------+
+        | metadata_size_bytes | filename  | file_size_bytes | etag |
+        +---------------------+-----------+-----------------+------+
+        | 212                 | 0.parquet | 3645            | 0    |
+        | 212                 | 1.parquet | 3645            | 1    |
+        +---------------------+-----------+-----------------+------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_list_files_cache_not_set() -> Result<(), DataFusionError> {
+        let rt = RuntimeEnvBuilder::new()
+            .with_cache_manager(CacheManagerConfig::default().with_list_files_cache(None))
+            .build_arc()
+            .unwrap();
+
+        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+
+        ctx.register_udtf(
+            "list_files_cache",
+            Arc::new(ListFilesCacheFunc::new(
+                ctx.task_ctx().runtime_env().cache_manager.clone(),
+            )),
+        );
+
+        let rbs = ctx
+            .sql("SELECT * FROM list_files_cache()")
+            .await?
+            .collect()
+            .await?;
+        assert_snapshot!(batches_to_string(&rbs),@r"
+        +------+---------------------+------------+---------------+
+        | path | metadata_size_bytes | expires_in | metadata_list |
+        +------+---------------------+------------+---------------+
+        +------+---------------------+------------+---------------+
         ");
 
         Ok(())
