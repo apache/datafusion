@@ -16,9 +16,14 @@
 # under the License.
 
 query T
-SELECT space(1::INT);
+SELECT concat(space(1::INT), 'Spark');
 ----
- 
+ Spark
+
+query T
+SELECT concat(space(5::INT), 'Spark');
+----
+     Spark
 
 query T
 SELECT space(0::INT);
