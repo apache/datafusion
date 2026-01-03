@@ -18,7 +18,7 @@
 query T
 SELECT space(1::INT);
 ----
-
+ 
 
 query T
 SELECT space(0::INT);
