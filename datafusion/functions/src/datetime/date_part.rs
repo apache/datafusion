@@ -27,6 +27,10 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::temporal_conversions::{
+    MICROSECONDS_IN_DAY, MILLISECONDS_IN_DAY, NANOSECONDS_IN_DAY, SECONDS_IN_DAY,
+};
+use chrono::{Datelike, NaiveDate};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
@@ -41,10 +45,12 @@ use datafusion_common::{
     types::logical_string,
     utils::take_function_args,
 };
+use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+use datafusion_expr::{Expr, interval_arithmetic};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
@@ -231,6 +237,67 @@ impl ScalarUDFImpl for DatePartFunc {
         })
     }
 
+    // Only casting the year is supported since pruning other IntervalUnit is not possible
+    // date_part(col, YEAR) = 2024 => col >= '2024-01-01' and col < '2025-01-01'
+    // But for anything less than YEAR simplifying is not possible without specifying the bigger interval
+    // date_part(col, MONTH) = 1 => col = '2023-01-01' or col = '2024-01-01' or ... or col = '3000-01-01'
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &dyn SimplifyInfo,
+    ) -> Result<Option<interval_arithmetic::Interval>> {
+        let [part, col_expr] = take_function_args(self.name(), args)?;
+
+        // Get the interval unit from the part argument
+        let interval_unit = part
+            .as_literal()
+            .and_then(|sv| sv.try_as_str().flatten())
+            .map(part_normalization)
+            .and_then(|s| IntervalUnit::from_str(s).ok());
+
+        // only support extracting year
+        match interval_unit {
+            Some(IntervalUnit::Year) => (),
+            _ => return Ok(None),
+        }
+
+        // Check if the argument is a literal (e.g. date_part(YEAR, col) = 2024)
+        let Some(argument_literal) = lit_expr.as_literal() else {
+            return Ok(None);
+        };
+
+        // Extract i32 year from Scalar value
+        let year = match argument_literal {
+            ScalarValue::Int32(Some(y)) => *y,
+            _ => return Ok(None),
+        };
+
+        // Can only extract year from Date32/64 and Timestamp column
+        let target_type = match info.get_data_type(col_expr)? {
+            Date32 | Date64 | Timestamp(_, _) => &info.get_data_type(col_expr)?,
+            _ => return Ok(None),
+        };
+
+        // Compute the Interval bounds
+        let start_time =
+            NaiveDate::from_ymd_opt(year, 1, 1).expect("Expect computed start time");
+        let end_time = start_time
+            .with_year(year + 1)
+            .expect("Expect computed end time");
+
+        // Convert to ScalarValues
+        let lower = date_to_scalar(start_time, target_type)
+            .expect("Expect preimage interval lower bound");
+        let upper = date_to_scalar(end_time, target_type)
+            .expect("Expect preimage interval upper bound");
+        Ok(Some(interval_arithmetic::Interval::try_new(lower, upper)?))
+    }
+
+    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        Some(args[1].clone())
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -238,6 +305,35 @@ impl ScalarUDFImpl for DatePartFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
+    let days = date
+        .signed_duration_since(NaiveDate::from_epoch_days(0)?)
+        .num_days();
+
+    Some(match target_type {
+        Date32 => ScalarValue::Date32(Some(days as i32)),
+        Date64 => ScalarValue::Date64(Some(days * MILLISECONDS_IN_DAY)),
+        Timestamp(unit, tz) => match unit {
+            Second => {
+                ScalarValue::TimestampSecond(Some(days * SECONDS_IN_DAY), tz.clone())
+            }
+            Millisecond => ScalarValue::TimestampMillisecond(
+                Some(days * MILLISECONDS_IN_DAY),
+                tz.clone(),
+            ),
+            Microsecond => ScalarValue::TimestampMicrosecond(
+                Some(days * MICROSECONDS_IN_DAY),
+                tz.clone(),
+            ),
+            Nanosecond => ScalarValue::TimestampNanosecond(
+                Some(days * NANOSECONDS_IN_DAY),
+                tz.clone(),
+            ),
+        },
+        _ => return None,
+    })
 }
 
 fn is_epoch(part: &str) -> bool {
