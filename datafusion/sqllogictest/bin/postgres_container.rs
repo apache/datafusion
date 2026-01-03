@@ -23,10 +23,10 @@ use std::env::set_var;
 use std::future::Future;
 use std::sync::LazyLock;
 use std::{env, thread};
-use testcontainers::ImageExt;
-use testcontainers::core::IntoContainerPort;
-use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres;
+use testcontainers_modules::testcontainers::ImageExt;
+use testcontainers_modules::testcontainers::core::IntoContainerPort;
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, mpsc};
 
