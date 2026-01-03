@@ -27,7 +27,6 @@ pub struct ProgressConfig {
     pub mode: ProgressMode,
     pub style: ProgressStyle,
     pub interval_ms: u64,
-    pub estimator: ProgressEstimator,
 }
 
 impl ProgressConfig {
@@ -52,7 +51,6 @@ impl Default for ProgressConfig {
             mode: ProgressMode::Auto,
             style: ProgressStyle::Bar,
             interval_ms: 200,
-            estimator: ProgressEstimator::Alpha,
         }
     }
 }
@@ -86,24 +84,5 @@ pub enum ProgressStyle {
 impl Default for ProgressStyle {
     fn default() -> Self {
         Self::Bar
-    }
-}
-
-/// ETA estimation algorithm
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub enum ProgressEstimator {
-    /// Simple linear estimation based on current progress rate
-    Linear,
-    /// Alpha filter (exponential moving average) - recommended for most use cases
-    /// Provides smooth ETA estimates with good responsiveness to progress changes
-    Alpha,
-    /// Kalman filter-based estimation (DuckDB-inspired) - advanced mathematical modeling
-    /// Uses state estimation to predict completion time, best for variable workloads
-    Kalman,
-}
-
-impl Default for ProgressEstimator {
-    fn default() -> Self {
-        Self::Alpha
     }
 }

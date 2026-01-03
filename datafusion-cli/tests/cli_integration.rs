@@ -525,8 +525,6 @@ fn test_progress_bar_with_large_dataset() {
     cmd.args([
         "--progress",
         "on",
-        "--progress-estimator",
-        "alpha",
         "--command",
         "SELECT COUNT(*) FROM generate_series(1, 50000)",
         "-q",

@@ -40,7 +40,7 @@ use datafusion_cli::{
     pool_type::PoolType,
     print_format::PrintFormat,
     print_options::{MaxRows, PrintOptions},
-    progress::{ProgressConfig, ProgressEstimator, ProgressMode, ProgressStyle},
+    progress::{ProgressConfig, ProgressMode, ProgressStyle},
     DATAFUSION_CLI_VERSION,
 };
 
@@ -163,9 +163,6 @@ struct Args {
     )]
     progress_interval: u64,
 
-    #[clap(long, value_enum, default_value_t = ProgressEstimator::Alpha, help = "ETA estimation algorithm")]
-    progress_estimator: ProgressEstimator,
-
     #[clap(
         long,
         help = "Specify the default object_store_profiling mode, defaults to 'disabled'.\n[possible values: disabled, enabled]",
@@ -265,7 +262,6 @@ async fn main_inner() -> Result<()> {
         mode: args.progress,
         style: args.progress_style,
         interval_ms: args.progress_interval,
-        estimator: args.progress_estimator,
     };
 
     let mut print_options = PrintOptions {

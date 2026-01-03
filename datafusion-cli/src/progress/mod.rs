@@ -21,9 +21,9 @@
 //!
 //! # Features
 //! - Real-time progress bars with percentage completion
-//! - ETA estimation using multiple algorithms (Linear, Alpha filter, Kalman filter)
+//! - ETA estimation using alpha filter (exponential moving average)
 //! - Automatic detection of pipeline-breaking operators (sorts, joins, aggregates)
-//! - Phase-aware progress tracking to avoid "stuck at 100%" issues
+//! - Automatic switch to spinner mode when exact progress cannot be determined
 //! - TTY auto-detection for seamless terminal integration
 //!
 //! # Usage
@@ -31,8 +31,8 @@
 //! # Basic progress bar (auto-enabled in TTY)
 //! datafusion-cli --progress auto
 //!
-//! # Force progress bar on with specific estimator
-//! datafusion-cli --progress on --progress-estimator alpha
+//! # Force progress bar on
+//! datafusion-cli --progress on
 //!
 //! # Spinner mode for unknown progress
 //! datafusion-cli --progress on --progress-style spinner
@@ -41,13 +41,13 @@
 //! # Implementation Notes
 //! The progress system addresses review feedback from the DataFusion community:
 //! - Uses robust ExecutionPlan analysis instead of brittle string matching
-//! - Alpha filter is the default (simpler than Kalman, more accurate than linear)
-//! - Smart handling of blocking operators prevents progress from appearing stuck
-//! - Phase tracking provides user feedback during complex operations
+//! - Alpha filter provides smooth ETA estimates with good responsiveness
+//! - When blocking operators are detected and input is consumed, switches to spinner
+//!   to avoid showing misleading progress (e.g., stuck at 100% during sort)
 //!
 //! # Limitations
 //! - Progress accuracy depends on DataFusion's metrics availability
-//! - Complex queries with multiple blocking phases may show approximate progress
+//! - Complex queries with blocking operators will show spinner during processing phase
 //! - Very fast queries may not show progress bars due to update intervals
 
 mod config;
@@ -56,7 +56,7 @@ mod estimator;
 mod metrics_poll;
 mod plan_introspect;
 
-pub use config::{ProgressConfig, ProgressEstimator, ProgressMode, ProgressStyle};
+pub use config::{ProgressConfig, ProgressMode, ProgressStyle};
 
 use datafusion::error::Result;
 use datafusion::physical_plan::ExecutionPlan;
@@ -114,7 +114,7 @@ impl ProgressReporterInner {
         let totals = introspector.get_totals();
 
         let mut poller = metrics_poll::MetricsPoller::new(&self.plan);
-        let mut estimator = estimator::ProgressEstimator::new(self.config.estimator);
+        let mut estimator = estimator::ProgressEstimator::new();
         let mut display = display::ProgressDisplay::new(self.config.style);
 
         let interval = Duration::from_millis(self.config.interval_ms);
@@ -176,46 +176,44 @@ impl ProgressReporterInner {
             0.0
         };
 
-        // Determine execution phase and adjust progress accordingly
-        let (percent, phase) = self.determine_execution_phase(
-            raw_percent,
-            totals.has_blocking_operators,
-            metrics,
-        );
+        // Determine execution phase and whether to show progress bar or spinner
+        let (percent, phase) =
+            self.determine_execution_phase(raw_percent, totals.has_blocking_operators);
 
         ProgressInfo {
             current,
             total: Some(total),
             unit,
-            percent: Some(percent),
+            percent,
             has_blocking_operators: totals.has_blocking_operators,
             phase,
         }
     }
 
-    /// Determine which execution phase we're in and adjust progress display
+    /// Determine which execution phase we're in and whether to show a progress bar.
+    ///
+    /// When blocking operators (sorts, joins, aggregates) are detected and input
+    /// has been mostly consumed (>95%), we switch to spinner mode by returning
+    /// `percent: None`. This is more honest than showing a misleading progress bar
+    /// stuck at 100% while the blocking operator processes data.
     fn determine_execution_phase(
         &self,
         raw_percent: f64,
         has_blocking_operators: bool,
-        _metrics: &metrics_poll::LiveMetrics,
-    ) -> (f64, ExecutionPhase) {
+    ) -> (Option<f64>, ExecutionPhase) {
         if !has_blocking_operators {
             // No blocking operators, simple linear progress
-            return (raw_percent, ExecutionPhase::Reading);
+            return (Some(raw_percent), ExecutionPhase::Reading);
         }
 
-        // With blocking operators, we need to be smarter about phases
-        if raw_percent < 90.0 {
-            // Still reading data
-            (raw_percent, ExecutionPhase::Reading)
-        } else if raw_percent >= 99.0 {
-            // Likely in blocking operation phase
-            // Show progress as processing instead of stuck at 100%
-            (75.0, ExecutionPhase::Processing)
+        // With blocking operators, we need to be honest about what we know
+        if raw_percent < 95.0 {
+            // Still reading data, can show accurate progress
+            (Some(raw_percent), ExecutionPhase::Reading)
         } else {
-            // Transitioning to blocking operation
-            (raw_percent * 0.9, ExecutionPhase::Reading)
+            // Input mostly consumed, but blocking operator is likely still processing.
+            // Switch to spinner mode to avoid showing misleading "stuck at 100%" progress.
+            (None, ExecutionPhase::Processing)
         }
     }
 }
