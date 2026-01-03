@@ -299,3 +299,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "left"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "factorial"
+required-features = ["math_expressions"]
