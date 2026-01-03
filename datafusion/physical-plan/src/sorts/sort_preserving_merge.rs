@@ -408,6 +408,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    #[expect(deprecated)]
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
@@ -485,6 +486,7 @@ mod tests {
             TestMemoryExec::try_new_exec(&[rbs], schema, None)?,
             Partitioning::RoundRobinBatch(2),
         )?;
+        #[expect(deprecated)]
         let coalesce_batches_exec =
             CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
         let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))

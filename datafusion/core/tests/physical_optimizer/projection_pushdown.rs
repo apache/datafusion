@@ -45,6 +45,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
@@ -1691,6 +1692,7 @@ fn test_coalesce_batches_after_projection() -> Result<()> {
         )),
         csv,
     )?);
+    #[expect(deprecated)]
     let coalesce_batches: Arc<dyn ExecutionPlan> =
         Arc::new(CoalesceBatchesExec::new(filter, 8192));
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(

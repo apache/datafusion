@@ -135,6 +135,7 @@ async fn explain_analyze_baseline_metrics() {
         "output_batches=1"
     );
 
+    #[expect(deprecated)]
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;

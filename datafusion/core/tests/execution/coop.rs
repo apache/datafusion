@@ -41,6 +41,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_coop::EnsureCooperative;
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coop::make_cooperative;
 use datafusion_physical_plan::filter::FilterExec;
@@ -425,6 +426,7 @@ async fn filter_reject_all_batches_yields(
     ));
     let filtered = Arc::new(FilterExec::try_new(false_predicate, Arc::new(infinite))?);
 
+    #[expect(deprecated)]
     // Use CoalesceBatchesExec to guarantee each Filter pull always yields an 8192-row batch
     let coalesced = Arc::new(CoalesceBatchesExec::new(filtered, 8_192));
 
@@ -584,9 +586,11 @@ async fn join_yields(
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
     let right_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
 
+    #[expect(deprecated)]
     // Wrap each side in CoalesceBatches + Repartition so they are both hashed into 1 partition
     let coalesced_left =
         Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_left), 8_192));
+    #[expect(deprecated)]
     let coalesced_right =
         Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_right), 8_192));
 
@@ -632,9 +636,11 @@ async fn join_agg_yields(
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
     let right_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
 
+    #[expect(deprecated)]
     // Wrap each side in CoalesceBatches + Repartition so they are both hashed into 1 partition
     let coalesced_left =
         Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_left), 8_192));
+    #[expect(deprecated)]
     let coalesced_right =
         Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_right), 8_192));
 
