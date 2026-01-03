@@ -24,8 +24,8 @@ use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::i256;
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNativeTypeOp, DataType, Decimal128Type, Decimal256Type,
-    Decimal32Type, Decimal64Type, Float64Type, Int64Type,
+    ArrowNativeType, ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, Float64Type, Int64Type,
 };
 use arrow::error::ArrowError;
 use datafusion_common::types::{NativeType, logical_float64, logical_int64};
@@ -130,13 +130,11 @@ where
     // If scale < 0, 10^scale (e.g., 10^-2 = 0.01) becomes 0 in integer arithmetic.
     if exp == 0 {
         return if scale >= 0 {
-            T::usize_as(10)
-                .pow_checked(scale as u32)
-                .map_err(|_| {
-                    ArrowError::ArithmeticOverflow(format!(
-                        "Cannot make unscale factor for {scale} and {exp}"
-                    ))
-                })
+            T::usize_as(10).pow_checked(scale as u32).map_err(|_| {
+                ArrowError::ArithmeticOverflow(format!(
+                    "Cannot make unscale factor for {scale} and {exp}"
+                ))
+            })
         } else {
             Ok(T::ZERO)
         };
@@ -156,9 +154,8 @@ where
     // If mul_exp is positive, we divide (standard case).
     // If mul_exp is negative, we multiply (negative scale case).
     if mul_exp > 0 {
-        let div_factor: T = T::usize_as(10)
-            .pow_checked(mul_exp as u32)
-            .map_err(|_| {
+        let div_factor: T =
+            T::usize_as(10).pow_checked(mul_exp as u32).map_err(|_| {
                 ArrowError::ArithmeticOverflow(format!(
                     "Cannot make div factor for {scale} and {exp}"
                 ))
@@ -171,9 +168,8 @@ where
                 "Overflow while negating scale exponent".to_string(),
             )
         })?;
-        let mul_factor: T = T::usize_as(10)
-            .pow_checked(abs_exp as u32)
-            .map_err(|_| {
+        let mul_factor: T =
+            T::usize_as(10).pow_checked(abs_exp as u32).map_err(|_| {
                 ArrowError::ArithmeticOverflow(format!(
                     "Cannot make mul factor for {scale} and {exp}"
                 ))
