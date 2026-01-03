@@ -18,8 +18,9 @@
 //! Math function: `isnan()`.
 
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, TypeSignature};
+use datafusion_common::types::NativeType;
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{Coercion, ColumnarValue, ScalarFunctionArgs, TypeSignatureClass};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
@@ -54,15 +55,14 @@ impl Default for IsNanFunc {
 
 impl IsNanFunc {
     pub fn new() -> Self {
-        use DataType::*;
+        // Accept any numeric type and coerce to float
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![Float32]),
-                    TypeSignature::Exact(vec![Float64]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![float], Volatility::Immutable),
         }
     }
 }
@@ -84,6 +84,11 @@ impl ScalarUDFImpl for IsNanFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Handle NULL input
+        if args.args[0].data_type().is_null() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+        }
+
         let args = ColumnarValue::values_to_arrays(&args.args)?;
 
         let arr: ArrayRef = match args[0].data_type() {

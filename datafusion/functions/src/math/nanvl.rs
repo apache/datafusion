@@ -23,8 +23,9 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{DataFusionError, Result, exec_err};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_common::types::NativeType;
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_expr::{Coercion, TypeSignatureClass};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -66,10 +67,14 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
-        use DataType::*;
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+            signature: Signature::coercible(
+                vec![float.clone(), float],
                 Volatility::Immutable,
             ),
         }
@@ -97,7 +102,25 @@ impl ScalarUDFImpl for NanvlFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(nanvl, vec![])(&args.args)
+        if args.arg_fields.iter().any(|f| f.data_type().is_null()) {
+            return ColumnarValue::Scalar(ScalarValue::Null)
+                .cast_to(args.return_type(), None);
+        }
+
+        let target_type = args.return_type();
+        if !matches!(target_type, Float32 | Float64) {
+            return exec_err!(
+                "Unsupported return type {target_type:?} for function nanvl"
+            );
+        }
+
+        let casted_args = args
+            .args
+            .iter()
+            .map(|arg| arg.cast_to(target_type, None))
+            .collect::<Result<Vec<_>>>()?;
+
+        make_scalar_function(nanvl, vec![])(&casted_args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
