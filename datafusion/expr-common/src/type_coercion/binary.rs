@@ -268,18 +268,8 @@ impl<'a> BinaryTypeCoercer<'a> {
             });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
-            // Special case: Date - Date should return Int64 (days difference)
-            // This aligns with PostgreSQL, DuckDB, and MySQL behavior
-            // See: https://www.postgresql.org/docs/current/functions-datetime.html
-            if matches!(self.op, Minus) && is_date_minus_date(lhs, rhs) {
-                return Ok(Signature {
-                    lhs: lhs.clone(),
-                    rhs: rhs.clone(),
-                    ret: Int64,
-                });
-            }
-
             if let Ok(ret) = self.get_result(lhs, rhs) {
+
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
