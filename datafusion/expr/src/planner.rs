@@ -249,13 +249,6 @@ pub trait ExprPlanner: Debug + Send + Sync {
         )
     }
 
-    /// Plans `ANY` expression, such as `expr = ANY(array_expr)`
-    ///
-    /// Returns origin binary expression if not possible
-    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        Ok(PlannerResult::Original(expr))
-    }
-
     /// Plans aggregate functions, such as `COUNT(<expr>)`
     ///
     /// Returns original expression arguments if not possible

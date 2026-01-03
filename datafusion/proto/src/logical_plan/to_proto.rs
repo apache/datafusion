@@ -578,6 +578,7 @@ pub fn serialize_expr(
         Expr::ScalarSubquery(_)
         | Expr::InSubquery(_)
         | Expr::Exists { .. }
+        | Expr::SetComparison(_)
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
             // see discussion in https://github.com/apache/datafusion/issues/2565
