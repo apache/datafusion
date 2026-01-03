@@ -124,7 +124,13 @@ fn spark_space_array(array: &ArrayRef) -> Result<ArrayRef> {
 fn spark_space_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
     match scalar {
         ScalarValue::Int32(value) => {
-            let result = value.map(|v| " ".repeat(v as usize));
+            let result = value.map(|v| {
+                if v <= 0 {
+                    String::new()
+                } else {
+                    " ".repeat(v as usize)
+                }
+            });
             Ok(ScalarValue::Utf8(result))
         }
         other => {
@@ -224,13 +230,13 @@ mod tests {
 
     #[test]
     fn test_spark_space_scalar() -> Result<()> {
-        let scalar = ColumnarValue::Scalar(ScalarValue::Int32(Some(5)));
+        let scalar = ColumnarValue::Scalar(ScalarValue::Int32(Some(-5)));
         let ColumnarValue::Scalar(result) = spark_space(&[scalar])? else {
             unreachable!()
         };
         match result {
             ScalarValue::Utf8(Some(result)) => {
-                assert_eq!(result, "     ");
+                assert_eq!(result, "");
             }
             _ => unreachable!(),
         }
