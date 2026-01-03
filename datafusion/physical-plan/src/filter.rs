@@ -1746,7 +1746,7 @@ mod tests {
 
         Ok(())
     }
-
+}
     #[tokio::test]
     async fn test_builder_vs_with_projection() -> Result<()> {
         // This test verifies that the builder with projection produces the same result
