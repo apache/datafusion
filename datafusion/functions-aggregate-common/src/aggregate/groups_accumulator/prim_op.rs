@@ -106,7 +106,8 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let value = &mut self.values[group_index];
+                // SAFETY: group_index is guaranteed to be in bounds
+                let value = unsafe { self.values.get_unchecked_mut(group_index) };
                 (self.prim_fn)(value, new_value);
             },
         );

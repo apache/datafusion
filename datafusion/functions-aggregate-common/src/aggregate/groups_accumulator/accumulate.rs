@@ -59,6 +59,9 @@ pub struct NullState {
     /// If `seen_values[i]` is false, have not seen any values that
     /// pass the filter yet for group `i`
     seen_values: BooleanBufferBuilder,
+    /// If true, all groups seen so far have seen at least one non-null value
+    /// and no filters have been applied.
+    all_seen: bool,
 }
 
 impl Default for NullState {
@@ -71,6 +74,7 @@ impl NullState {
     pub fn new() -> Self {
         Self {
             seen_values: BooleanBufferBuilder::new(0),
+            all_seen: true,
         }
     }
 
@@ -107,14 +111,18 @@ impl NullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        // ensure the seen_values is big enough (start everything at
-        // "not seen" valid)
-        let seen_values =
-            initialize_builder(&mut self.seen_values, total_num_groups, false);
-        accumulate(group_indices, values, opt_filter, |group_index, value| {
-            seen_values.set_bit(group_index, true);
-            value_fn(group_index, value);
-        });
+        if self.all_seen && opt_filter.is_none() && values.null_count() == 0 {
+            initialize_builder(&mut self.seen_values, total_num_groups, true);
+            accumulate(group_indices, values, None, value_fn);
+        } else {
+            self.all_seen = false;
+            let seen_values =
+                initialize_builder(&mut self.seen_values, total_num_groups, false);
+            accumulate(group_indices, values, opt_filter, |group_index, value| {
+                seen_values.set_bit(group_index, true);
+                value_fn(group_index, value);
+            });
+        }
     }
 
     /// Invokes `value_fn(group_index, value)` for each non null, non
@@ -140,6 +148,16 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
+        if self.all_seen && opt_filter.is_none() && values.null_count() == 0 {
+            initialize_builder(&mut self.seen_values, total_num_groups, true);
+            group_indices
+                .iter()
+                .zip(data.iter())
+                .for_each(|(&group_index, new_value)| value_fn(group_index, new_value));
+            return;
+        }
+
+        self.all_seen = false;
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
         let seen_values =
@@ -215,7 +233,10 @@ impl NullState {
         let nulls: BooleanBuffer = self.seen_values.finish();
 
         let nulls = match emit_to {
-            EmitTo::All => nulls,
+            EmitTo::All => {
+                self.all_seen = true;
+                nulls
+            }
             EmitTo::First(n) => {
                 // split off the first N values in seen_values
                 let first_n_null: BooleanBuffer = nulls.slice(0, n);
@@ -662,9 +683,17 @@ mod test {
             let num_groups: usize = rng.random_range(2..1000);
             let max_group = num_groups - 1;
 
-            let group_indices: Vec<usize> = (0..num_values)
+            let mut group_indices: Vec<usize> = (0..num_values)
                 .map(|_| rng.random_range(0..max_group))
                 .collect();
+
+            // ensure all groups are seen at least once to match DataFusion behavior
+            // where total_num_groups is the number of groups seen so far
+            for (i, group_index) in group_indices.iter_mut().enumerate() {
+                if i < num_groups {
+                    *group_index = i;
+                }
+            }
 
             let values: Vec<u32> = (0..num_values).map(|_| rng.random()).collect();
 

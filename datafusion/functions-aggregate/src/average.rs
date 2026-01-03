@@ -821,7 +821,8 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value| {
-                let sum = &mut self.sums[group_index];
+                // SAFETY: group_index is guaranteed to be in bounds
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
 
                 self.counts[group_index] += 1;
@@ -904,7 +905,9 @@ where
             opt_filter,
             total_num_groups,
             |group_index, partial_count| {
-                self.counts[group_index] += partial_count;
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += partial_count;
             },
         );
 
@@ -916,7 +919,7 @@ where
             opt_filter,
             total_num_groups,
             |group_index, new_value: <T as ArrowPrimitiveType>::Native| {
-                let sum = &mut self.sums[group_index];
+                let sum = unsafe { self.sums.get_unchecked_mut(group_index) };
                 *sum = sum.add_wrapping(new_value);
             },
         );
