@@ -93,7 +93,7 @@ pub fn spark_space(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     match &args[0] {
         ColumnarValue::Array(array) => {
-            let result = spark_space_array(&array)?;
+            let result = spark_space_array(array)?;
             Ok(ColumnarValue::Array(result))
         }
         ColumnarValue::Scalar(scalar) => {
@@ -107,7 +107,7 @@ fn spark_space_array(array: &ArrayRef) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Int32 => {
             let array = as_int32_array(array)?;
-            Ok(Arc::new(spark_space_array_inner(&array)))
+            Ok(Arc::new(spark_space_array_inner(array)))
         }
         DataType::Dictionary(_, _) => {
             let dict = as_dictionary_array::<Int32Type>(array);
