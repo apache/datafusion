@@ -516,9 +516,8 @@ impl ExecutionPlan for FilterExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         let input_stats = self.input.partition_statistics(partition)?;
-        let schema = self.schema();
         let stats = Self::statistics_helper(
-            &schema,
+            &self.input.schema(),
             input_stats,
             self.predicate(),
             self.default_selectivity,
@@ -1746,17 +1745,17 @@ mod tests {
 
         Ok(())
     }
-}
+
     #[tokio::test]
     async fn test_builder_vs_with_projection() -> Result<()> {
         // This test verifies that the builder with projection produces the same result
         // as try_new().with_projection(), but more efficiently (one compute_properties call)
-        let schema = Arc::new(Schema::new(vec![
+        let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
             Field::new("d", DataType::Int32, false),
-        ]));
+        ]);
 
         let input = Arc::new(StatisticsExec::new(
             Statistics {
@@ -1779,7 +1778,7 @@ mod tests {
                     },
                 ],
             },
-            Arc::clone(&schema),
+            schema,
         ));
 
         let predicate = Arc::new(BinaryExpr::new(
@@ -1815,11 +1814,11 @@ mod tests {
     #[tokio::test]
     async fn test_builder_statistics_with_projection() -> Result<()> {
         // Test that statistics are correctly computed when using builder with projection
-        let schema = Arc::new(Schema::new(vec![
+        let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
-        ]));
+        ]);
 
         let input = Arc::new(StatisticsExec::new(
             Statistics {
@@ -1843,7 +1842,7 @@ mod tests {
                     },
                 ],
             },
-            Arc::clone(&schema),
+            schema,
         ));
 
         // Filter: a < 50, Project: [0, 2]
