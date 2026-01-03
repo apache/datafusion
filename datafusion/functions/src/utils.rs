@@ -199,53 +199,62 @@ where
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128
 pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
-            "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
+    if scale == 0 {
+        return Ok(value);
+    }
+
+    let scale_abs = scale.unsigned_abs() as u32;
+
+    let factor = i128::from(10).checked_pow(scale_abs).ok_or_else(|| {
+        ArrowError::ComputeError(format!("Cannot get a power of {scale_abs}"))
+    })?;
+
+    if scale > 0 {
+        Ok(value / factor)
     } else {
-        match i128::from(10).checked_pow(scale as u32) {
-            Some(divisor) => Ok(value / divisor),
-            None => Err(ArrowError::ComputeError(format!(
-                "Cannot get a power of {scale}"
-            ))),
-        }
+        value.checked_mul(factor).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while applying negative scale".into())
+        })
     }
 }
 
 pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
-            "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
+    if scale == 0 {
+        return Ok(value);
+    }
+
+    let scale_abs = scale.unsigned_abs() as u32;
+
+    let factor = 10_i32.checked_pow(scale_abs).ok_or_else(|| {
+        ArrowError::ComputeError(format!("Cannot get a power of {scale_abs}"))
+    })?;
+
+    if scale > 0 {
+        Ok(value / factor)
     } else {
-        match 10_i32.checked_pow(scale as u32) {
-            Some(divisor) => Ok(value / divisor),
-            None => Err(ArrowError::ComputeError(format!(
-                "Cannot get a power of {scale}"
-            ))),
-        }
+        value.checked_mul(factor).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while applying negative scale".into())
+        })
     }
 }
 
 pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
-    if scale < 0 {
-        Err(ArrowError::ComputeError(
-            "Negative scale is not supported".into(),
-        ))
-    } else if scale == 0 {
-        Ok(value)
+    if scale == 0 {
+        return Ok(value);
+    }
+
+    let scale_abs = scale.unsigned_abs() as u32;
+
+    let factor = i64::from(10).checked_pow(scale_abs).ok_or_else(|| {
+        ArrowError::ComputeError(format!("Cannot get a power of {scale_abs}"))
+    })?;
+
+    if scale > 0 {
+        Ok(value / factor)
     } else {
-        match i64::from(10).checked_pow(scale as u32) {
-            Some(divisor) => Ok(value / divisor),
-            None => Err(ArrowError::ComputeError(format!(
-                "Cannot get a power of {scale}"
-            ))),
-        }
+        value.checked_mul(factor).ok_or_else(|| {
+            ArrowError::ComputeError("Overflow while applying negative scale".into())
+        })
     }
 }
 
@@ -388,7 +397,7 @@ pub mod test {
             (1230, 1, Some(123)),
             (123000, 3, Some(123)),
             (1, 0, Some(1)),
-            (123, -3, None),
+            (123, -3, Some(123000)),
             (123, i8::MAX, None),
             (i128::MAX, 0, Some(i128::MAX)),
             (i128::MAX, 3, Some(i128::MAX / 1000)),
@@ -417,11 +426,7 @@ pub mod test {
             (1234567, 2, Either::Left(12345)),
             (-1234567, 2, Either::Left(-12345)),
             (1, 0, Either::Left(1)),
-            (
-                123,
-                -3,
-                Either::Right("Negative scale is not supported".into()),
-            ),
+            (123, -3, Either::Left(123000)),
             (
                 123,
                 i8::MAX,
@@ -460,11 +465,7 @@ pub mod test {
             (123, 0, Either::Left(123)),
             (1234567890, 2, Either::Left(12345678)),
             (-1234567890, 2, Either::Left(-12345678)),
-            (
-                123,
-                -3,
-                Either::Right("Negative scale is not supported".into()),
-            ),
+            (123, -3, Either::Left(123000)),
             (
                 123,
                 i8::MAX,

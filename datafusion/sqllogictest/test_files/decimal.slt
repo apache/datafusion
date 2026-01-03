@@ -1217,3 +1217,18 @@ NULL
 
 query error Arrow error: Invalid argument error: 1.10 is too large to store in a Decimal128 of precision 2. Max is 0.99
 select cast(1.1 as decimal(2, 2)) + 1;
+
+query I
+SELECT CAST(123.45 AS INT);
+----
+123
+
+query I
+SELECT CAST(1e2 AS INT);
+----
+100
+
+query I
+SELECT CAST(1e4 AS INT);
+----
+10000
