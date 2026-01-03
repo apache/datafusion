@@ -20,8 +20,8 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeBinaryArray, LargeStringArray, StringArray,
+    Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray,
 };
@@ -222,10 +222,7 @@ fn hash_column_xxhash64(col: &ArrayRef, hashes: &mut [u64]) -> Result<()> {
             }
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap();
+            let array = col.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
                     *hash =
@@ -387,14 +384,8 @@ mod tests {
     #[test]
     fn test_xxhash64_string() {
         let seed = 42u64;
-        assert_eq!(
-            spark_compatible_xxhash64("hello", seed),
-            0xc3629e6318d53932
-        );
+        assert_eq!(spark_compatible_xxhash64("hello", seed), 0xc3629e6318d53932);
         assert_eq!(spark_compatible_xxhash64("", seed), 0x98b1582b0977e704);
-        assert_eq!(
-            spark_compatible_xxhash64("abc", seed),
-            0x13c1d910702770e6
-        );
+        assert_eq!(spark_compatible_xxhash64("abc", seed), 0x13c1d910702770e6);
     }
 }

@@ -19,11 +19,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ArrowNativeTypeOp, AsArray, BinaryArray, BooleanArray,
-    Date32Array, Date64Array, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray,
-    StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
+    Array, ArrayRef, ArrowNativeTypeOp, AsArray, BinaryArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray,
 };
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
@@ -224,8 +224,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
             let array = col.as_any().downcast_ref::<Int32Array>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -233,8 +235,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
             let array = col.as_any().downcast_ref::<Int64Array>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -272,8 +276,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
             let array = col.as_any().downcast_ref::<Date32Array>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -281,20 +287,21 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
             let array = col.as_any().downcast_ref::<Date64Array>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
         DataType::Timestamp(TimeUnit::Second, _) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap();
+            let array = col.as_any().downcast_ref::<TimestampSecondArray>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -305,8 +312,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
                 .unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -317,8 +326,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
                 .unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -329,8 +340,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
                 .unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -396,8 +409,10 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32]) -> Result<()> {
             let array = col.as_any().downcast_ref::<Decimal128Array>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        spark_compatible_murmur3_hash(array.value(i).to_le_bytes(), *hash);
+                    *hash = spark_compatible_murmur3_hash(
+                        array.value(i).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
