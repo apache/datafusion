@@ -250,12 +250,21 @@ impl NullState {
     /// resets the internal state appropriately
     pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
         let nulls: BooleanBuffer = self.seen_values.finish();
-
         let nulls = match emit_to {
             EmitTo::All => {
-                nulls
+                self.seen_values_size = 0;
+                if self.all_seen {
+                    // all groups have seen at least one non null value
+                    return None;
+                } else {
+                    nulls
+                }
             }
             EmitTo::First(n) => {
+                if self.all_seen {
+                    self.seen_values_size -= n;
+                    return None;
+                }
                 // split off the first N values in seen_values
                 let first_n_null: BooleanBuffer = nulls.slice(0, n);
                 // reset the existing seen buffer
@@ -264,11 +273,7 @@ impl NullState {
                 first_n_null
             }
         };
-        if self.all_seen {
-            None
-        } else {
-            Some(NullBuffer::new(nulls))
-        }
+        Some(NullBuffer::new(nulls))
     }
 }
 
