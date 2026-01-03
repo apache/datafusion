@@ -53,6 +53,7 @@ use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinct
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -364,6 +365,7 @@ pub fn coalesce_batches_exec(
     input: Arc<dyn ExecutionPlan>,
     batch_size: usize,
 ) -> Arc<dyn ExecutionPlan> {
+    #[expect(deprecated)]
     Arc::new(CoalesceBatchesExec::new(input, batch_size))
 }
 

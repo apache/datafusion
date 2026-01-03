@@ -37,8 +37,7 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[min(async_abs(data.x))]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
-06)----------CoalesceBatchesExec: target_batch_size=8192
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in aggregation with group by
 query I rowsort
@@ -63,8 +62,7 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------ProjectionExec: expr=[__async_fn_0@1 as __common_expr_1]
 07)------------AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
-08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in filter
 query I
@@ -82,8 +80,7 @@ physical_plan
 01)FilterExec: __async_fn_0@1 < 5, projection=[x@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 03)----AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in projection
 query I rowsort
@@ -101,5 +98,4 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[__async_fn_0@1 as async_abs(data.x)]
 02)--AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
-03)----CoalesceBatchesExec: target_batch_size=8192
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]

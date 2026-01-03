@@ -56,6 +56,8 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
@@ -1741,6 +1743,7 @@ fn merge_does_not_need_sort() -> Result<()> {
     // Scan some sorted parquet files
     let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
+    #[expect(deprecated)]
     // CoalesceBatchesExec to mimic behavior after a filter
     let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
 

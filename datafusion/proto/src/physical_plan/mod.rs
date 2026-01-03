@@ -74,6 +74,7 @@ use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion_physical_plan::analyze::AnalyzeExec;
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
@@ -358,6 +359,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
+        #[expect(deprecated)]
         if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>() {
             return protobuf::PhysicalPlanNode::try_from_coalesce_batches_exec(
                 coalesce_batches,
@@ -821,6 +823,7 @@ impl protobuf::PhysicalPlanNode {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&coalesce_batches.input, ctx, extension_codec)?;
         Ok(Arc::new(
+            #[expect(deprecated)]
             CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
                 .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
         ))
@@ -2574,6 +2577,7 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
+    #[expect(deprecated)]
     fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
         extension_codec: &dyn PhysicalExtensionCodec,

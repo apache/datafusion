@@ -31,6 +31,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+#[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
 use datafusion_datasource::TableSchema;
@@ -845,11 +846,13 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(CoalesceBatchesExec::new(
         Arc::new(EmptyExec::new(schema.clone())),
         8096,
     )))?;
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),

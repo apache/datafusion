@@ -1803,6 +1803,7 @@ mod tests {
 
     use super::*;
     use crate::RecordBatchStream;
+    #[expect(deprecated)]
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
@@ -2720,6 +2721,7 @@ mod tests {
             memory_exec,
             Arc::clone(&schema),
         )?);
+        #[expect(deprecated)]
         let coalesce = if use_coalesce_batches {
             let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
             Arc::new(CoalesceBatchesExec::new(coalesce, 1024)) as Arc<dyn ExecutionPlan>

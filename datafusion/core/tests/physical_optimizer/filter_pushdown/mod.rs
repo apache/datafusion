@@ -53,6 +53,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_optimizer::{
     PhysicalOptimizerRule, filter_pushdown::FilterPushdown,
 };
+#[expect(deprecated)]
 use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
@@ -527,6 +528,7 @@ fn test_filter_with_projection() {
 fn test_push_down_through_transparent_nodes() {
     // expect the predicate to be pushed down into the DataSource
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    #[expect(deprecated)]
     let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 1));
     let predicate = col_lit_predicate("a", "foo", &schema());
     let filter = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
@@ -564,6 +566,7 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     // 2. An outer filter (b@1 = bar) above the aggregate - also gets pushed through because 'b' is a grouping column
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
+    #[expect(deprecated)]
     let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 10));
 
     let filter = Arc::new(
@@ -594,6 +597,7 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     let coalesce = Arc::new(CoalesceBatchesExec::new(aggregate, 100));
 
     let predicate = col_lit_predicate("b", "bar", &schema());
@@ -943,6 +947,7 @@ async fn test_topk_filter_passes_through_coalesce_batches() {
         .with_batches(batches)
         .build();
 
+    #[expect(deprecated)]
     let coalesce_batches =
         Arc::new(CoalesceBatchesExec::new(scan, 1024)) as Arc<dyn ExecutionPlan>;
 
@@ -1206,6 +1211,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
     // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
@@ -1220,6 +1226,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec with partitioned inputs
@@ -1248,6 +1255,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     );
 
     // Top-level CoalesceBatchesExec
+    #[expect(deprecated)]
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
     // Top-level CoalescePartitionsExec
@@ -1430,6 +1438,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     let on = vec![
@@ -1456,6 +1465,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     // Top-level CoalesceBatchesExec
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
@@ -2835,6 +2845,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
     let probe_hash_exprs = vec![
@@ -2848,6 +2859,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec
@@ -2875,6 +2887,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     let plan =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
@@ -3012,6 +3025,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     let plan =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
@@ -3128,6 +3142,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
     // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
@@ -3142,6 +3157,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec with partitioned inputs
@@ -3169,6 +3185,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     // Top-level CoalesceBatchesExec
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
@@ -3297,6 +3314,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         )
         .unwrap(),
     );
+    #[expect(deprecated)]
     let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     let on = vec![
@@ -3323,6 +3341,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     // Top-level CoalesceBatchesExec
     let cb =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
@@ -3460,6 +3479,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
         .unwrap(),
     );
 
+    #[expect(deprecated)]
     let plan =
         Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 

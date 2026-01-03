@@ -41,6 +41,7 @@ mod test {
     use datafusion_physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
+    #[expect(deprecated)]
     use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common::compute_record_batch_statistics;
@@ -716,6 +717,7 @@ mod test {
     #[tokio::test]
     async fn test_statistic_by_partition_of_coalesce_batches() -> Result<()> {
         let scan = create_scan_exec_with_statistics(None, Some(2)).await;
+        #[expect(deprecated)]
         let coalesce_batches: Arc<dyn ExecutionPlan> =
             Arc::new(CoalesceBatchesExec::new(scan, 2));
         // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]

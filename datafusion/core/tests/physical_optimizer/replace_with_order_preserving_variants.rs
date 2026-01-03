@@ -41,6 +41,7 @@ use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{
     plan_with_order_breaking_variants, plan_with_order_preserving_variants, replace_with_order_preserving_variants, OrderPreservationContext
 };
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -1041,6 +1042,7 @@ async fn test_with_multiple_child_trees(
     };
     let left_repartition_rr = repartition_exec_round_robin(left_source);
     let left_repartition_hash = repartition_exec_hash(left_repartition_rr);
+    #[expect(deprecated)]
     let left_coalesce_partitions =
         Arc::new(CoalesceBatchesExec::new(left_repartition_hash, 4096));
 
@@ -1053,6 +1055,7 @@ async fn test_with_multiple_child_trees(
     };
     let right_repartition_rr = repartition_exec_round_robin(right_source);
     let right_repartition_hash = repartition_exec_hash(right_repartition_rr);
+    #[expect(deprecated)]
     let right_coalesce_partitions =
         Arc::new(CoalesceBatchesExec::new(right_repartition_hash, 4096));
 
