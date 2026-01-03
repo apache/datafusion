@@ -63,7 +63,8 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let mut table_path =
+            ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
         let file_extension = match table_path.is_collection() {
             // Setting the extension to be empty instead of allowing the default extension seems
             // odd, but was done to ensure existing behavior isn't modified. It seems like this
