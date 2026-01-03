@@ -276,7 +276,7 @@ impl AggregateUDFImpl for PercentileCont {
 
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         Some(Box::new(|aggregate_function, info| {
-            simplify_percentile_cont_aggregate(&aggregate_function, info)
+            simplify_percentile_cont_aggregate(aggregate_function, info)
         }))
     }
 
@@ -308,7 +308,7 @@ fn get_percentile(args: &AccumulatorArgs) -> Result<f64> {
 }
 
 fn simplify_percentile_cont_aggregate(
-    aggregate_function: &AggregateFunction,
+    aggregate_function: AggregateFunction,
     info: &dyn SimplifyInfo,
 ) -> Result<Expr> {
     enum PercentileRewriteTarget {
@@ -316,10 +316,15 @@ fn simplify_percentile_cont_aggregate(
         Max,
     }
 
-    let original_expr = Expr::AggregateFunction(aggregate_function.clone());
     let params = &aggregate_function.params;
-
     let [value, percentile] = take_function_args("percentile_cont", &params.args)?;
+    //
+    // For simplicity we don't bother with null types (otherwise we'd need to
+    // cast the return type)
+    let input_type = info.get_data_type(value)?;
+    if input_type.is_null() {
+        return Ok(Expr::AggregateFunction(aggregate_function));
+    }
 
     let is_descending = params
         .order_by
@@ -342,21 +347,7 @@ fn simplify_percentile_cont_aggregate(
                 PercentileRewriteTarget::Max
             }
         }
-        _ => return Ok(original_expr),
-    };
-
-    let input_type = info.get_data_type(value)?;
-    let expected_return_type =
-        percentile_cont_udaf().return_type(std::slice::from_ref(&input_type))?;
-
-    // min/max return the same type as their input, whilst percentile_cont casts
-    // to floats, so ensure rewritten aggregate casts to float to align with
-    // percentile_cont behaviour
-    let value = value.clone();
-    let agg_arg = if expected_return_type != input_type {
-        datafusion_expr::cast(value, expected_return_type)
-    } else {
-        value
+        _ => return Ok(Expr::AggregateFunction(aggregate_function)),
     };
 
     let udaf = match rewrite_target {
@@ -366,7 +357,7 @@ fn simplify_percentile_cont_aggregate(
 
     let rewritten = Expr::AggregateFunction(AggregateFunction::new_udf(
         udaf,
-        vec![agg_arg],
+        vec![value.clone()],
         params.distinct,
         params.filter.clone(),
         vec![],
