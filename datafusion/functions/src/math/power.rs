@@ -364,6 +364,37 @@ fn pow_decimal256_float_fallback(
     Ok(i256::from_i128(result_i128))
 }
 
+/// Fallback implementation for decimal power when exponent is an array.
+/// Casts decimal to float64, computes power, and casts back to original decimal type.
+/// This is used for performance when exponent varies per-row.
+fn pow_decimal_with_float_fallback(
+    base: &ArrayRef,
+    exponent: &ColumnarValue,
+    num_rows: usize,
+) -> Result<ColumnarValue> {
+    use arrow::compute::cast;
+
+    let original_type = base.data_type().clone();
+    let base_f64 = cast(base.as_ref(), &DataType::Float64)?;
+
+    let exp_f64 = match exponent {
+        ColumnarValue::Array(arr) => cast(arr.as_ref(), &DataType::Float64)?,
+        ColumnarValue::Scalar(scalar) => {
+            let scalar_f64 = scalar.cast_to(&DataType::Float64)?;
+            scalar_f64.to_array_of_size(num_rows)?
+        }
+    };
+
+    let result_f64 = calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+        &base_f64,
+        &ColumnarValue::Array(exp_f64),
+        |b, e| Ok(f64::powf(b, e)),
+    )?;
+
+    let result = cast(result_f64.as_ref(), &original_type)?;
+    Ok(ColumnarValue::Array(result))
+}
+
 impl ScalarUDFImpl for PowerFunc {
     fn as_any(&self) -> &dyn Any {
         self
@@ -391,7 +422,24 @@ impl ScalarUDFImpl for PowerFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [base, exponent] = take_function_args(self.name(), &args.args)?;
+
+        // For decimal types, only use native decimal
+        // operations when we have a scalar exponent. When the exponent is an array,
+        // fall back to float computation for better performance.
+        let use_float_fallback = matches!(
+            base.data_type(),
+            DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _)
+        ) && matches!(exponent, ColumnarValue::Array(_));
+
         let base = base.to_array(args.number_rows)?;
+
+        // If decimal with array exponent, cast to float and compute
+        if use_float_fallback {
+            return pow_decimal_with_float_fallback(&base, exponent, args.number_rows);
+        }
 
         let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
             (DataType::Float64, DataType::Float64) => {
