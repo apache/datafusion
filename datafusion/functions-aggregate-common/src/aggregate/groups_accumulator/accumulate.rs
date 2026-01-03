@@ -62,6 +62,7 @@ pub struct NullState {
     /// If true, all groups seen so far have seen at least one non-null value
     /// and no filters have been applied.
     all_seen: bool,
+    seen_values_size: usize,
 }
 
 impl Default for NullState {
@@ -75,6 +76,7 @@ impl NullState {
         Self {
             seen_values: BooleanBufferBuilder::new(0),
             all_seen: true,
+            seen_values_size: 0,
         }
     }
 
@@ -112,12 +114,21 @@ impl NullState {
         F: FnMut(usize, T::Native) + Send,
     {
         if self.all_seen && opt_filter.is_none() && values.null_count() == 0 {
-            initialize_builder(&mut self.seen_values, total_num_groups, true);
             accumulate(group_indices, values, None, value_fn);
+            self.seen_values_size = total_num_groups;
         } else {
+            let prev_seen: bool = self.all_seen && self.seen_values_size > 0;
+
             self.all_seen = false;
             let seen_values =
                 initialize_builder(&mut self.seen_values, total_num_groups, false);
+
+            if prev_seen {
+                // restore previous seen values
+                for i in 0..self.seen_values_size {
+                    seen_values.set_bit(i, true);
+                }
+            }
             accumulate(group_indices, values, opt_filter, |group_index, value| {
                 seen_values.set_bit(group_index, true);
                 value_fn(group_index, value);
@@ -149,19 +160,27 @@ impl NullState {
         assert_eq!(data.len(), group_indices.len());
 
         if self.all_seen && opt_filter.is_none() && values.null_count() == 0 {
-            initialize_builder(&mut self.seen_values, total_num_groups, true);
             group_indices
                 .iter()
                 .zip(data.iter())
                 .for_each(|(&group_index, new_value)| value_fn(group_index, new_value));
+            self.seen_values_size = total_num_groups;
+
             return;
         }
+        let prev_seen: bool = self.all_seen && self.seen_values_size > 0;
 
         self.all_seen = false;
         // ensure the seen_values is big enough (start everything at
         // "not seen" valid)
         let seen_values =
             initialize_builder(&mut self.seen_values, total_num_groups, false);
+        if prev_seen {
+            // restore previous seen values
+            for i in 0..self.seen_values_size {
+                seen_values.set_bit(i, true);
+            }
+        }
 
         // These could be made more performant by iterating in chunks of 64 bits at a time
         match (values.null_count() > 0, opt_filter) {
@@ -229,7 +248,7 @@ impl NullState {
     /// for the `emit_to` rows.
     ///
     /// resets the internal state appropriately
-    pub fn build(&mut self, emit_to: EmitTo) -> NullBuffer {
+    pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
         let nulls: BooleanBuffer = self.seen_values.finish();
 
         let nulls = match emit_to {
@@ -246,7 +265,11 @@ impl NullState {
                 first_n_null
             }
         };
-        NullBuffer::new(nulls)
+        if self.all_seen {
+            None
+        } else {
+            Some(NullBuffer::new(nulls))
+        }
     }
 }
 
@@ -856,14 +879,19 @@ mod test {
                 "\n\naccumulated_values:{accumulated_values:#?}\n\nexpected_values:{expected_values:#?}"
             );
             let seen_values = null_state.seen_values.finish_cloned();
-            mock.validate_seen_values(&seen_values);
+            if null_state.all_seen {
+                assert_eq!(null_state.seen_values_size, total_num_groups);
+            } else {
+                mock.validate_seen_values(&seen_values);
+            }
 
             // Validate the final buffer (one value per group)
             let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
 
             let null_buffer = null_state.build(EmitTo::All);
-
-            assert_eq!(null_buffer, expected_null_buffer);
+            if let Some(nulls) = &null_buffer {
+                assert_eq!(*nulls, expected_null_buffer);
+            }
         }
 
         // Calls `accumulate_indices`
@@ -980,11 +1008,13 @@ mod test {
             mock.validate_seen_values(&seen_values);
 
             // Validate the final buffer (one value per group)
-            let expected_null_buffer = mock.expected_null_buffer(total_num_groups);
+            let expected_null_buffer = Some(mock.expected_null_buffer(total_num_groups));
 
             let null_buffer = null_state.build(EmitTo::All);
 
-            assert_eq!(null_buffer, expected_null_buffer);
+            if !null_state.all_seen {
+                assert_eq!(null_buffer, expected_null_buffer);
+            }
         }
     }
 
