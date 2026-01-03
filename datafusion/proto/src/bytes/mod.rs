@@ -21,7 +21,8 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
+    PhysicalExtensionCodec, PhysicalExtensionProtoCodec,
 };
 use crate::protobuf;
 use datafusion_common::{Result, plan_datafusion_err};
@@ -276,7 +277,8 @@ pub fn logical_plan_from_json_with_extension_codec(
 /// Serialize a PhysicalPlan as bytes
 pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec)
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    physical_plan_to_bytes_with_extension_codec(plan, &extension_codec, &proto_codec)
 }
 
 /// Serialize a PhysicalPlan as JSON
@@ -294,9 +296,9 @@ pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
 pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,
+    proto_codec: &dyn PhysicalExtensionProtoCodec,
 ) -> Result<Bytes> {
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+    let protobuf = proto_codec.execution_plan_to_proto(plan, extension_codec)?;
     let mut buffer = BytesMut::new();
     protobuf
         .encode(&mut buffer)
@@ -322,7 +324,13 @@ pub fn physical_plan_from_bytes(
     ctx: &TaskContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    physical_plan_from_bytes_with_extension_codec(bytes, ctx, &extension_codec)
+    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    physical_plan_from_bytes_with_extension_codec(
+        bytes,
+        ctx,
+        &extension_codec,
+        &proto_codec,
+    )
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -330,8 +338,9 @@ pub fn physical_plan_from_bytes_with_extension_codec(
     bytes: &[u8],
     ctx: &TaskContext,
     extension_codec: &dyn PhysicalExtensionCodec,
+    proto_codec: &dyn PhysicalExtensionProtoCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, extension_codec)
+    protobuf.try_into_physical_plan(ctx, extension_codec, proto_codec)
 }
