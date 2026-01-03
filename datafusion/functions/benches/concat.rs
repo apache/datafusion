@@ -126,7 +126,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                             args: args_cloned,
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
-                            return_field: Field::new("f", DataType::Utf8View, true).into(),
+                            return_field: Field::new("f", DataType::Utf8View, true)
+                                .into(),
                             config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
