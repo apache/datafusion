@@ -838,13 +838,15 @@ where
         let nulls = self.null_state.build(emit_to);
 
         if let Some(nulls) = &nulls {
-           assert_eq!(nulls.len(), sums.len());
+            assert_eq!(nulls.len(), sums.len());
         }
         assert_eq!(counts.len(), sums.len());
 
         // don't evaluate averages with null inputs to avoid errors on null values
 
-        let array: PrimitiveArray<T> = if let Some(nulls) = &nulls && nulls.null_count() > 0 {
+        let array: PrimitiveArray<T> = if let Some(nulls) = &nulls
+            && nulls.null_count() > 0
+        {
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len())
                 .with_data_type(self.return_data_type.clone());
             let iter = sums.into_iter().zip(counts).zip(nulls.iter());
