@@ -8246,3 +8246,137 @@ query R
 select percentile_cont(null, 0.5);
 ----
 NULL
+
+###########
+# Issue #19612: Test that percentile_cont and median produce identical results
+# in window frame queries with ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW.
+# Previously percentile_cont consumed its internal state during evaluate(),
+# causing incorrect results when called multiple times in window queries.
+###########
+
+# Test percentile_cont window frame behavior (fix for issue #19612)
+statement ok
+CREATE TABLE percentile_window_test (
+    timestamp INT,
+    tags VARCHAR,
+    value DOUBLE
+);
+
+statement ok
+INSERT INTO percentile_window_test (timestamp, tags, value) VALUES
+(1, 'tag1', 10.0),
+(2, 'tag1', 20.0),
+(3, 'tag1', 30.0),
+(4, 'tag1', 40.0),
+(5, 'tag1', 50.0),
+(1, 'tag2', 60.0),
+(2, 'tag2', 70.0),
+(3, 'tag2', 80.0),
+(4, 'tag2', 90.0),
+(5, 'tag2', 100.0);
+
+# Test that median and percentile_cont(0.5) produce the same results
+# with ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW frame.
+# Both functions should maintain state correctly across multiple evaluate() calls.
+query ITRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_median,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_percentile_50
+FROM percentile_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 10
+2 tag1 20 15 15
+3 tag1 30 20 20
+4 tag1 40 25 25
+5 tag1 50 30 30
+1 tag2 60 60 60
+2 tag2 70 65 65
+3 tag2 80 70 70
+4 tag2 90 75 75
+5 tag2 100 80 80
+
+# Test percentile_cont with different percentile values
+query ITRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.25) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p25,
+    percentile_cont(value, 0.75) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p75
+FROM percentile_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 10
+2 tag1 20 12.5 17.5
+3 tag1 30 15 25
+4 tag1 40 17.5 32.5
+5 tag1 50 20 40
+1 tag2 60 60 60
+2 tag2 70 62.5 67.5
+3 tag2 80 65 75
+4 tag2 90 67.5 82.5
+5 tag2 100 70 90
+
+statement ok
+DROP TABLE percentile_window_test;
+
+# Test string_agg window frame behavior (fix for issue #19612)
+statement ok
+CREATE TABLE string_agg_window_test (
+    id INT,
+    grp VARCHAR,
+    val VARCHAR
+);
+
+statement ok
+INSERT INTO string_agg_window_test (id, grp, val) VALUES
+(1, 'A', 'a'),
+(2, 'A', 'b'),
+(3, 'A', 'c'),
+(1, 'B', 'x'),
+(2, 'B', 'y'),
+(3, 'B', 'z');
+
+# Test string_agg with ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+# The function should maintain state correctly across multiple evaluate() calls
+query ITT
+SELECT
+    id,
+    grp,
+    string_agg(val, ',') OVER (
+        PARTITION BY grp
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_string
+FROM string_agg_window_test
+ORDER BY grp, id;
+----
+1 A a
+2 A a,b
+3 A a,b,c
+1 B x
+2 B x,y
+3 B x,y,z
+
+statement ok
+DROP TABLE string_agg_window_test;
