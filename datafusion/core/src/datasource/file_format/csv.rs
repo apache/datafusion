@@ -1547,6 +1547,16 @@ mod tests {
             .await?;
         assert!(std::path::Path::new(&path).exists());
 
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
         Ok(())
     }
 
@@ -1574,6 +1584,18 @@ mod tests {
             .await?;
         // Expected the file to exist
         assert!(std::path::Path::new(&path).exists());
+
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 2);
+        assert_eq!(stream.schema().field(0).name(), "id");
+        assert_eq!(stream.schema().field(1).name(), "name");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
         Ok(())
     }
 
