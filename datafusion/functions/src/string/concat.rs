@@ -77,6 +77,10 @@ impl ConcatFunc {
     }
 
     /// Get the string type with highest precedence: Utf8View > LargeUtf8 > Utf8
+    ///
+    /// Utf8View is preferred for performance (zero-copy views),
+    /// LargeUtf8 supports larger strings (i64 offsets),
+    /// Utf8 is the fallback standard string type
     fn get_string_type_precedence(&self, arg_types: &[DataType]) -> DataType {
         use DataType::*;
 
@@ -102,16 +106,10 @@ impl ConcatFunc {
         }
 
         // Convert ColumnarValue arguments to ArrayRef
-        let arrays: Result<Vec<Arc<dyn Array>>> = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(arr) => Ok(Arc::clone(arr)),
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(1),
-            })
-            .collect();
-        let arrays = arrays?;
+        let arrays = ColumnarValue::values_to_arrays(args)?;
 
         // Check if all arrays are null - concat errors in this case
+        // This matches PostgreSQL behavior where concat() with all NULL values returns an error
         let mut all_null = true;
         for arg in &arrays {
             if arg.data_type() == &DataType::Null {
@@ -127,7 +125,7 @@ impl ConcatFunc {
         }
 
         // Delegate to shared array concatenation
-        let result = datafusion_common::utils::array_utils::concat_arrays(&arrays)?;
+        let result = crate::utils::concat_arrays(&arrays)?;
         Ok(ColumnarValue::Array(result))
     }
 }
@@ -161,8 +159,7 @@ impl ScalarUDFImpl for ConcatFunc {
 
         if has_arrays && has_non_arrays {
             return plan_err!(
-                "Cannot mix array and non-array arguments in concat function. \
-                Use concat(array1, array2, ...) for arrays or concat(str1, str2, ...) for strings, but not both."
+                "Cannot mix array and non-array arguments in concat function."
             );
         }
 
@@ -186,15 +183,17 @@ impl ScalarUDFImpl for ConcatFunc {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         use DataType::*;
 
-        // Check if any argument is an array type
-        for data_type in arg_types {
-            if let List(field) | LargeList(field) | FixedSizeList(field, _) = data_type {
-                return Ok(List(Arc::new(arrow::datatypes::Field::new(
-                    "item",
-                    field.data_type().clone(),
-                    true,
-                ))));
-            }
+        if arg_types.is_empty() {
+            return plan_err!("concat requires at least one argument");
+        }
+
+        // After coercion, all arguments have the same type category, so check only the first
+        if let List(field) | LargeList(field) | FixedSizeList(field, _) = &arg_types[0] {
+            return Ok(List(Arc::new(arrow::datatypes::Field::new(
+                "item",
+                field.data_type().clone(),
+                true,
+            ))));
         }
 
         // For non-array arguments, return string type based on precedence
@@ -212,20 +211,19 @@ impl ScalarUDFImpl for ConcatFunc {
             return plan_err!("concat requires at least one argument");
         }
 
-        for arg in &args {
-            let is_array = match arg {
-                ColumnarValue::Array(array) => matches!(
-                    array.data_type(),
-                    List(_) | LargeList(_) | FixedSizeList(_, _)
-                ),
-                ColumnarValue::Scalar(scalar) => matches!(
-                    scalar.data_type(),
-                    List(_) | LargeList(_) | FixedSizeList(_, _)
-                ),
-            };
-            if is_array {
-                return self.concat_arrays(&args);
-            }
+        // After coercion, all arguments have the same type category, so check only the first
+        let is_array = match &args[0] {
+            ColumnarValue::Array(array) => matches!(
+                array.data_type(),
+                List(_) | LargeList(_) | FixedSizeList(_, _)
+            ),
+            ColumnarValue::Scalar(scalar) => matches!(
+                scalar.data_type(),
+                List(_) | LargeList(_) | FixedSizeList(_, _)
+            ),
+        };
+        if is_array {
+            return self.concat_arrays(&args);
         }
 
         let data_types: Vec<DataType> = args.iter().map(|col| col.data_type()).collect();
@@ -401,7 +399,7 @@ impl ScalarUDFImpl for ConcatFunc {
     }
 }
 
-pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
+pub(crate) fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     use DataType::*;
 
     if args.is_empty() {
@@ -463,6 +461,7 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                     new_args.push(arg.clone());
                 } else {
                     // Convert non-string, non-array literals to their string representation
+                    // This is needed during simplification phase which happens before coercion
                     // Skip NULL values (concat ignores NULLs)
                     if !scalar_val.is_null() {
                         let string_repr = format!("{scalar_val}");
@@ -759,7 +758,6 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Cannot mix array and non-array arguments"));
-        assert!(err_msg.contains("Use concat(array1, array2, ...) for arrays"));
 
         Ok(())
     }

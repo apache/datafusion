@@ -329,7 +329,7 @@ impl ScalarUDFImpl for ArrayConcat {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_concat_inner)(&args.args)
+        make_scalar_function(datafusion_functions::utils::concat_arrays)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -351,15 +351,10 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 }
 
-/// Array_concat/Array_cat SQL function
-pub fn array_concat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    datafusion_common::utils::array_utils::concat_arrays(args)
-}
-
 // Kernel functions
 
 /// Array_append SQL function
-pub fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
@@ -370,7 +365,7 @@ pub fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 /// Array_prepend SQL function
-pub fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
@@ -400,10 +395,8 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => datafusion_common::utils::array_utils::concat_arrays(args)?,
-        DataType::LargeList(_) => {
-            datafusion_common::utils::array_utils::concat_arrays(args)?
-        }
+        DataType::List(_) => datafusion_functions::utils::concat_arrays(args)?,
+        DataType::LargeList(_) => datafusion_functions::utils::concat_arrays(args)?,
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
