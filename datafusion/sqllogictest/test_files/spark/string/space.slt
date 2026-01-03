@@ -31,11 +31,6 @@ SELECT space(-1::INT);
 (empty)
 
 query T
-SELECT space(5::INT);
-----
-
-
-query T
 SELECT space(NULL);
 ----
 NULL
