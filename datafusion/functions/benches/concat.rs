@@ -17,7 +17,7 @@
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
-use arrow::util::bench_util::create_string_array_with_len;
+use arrow::util::bench_util::{create_string_array_with_len, create_string_view_array};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -30,6 +30,16 @@ use std::sync::Arc;
 
 fn create_array_args(size: usize, str_len: usize) -> Vec<ColumnarValue> {
     let array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, str_len));
+    let scalar = ScalarValue::Utf8(Some(", ".to_string()));
+    vec![
+        ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
+        ColumnarValue::Scalar(scalar),
+        ColumnarValue::Array(array),
+    ]
+}
+
+fn create_array_args_view(size: usize) -> Vec<ColumnarValue> {
+    let array = Arc::new(create_string_view_array(size, 0.2));
     let scalar = ScalarValue::Utf8(Some(", ".to_string()));
     vec![
         ColumnarValue::Array(Arc::clone(&array) as ArrayRef),
@@ -79,6 +89,44 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Field::new("f", DataType::Utf8, true).into(),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+        group.finish();
+    }
+
+    // Benchmark for StringViewArray concat
+    for size in [1024, 4096, 8192] {
+        let args = create_array_args_view(size);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                // Use Utf8View for array args
+                let dt = if matches!(arg, ColumnarValue::Array(_)) {
+                    DataType::Utf8View
+                } else {
+                    DataType::Utf8 // scalar remains Utf8
+                };
+                Field::new(format!("arg_{idx}"), dt, true).into()
+            })
+            .collect::<Vec<_>>();
+        let config_options = Arc::new(ConfigOptions::default());
+
+        let mut group = c.benchmark_group("concat function");
+        group.bench_function(BenchmarkId::new("concat_view", size), |b| {
+            b.iter(|| {
+                let args_cloned = args.clone();
+                black_box(
+                    concat()
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args_cloned,
+                            arg_fields: arg_fields.clone(),
+                            number_rows: size,
+                            return_field: Field::new("f", DataType::Utf8View, true).into(),
                             config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),
