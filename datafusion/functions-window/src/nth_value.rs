@@ -19,6 +19,7 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -474,48 +475,8 @@ impl NthValueEvaluator {
             // Calculate valid indices, inside the window frame boundaries.
             let slice = array.slice(range.start, n_range);
             if let Some(nulls) = slice.nulls() {
-                return match self.state.kind {
-                    NthValueKind::First => {
-                        nulls.valid_indices().next().map(|idx| idx + range.start)
-                    }
-                    NthValueKind::Last => {
-                        nulls.valid_indices().last().map(|idx| idx + range.start)
-                    }
-                    NthValueKind::Nth => {
-                        match self.n.cmp(&0) {
-                            Ordering::Greater => {
-                                // SQL indices are not 0-based.
-                                let index = (self.n as usize) - 1;
-                                nulls
-                                    .valid_indices()
-                                    .nth(index)
-                                    .map(|idx| idx + range.start)
-                            }
-                            Ordering::Less => {
-                                let reverse_index = (-self.n) as usize;
-                                if n_range < reverse_index {
-                                    // Outside the range, return NULL to avoid allocating
-                                    // for the sliding window that will be discarded in the end.
-                                    return None;
-                                }
-                                let mut window = VecDeque::with_capacity(reverse_index);
-                                for idx in nulls.valid_indices() {
-                                    if window.len() == reverse_index {
-                                        window.pop_front();
-                                    }
-                                    window.push_back(idx + range.start);
-                                }
-
-                                if window.len() == reverse_index {
-                                    Some(window.pop_front().unwrap())
-                                } else {
-                                    None
-                                }
-                            }
-                            Ordering::Equal => None,
-                        }
-                    }
-                };
+                assert_eq!(nulls.len(), n_range);
+                return self.valid_index_with_nulls(nulls, range.start);
             }
         }
         // Either no nulls, or nulls are regarded as valid rows
@@ -544,6 +505,44 @@ impl NthValueEvaluator {
                 }
                 Ordering::Equal => None,
             },
+        }
+    }
+
+    fn valid_index_with_nulls(&self, nulls: &NullBuffer, offset: usize) -> Option<usize> {
+        match self.state.kind {
+            NthValueKind::First => nulls.valid_indices().next().map(|idx| idx + offset),
+            NthValueKind::Last => nulls.valid_indices().last().map(|idx| idx + offset),
+            NthValueKind::Nth => {
+                match self.n.cmp(&0) {
+                    Ordering::Greater => {
+                        // SQL indices are not 0-based.
+                        let index = (self.n as usize) - 1;
+                        nulls.valid_indices().nth(index).map(|idx| idx + offset)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = (-self.n) as usize;
+                        if nulls.len() < reverse_index {
+                            // Outside the range, return NULL to avoid allocating
+                            // for the sliding window that will be discarded in the end.
+                            return None;
+                        }
+                        let mut window = VecDeque::with_capacity(reverse_index);
+                        for idx in nulls.valid_indices() {
+                            if window.len() == reverse_index {
+                                window.pop_front();
+                            }
+                            window.push_back(idx + offset);
+                        }
+
+                        if window.len() == reverse_index {
+                            Some(window.pop_front().unwrap())
+                        } else {
+                            None
+                        }
+                    }
+                    Ordering::Equal => None,
+                }
+            }
         }
     }
 }
