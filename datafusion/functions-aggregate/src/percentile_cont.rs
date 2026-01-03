@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
@@ -53,7 +52,7 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
-use datafusion_functions_aggregate_common::utils::{GenericDistinctBuffer, Hashable};
+use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
 
 use crate::utils::validate_percentile_expr;
@@ -534,56 +533,13 @@ impl<T: ArrowNumericType> Accumulator for PercentileContAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let value = calculate_percentile::<T>(&mut self.all_values, self.percentile);
+        let d = std::mem::take(&mut self.all_values);
+        let value = calculate_percentile::<T>(d, self.percentile);
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.all_values.capacity() * size_of::<T::Native>()
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // Cast to target type if needed (e.g., integer to Float64)
-        let values = if values[0].data_type() != &self.data_type {
-            arrow::compute::cast(&values[0], &self.data_type)?
-        } else {
-            Arc::clone(&values[0])
-        };
-
-        let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
-        for i in 0..values.len() {
-            let v = ScalarValue::try_from_array(&values, i)?;
-            if !v.is_null() {
-                *to_remove.entry(v).or_default() += 1;
-            }
-        }
-
-        let mut i = 0;
-        while i < self.all_values.len() {
-            let k = ScalarValue::new_primitive::<T>(
-                Some(self.all_values[i]),
-                &self.data_type,
-            )?;
-            if let Some(count) = to_remove.get_mut(&k)
-                && *count > 0
-            {
-                self.all_values.swap_remove(i);
-                *count -= 1;
-                if *count == 0 {
-                    to_remove.remove(&k);
-                    if to_remove.is_empty() {
-                        break;
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-        Ok(())
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
     }
 }
 
@@ -709,13 +665,13 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         // Emit values
-        let mut emit_group_values = emit_to.take_needed(&mut self.group_values);
+        let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
         // Calculate percentile for each group
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for values in &mut emit_group_values {
-            let value = calculate_percentile::<T>(values.as_mut_slice(), self.percentile);
+        for values in emit_group_values {
+            let value = calculate_percentile::<T>(values, self.percentile);
             evaluate_result_builder.append_option(value);
         }
 
@@ -812,34 +768,16 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut values: Vec<T::Native> = self
-            .distinct_values
-            .values
-            .iter()
+        let d = std::mem::take(&mut self.distinct_values.values)
+            .into_iter()
             .map(|v| v.0)
-            .collect();
-        let value = calculate_percentile::<T>(&mut values, self.percentile);
+            .collect::<Vec<_>>();
+        let value = calculate_percentile::<T>(d, self.percentile);
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.distinct_values.size()
-    }
-
-    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-
-        let arr = values[0].as_primitive::<T>();
-        for value in arr.iter().flatten() {
-            self.distinct_values.values.remove(&Hashable(value));
-        }
-        Ok(())
-    }
-
-    fn supports_retract_batch(&self) -> bool {
-        true
     }
 }
 
@@ -850,12 +788,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
 /// For percentile p and n values:
 /// - If p * (n-1) is an integer, return the value at that position
 /// - Otherwise, interpolate between the two closest values
-///
-/// Note: This function takes a mutable slice and sorts it in place, but does not
-/// consume the data. This is important for window frame queries where evaluate()
-/// may be called multiple times on the same accumulator state.
 fn calculate_percentile<T: ArrowNumericType>(
-    values: &mut [T::Native],
+    mut values: Vec<T::Native>,
     percentile: f64,
 ) -> Option<T::Native> {
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
