@@ -2147,12 +2147,15 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
+ "criterion",
+ "datafusion",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate-common",
+ "datafusion-functions-nested",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
@@ -2165,6 +2168,7 @@ dependencies = [
  "object_store",
  "parking_lot",
  "parquet",
+ "tempfile",
  "tokio",
 ]
 

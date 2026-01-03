@@ -32,6 +32,7 @@ mod row_filter;
 mod row_group_filter;
 mod sort;
 pub mod source;
+mod supported_predicates;
 mod writer;
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
