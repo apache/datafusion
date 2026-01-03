@@ -57,8 +57,8 @@ logical_plan
 04)------TableScan: data projection=[x]
 physical_plan
 01)ProjectionExec: expr=[min(async_abs(data.x))@1 as min(async_abs(data.x))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[async_abs(data.x)@0 as async_abs(data.x)], aggr=[min(async_abs(data.x))]
-03)----RepartitionExec: partitioning=Hash([async_abs(data.x)@0], 4), input_partitions=4
+02)--AggregateExec: mode=Final, gby=[async_abs(data.x)@0 as async_abs(data.x)], aggr=[min(async_abs(data.x))]
+03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[__common_expr_1@0 as async_abs(data.x)], aggr=[min(async_abs(data.x))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------ProjectionExec: expr=[__async_fn_0@1 as __common_expr_1]
