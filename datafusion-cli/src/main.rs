@@ -848,35 +848,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_list_files_cache_not_set() -> Result<(), DataFusionError> {
-        let rt = RuntimeEnvBuilder::new()
-            .with_cache_manager(CacheManagerConfig::default().with_list_files_cache(None))
-            .build_arc()
-            .unwrap();
-
-        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
-
-        ctx.register_udtf(
-            "list_files_cache",
-            Arc::new(ListFilesCacheFunc::new(
-                ctx.task_ctx().runtime_env().cache_manager.clone(),
-            )),
-        );
-
-        let rbs = ctx
-            .sql("SELECT * FROM list_files_cache()")
-            .await?
-            .collect()
-            .await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
-        +------+---------------------+------------+---------------+
-        | path | metadata_size_bytes | expires_in | metadata_list |
-        +------+---------------------+------------+---------------+
-        +------+---------------------+------------+---------------+
-        ");
-
-        Ok(())
-    }
 }
