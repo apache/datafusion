@@ -359,7 +359,10 @@ fn compatible_nullabilities(
 }
 
 pub(super) struct NameTracker {
-    seen_names: HashSet<String>,
+    /// Tracks seen schema names (from expr.schema_name())
+    seen_schema_names: HashSet<String>,
+    /// Tracks seen qualified names (the name part from expr.qualified_name())
+    seen_qualified_names: HashSet<String>,
 }
 
 pub(super) enum NameTrackerStatus {
@@ -370,25 +373,42 @@ pub(super) enum NameTrackerStatus {
 impl NameTracker {
     pub(super) fn new() -> Self {
         NameTracker {
-            seen_names: HashSet::default(),
+            seen_schema_names: HashSet::default(),
+            seen_qualified_names: HashSet::default(),
         }
     }
+
+    /// Gets a unique name that is unique in both schema names and qualified names
     pub(super) fn get_unique_name(
         &mut self,
-        name: String,
+        schema_name: String,
+        qualified_name: String,
     ) -> (String, NameTrackerStatus) {
-        match self.seen_names.insert(name.clone()) {
-            true => (name, NameTrackerStatus::NeverSeen),
-            false => {
-                let mut counter = 0;
-                loop {
-                    let candidate_name = format!("{name}__temp__{counter}");
-                    if self.seen_names.insert(candidate_name.clone()) {
-                        return (candidate_name, NameTrackerStatus::SeenBefore);
-                    }
-                    counter += 1;
-                }
+        // Check if both names are unique
+        let schema_unique = !self.seen_schema_names.contains(&schema_name);
+        let qualified_unique = !self.seen_qualified_names.contains(&qualified_name);
+
+        if schema_unique && qualified_unique {
+            // Both are unique, mark them as seen and return
+            self.seen_schema_names.insert(schema_name.clone());
+            self.seen_qualified_names.insert(qualified_name);
+            return (schema_name, NameTrackerStatus::NeverSeen);
+        }
+
+        // Need to generate a unique name
+        let mut counter = 0;
+        loop {
+            let candidate_name = format!("{schema_name}__temp__{counter}");
+
+            // Check if the candidate is unique in both sets
+            if !self.seen_schema_names.contains(&candidate_name)
+                && !self.seen_qualified_names.contains(&candidate_name)
+            {
+                self.seen_schema_names.insert(candidate_name.clone());
+                self.seen_qualified_names.insert(candidate_name.clone());
+                return (candidate_name, NameTrackerStatus::SeenBefore);
             }
+            counter += 1;
         }
     }
 
@@ -396,7 +416,11 @@ impl NameTracker {
         &mut self,
         expr: Expr,
     ) -> datafusion::common::Result<Expr> {
-        match self.get_unique_name(expr.name_for_alias()?) {
+        // Get both the schema name and the qualified name
+        let schema_name = expr.schema_name().to_string();
+        let (_qualifier, qualified_name) = expr.qualified_name();
+
+        match self.get_unique_name(schema_name, qualified_name) {
             (_, NameTrackerStatus::NeverSeen) => Ok(expr),
             (name, NameTrackerStatus::SeenBefore) => Ok(expr.alias(name)),
         }

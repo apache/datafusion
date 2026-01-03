@@ -160,28 +160,21 @@ mod tests {
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
         let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
-        let mut settings = insta::Settings::clone_current();
-        settings.add_filter(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-            "[UUID]",
+        assert_snapshot!(
+            plan,
+            @r"
+        Projection: left.A, left.Utf8(NULL) AS C, right.D, Utf8(NULL) AS Utf8(NULL)__temp__0 AS E
+          Left Join: left.A = right.A
+            SubqueryAlias: left
+              Union
+                Projection: A.A, Utf8(NULL)
+                  TableScan: A
+                Projection: B.A, CAST(B.C AS Utf8)
+                  TableScan: B
+            SubqueryAlias: right
+              TableScan: C
+        "
         );
-        settings.bind(|| {
-            assert_snapshot!(
-                plan,
-                @r"
-            Projection: left.A, left.[UUID] AS C, right.D, Utf8(NULL) AS [UUID] AS E
-              Left Join: left.A = right.A
-                SubqueryAlias: left
-                  Union
-                    Projection: A.A, Utf8(NULL) AS [UUID]
-                      TableScan: A
-                    Projection: B.A, CAST(B.C AS Utf8)
-                      TableScan: B
-                SubqueryAlias: right
-                  TableScan: C
-            "
-            );
-        });
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
