@@ -23472,12 +23472,18 @@ impl serde::Serialize for UnnestOptions {
         if !self.recursions.is_empty() {
             len += 1;
         }
+        if self.preserve_empty_as_null {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.UnnestOptions", len)?;
         if self.preserve_nulls {
             struct_ser.serialize_field("preserveNulls", &self.preserve_nulls)?;
         }
         if !self.recursions.is_empty() {
             struct_ser.serialize_field("recursions", &self.recursions)?;
+        }
+        if self.preserve_empty_as_null {
+            struct_ser.serialize_field("preserveEmptyAsNull", &self.preserve_empty_as_null)?;
         }
         struct_ser.end()
     }
@@ -23492,12 +23498,15 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
             "preserve_nulls",
             "preserveNulls",
             "recursions",
+            "preserve_empty_as_null",
+            "preserveEmptyAsNull",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             PreserveNulls,
             Recursions,
+            PreserveEmptyAsNull,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -23521,6 +23530,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                         match value {
                             "preserveNulls" | "preserve_nulls" => Ok(GeneratedField::PreserveNulls),
                             "recursions" => Ok(GeneratedField::Recursions),
+                            "preserveEmptyAsNull" | "preserve_empty_as_null" => Ok(GeneratedField::PreserveEmptyAsNull),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -23542,6 +23552,7 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
             {
                 let mut preserve_nulls__ = None;
                 let mut recursions__ = None;
+                let mut preserve_empty_as_null__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::PreserveNulls => {
@@ -23556,11 +23567,18 @@ impl<'de> serde::Deserialize<'de> for UnnestOptions {
                             }
                             recursions__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PreserveEmptyAsNull => {
+                            if preserve_empty_as_null__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preserveEmptyAsNull"));
+                            }
+                            preserve_empty_as_null__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(UnnestOptions {
                     preserve_nulls: preserve_nulls__.unwrap_or_default(),
                     recursions: recursions__.unwrap_or_default(),
+                    preserve_empty_as_null: preserve_empty_as_null__.unwrap_or_default(),
                 })
             }
         }
