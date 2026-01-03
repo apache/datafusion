@@ -837,12 +837,14 @@ where
         let sums = emit_to.take_needed(&mut self.sums);
         let nulls = self.null_state.build(emit_to);
 
-        assert_eq!(nulls.len(), sums.len());
+        if let Some(nulls) = &nulls {
+           assert_eq!(nulls.len(), sums.len());
+        }
         assert_eq!(counts.len(), sums.len());
 
         // don't evaluate averages with null inputs to avoid errors on null values
 
-        let array: PrimitiveArray<T> = if nulls.null_count() > 0 {
+        let array: PrimitiveArray<T> = if let Some(nulls) = &nulls && nulls.null_count() > 0 {
             let mut builder = PrimitiveBuilder::<T>::with_capacity(nulls.len())
                 .with_data_type(self.return_data_type.clone());
             let iter = sums.into_iter().zip(counts).zip(nulls.iter());
@@ -861,7 +863,7 @@ where
                 .zip(counts.into_iter())
                 .map(|(sum, count)| (self.avg_fn)(sum, count))
                 .collect::<Result<Vec<_>>>()?;
-            PrimitiveArray::new(averages.into(), Some(nulls)) // no copy
+            PrimitiveArray::new(averages.into(), nulls) // no copy
                 .with_data_type(self.return_data_type.clone())
         };
 
@@ -871,7 +873,6 @@ where
     // return arrays for sums and counts
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
-        let nulls = Some(nulls);
 
         let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt64Array::new(counts.into(), nulls.clone()); // zero copy
