@@ -1676,7 +1676,7 @@ mod tests {
 
         // Create filter with projection [0, 2] (columns a and c) using builder
         let projection = Some(vec![0, 2]);
-        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+        let filter = FilterExecBuilder::new(predicate, input)
             .with_projection(projection.clone())
             .build()?;
 
@@ -1708,7 +1708,7 @@ mod tests {
         ));
 
         // Create filter without projection using builder
-        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+        let filter = FilterExecBuilder::new(predicate, input)
             .build()?;
 
         // Verify no projection is set
@@ -1737,7 +1737,7 @@ mod tests {
         ));
 
         // Try to create filter with invalid projection (index out of bounds) using builder
-        let result = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+        let result = FilterExecBuilder::new(predicate, input)
             .with_projection(Some(vec![0, 5])) // 5 is out of bounds
             .build();
 
@@ -1791,12 +1791,12 @@ mod tests {
         let projection = Some(vec![0, 2]);
 
         // Method 1: Builder with projection (one call to compute_properties)
-        let filter1 = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+        let filter1 = FilterExecBuilder::new(predicate.clone(), input.clone())
             .with_projection(projection.clone())
             .build()?;
 
         // Method 2: try_new().with_projection() (two calls to compute_properties)
-        let filter2 = FilterExec::try_new(Arc::clone(&predicate), Arc::clone(&input))?
+        let filter2 = FilterExec::try_new(predicate, input)?
             .with_projection(projection)?;
 
         // Both methods should produce equivalent results
@@ -1853,7 +1853,7 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
         ));
 
-        let filter = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
+        let filter = FilterExecBuilder::new(predicate, input)
             .with_projection(Some(vec![0, 2]))
             .build()?;
 
@@ -1882,7 +1882,7 @@ mod tests {
         let invalid_predicate = Arc::new(Column::new("a", 0));
 
         // Should fail because predicate doesn't return boolean
-        let result = FilterExecBuilder::new(invalid_predicate, Arc::clone(&input))
+        let result = FilterExecBuilder::new(invalid_predicate, input)
             .with_projection(Some(vec![0]))
             .build();
 
@@ -1890,3 +1890,4 @@ mod tests {
 
         Ok(())
     }
+}
