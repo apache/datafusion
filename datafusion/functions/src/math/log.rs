@@ -1087,7 +1087,9 @@ mod tests {
                 // log10(12600) ≈ 4.1003 (not truncated to 4)
                 assert!((floats.value(4) - 12600f64.log10()).abs() < 1e-10);
                 // log10(i128::MAX - 1000) ≈ 38.23 (not truncated to 38)
-                assert!((floats.value(5) - ((i128::MAX - 1000) as f64).log10()).abs() < 1e-10);
+                assert!(
+                    (floats.value(5) - ((i128::MAX - 1000) as f64).log10()).abs() < 1e-10
+                );
                 assert!(floats.value(6).is_nan());
             }
             ColumnarValue::Scalar(_) => {
