@@ -18,22 +18,22 @@
 query T
 SELECT space(1::INT);
 ----
-' '
+
 
 query T
 SELECT space(0::INT);
 ----
-''
+(empty)
 
 query T
 SELECT space(-1::INT);
 ----
-''
+(empty)
 
 query T
 SELECT space(5::INT);
 ----
-'     '
+
 
 query T
 SELECT space(NULL);

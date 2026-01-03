@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, DictionaryArray, StringArray};
+use arrow::array::{
+    Array, ArrayRef, DictionaryArray, Int32Array, StringArray, StringBuilder,
+    as_dictionary_array,
+};
 use arrow::datatypes::{DataType, Int32Type};
-use datafusion_common::cast::{as_dictionary_array, as_int32_array};
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::cast::as_int32_array;
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::utils::make_scalar_function;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -81,25 +83,36 @@ impl ScalarUDFImpl for SparkSpace {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return plan_err!("space expects exactly 1 argument");
-        }
-        make_scalar_function(spark_space, vec![])(&args.args)
+        spark_space(&args.args)
     }
 }
 
-fn spark_space(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let array = &args[0];
+pub fn spark_space(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 1 {
+        return exec_err!("space function takes exactly one argument");
+    }
+    match &args[0] {
+        ColumnarValue::Array(array) => {
+            let result = spark_space_array(&array)?;
+            Ok(ColumnarValue::Array(result))
+        }
+        ColumnarValue::Scalar(scalar) => {
+            let result = spark_space_scalar(scalar)?;
+            Ok(ColumnarValue::Scalar(result))
+        }
+    }
+}
+
+fn spark_space_array(array: &ArrayRef) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Int32 => {
-            let result = space(array);
-            Ok(Arc::new(result))
+            let array = as_int32_array(array)?;
+            Ok(Arc::new(spark_space_array_inner(&array)))
         }
-        DataType::Dictionary(_, v) if v.as_ref() == &DataType::Int32 => {
-            let dictionary_array = as_dictionary_array::<Int32Type>(array)?;
-            let values = Arc::new(space(dictionary_array.values()));
-            let result =
-                DictionaryArray::try_new(dictionary_array.keys().clone(), values)?;
+        DataType::Dictionary(_, _) => {
+            let dict = as_dictionary_array::<Int32Type>(array);
+            let values = spark_space_array(dict.values())?;
+            let result = DictionaryArray::try_new(dict.keys().clone(), values)?;
             Ok(Arc::new(result))
         }
         other => {
@@ -108,20 +121,48 @@ fn spark_space(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn space(array: &ArrayRef) -> StringArray {
-    as_int32_array(array)
-        .unwrap()
+fn spark_space_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Int32(value) => {
+            let result = value.map(|v| " ".repeat(v as usize));
+            Ok(ScalarValue::Utf8(result))
+        }
+        other => {
+            exec_err!("Unsupported data type {other:?} for function `space`")
+        }
+    }
+}
+
+fn spark_space_array_inner(array: &Int32Array) -> StringArray {
+    let values = array.values();
+    let data_capacity = values
         .iter()
-        .map(|n| {
-            n.map(|m| {
-                if m < 0 {
-                    String::new()
-                } else {
-                    " ".repeat(m as usize)
-                }
-            })
-        })
-        .collect()
+        .map(|l| if *l < 0 { 0 } else { *l as usize })
+        .sum();
+
+    let max_length = values
+        .iter()
+        .filter(|&&l| l > 0)
+        .max()
+        .copied()
+        .unwrap_or(0) as usize;
+
+    let space_buffer = " ".repeat(max_length);
+    let mut builder = StringBuilder::with_capacity(array.len(), data_capacity);
+
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            let len = array.value(i);
+            if len <= 0 {
+                builder.append_value("");
+            } else {
+                builder.append_value(&space_buffer[..len as usize]);
+            }
+        }
+    }
+    builder.finish()
 }
 
 #[cfg(test)]
@@ -129,20 +170,23 @@ mod tests {
     use crate::function::string::space::spark_space;
     use arrow::array::{Array, Int32Array, Int32DictionaryArray};
     use arrow::datatypes::Int32Type;
-    use datafusion_common::Result;
     use datafusion_common::cast::{as_dictionary_array, as_string_array};
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::ColumnarValue;
     use std::sync::Arc;
 
     #[test]
     fn test_spark_space_int32_array() -> Result<()> {
-        let int32_array = Arc::new(Int32Array::from(vec![
+        let int32_array = ColumnarValue::Array(Arc::new(Int32Array::from(vec![
             Some(1),
             Some(-3),
             Some(0),
             Some(5),
             None,
-        ]));
-        let result = spark_space(&[int32_array])?;
+        ])));
+        let ColumnarValue::Array(result) = spark_space(&[int32_array])? else {
+            unreachable!()
+        };
         let result = as_string_array(&result)?;
 
         assert_eq!(result.value(0), " ");
@@ -155,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_spark_space_dictionary() -> Result<()> {
-        let dictionary = Arc::new(Int32DictionaryArray::new(
+        let dictionary = ColumnarValue::Array(Arc::new(Int32DictionaryArray::new(
             Int32Array::from(vec![0, 1, 2, 3, 4]),
             Arc::new(Int32Array::from(vec![
                 Some(1),
@@ -164,8 +208,10 @@ mod tests {
                 Some(5),
                 None,
             ])),
-        ));
-        let result = spark_space(&[dictionary])?;
+        )));
+        let ColumnarValue::Array(result) = spark_space(&[dictionary])? else {
+            unreachable!()
+        };
         let result =
             as_string_array(as_dictionary_array::<Int32Type>(&result)?.values())?;
         assert_eq!(result.value(0), " ");
@@ -173,6 +219,21 @@ mod tests {
         assert_eq!(result.value(2), "");
         assert_eq!(result.value(3), "     ");
         assert!(result.is_null(4));
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_space_scalar() -> Result<()> {
+        let scalar = ColumnarValue::Scalar(ScalarValue::Int32(Some(5)));
+        let ColumnarValue::Scalar(result) = spark_space(&[scalar])? else {
+            unreachable!()
+        };
+        match result {
+            ScalarValue::Utf8(Some(result)) => {
+                assert_eq!(result, "     ");
+            }
+            _ => unreachable!(),
+        }
         Ok(())
     }
 }
