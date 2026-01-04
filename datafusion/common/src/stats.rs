@@ -22,12 +22,13 @@ use std::fmt::{self, Debug, Display};
 use crate::{Result, ScalarValue};
 
 use crate::error::_plan_err;
+use crate::heap_size::HeapSize;
 use arrow::datatypes::{DataType, Schema};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
 #[derive(Clone, PartialEq, Eq, Default, Copy)]
-pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
+pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd + HeapSize> {
     /// The exact value is known
     Exact(T),
     /// The value is not known exactly, but is likely close to this value
@@ -37,7 +38,7 @@ pub enum Precision<T: Debug + Clone + PartialEq + Eq + PartialOrd> {
     Absent,
 }
 
-impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd + HeapSize> Precision<T> {
     /// If we have some value (exact or inexact), it returns that value.
     /// Otherwise, it returns `None`.
     pub fn get_value(&self) -> Option<&T> {
@@ -52,7 +53,7 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Precision<T> {
     pub fn map<U, F>(self, f: F) -> Precision<U>
     where
         F: Fn(T) -> U,
-        U: Debug + Clone + PartialEq + Eq + PartialOrd,
+        U: Debug + Clone + PartialEq + Eq + PartialOrd + HeapSize,
     {
         match self {
             Precision::Exact(val) => Precision::Exact(f(val)),
@@ -245,7 +246,7 @@ impl Precision<ScalarValue> {
     }
 }
 
-impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd + HeapSize> Debug for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
@@ -255,7 +256,7 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Debug for Precision<T> {
     }
 }
 
-impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
+impl<T: Debug + Clone + PartialEq + Eq + PartialOrd + HeapSize> Display for Precision<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Precision::Exact(inner) => write!(f, "Exact({inner:?})"),
@@ -319,13 +320,6 @@ impl Statistics {
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(schema),
         }
-    }
-
-    /// Returns the memory size in bytes.
-    pub fn heap_size(&self) -> usize {
-        // column_statistics + num_rows + total_byte_size
-        self.column_statistics.capacity() * size_of::<ColumnStatistics>()
-            + size_of::<Precision<usize>>() * 2
     }
 
     /// Calculates `total_byte_size` based on the schema and `num_rows`.
@@ -832,6 +826,8 @@ impl ColumnStatistics {
 mod tests {
     use super::*;
     use crate::assert_contains;
+    use arrow::array::{Int32Array, ListArray};
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::Field;
     use std::sync::Arc;
 
@@ -1767,15 +1763,7 @@ mod tests {
 
     #[test]
     fn test_statistics_heap_size() {
-        let stats = Statistics {
-            num_rows: Precision::Exact(100),
-            total_byte_size: Precision::Exact(100),
-            column_statistics: vec![],
-        };
-
-        assert_eq!(stats.heap_size(), 32);
-
-        let stats = Statistics {
+        let stats_no_heap_allocations = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(100),
             column_statistics: vec![ColumnStatistics {
@@ -1788,30 +1776,36 @@ mod tests {
             }],
         };
 
-        assert_eq!(stats.heap_size(), 320);
+        assert_eq!(stats_no_heap_allocations.heap_size(), 0);
 
-        let stats = Statistics {
+        let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list_array = ListArray::new(field, offsets, Arc::new(values), None);
+
+        let column_statistics = ColumnStatistics {
+            null_count: Precision::Exact(1),
+            max_value: Precision::Exact(ScalarValue::List(Arc::new(list_array.clone()))),
+            min_value: Precision::Exact(ScalarValue::List(Arc::new(list_array.clone()))),
+            sum_value: Precision::Exact(ScalarValue::List(Arc::new(list_array.clone()))),
+            distinct_count: Precision::Exact(100),
+            byte_size: Precision::Exact(800),
+        };
+
+        let stats_1 = Statistics {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(100),
-            column_statistics: vec![
-                ColumnStatistics {
-                    null_count: Precision::Absent,
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
-                    byte_size: Precision::Exact(100),
-                },
-                ColumnStatistics {
-                    null_count: Precision::Exact(10),
-                    max_value: Precision::Absent,
-                    min_value: Precision::Absent,
-                    sum_value: Precision::Absent,
-                    distinct_count: Precision::Absent,
-                    byte_size: Precision::Exact(100),
-                },
-            ],
+            column_statistics: vec![column_statistics.clone()],
         };
-        assert_eq!(stats.heap_size(), 608);
+
+        assert_eq!(stats_1.heap_size(), 1152);
+
+        let heap_stats_2 = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![column_statistics.clone(), column_statistics.clone()],
+        };
+
+        assert_eq!(heap_stats_2.heap_size(), 2304);
     }
 }

@@ -22,10 +22,10 @@ use crate::cache::cache_manager::{
     CachedFileMetadata, FileStatisticsCache, FileStatisticsCacheEntry,
 };
 
-use dashmap::DashMap;
-use object_store::path::Path;
-
 pub use crate::cache::DefaultFilesMetadataCache;
+use dashmap::DashMap;
+use datafusion_common::heap_size::HeapSize;
+use object_store::path::Path;
 
 /// Default implementation of [`FileStatisticsCache`]
 ///
@@ -88,7 +88,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     num_rows: cached.statistics.num_rows,
                     num_columns: cached.statistics.column_statistics.len(),
                     table_size_bytes: cached.statistics.total_byte_size,
-                    statistics_size_bytes: 0, // TODO: set to the real size in the future
+                    statistics_size_bytes: cached.statistics.heap_size(),
                     has_ordering: cached.ordering.is_some(),
                 },
             );
@@ -395,7 +395,7 @@ mod tests {
                         num_rows: Precision::Absent,
                         num_columns: 1,
                         table_size_bytes: Precision::Absent,
-                        statistics_size_bytes: 0,
+                        statistics_size_bytes: 72,
                         has_ordering: false,
                     }
                 ),
@@ -406,7 +406,7 @@ mod tests {
                         num_rows: Precision::Absent,
                         num_columns: 1,
                         table_size_bytes: Precision::Absent,
-                        statistics_size_bytes: 0,
+                        statistics_size_bytes: 72,
                         has_ordering: true,
                     }
                 ),
