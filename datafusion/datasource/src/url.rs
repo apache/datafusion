@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -364,15 +363,13 @@ async fn list_with_cache<'b>(
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
             .boxed()),
         Some(cache) => {
-            // Convert prefix to Option<Path> for cache lookup
-            let prefix_filter = prefix.cloned();
+            // Build the filter prefix (only Some if prefix was requested)
+            let filter_prefix = prefix.is_some().then(|| full_prefix.clone());
 
-            // Try cache lookup with optional prefix filter
-            let vec = if let Some(res) =
-                cache.get_with_extra(table_base_path, &prefix_filter)
-            {
+            // Try cache lookup
+            let vec = if let Some(cached) = cache.get(table_base_path) {
                 debug!("Hit list files cache");
-                res.as_ref().clone()
+                cached.filter_by_prefix(&filter_prefix)
             } else {
                 // Cache miss - always list and cache the full table
                 // This ensures we have complete data for future prefix queries
@@ -380,19 +377,10 @@ async fn list_with_cache<'b>(
                     .list(Some(table_base_path))
                     .try_collect::<Vec<ObjectMeta>>()
                     .await?;
-                cache.put(table_base_path, Arc::new(vec.clone()));
-
-                // If a prefix filter was requested, apply it to the results
-                if prefix.is_some() {
-                    let full_prefix_str = full_prefix.as_ref();
-                    vec.into_iter()
-                        .filter(|meta| {
-                            meta.location.as_ref().starts_with(full_prefix_str)
-                        })
-                        .collect()
-                } else {
-                    vec
-                }
+                let cached = CachedFileList::new(vec);
+                let result = cached.filter_by_prefix(&filter_prefix);
+                cache.put(table_base_path, cached);
+                result
             };
             Ok(futures::stream::iter(vec.into_iter().map(Ok)).boxed())
         }
@@ -494,6 +482,7 @@ mod tests {
     use std::any::Any;
     use std::collections::HashMap;
     use std::ops::Range;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]

@@ -31,7 +31,9 @@ use datafusion_common::stats::Precision;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, Result, ScalarValue, Statistics,
 };
-use datafusion_execution::cache::cache_manager::{FileMetadata, FileMetadataCache};
+use datafusion_execution::cache::cache_manager::{
+    CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
+};
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
@@ -125,19 +127,15 @@ impl<'a> DFParquetMetadata<'a> {
             !cfg!(feature = "parquet_encryption") || decryption_properties.is_none();
 
         if cache_metadata
-            && let Some(parquet_metadata) = file_metadata_cache
-                .as_ref()
-                .and_then(|file_metadata_cache| file_metadata_cache.get(object_meta))
-                .and_then(|file_metadata| {
-                    file_metadata
-                        .as_any()
-                        .downcast_ref::<CachedParquetMetaData>()
-                        .map(|cached_parquet_metadata| {
-                            Arc::clone(cached_parquet_metadata.parquet_metadata())
-                        })
-                })
+            && let Some(file_metadata_cache) = file_metadata_cache.as_ref()
+            && let Some(cached) = file_metadata_cache.get(&object_meta.location)
+            && cached.is_valid_for(object_meta)
+            && let Some(cached_parquet) = cached
+                .file_metadata
+                .as_any()
+                .downcast_ref::<CachedParquetMetaData>()
         {
-            return Ok(parquet_metadata);
+            return Ok(Arc::clone(cached_parquet.parquet_metadata()));
         }
 
         let mut reader =
@@ -163,8 +161,11 @@ impl<'a> DFParquetMetadata<'a> {
 
         if cache_metadata && let Some(file_metadata_cache) = file_metadata_cache {
             file_metadata_cache.put(
-                object_meta,
-                Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+                &object_meta.location,
+                CachedFileMetadataEntry::new(
+                    (*object_meta).clone(),
+                    Arc::new(CachedParquetMetaData::new(Arc::clone(&metadata))),
+                ),
             );
         }
 

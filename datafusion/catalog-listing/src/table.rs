@@ -705,31 +705,42 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<Arc<Statistics>> {
-        match self
+        use datafusion_execution::cache::cache_manager::CachedFileMetadata;
+
+        // Check cache first
+        if let Some(cached) = self
             .collected_statistics
-            .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
+            .get(&part_file.object_meta.location)
         {
-            Some(statistics) => Ok(statistics),
-            None => {
-                let statistics = self
-                    .options
-                    .format
-                    .infer_stats(
-                        ctx,
-                        store,
-                        Arc::clone(&self.file_schema),
-                        &part_file.object_meta,
-                    )
-                    .await?;
-                let statistics = Arc::new(statistics);
-                self.collected_statistics.put_with_extra(
-                    &part_file.object_meta.location,
-                    Arc::clone(&statistics),
-                    &part_file.object_meta,
-                );
-                Ok(statistics)
+            // Validate that cached entry is still valid
+            if cached.is_valid_for(&part_file.object_meta) {
+                return Ok(cached.statistics);
             }
         }
+
+        // Cache miss or invalid - infer statistics
+        let statistics = self
+            .options
+            .format
+            .infer_stats(
+                ctx,
+                store,
+                Arc::clone(&self.file_schema),
+                &part_file.object_meta,
+            )
+            .await?;
+        let statistics = Arc::new(statistics);
+
+        // Store in cache
+        self.collected_statistics.put(
+            &part_file.object_meta.location,
+            CachedFileMetadata::new(
+                part_file.object_meta.clone(),
+                Arc::clone(&statistics),
+                None, // No ordering information in this PR
+            ),
+        );
+        Ok(statistics)
     }
 }
 

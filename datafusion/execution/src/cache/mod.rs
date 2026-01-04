@@ -25,35 +25,54 @@ mod list_files_cache;
 pub use file_metadata_cache::DefaultFilesMetadataCache;
 pub use list_files_cache::DefaultListFilesCache;
 
-/// A trait that can be implemented to provide custom cache behavior for the caches managed by
-/// [`cache_manager::CacheManager`].
+/// Base trait for cache implementations with common operations.
+///
+/// This trait provides the fundamental cache operations (`get`, `put`, `remove`, etc.)
+/// that all cache types share. Specific cache traits like [`cache_manager::FileStatisticsCache`],
+/// [`cache_manager::ListFilesCache`], and [`cache_manager::FileMetadataCache`] extend this
+/// trait with their specialized methods.
+///
+/// ## Thread Safety
 ///
 /// Implementations must handle their own locking via internal mutability, as methods do not
 /// take mutable references and may be accessed by multiple concurrent queries.
+///
+/// ## Validation Pattern
+///
+/// Validation metadata (e.g., file size, last modified time) should be embedded in the
+/// value type `V`. The typical usage pattern is:
+/// 1. Call `get(key)` to check for cached value
+/// 2. If `Some(cached)`, validate with `cached.is_valid_for(&current_meta)`
+/// 3. If invalid or missing, compute new value and call `put(key, new_value)`
 pub trait CacheAccessor<K, V>: Send + Sync {
-    // Extra info but not part of the cache key or cache value.
-    type Extra: Clone;
+    /// Get a cached entry if it exists.
+    ///
+    /// Returns the cached value without any validation. The caller should
+    /// validate the returned value if freshness matters.
+    fn get(&self, key: &K) -> Option<V>;
 
-    /// Get value from cache.
-    fn get(&self, k: &K) -> Option<V>;
-    /// Get value from cache.
-    fn get_with_extra(&self, k: &K, e: &Self::Extra) -> Option<V>;
-    /// Put value into cache. Returns the old value associated with the key if there was one.
+    /// Store a value in the cache.
+    ///
+    /// Returns the previous value if one existed.
     fn put(&self, key: &K, value: V) -> Option<V>;
-    /// Put value into cache. Returns the old value associated with the key if there was one.
-    fn put_with_extra(&self, key: &K, value: V, e: &Self::Extra) -> Option<V>;
-    /// Remove an entry from the cache, returning value if they existed in the map.
+
+    /// Remove an entry from the cache, returning the value if it existed.
     fn remove(&self, k: &K) -> Option<V>;
+
     /// Check if the cache contains a specific key.
     fn contains_key(&self, k: &K) -> bool;
+
     /// Fetch the total number of cache entries.
     fn len(&self) -> usize;
-    /// Check if the Cache collection is empty or not.
+
+    /// Check if the cache collection is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
     /// Remove all entries from the cache.
     fn clear(&self);
+
     /// Return the cache name.
     fn name(&self) -> String;
 }
