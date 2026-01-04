@@ -144,15 +144,17 @@ impl ArrowHashTable for StringHashTable {
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        self.map.update_heap_idx(mapper);
+        unsafe {
+            self.map.update_heap_idx(mapper);
+        }
     }
 
     unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        self.map.heap_idx_at(map_idx)
+        unsafe { self.map.heap_idx_at(map_idx) }
     }
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
-        let ids = self.map.take_all(indexes);
+        let ids = unsafe { self.map.take_all(indexes) };
         match self.data_type {
             DataType::Utf8 => Arc::new(StringArray::from(ids)),
             DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ids)),
@@ -216,7 +218,7 @@ impl ArrowHashTable for StringHashTable {
         }
 
         // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
+        let heap_idx = unsafe { self.map.remove_if_full(replace_idx) };
 
         // add the new group
         let id = id.map(|id| id.to_string());
@@ -259,15 +261,17 @@ where
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        self.map.update_heap_idx(mapper);
+        unsafe {
+            self.map.update_heap_idx(mapper);
+        }
     }
 
     unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        self.map.heap_idx_at(map_idx)
+        unsafe { self.map.heap_idx_at(map_idx) }
     }
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
-        let ids = self.map.take_all(indexes);
+        let ids = unsafe { self.map.take_all(indexes) };
         let mut builder: PrimitiveBuilder<VAL> =
             PrimitiveArray::builder(ids.len()).with_data_type(self.kt.clone());
         for id in ids.into_iter() {
@@ -299,7 +303,7 @@ where
         }
 
         // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
+        let heap_idx = unsafe { self.map.remove_if_full(replace_idx) };
 
         // add the new group
         let map_idx = self.map.insert(hash, id, heap_idx, mapper);
@@ -325,13 +329,16 @@ impl<ID: KeyType> TopKHashTable<ID> {
     }
 
     pub unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        let bucket = self.map.bucket(map_idx);
-        bucket.as_ref().heap_idx
+        let bucket = unsafe { self.map.bucket(map_idx) };
+        unsafe { bucket.as_ref().heap_idx }
     }
 
     pub unsafe fn remove_if_full(&mut self, replace_idx: usize) -> usize {
         if self.map.len() >= self.limit {
-            self.map.erase(self.map.bucket(replace_idx));
+            unsafe {
+                let bucket = self.map.bucket(replace_idx);
+                self.map.erase(bucket);
+            }
             0 // if full, always replace top node
         } else {
             self.map.len() // if we're not full, always append to end
@@ -340,7 +347,7 @@ impl<ID: KeyType> TopKHashTable<ID> {
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
         for (m, h) in mapper {
-            self.map.bucket(*m).as_mut().heap_idx = *h
+            unsafe { self.map.bucket(*m).as_mut().heap_idx = *h }
         }
     }
 
@@ -383,7 +390,7 @@ impl<ID: KeyType> TopKHashTable<ID> {
     pub unsafe fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
         let ids = idxs
             .into_iter()
-            .map(|idx| self.map.bucket(idx).as_ref().id.clone())
+            .map(|idx| unsafe { self.map.bucket(idx).as_ref() }.id.clone())
             .collect();
         self.map.clear();
         ids

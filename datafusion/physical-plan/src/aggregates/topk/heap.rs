@@ -24,8 +24,9 @@
 //! and UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`) using lexicographic ordering.
 
 use arrow::array::{ArrayRef, ArrowPrimitiveType, PrimitiveArray, downcast_primitive};
+use arrow::array::{LargeStringBuilder, StringBuilder, StringViewBuilder};
 use arrow::array::{
-    LargeStringArray, StringArray, StringViewArray,
+    StringArray,
     cast::AsArray,
     types::{IntervalDayTime, IntervalMonthDayNano},
 };
@@ -293,7 +294,7 @@ impl ArrowHeap for StringHeap {
         let (vals, map_idxs) = self.heap.drain();
         let arr: ArrayRef = match self.data_type {
             DataType::Utf8 => {
-                let mut builder = StringArray::builder(vals.len());
+                let mut builder = StringBuilder::new();
                 for val in vals {
                     match val {
                         Some(s) => builder.append_value(&s),
@@ -303,7 +304,7 @@ impl ArrowHeap for StringHeap {
                 Arc::new(builder.finish())
             }
             DataType::LargeUtf8 => {
-                let mut builder = LargeStringArray::builder(vals.len());
+                let mut builder = LargeStringBuilder::new();
                 for val in vals {
                     match val {
                         Some(s) => builder.append_value(&s),
@@ -313,7 +314,7 @@ impl ArrowHeap for StringHeap {
                 Arc::new(builder.finish())
             }
             DataType::Utf8View => {
-                let mut builder = StringViewArray::builder(vals.len());
+                let mut builder = StringViewBuilder::new();
                 for val in vals {
                     match val {
                         Some(s) => builder.append_value(&s),
