@@ -3785,9 +3785,11 @@ pub struct Join {
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
     /// Whether this is a null-aware anti join (for NOT IN semantics).
+    ///
     /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
     /// - If the right side (subquery) contains any NULL in join keys, no rows are output
     /// - Left side rows with NULL in join keys are not output
+    ///
     /// This is required for correct NOT IN subquery behavior with three-valued logic.
     pub null_aware: bool,
 }
@@ -3812,6 +3814,7 @@ impl Join {
     /// # Returns
     ///
     /// A new Join operator with the computed schema
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
