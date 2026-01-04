@@ -177,7 +177,10 @@ pub fn spark_compatible_murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 
     let len = data.len();
     let len_aligned = len - len % 4;
 
-    // SAFETY: all operations are guaranteed to be safe
+    // SAFETY:
+    // Avoid boundary checking in performance critical code.
+    // All operations are guaranteed to be safe.
+    // data is &[u8] so we do not need to check for proper alignment.
     unsafe {
         let mut h1 = if len_aligned > 0 {
             hash_bytes_by_int(&data[0..len_aligned], seed)
