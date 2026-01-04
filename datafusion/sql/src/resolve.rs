@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use crate::parser::{CopyToSource, CopyToStatement, Statement as DFStatement};
-use crate::planner::object_name_to_table_reference;
+use crate::planner::{IdentNormalizer, object_name_to_table_reference};
 use sqlparser::ast::*;
 
 // following constants are used in `resolve_table_references`
@@ -49,13 +49,31 @@ struct RelationVisitor {
     relations: BTreeSet<ObjectName>,
     all_ctes: BTreeSet<ObjectName>,
     ctes_in_scope: Vec<ObjectName>,
+    normalizer: IdentNormalizer,
 }
 
 impl RelationVisitor {
+    fn normalize_object_name(&self, name: &ObjectName) -> ObjectName {
+        let parts: Vec<ObjectNamePart> = name
+            .0
+            .iter()
+            .cloned()
+            .map(|part| match part {
+                ObjectNamePart::Identifier(ident) => ObjectNamePart::Identifier(
+                    Ident::new(self.normalizer.normalize(ident)),
+                ),
+                other => other,
+            })
+            .collect();
+        ObjectName(parts)
+    }
+
     /// Record the reference to `relation`, if it's not a CTE reference.
     fn insert_relation(&mut self, relation: &ObjectName) {
-        if !self.relations.contains(relation) && !self.ctes_in_scope.contains(relation) {
-            self.relations.insert(relation.clone());
+        let relation = self.normalize_object_name(relation);
+        if !self.relations.contains(&relation) && !self.ctes_in_scope.contains(&relation)
+        {
+            self.relations.insert(relation);
         }
     }
 }
@@ -81,7 +99,9 @@ impl Visitor for RelationVisitor {
                     let _ = cte.visit(self);
                 }
                 self.ctes_in_scope
-                    .push(ObjectName::from(vec![cte.alias.name.clone()]));
+                    .push(self.normalize_object_name(&ObjectName::from(vec![
+                        cte.alias.name.clone(),
+                    ])));
             }
         }
         ControlFlow::Continue(())
@@ -136,7 +156,7 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
             let _ = s.as_ref().visit(visitor);
         }
         DFStatement::CreateExternalTable(table) => {
-            visitor.relations.insert(table.name.clone());
+            visitor.insert_relation(&table.name);
         }
         DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
             CopyToSource::Relation(table_name) => {
@@ -193,6 +213,7 @@ pub fn resolve_table_references(
         relations: BTreeSet::new(),
         all_ctes: BTreeSet::new(),
         ctes_in_scope: vec![],
+        normalizer: IdentNormalizer::new(enable_ident_normalization),
     };
 
     visit_statement(statement, &mut visitor);
@@ -200,12 +221,12 @@ pub fn resolve_table_references(
     let table_refs = visitor
         .relations
         .into_iter()
-        .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+        .map(|x| object_name_to_table_reference(x, false))
         .collect::<datafusion_common::Result<_>>()?;
     let ctes = visitor
         .all_ctes
         .into_iter()
-        .map(|x| object_name_to_table_reference(x, enable_ident_normalization))
+        .map(|x| object_name_to_table_reference(x, false))
         .collect::<datafusion_common::Result<_>>()?;
     Ok((table_refs, ctes))
 }
@@ -269,5 +290,58 @@ mod tests {
         assert_eq!(table_refs.len(), 0);
         assert_eq!(ctes.len(), 1);
         assert_eq!(ctes[0].to_string(), "nodes");
+    }
+
+    #[test]
+    fn resolve_table_references_cte_with_quoted_reference() {
+        use crate::parser::DFParser;
+
+        let query = r#"with barbaz as (select 1) select * from "barbaz""#;
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "barbaz");
+        // Quoted reference should still resolve to the CTE when normalization is on
+        assert_eq!(table_refs.len(), 0);
+    }
+
+    #[test]
+    fn resolve_table_references_cte_with_quoted_reference_normalization_off() {
+        use crate::parser::DFParser;
+
+        let query = r#"with barbaz as (select 1) select * from "barbaz""#;
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, false).unwrap();
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "barbaz");
+        // Even with normalization off, quoted reference matches same-case CTE name
+        assert_eq!(table_refs.len(), 0);
+    }
+
+    #[test]
+    fn resolve_table_references_cte_with_quoted_reference_uppercase_normalization_on() {
+        use crate::parser::DFParser;
+
+        let query = r#"with FOObar as (select 1) select * from "FOObar""#;
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, true).unwrap();
+        // CTE name is normalized to lowercase, quoted reference preserves case, so they differ
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "foobar");
+        assert_eq!(table_refs.len(), 1);
+        assert_eq!(table_refs[0].to_string(), "FOObar");
+    }
+
+    #[test]
+    fn resolve_table_references_cte_with_quoted_reference_uppercase_normalization_off() {
+        use crate::parser::DFParser;
+
+        let query = r#"with FOObar as (select 1) select * from "FOObar""#;
+        let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+        let (table_refs, ctes) = resolve_table_references(&statement, false).unwrap();
+        // Without normalization, cases match exactly, so quoted reference resolves to the CTE
+        assert_eq!(ctes.len(), 1);
+        assert_eq!(ctes[0].to_string(), "FOObar");
+        assert_eq!(table_refs.len(), 0);
     }
 }
