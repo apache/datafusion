@@ -1012,6 +1012,18 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
         null_equality: NullEquality,
     ) -> Result<Self> {
+        self.join_detailed_with_options(right, join_type, join_keys, filter, null_equality, false)
+    }
+
+    pub fn join_detailed_with_options(
+        self,
+        right: LogicalPlan,
+        join_type: JoinType,
+        join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
+        filter: Option<Expr>,
+        null_equality: NullEquality,
+        null_aware: bool,
+    ) -> Result<Self> {
         if join_keys.0.len() != join_keys.1.len() {
             return plan_err!("left_keys and right_keys were not the same length");
         }
@@ -1128,6 +1140,7 @@ impl LogicalPlanBuilder {
             join_constraint: JoinConstraint::On,
             schema: DFSchemaRef::new(join_schema),
             null_equality,
+            null_aware,
         })))
     }
 
@@ -1201,6 +1214,7 @@ impl LogicalPlanBuilder {
                 join_type,
                 JoinConstraint::Using,
                 NullEquality::NullEqualsNothing,
+                false, // null_aware
             )?;
 
             Ok(Self::new(LogicalPlan::Join(join)))
@@ -1217,6 +1231,7 @@ impl LogicalPlanBuilder {
             JoinType::Inner,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?;
 
         Ok(Self::new(LogicalPlan::Join(join)))
@@ -1471,6 +1486,7 @@ impl LogicalPlanBuilder {
             join_type,
             JoinConstraint::On,
             NullEquality::NullEqualsNothing,
+            false, // null_aware
         )?;
 
         Ok(Self::new(LogicalPlan::Join(join)))

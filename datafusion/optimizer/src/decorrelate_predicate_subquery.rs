@@ -27,7 +27,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, Result, assert_or_internal_err, plan_err};
+use datafusion_common::{Column, NullEquality, Result, assert_or_internal_err, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -403,6 +403,8 @@ fn build_join(
             // Degenerate case: no right columns referenced by the predicate(s)
             sub_query_alias.clone()
         };
+
+        // Mark joins don't use null-aware semantics (they use three-valued logic with mark column)
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_on(right_projected, join_type, Some(join_filter))?
             .build()?;
@@ -415,10 +417,30 @@ fn build_join(
         return Ok(Some(new_plan));
     }
 
+    // Determine if this should be a null-aware anti join
+    // For LeftAnti joins (NOT IN), we need null-aware semantics if:
+    // 1. The join type is LeftAnti
+    // 2. The join predicate involves nullable columns (conservative: assume nullable)
+    let null_aware = matches!(join_type, JoinType::LeftAnti);
+
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(left.clone())
-        .join_on(sub_query_alias, join_type, Some(join_filter))?
-        .build()?;
+    let new_plan = if null_aware {
+        // Use join_detailed_with_options to set null_aware flag
+        LogicalPlanBuilder::from(left.clone())
+            .join_detailed_with_options(
+                sub_query_alias,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()), // No equijoin keys, filter-based join
+                Some(join_filter),
+                NullEquality::NullEqualsNothing,
+                true, // null_aware
+            )?
+            .build()?
+    } else {
+        LogicalPlanBuilder::from(left.clone())
+            .join_on(sub_query_alias, join_type, Some(join_filter))?
+            .build()?
+    };
     debug!(
         "predicate subquery optimized:\n{}",
         new_plan.display_indent()

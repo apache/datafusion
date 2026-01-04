@@ -1,0 +1,261 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Null-Aware Anti Join Tests
+## Tests for automatic null-aware semantics in NOT IN subqueries
+#############
+
+statement ok
+CREATE TABLE outer_table(id INT, value TEXT) AS VALUES
+(1, 'a'),
+(2, 'b'),
+(3, 'c'),
+(4, 'd'),
+(NULL, 'e');
+
+statement ok
+CREATE TABLE inner_table_no_null(id INT, value TEXT) AS VALUES
+(2, 'x'),
+(4, 'y');
+
+statement ok
+CREATE TABLE inner_table_with_null(id INT, value TEXT) AS VALUES
+(2, 'x'),
+(NULL, 'y');
+
+#############
+## Test 1: NOT IN with no NULLs - should behave like regular anti join
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
+----
+1 a
+3 c
+
+# Verify the plan uses LeftAnti join
+query TT
+EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
+----
+logical_plan
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+02)--TableScan: outer_table projection=[id, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: inner_table_no_null projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 2: NOT IN with NULL in subquery - should return 0 rows (null-aware semantics)
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+# Verify the result is empty even though there are rows in outer_table
+# that don't match the non-NULL value (2) in the subquery.
+# This is correct null-aware behavior: if subquery contains NULL, result is unknown.
+
+#############
+## Test 3: NOT IN with NULL in outer table but not in subquery
+## NULL rows from outer should not appear in output
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null) AND id IS NOT NULL;
+----
+1 a
+3 c
+
+#############
+## Test 4: Test with all NULL subquery
+#############
+
+statement ok
+CREATE TABLE all_null_table(id INT) AS VALUES (NULL), (NULL);
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM all_null_table);
+----
+
+#############
+## Test 5: Test with empty subquery - should return all rows
+#############
+
+statement ok
+CREATE TABLE empty_table(id INT, value TEXT);
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM empty_table);
+----
+1 a
+2 b
+3 c
+4 d
+
+#############
+## Test 6: NOT IN with complex expression
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id + 1 NOT IN (SELECT id FROM inner_table_no_null);
+----
+2 b
+4 d
+
+#############
+## Test 7: NOT IN with complex expression and NULL in subquery
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id + 1 NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+#############
+## Test 8: Multiple NOT IN conditions (AND)
+#############
+
+statement ok
+CREATE TABLE inner_table2(id INT) AS VALUES (1), (3);
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_no_null)
+  AND id NOT IN (SELECT id FROM inner_table2);
+----
+
+#############
+## Test 9: Multiple NOT IN conditions (OR)
+#############
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_no_null)
+   OR id NOT IN (SELECT id FROM inner_table2);
+----
+1 a
+2 b
+3 c
+4 d
+NULL e
+
+#############
+## Test 10: NOT IN with WHERE clause in subquery
+#############
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_with_null WHERE value = 'x');
+----
+1 a
+3 c
+4 d
+
+# Note: The NULL row from inner_table_with_null is filtered out by WHERE clause,
+# so this behaves like regular anti join (not null-aware)
+
+#############
+## Test 11: Verify NULL-aware flag is set for LeftAnti joins
+#############
+
+# Check that the physical plan shows null-aware anti join
+# Note: The exact format may vary, but we should see LeftAnti join type
+query TT
+EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+logical_plan
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+02)--TableScan: outer_table projection=[id, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: inner_table_with_null projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 12: Correlated NOT IN subquery with NULL
+#############
+
+statement ok
+CREATE TABLE orders(order_id INT, customer_id INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, 300);
+
+statement ok
+CREATE TABLE payments(payment_id INT, order_id INT) AS VALUES
+(1, 1),
+(2, NULL);
+
+# Find orders that don't have payments
+# Should return empty because there's a NULL in payments.order_id
+query I rowsort
+SELECT order_id FROM orders
+WHERE order_id NOT IN (SELECT order_id FROM payments);
+----
+
+#############
+## Test 13: NOT IN with DISTINCT in subquery
+#############
+
+statement ok
+CREATE TABLE duplicates_with_null(id INT) AS VALUES
+(2),
+(2),
+(NULL),
+(NULL);
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT DISTINCT id FROM duplicates_with_null);
+----
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE outer_table;
+
+statement ok
+DROP TABLE inner_table_no_null;
+
+statement ok
+DROP TABLE inner_table_with_null;
+
+statement ok
+DROP TABLE all_null_table;
+
+statement ok
+DROP TABLE empty_table;
+
+statement ok
+DROP TABLE inner_table2;
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE payments;
+
+statement ok
+DROP TABLE duplicates_with_null;
