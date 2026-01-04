@@ -216,10 +216,7 @@ impl TableProvider for CaptureTruncateProvider {
         Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
     }
 
-    async fn truncate(
-        &self,
-        _state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         *self.truncate_called.lock().unwrap() = true;
 
         Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
@@ -339,10 +336,7 @@ async fn test_truncate_calls_provider() -> Result<()> {
 
     ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
 
-    ctx.sql("TRUNCATE TABLE t")
-        .await?
-        .collect()
-        .await?;
+    ctx.sql("TRUNCATE TABLE t").await?.collect().await?;
 
     assert!(
         provider.was_truncated(),

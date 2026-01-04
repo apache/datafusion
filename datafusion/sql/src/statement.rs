@@ -1364,7 +1364,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             Statement::Truncate { table_names, .. } => {
                 if table_names.len() != 1 {
-                    return not_impl_err!("TRUNCATE with multiple tables is not supported");
+                    return not_impl_err!(
+                        "TRUNCATE with multiple tables is not supported"
+                    );
                 }
 
                 let target = &table_names[0]; // TruncateTableTarget
@@ -1375,12 +1377,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     table_name: table.clone(),
                     target: source,
                     op: WriteOp::Truncate,
-                    input: Arc::new(LogicalPlan::EmptyRelation(
-                        EmptyRelation {
-                            produce_one_row: false,
-                            schema: DFSchemaRef::new(DFSchema::empty()),
-                        },
-                    )),
+                    input: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })),
                     output_schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }

@@ -355,10 +355,7 @@ pub trait TableProvider: Debug + Sync + Send {
     }
 
     /// Truncate rows
-    async fn truncate(
-        &self,
-        _state: &dyn Session,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {}", self.table_type())
     }
 }

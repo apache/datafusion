@@ -471,6 +471,7 @@ pub mod dml_node {
                 "INSERT_APPEND" => Some(Self::InsertAppend),
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
+                "TRUNCATE" => Some(Self::Truncate),
                 _ => None,
             }
         }

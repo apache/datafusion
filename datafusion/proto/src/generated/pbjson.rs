@@ -5236,6 +5236,7 @@ impl serde::Serialize for dml_node::Type {
             Self::InsertAppend => "INSERT_APPEND",
             Self::InsertOverwrite => "INSERT_OVERWRITE",
             Self::InsertReplace => "INSERT_REPLACE",
+            Self::Truncate => "TRUNCATE",
         };
         serializer.serialize_str(variant)
     }
@@ -5253,6 +5254,7 @@ impl<'de> serde::Deserialize<'de> for dml_node::Type {
             "INSERT_APPEND",
             "INSERT_OVERWRITE",
             "INSERT_REPLACE",
+            "TRUNCATE",
         ];
 
         struct GeneratedVisitor;
@@ -5299,6 +5301,7 @@ impl<'de> serde::Deserialize<'de> for dml_node::Type {
                     "INSERT_APPEND" => Ok(dml_node::Type::InsertAppend),
                     "INSERT_OVERWRITE" => Ok(dml_node::Type::InsertOverwrite),
                     "INSERT_REPLACE" => Ok(dml_node::Type::InsertReplace),
+                    "TRUNCATE" => Ok(dml_node::Type::Truncate),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }
