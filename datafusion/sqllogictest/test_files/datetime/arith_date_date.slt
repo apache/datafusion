@@ -1,16 +1,15 @@
 # date - date → integer
 # Subtract dates, producing the number of days elapsed
 # date '2001-10-01' - date '2001-09-28' → 3
+# This aligns with PostgreSQL, DuckDB, and MySQL behavior
+# Resolved by: https://github.com/apache/datafusion/issues/19528
 
-# note that datafusion returns Duration whereas postgres returns an int
-# Tracking issue: https://github.com/apache/datafusion/issues/19528
-
-query ?
+query I
 SELECT '2001-10-01'::date - '2001-09-28'::date
 ----
-3 days 0 hours 0 mins 0 secs
+3
 
 query T
 SELECT arrow_typeof('2001-10-01'::date - '2001-09-28'::date)
 ----
-Duration(s)
+Int64
