@@ -144,24 +144,20 @@ impl ArrowHashTable for StringHashTable {
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        unsafe {
-            self.map.update_heap_idx(mapper);
-        }
+        self.map.update_heap_idx(mapper);
     }
 
     unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        unsafe { self.map.heap_idx_at(map_idx) }
+        self.map.heap_idx_at(map_idx)
     }
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
-        unsafe {
-            let ids = self.map.take_all(indexes);
-            match self.data_type {
-                DataType::Utf8 => Arc::new(StringArray::from(ids)),
-                DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ids)),
-                DataType::Utf8View => Arc::new(StringViewArray::from(ids)),
-                _ => unreachable!(),
-            }
+        let ids = self.map.take_all(indexes);
+        match self.data_type {
+            DataType::Utf8 => Arc::new(StringArray::from(ids)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ids)),
+            DataType::Utf8View => Arc::new(StringViewArray::from(ids)),
+            _ => unreachable!(),
         }
     }
 
@@ -171,63 +167,61 @@ impl ArrowHashTable for StringHashTable {
         replace_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
-        unsafe {
-            let id = match self.data_type {
-                DataType::Utf8 => {
-                    let ids = self
-                        .owned
-                        .as_any()
-                        .downcast_ref::<StringArray>()
-                        .expect("Expected StringArray for DataType::Utf8");
-                    if ids.is_null(row_idx) {
-                        None
-                    } else {
-                        Some(ids.value(row_idx))
-                    }
+        let id = match self.data_type {
+            DataType::Utf8 => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("Expected StringArray for DataType::Utf8");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
                 }
-                DataType::LargeUtf8 => {
-                    let ids = self
-                        .owned
-                        .as_any()
-                        .downcast_ref::<LargeStringArray>()
-                        .expect("Expected LargeStringArray for DataType::LargeUtf8");
-                    if ids.is_null(row_idx) {
-                        None
-                    } else {
-                        Some(ids.value(row_idx))
-                    }
-                }
-                DataType::Utf8View => {
-                    let ids = self
-                        .owned
-                        .as_any()
-                        .downcast_ref::<StringViewArray>()
-                        .expect("Expected StringViewArray for DataType::Utf8View");
-                    if ids.is_null(row_idx) {
-                        None
-                    } else {
-                        Some(ids.value(row_idx))
-                    }
-                }
-                _ => panic!("Unsupported data type"),
-            };
-
-            let hash = self.rnd.hash_one(id);
-            if let Some(map_idx) = self
-                .map
-                .find(hash, |mi| id == mi.as_ref().map(|id| id.as_str()))
-            {
-                return (map_idx, false);
             }
+            DataType::LargeUtf8 => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .expect("Expected LargeStringArray for DataType::LargeUtf8");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            DataType::Utf8View => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<StringViewArray>()
+                    .expect("Expected StringViewArray for DataType::Utf8View");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            _ => panic!("Unsupported data type"),
+        };
 
-            // we're full and this is a better value, so remove the worst
-            let heap_idx = self.map.remove_if_full(replace_idx);
-
-            // add the new group
-            let id = id.map(|id| id.to_string());
-            let map_idx = self.map.insert(hash, id, heap_idx, mapper);
-            (map_idx, true)
+        let hash = self.rnd.hash_one(id);
+        if let Some(map_idx) = self
+            .map
+            .find(hash, |mi| id == mi.as_ref().map(|id| id.as_str()))
+        {
+            return (map_idx, false);
         }
+
+        // we're full and this is a better value, so remove the worst
+        let heap_idx = self.map.remove_if_full(replace_idx);
+
+        // add the new group
+        let id = id.map(|id| id.to_string());
+        let map_idx = self.map.insert(hash, id, heap_idx, mapper);
+        (map_idx, true)
     }
 }
 
@@ -265,29 +259,25 @@ where
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        unsafe {
-            self.map.update_heap_idx(mapper);
-        }
+        self.map.update_heap_idx(mapper);
     }
 
     unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        unsafe { self.map.heap_idx_at(map_idx) }
+        self.map.heap_idx_at(map_idx)
     }
 
     unsafe fn take_all(&mut self, indexes: Vec<usize>) -> ArrayRef {
-        unsafe {
-            let ids = self.map.take_all(indexes);
-            let mut builder: PrimitiveBuilder<VAL> =
-                PrimitiveArray::builder(ids.len()).with_data_type(self.kt.clone());
-            for id in ids.into_iter() {
-                match id {
-                    None => builder.append_null(),
-                    Some(id) => builder.append_value(id),
-                }
+        let ids = self.map.take_all(indexes);
+        let mut builder: PrimitiveBuilder<VAL> =
+            PrimitiveArray::builder(ids.len()).with_data_type(self.kt.clone());
+        for id in ids.into_iter() {
+            match id {
+                None => builder.append_null(),
+                Some(id) => builder.append_value(id),
             }
-            let ids = builder.finish();
-            Arc::new(ids)
         }
+        let ids = builder.finish();
+        Arc::new(ids)
     }
 
     unsafe fn find_or_insert(
@@ -296,26 +286,24 @@ where
         replace_idx: usize,
         mapper: &mut Vec<(usize, usize)>,
     ) -> (usize, bool) {
-        unsafe {
-            let ids = self.owned.as_primitive::<VAL>();
-            let id: Option<VAL::Native> = if ids.is_null(row_idx) {
-                None
-            } else {
-                Some(ids.value(row_idx))
-            };
+        let ids = self.owned.as_primitive::<VAL>();
+        let id: Option<VAL::Native> = if ids.is_null(row_idx) {
+            None
+        } else {
+            Some(ids.value(row_idx))
+        };
 
-            let hash: u64 = id.hash(&self.rnd);
-            if let Some(map_idx) = self.map.find(hash, |mi| id == *mi) {
-                return (map_idx, false);
-            }
-
-            // we're full and this is a better value, so remove the worst
-            let heap_idx = self.map.remove_if_full(replace_idx);
-
-            // add the new group
-            let map_idx = self.map.insert(hash, id, heap_idx, mapper);
-            (map_idx, true)
+        let hash: u64 = id.hash(&self.rnd);
+        if let Some(map_idx) = self.map.find(hash, |mi| id == *mi) {
+            return (map_idx, false);
         }
+
+        // we're full and this is a better value, so remove the worst
+        let heap_idx = self.map.remove_if_full(replace_idx);
+
+        // add the new group
+        let map_idx = self.map.insert(hash, id, heap_idx, mapper);
+        (map_idx, true)
     }
 }
 
@@ -337,28 +325,22 @@ impl<ID: KeyType> TopKHashTable<ID> {
     }
 
     pub unsafe fn heap_idx_at(&self, map_idx: usize) -> usize {
-        unsafe {
-            let bucket = self.map.bucket(map_idx);
-            bucket.as_ref().heap_idx
-        }
+        let bucket = self.map.bucket(map_idx);
+        bucket.as_ref().heap_idx
     }
 
     pub unsafe fn remove_if_full(&mut self, replace_idx: usize) -> usize {
-        unsafe {
-            if self.map.len() >= self.limit {
-                self.map.erase(self.map.bucket(replace_idx));
-                0 // if full, always replace top node
-            } else {
-                self.map.len() // if we're not full, always append to end
-            }
+        if self.map.len() >= self.limit {
+            self.map.erase(self.map.bucket(replace_idx));
+            0 // if full, always replace top node
+        } else {
+            self.map.len() // if we're not full, always append to end
         }
     }
 
     unsafe fn update_heap_idx(&mut self, mapper: &[(usize, usize)]) {
-        unsafe {
-            for (m, h) in mapper {
-                self.map.bucket(*m).as_mut().heap_idx = *h
-            }
+        for (m, h) in mapper {
+            self.map.bucket(*m).as_mut().heap_idx = *h
         }
     }
 
@@ -399,14 +381,12 @@ impl<ID: KeyType> TopKHashTable<ID> {
     }
 
     pub unsafe fn take_all(&mut self, idxs: Vec<usize>) -> Vec<ID> {
-        unsafe {
-            let ids = idxs
-                .into_iter()
-                .map(|idx| self.map.bucket(idx).as_ref().id.clone())
-                .collect();
-            self.map.clear();
-            ids
-        }
+        let ids = idxs
+            .into_iter()
+            .map(|idx| self.map.bucket(idx).as_ref().id.clone())
+            .collect();
+        self.map.clear();
+        ids
     }
 }
 
