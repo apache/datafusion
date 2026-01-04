@@ -17,7 +17,7 @@
 
 //! Math function: `isnan()`.
 
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{Coercion, ColumnarValue, ScalarFunctionArgs, TypeSignatureClass};
@@ -100,6 +100,11 @@ impl ScalarUDFImpl for IsNanFunc {
             DataType::Float32 => Arc::new(BooleanArray::from_unary(
                 args[0].as_primitive::<Float32Type>(),
                 f32::is_nan,
+            )) as ArrayRef,
+
+            DataType::Float16 => Arc::new(BooleanArray::from_unary(
+                args[0].as_primitive::<Float16Type>(),
+                |x| x.is_nan(),
             )) as ArrayRef,
             other => {
                 return exec_err!(

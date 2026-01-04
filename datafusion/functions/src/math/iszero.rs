@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::datatypes::DataType::{Boolean, Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::datatypes::DataType::{Boolean, Float16, Float32, Float64};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 
 use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err};
@@ -113,6 +113,11 @@ fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
         Float32 => Ok(Arc::new(BooleanArray::from_unary(
             args[0].as_primitive::<Float32Type>(),
             |x| x == 0.0,
+        )) as ArrayRef),
+
+        Float16 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float16Type>(),
+            |x| x.to_f32() == 0.0,
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),

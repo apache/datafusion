@@ -20,9 +20,9 @@ use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
-use arrow::datatypes::DataType::{Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
+use arrow::datatypes::DataType::{Float16, Float32, Float64};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 use datafusion_common::types::NativeType;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
@@ -96,6 +96,7 @@ impl ScalarUDFImpl for NanvlFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
+            Float16 => Ok(Float16),
             Float32 => Ok(Float32),
             _ => Ok(Float64),
         }
@@ -108,7 +109,7 @@ impl ScalarUDFImpl for NanvlFunc {
         }
 
         let target_type = args.return_type();
-        if !matches!(target_type, Float32 | Float64) {
+        if !matches!(target_type, Float16 | Float32 | Float64) {
             return exec_err!(
                 "Unsupported return type {target_type:?} for function nanvl"
             );
@@ -150,6 +151,19 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
             let x = args[0].as_primitive() as &Float32Array;
             let y = args[1].as_primitive() as &Float32Array;
             arrow::compute::binary::<_, _, _, Float32Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
+        }
+        Float16 => {
+            let compute_nanvl =
+                |x: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native,
+                 y: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native| {
+                    if x.is_nan() { y } else { x }
+                };
+
+            let x = args[0].as_primitive() as &Float16Array;
+            let y = args[1].as_primitive() as &Float16Array;
+            arrow::compute::binary::<_, _, _, Float16Type>(x, y, compute_nanvl)
                 .map(|res| Arc::new(res) as _)
                 .map_err(DataFusionError::from)
         }
