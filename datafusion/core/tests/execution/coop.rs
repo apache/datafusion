@@ -606,6 +606,7 @@ async fn join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -655,6 +656,7 @@ async fn join_agg_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     // Project only one column (“value” from the left side) because we just want to sum that
