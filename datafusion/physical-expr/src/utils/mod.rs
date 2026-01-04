@@ -239,7 +239,8 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-pub fn have_unknown_columns(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// Recursively check whether the given [`PhysicalExpr`] contains any [`UnKnownColumn`]s.
+pub fn has_unknown_columns(expr: &Arc<dyn PhysicalExpr>) -> bool {
     let mut found = false;
     expr.apply(|e| {
         if e.as_any().downcast_ref::<UnKnownColumn>().is_some() {

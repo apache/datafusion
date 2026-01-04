@@ -1442,6 +1442,69 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_pushdown_with_swapped_aliases() -> Result<()> {
+        let input_schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics {
+                column_statistics: vec![Default::default(); input_schema.fields().len()],
+                ..Default::default()
+            },
+            input_schema.clone(),
+        ));
+
+        // project "a" as "b", "b" as "a"
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "b".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("b", 1)),
+                    alias: "a".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "b > 5" (output column 0, which is "a" in input)
+        let filter1 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "a < 10" (output column 1, which is "b" in input)
+        let filter2 = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 1)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter1, filter2],
+            &ConfigOptions::default(),
+        )?;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+
+        // "b" (output index 0) -> "a" (input index 0)
+        let expected_filter1 = "a@0 > 5";
+        // "a" (output index 1) -> "b" (input index 1)
+        let expected_filter2 = "b@1 < 10";
+
+        assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
+        assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_filter_pushdown_with_mixed_columns() -> Result<()> {
         let input_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1593,11 +1656,11 @@ mod tests {
         Ok(())
     }
 
-    /// Test that `DynamicFilterPhysicalExpr` can correctly update its child expression
+    /// Basic test for `DynamicFilterPhysicalExpr` can correctly update its child expression
     /// i.e. starting with lit(true) and after update it becomes `a > 5`
     /// with projection [b - 1 as a], the pushed down filter should be `b - 1 > 5`
     #[test]
-    fn test_dyn_filter_projection_pushdown_update_child() -> Result<()> {
+    fn test_basic_dyn_filter_projection_pushdown_update_child() -> Result<()> {
         let input_schema =
             Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
 
