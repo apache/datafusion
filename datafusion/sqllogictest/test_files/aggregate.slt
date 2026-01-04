@@ -8241,3 +8241,8 @@ NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
+
+query R
+select percentile_cont(null, 0.5);
+----
+NULL
