@@ -967,7 +967,7 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 /// # Examples
 ///
 /// ```
-/// use datafusion_common::types::{logical_binary, logical_string, NativeType};
+/// use datafusion_common::types::{NativeType, logical_binary, logical_string};
 /// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 ///
 /// // Exact coercion that only accepts timestamp types

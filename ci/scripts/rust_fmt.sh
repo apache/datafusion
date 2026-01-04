@@ -18,4 +18,13 @@
 # under the License.
 
 set -ex
-cargo fmt --all -- --check
+
+# Install nightly toolchain (skips if already installed)
+rustup toolchain install nightly --component rustfmt
+
+# Use nightly rustfmt to check formatting including doc comments
+# This requires nightly because format_code_in_doc_comments is an unstable feature
+if ! cargo +nightly fmt --all -- --check --config format_code_in_doc_comments=true; then
+    echo "To fix, run: cargo +nightly fmt --all -- --config format_code_in_doc_comments=true"
+    exit 1
+fi

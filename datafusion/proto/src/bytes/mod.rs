@@ -47,7 +47,7 @@ mod registry;
 /// bytes.
 ///
 /// ```
-/// use datafusion_expr::{col, lit, Expr};
+/// use datafusion_expr::{Expr, col, lit};
 /// use datafusion_proto::bytes::Serializeable;
 ///
 /// // Create a new `Expr` a < 32

@@ -211,7 +211,7 @@ impl JoinLeftData {
 ///
 ///
 /// ```text
-///
+/// 
 ///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
 ///                                                                         ┌───────────────────────────┐
 ///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │

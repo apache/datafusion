@@ -255,8 +255,9 @@ impl CreateExternalTable {
     ///     TableReference::bare("my_table"),
     ///     "/path/to/data",
     ///     "parquet",
-    ///     Arc::new(DFSchema::empty())
-    /// ).build();
+    ///     Arc::new(DFSchema::empty()),
+    /// )
+    /// .build();
     /// ```
     pub fn builder(
         name: impl Into<TableReference>,

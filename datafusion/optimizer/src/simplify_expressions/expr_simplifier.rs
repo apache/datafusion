@@ -148,7 +148,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_expr::simplify::SimplifyInfo;
-    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::{Expr, col, lit};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     /// use std::sync::Arc;
     ///
@@ -290,7 +290,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
-    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::{Expr, col, lit};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![
@@ -352,7 +352,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
-    /// use datafusion_expr::{col, lit, Expr};
+    /// use datafusion_expr::{Expr, col, lit};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
     /// let schema = Schema::new(vec![

@@ -234,7 +234,7 @@ enum OutOfMemoryMode {
 /// # Architecture
 ///
 /// ```text
-///
+/// 
 ///     Assigns a consecutive group           internally stores aggregate values
 ///     index for each unique set                     for all groups
 ///         of group values

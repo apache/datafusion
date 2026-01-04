@@ -37,7 +37,6 @@ use std::sync::Arc;
 /// TODOs:
 ///  - Spark's ANSI-compliant dialect, when off (i.e. `spark.sql.ansi.enabled=false`), taking absolute value on the minimal value of a signed integer returns the value as is. DataFusion's abs throws "DataFusion error: Arrow error: Compute error" on arithmetic overflow
 ///  - Spark's abs also supports ANSI interval types: YearMonthIntervalType and DayTimeIntervalType. DataFusion's abs doesn't.
-///
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAbs {
     signature: Signature,
