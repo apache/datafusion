@@ -102,20 +102,90 @@ impl LogFunc {
     }
 }
 
-/// Generic function to calculate logarithm of a decimal value using the given base.
-///
-/// Uses f64 computation which naturally returns NaN for invalid inputs
-/// (base <= 1, non-finite, value <= 0), matching the behavior of `f64::log`.
-fn log_decimal<T>(value: T, scale: i8, base: f64) -> Result<f64, ArrowError>
-where
-    T: ToPrimitive + Copy,
-{
-    decimal_to_f64(&value, scale).map(|v| v.log(base))
+/// Checks if the base is valid for the efficient integer logarithm algorithm.
+#[inline]
+fn is_valid_integer_base(base: f64) -> bool {
+    base.trunc() == base && base >= 2.0 && base <= u32::MAX as f64
+}
+
+/// Calculate logarithm for Decimal32 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u32 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u32(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u32) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Calculate logarithm for Decimal64 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u64 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u64(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u64) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Calculate logarithm for Decimal128 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u128 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u128(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u128) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Unscale a Decimal32 value to u32.
+#[inline]
+fn unscale_to_u32(value: i32, scale: i8) -> Option<u32> {
+    let value_u32 = u32::try_from(value).ok()?;
+    let divisor = 10u32.checked_pow(scale as u32)?;
+    Some(value_u32 / divisor)
+}
+
+/// Unscale a Decimal64 value to u64.
+#[inline]
+fn unscale_to_u64(value: i64, scale: i8) -> Option<u64> {
+    let value_u64 = u64::try_from(value).ok()?;
+    let divisor = 10u64.checked_pow(scale as u32)?;
+    Some(value_u64 / divisor)
+}
+
+/// Unscale a Decimal128 value to u128.
+#[inline]
+fn unscale_to_u128(value: i128, scale: i8) -> Option<u128> {
+    let value_u128 = u128::try_from(value).ok()?;
+    let divisor = 10u128.checked_pow(scale as u32)?;
+    Some(value_u128 / divisor)
 }
 
 /// Convert a scaled decimal value to f64.
 #[inline]
-fn decimal_to_f64<T: ToPrimitive>(value: &T, scale: i8) -> Result<f64, ArrowError> {
+fn decimal_to_f64<T: ToPrimitive + Copy>(value: T, scale: i8) -> Result<f64, ArrowError> {
     let value_f64 = value.to_f64().ok_or_else(|| {
         ArrowError::ComputeError("Cannot convert value to f64".to_string())
     })?;
@@ -126,7 +196,7 @@ fn decimal_to_f64<T: ToPrimitive>(value: &T, scale: i8) -> Result<f64, ArrowErro
 fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
     // Try to convert to i128 for the optimized path
     match value.to_i128() {
-        Some(v) => log_decimal(v, scale, base),
+        Some(v) => log_decimal128(v, scale, base),
         None => {
             // For very large Decimal256 values, use f64 computation
             let value_f64 = value.to_f64().ok_or_else(|| {
@@ -228,21 +298,21 @@ impl ScalarUDFImpl for LogFunc {
                 calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal(value, *scale, base),
+                    |value, base| log_decimal32(value, *scale, base),
                 )?
             }
             DataType::Decimal64(_, scale) => {
                 calculate_binary_math::<Decimal64Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal(value, *scale, base),
+                    |value, base| log_decimal64(value, *scale, base),
                 )?
             }
             DataType::Decimal128(_, scale) => {
                 calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal(value, *scale, base),
+                    |value, base| log_decimal128(value, *scale, base),
                 )?
             }
             DataType::Decimal256(_, scale) => {
@@ -377,10 +447,13 @@ mod tests {
     #[test]
     fn test_log_decimal_native() {
         let value = 10_i128.pow(35);
-        let expected = (value as f64).log2();
-        assert_eq!(expected, 116.26748332105768);
-        // Now using f64 computation, we get the precise value
-        assert!((log_decimal(value, 0, 2.0).unwrap() - expected).abs() < 1e-10);
+        assert_eq!((value as f64).log2(), 116.26748332105768);
+        assert_eq!(
+            log_decimal128(value, 0, 2.0).unwrap(),
+            // TODO: see we're losing our decimal points compared to above
+            //       https://github.com/apache/datafusion/issues/18524
+            116.0
+        );
     }
 
     #[test]
@@ -948,8 +1021,7 @@ mod tests {
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
-                // log10(12600) ≈ 4.1003 (not truncated to 4)
-                assert!((floats.value(4) - 12600f64.log10()).abs() < 1e-10);
+                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding
                 assert!(floats.value(5).is_nan());
             }
             ColumnarValue::Scalar(_) => {
@@ -1084,13 +1156,43 @@ mod tests {
                 assert!((floats.value(1) - 2.0).abs() < 1e-10);
                 assert!((floats.value(2) - 3.0).abs() < 1e-10);
                 assert!((floats.value(3) - 4.0).abs() < 1e-10);
-                // log10(12600) ≈ 4.1003 (not truncated to 4)
-                assert!((floats.value(4) - 12600f64.log10()).abs() < 1e-10);
-                // log10(i128::MAX - 1000) ≈ 38.23 (not truncated to 38)
-                assert!(
-                    (floats.value(5) - ((i128::MAX - 1000) as f64).log10()).abs() < 1e-10
-                );
+                assert!((floats.value(4) - 4.0).abs() < 1e-10); // Integer rounding for float log
+                assert!((floats.value(5) - 38.0).abs() < 1e-10);
                 assert!(floats.value(6).is_nan());
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
+    }
+
+    #[test]
+    fn test_log_decimal128_invalid_base() {
+        // Invalid base (-2.0) should return NaN, matching f64::log behavior
+        let arg_fields = vec![
+            Field::new("b", DataType::Float64, false).into(),
+            Field::new("x", DataType::Decimal128(38, 0), false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(-2.0))), // base
+                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(64), 38, 0)), // num
+            ],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("should not error on invalid base");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 1);
+                assert!(floats.value(0).is_nan());
             }
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
