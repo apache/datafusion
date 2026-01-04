@@ -25,7 +25,7 @@ use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, ProjectionExprs};
 
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
@@ -194,7 +194,10 @@ pub trait TableProvider: Debug + Sync + Send {
         args: ScanArgs<'a>,
     ) -> Result<ScanResult> {
         let filters = args.filters().unwrap_or(&[]);
-        let projection = args.projection().map(|p| p.to_vec());
+        let projection = args
+            .projection()
+            .map(|p| p.projection_column_indices(&self.schema()))
+            .transpose()?;
         let limit = args.limit();
         let plan = self
             .scan(state, projection.as_ref(), filters, limit)
@@ -359,19 +362,19 @@ pub trait TableProvider: Debug + Sync + Send {
 #[derive(Debug, Clone, Default)]
 pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
-    projection: Option<&'a [usize]>,
+    projection: Option<&'a [Expr]>,
     limit: Option<usize>,
 }
 
 impl<'a> ScanArgs<'a> {
     /// Set the column projection for the scan.
     ///
-    /// The projection is a list of column indices from [`TableProvider::schema`]
-    /// that should be included in the scan results. If `None`, all columns are included.
+    /// The projection is a list of expressions applied to
+    /// [`TableProvider::schema`] which may include columns and more complex expressions.
     ///
     /// # Arguments
-    /// * `projection` - Optional slice of column indices to project
-    pub fn with_projection(mut self, projection: Option<&'a [usize]>) -> Self {
+    /// * `projection` - Optional slice of projection expressions
+    pub fn with_projection(mut self, projection: Option<&'a [Expr]>) -> Self {
         self.projection = projection;
         self
     }
@@ -380,7 +383,7 @@ impl<'a> ScanArgs<'a> {
     ///
     /// Returns a reference to the projection column indices, or `None` if
     /// no projection was specified (meaning all columns should be included).
-    pub fn projection(&self) -> Option<&'a [usize]> {
+    pub fn projection(&self) -> Option<&'a [Expr]> {
         self.projection
     }
 
@@ -429,6 +432,14 @@ impl<'a> ScanArgs<'a> {
 pub struct ScanResult {
     /// The ExecutionPlan to run.
     plan: Arc<dyn ExecutionPlan>,
+    /// Filters that we re not completely handled by the scan
+    /// either via statistics or other plan-time optimizations,
+    /// or by binding them to the returned plan.
+    unhandled_filters: Vec<Expr>,
+    /// Projections that were not completely handled by the scan
+    /// either via statistics or other plan-time optimizations,
+    /// or by binding them to the returned plan.
+    unhandled_projections: Vec<usize>,
 }
 
 impl ScanResult {
@@ -437,7 +448,11 @@ impl ScanResult {
     /// # Arguments
     /// * `plan` - The execution plan that will perform the table scan
     pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            unhandled_filters: vec![],
+            unhandled_projections: vec![],
+        }
     }
 
     /// Get a reference to the execution plan for this scan result.
@@ -454,6 +469,22 @@ impl ScanResult {
     /// the actual table scanning and data retrieval.
     pub fn into_inner(self) -> Arc<dyn ExecutionPlan> {
         self.plan
+    }
+
+    /// Record filters that were not handled by the scan.
+    /// If called multiple times this method appends the provided
+    /// filters to the existing unhandled filters in the [`ScanResult`].
+    pub fn with_unhandled_filters(mut self, filters: Vec<Expr>) -> Self {
+        self.unhandled_filters.extend(filters);
+        self
+    }
+
+    /// Record projections that were not handled by the scan.
+    /// If called multiple times this method appends the provided
+    /// projections to the existing unhandled projections in the [`ScanResult`].
+    pub fn with_unhandled_projections(mut self, projections: Vec<usize>) -> Self {
+        self.unhandled_projections.extend(projections);
+        self
     }
 }
 

@@ -27,7 +27,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
 use datafusion_expr::{
-    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
+    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE, col,
 };
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
@@ -110,7 +110,7 @@ fn inline_scan_projection_test() -> Result<()> {
         Field::new("a", DataType::Int32, false),
         Field::new("b", DataType::Int32, false),
     ]);
-    let projection = vec![schema.index_of(column)?];
+    let projection = vec![col(column)];
 
     let provider = ViewTable::new(
         LogicalPlan::EmptyRelation(EmptyRelation {

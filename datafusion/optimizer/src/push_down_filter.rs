@@ -3108,7 +3108,7 @@ mod tests {
     fn table_scan_with_pushdown_provider_builder(
         filter_support: TableProviderFilterPushDown,
         filters: Vec<Expr>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
     ) -> Result<LogicalPlanBuilder> {
         let test_provider = PushDownProvider { filter_support };
 
@@ -3196,7 +3196,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Inexact,
             vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            Some(vec![0]),
+            Some(vec![col("a")]),
         )?
         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
         .project(vec![col("a"), col("b")])?
@@ -3217,7 +3217,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Exact,
             vec![],
-            Some(vec![0]),
+            Some(vec![col("a")]),
         )?
         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
         .project(vec![col("a"), col("b")])?

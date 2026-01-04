@@ -31,7 +31,7 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    logical_plan::LogicalPlan, projection_exprs_from_schema_and_indices,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -262,16 +262,31 @@ fn optimize_projections(
                 projected_schema: _,
             } = table_scan;
 
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
-            let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
+            // Get the projection expressions based on required indices.
+            // If there's an existing projection, select the expressions at the required indices.
+            // If there's no projection, create expressions from the indices using the source schema.
+            let new_projection = match &projection {
+                Some(proj_exprs) => {
+                    // Select the expressions at the required indices
+                    let required_indices = indices.into_inner();
+                    required_indices
+                        .into_iter()
+                        .map(|idx| proj_exprs[idx].clone())
+                        .collect::<Vec<_>>()
+                }
+                None => {
+                    // Convert indices to column expressions
+                    let required_indices = indices.into_inner();
+                    projection_exprs_from_schema_and_indices(
+                        &source.schema(),
+                        &required_indices,
+                    )?
+                }
             };
             return TableScan::try_new(
                 table_name,
                 source,
-                Some(projection),
+                Some(new_projection),
                 filters,
                 fetch,
             )
@@ -835,6 +850,63 @@ fn rewrite_projection_given_requirements(
     let Projection { expr, input, .. } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
+
+    // Special case: when the input is a TableScan and all projection expressions
+    // are simple column references, push the projection directly into the scan.
+    // This preserves the desired column order and eliminates the Projection node.
+    if let LogicalPlan::TableScan(table_scan) = input.as_ref() {
+        if exprs_used.iter().all(|e| matches!(e, Expr::Column(_))) {
+            // All expressions are column references - push directly into scan
+            let TableScan {
+                table_name,
+                source,
+                projection,
+                filters,
+                fetch,
+                projected_schema: _,
+            } = table_scan.clone();
+
+            // Build the new projection expressions by mapping through the existing
+            // scan projection (if any) or directly from the source schema
+            let new_projection_exprs: Vec<Expr> = exprs_used
+                .iter()
+                .filter_map(|e| {
+                    if let Expr::Column(col) = e {
+                        // Find the index of this column in the current scan's schema
+                        let idx =
+                            table_scan.projected_schema.maybe_index_of_column(col)?;
+                        // Get the corresponding expression from the existing projection
+                        // or create a column reference from the source schema
+                        match &projection {
+                            Some(proj_exprs) => Some(proj_exprs[idx].clone()),
+                            None => {
+                                // No existing projection - create unqualified column
+                                // to match the behavior of projection_exprs_from_schema_and_indices
+                                let (_, field) =
+                                    table_scan.projected_schema.qualified_field(idx);
+                                Some(Expr::Column(Column::new_unqualified(field.name())))
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Only proceed if we successfully mapped all columns
+            if new_projection_exprs.len() == exprs_used.len() {
+                return TableScan::try_new(
+                    table_name,
+                    source,
+                    Some(new_projection_exprs),
+                    filters,
+                    fetch,
+                )
+                .map(LogicalPlan::TableScan)
+                .map(Transformed::yes);
+            }
+        }
+    }
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
@@ -1752,16 +1824,15 @@ mod tests {
     fn redundant_project() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        // Two projections that are just column reordering get merged and
+        // pushed directly into the scan
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("a"), col("b"), col("c")])?
             .project(vec![col("a"), col("c"), col("b")])?
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, test.c, test.b
-          TableScan: test projection=[a, b, c]
-        "
+            @"TableScan: test projection=[a, c, b]"
         )
     }
 
@@ -1769,7 +1840,12 @@ mod tests {
     fn reorder_scan() -> Result<()> {
         let schema = Schema::new(test_table_scan_fields());
 
-        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?.build()?;
+        let plan = table_scan(
+            Some("test"),
+            &schema,
+            Some(vec![col("b"), col("a"), col("c")]),
+        )?
+        .build()?;
         assert_optimized_plan_equal!(
             plan,
             @"TableScan: test projection=[b, a, c]"
@@ -1780,15 +1856,18 @@ mod tests {
     fn reorder_scan_projection() -> Result<()> {
         let schema = Schema::new(test_table_scan_fields());
 
-        let plan = table_scan(Some("test"), &schema, Some(vec![1, 0, 2]))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+        // Projection over TableScan with column reordering should push
+        // the projection directly into the scan, eliminating the Projection node
+        let plan = table_scan(
+            Some("test"),
+            &schema,
+            Some(vec![col("b"), col("a"), col("c")]),
+        )?
+        .project(vec![col("a"), col("b")])?
+        .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a, test.b
-          TableScan: test projection=[b, a]
-        "
+            @"TableScan: test projection=[a, b]"
         )
     }
 
@@ -1796,15 +1875,13 @@ mod tests {
     fn reorder_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        // Projection that just reorders columns gets pushed into the scan
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("b"), col("a")])?
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.c, test.b, test.a
-          TableScan: test projection=[a, b, c]
-        "
+            @"TableScan: test projection=[c, b, a]"
         )
     }
 
@@ -1812,6 +1889,7 @@ mod tests {
     fn noncontinuous_redundant_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        // The innermost projection-over-scan gets pushed into the scan
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("b"), col("a")])?
             .filter(col("c").gt(lit(1)))?
@@ -1828,8 +1906,7 @@ mod tests {
             Filter: test.b > Int32(1)
               Projection: test.c, test.a, test.b
                 Filter: test.c > Int32(1)
-                  Projection: test.c, test.b, test.a
-                    TableScan: test projection=[a, b, c]
+                  TableScan: test projection=[c, b, a]
         "
         )
     }
@@ -2057,6 +2134,7 @@ mod tests {
         assert_eq!(3, table_scan.schema().fields().len());
         assert_fields_eq(&table_scan, vec!["a", "b", "c"]);
 
+        // Projection with column reordering gets pushed into the scan
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("a")])?
             .limit(0, Some(5))?
@@ -2068,8 +2146,7 @@ mod tests {
             plan,
             @r"
         Limit: skip=0, fetch=5
-          Projection: test.c, test.a
-            TableScan: test projection=[a, c]
+          TableScan: test projection=[c, a]
         "
         )
     }
@@ -2108,6 +2185,7 @@ mod tests {
         assert_fields_eq(&table_scan, vec!["a", "b", "c"]);
 
         // we never use "b" in the first projection => remove it
+        // the projection over scan gets pushed into the scan
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![col("c"), col("a"), col("b")])?
             .filter(col("c").gt(lit(1)))?
@@ -2122,8 +2200,7 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.c]], aggr=[[max(test.a)]]
           Filter: test.c > Int32(1)
-            Projection: test.c, test.a
-              TableScan: test projection=[a, c]
+            TableScan: test projection=[c, a]
         "
         )
     }

@@ -23,10 +23,13 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::error::Result;
-use datafusion_expr::{Expr, LogicalPlan, TableProviderFilterPushDown, TableType};
+use datafusion_common::{Column, error::Result};
+use datafusion_expr::{
+    Expr, LogicalPlan, ProjectionExprs, TableProviderFilterPushDown, TableType,
+};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::work_table::WorkTableExec;
+use itertools::Itertools;
 
 use crate::{ScanArgs, ScanResult, Session, TableProvider};
 
@@ -88,8 +91,17 @@ impl TableProvider for CteWorkTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = self.schema();
+        let projection_exprs = projection.as_ref().map(|p| {
+            p.as_slice()
+                .iter()
+                .map(|i| {
+                    Expr::Column(Column::from_name(schema.field(*i).name().to_string()))
+                })
+                .collect_vec()
+        });
         let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
+            .with_projection(projection_exprs.as_ref().map(|p| p.as_slice()))
             .with_filters(Some(filters))
             .with_limit(limit);
         Ok(self.scan_with_args(state, options).await?.into_inner())
@@ -100,10 +112,13 @@ impl TableProvider for CteWorkTable {
         _state: &dyn Session,
         args: ScanArgs<'a>,
     ) -> Result<ScanResult> {
+        let schema = self.schema();
         Ok(ScanResult::new(Arc::new(WorkTableExec::new(
             self.name.clone(),
             Arc::clone(&self.table_schema),
-            args.projection().map(|p| p.to_vec()),
+            args.projection()
+                .map(|p| p.projection_column_indices(&schema))
+                .transpose()?,
         )?)))
     }
 

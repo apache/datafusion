@@ -1538,8 +1538,7 @@ logical_plan
 02)--Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1))]]
 03)----Projection: aggregate_test_100.c2
 04)------Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
-05)--------Projection: aggregate_test_100.c2, aggregate_test_100.c1
-06)----------TableScan: aggregate_test_100 projection=[c1, c2]
+05)--------TableScan: aggregate_test_100 projection=[c2, c1]
 physical_plan
 01)ProjectionExec: expr=[c2@0 as c2, count(Int64(1))@1 as count(*)]
 02)--AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]

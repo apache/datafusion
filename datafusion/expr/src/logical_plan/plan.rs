@@ -1811,12 +1811,9 @@ impl LogicalPlan {
                         ..
                     }) => {
                         let projected_fields = match projection {
-                            Some(indices) => {
-                                let schema = source.schema();
-                                let names: Vec<&str> = indices
-                                    .iter()
-                                    .map(|i| schema.field(*i).name().as_str())
-                                    .collect();
+                            Some(exprs) => {
+                                let names: Vec<String> =
+                                    exprs.iter().map(|e| e.to_string()).collect();
                                 format!(" projection=[{}]", names.join(", "))
                             }
                             _ => "".to_string(),
@@ -2195,6 +2192,52 @@ impl PartialOrd for Values {
     }
 }
 
+pub fn projection_exprs_from_schema_and_indices(
+    schema: &Schema,
+    indices: &[usize],
+) -> Result<Vec<Expr>> {
+    let fields = schema.fields();
+    indices
+        .iter()
+        .map(|i| {
+            if i >= &fields.len() {
+                return plan_err!(
+                    "Index {i} out of bounds for schema with {} fields",
+                    fields.len()
+                );
+            }
+            let field = schema.field(*i);
+            Ok(Expr::Column(Column::new_unqualified(field.name())))
+        })
+        .collect::<Result<Vec<Expr>>>()
+}
+
+pub trait ProjectionExprs {
+    fn projection_columns(&self) -> Vec<Column>;
+    fn projection_column_indices(&self, schema: &Schema) -> Result<Vec<usize>>;
+}
+
+impl ProjectionExprs for [Expr] {
+    fn projection_columns(&self) -> Vec<Column> {
+        self.iter()
+            .filter_map(|e| match e {
+                Expr::Column(c) => Some(c.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn projection_column_indices(&self, schema: &Schema) -> Result<Vec<usize>> {
+        self.iter()
+            .filter_map(|e| match e {
+                Expr::Column(c) => Some(c.name()),
+                _ => None,
+            })
+            .map(|name| Ok(schema.index_of(name)?))
+            .collect()
+    }
+}
+
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -2245,7 +2288,7 @@ impl Projection {
             );
         }
         Ok(Self {
-            expr,
+            expr: expr.into(),
             input,
             schema,
         })
@@ -2255,7 +2298,7 @@ impl Projection {
     pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
         let expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
         Self {
-            expr,
+            expr: expr.into(),
             input,
             schema,
         }
@@ -2675,8 +2718,10 @@ pub struct TableScan {
     pub table_name: TableReference,
     /// The source of the table
     pub source: Arc<dyn TableSource>,
-    /// Optional column indices to use as a projection
-    pub projection: Option<Vec<usize>>,
+    /// Optional projection expressions to select which columns are returned.
+    /// Each expression is typically a column reference, but can also be
+    /// more complex expressions.
+    pub projection: Option<Vec<Expr>>,
     /// The schema description of the output
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
@@ -2718,8 +2763,8 @@ impl PartialOrd for TableScan {
         struct ComparableTableScan<'a> {
             /// The name of the table
             pub table_name: &'a TableReference,
-            /// Optional column indices to use as a projection
-            pub projection: &'a Option<Vec<usize>>,
+            /// Optional projection expressions
+            pub projection: &'a Option<Vec<Expr>>,
             /// Optional expressions to be used as filters by the table provider
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
@@ -2760,7 +2805,7 @@ impl TableScan {
     pub fn try_new(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
@@ -2777,11 +2822,15 @@ impl TableScan {
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                let projected_func_dependencies =
-                    func_dependencies.project_functional_dependencies(p, p.len());
+                // Convert projection expressions to column indices
+                let indices = p.projection_column_indices(&schema)?;
+
+                let projected_func_dependencies = func_dependencies
+                    .project_functional_dependencies(&indices, indices.len());
 
                 let df_schema = DFSchema::new_with_metadata(
-                    p.iter()
+                    indices
+                        .iter()
                         .map(|i| {
                             (Some(table_name.clone()), Arc::clone(&schema.fields()[*i]))
                         })
@@ -4328,13 +4377,21 @@ mod tests {
     }
 
     fn display_plan() -> Result<LogicalPlan> {
-        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
-            .build()?;
+        let plan1 = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state")]),
+        )?
+        .build()?;
 
-        table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-            .filter(in_subquery(col("state"), Arc::new(plan1)))?
-            .project(vec![col("id")])?
-            .build()
+        table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("id"), col("state")]),
+        )?
+        .filter(in_subquery(col("state"), Arc::new(plan1)))?
+        .project(vec![col("id")])?
+        .build()
     }
 
     #[test]
@@ -4367,14 +4424,21 @@ mod tests {
 
     #[test]
     fn test_display_subquery_alias() -> Result<()> {
-        let plan1 = table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3]))?
-            .build()?;
+        let plan1 = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state")]),
+        )?
+        .build()?;
         let plan1 = Arc::new(plan1);
 
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .project(vec![col("id"), exists(plan1).alias("exists")])?
-                .build();
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("id"), col("state")]),
+        )?
+        .project(vec![col("id"), exists(plan1).alias("exists")])?
+        .build();
 
         assert_snapshot!(plan?.display_indent(), @r"
         Projection: employee_csv.id, EXISTS (<subquery>) AS exists
@@ -4797,14 +4861,18 @@ mod tests {
             Field::new("state", DataType::Utf8, false),
         ]);
 
-        table_scan(TableReference::none(), &schema, Some(vec![0, 1]))
-            .unwrap()
-            .filter(col("state").eq(lit("CO")))
-            .unwrap()
-            .project(vec![col("id")])
-            .unwrap()
-            .build()
-            .unwrap()
+        table_scan(
+            TableReference::none(),
+            &schema,
+            Some(vec![col("id"), col("state")]),
+        )
+        .unwrap()
+        .filter(col("state").eq(lit("CO")))
+        .unwrap()
+        .project(vec![col("id")])
+        .unwrap()
+        .build()
+        .unwrap()
     }
 
     #[test]
@@ -5144,17 +5212,20 @@ mod tests {
         let subquery_schema =
             Schema::new(vec![Field::new("sub_id", DataType::Int32, false)]);
 
-        let subquery_plan =
-            table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
-                .unwrap()
-                .filter(col("sub_id").eq(lit(0)))
-                .unwrap()
-                .build()
-                .unwrap();
+        let subquery_plan = table_scan(
+            TableReference::none(),
+            &subquery_schema,
+            Some(vec![col("sub_id")]),
+        )
+        .unwrap()
+        .filter(col("sub_id").eq(lit(0)))
+        .unwrap()
+        .build()
+        .unwrap();
 
         let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-        let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
+        let plan = table_scan(TableReference::none(), &schema, Some(vec![col("id")]))
             .unwrap()
             .filter(col("id").eq(lit(0)))
             .unwrap()

@@ -2314,8 +2314,7 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
 05)------Aggregate: groupBy=[[join_t2.t2_int, join_t2.t2_id]], aggr=[[]]
-06)--------Projection: join_t2.t2_int, join_t2.t2_id
-07)----------TableScan: join_t2 projection=[t2_id, t2_int]
+06)--------TableScan: join_t2 projection=[t2_int, t2_id]
 
 statement ok
 set datafusion.optimizer.repartition_joins = false;

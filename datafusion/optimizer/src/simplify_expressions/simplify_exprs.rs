@@ -210,7 +210,7 @@ mod tests {
         let table_scan = table_scan_with_filters(
             Some("test"),
             &schema,
-            Some(vec![0]),
+            Some(vec![col("a")]),
             vec![col("b").is_not_null()],
         )?
         .build()?;
