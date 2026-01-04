@@ -418,10 +418,12 @@ fn build_join(
     }
 
     // Determine if this should be a null-aware anti join
-    // For LeftAnti joins (NOT IN), we need null-aware semantics if:
-    // 1. The join type is LeftAnti
-    // 2. The join predicate involves nullable columns (conservative: assume nullable)
-    let null_aware = matches!(join_type, JoinType::LeftAnti);
+    // Null-aware semantics are only needed for NOT IN subqueries, not NOT EXISTS:
+    // - NOT IN: Uses three-valued logic, requires null-aware handling
+    // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
+    // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
+    let null_aware = matches!(join_type, JoinType::LeftAnti)
+        && in_predicate_opt.is_some();
 
     // join our sub query into the main plan
     let new_plan = if null_aware {

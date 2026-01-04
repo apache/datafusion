@@ -230,6 +230,141 @@ WHERE id NOT IN (SELECT DISTINCT id FROM duplicates_with_null);
 ----
 
 #############
+## Test 14: NOT EXISTS vs NOT IN - Demonstrating the difference
+#############
+
+# NOT EXISTS should NOT use null-aware semantics
+# It uses two-valued logic (TRUE/FALSE), not three-valued logic (TRUE/FALSE/UNKNOWN)
+
+# Setup tables for comparison
+statement ok
+CREATE TABLE customers(id INT, name TEXT) AS VALUES
+(1, 'Alice'),
+(2, 'Bob'),
+(3, 'Charlie'),
+(NULL, 'Dave');
+
+statement ok
+CREATE TABLE banned(id INT) AS VALUES
+(2),
+(NULL);
+
+# Test 14a: NOT IN with NULL in subquery - Returns EMPTY (null-aware)
+query IT rowsort
+SELECT * FROM customers WHERE id NOT IN (SELECT id FROM banned);
+----
+
+# Test 14b: NOT EXISTS with NULL in subquery - Returns rows (NOT null-aware)
+# This should return (1, 'Alice'), (3, 'Charlie'), (NULL, 'Dave')
+# Because NOT EXISTS uses two-valued logic: NULL = NULL is FALSE, so no match found
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE c.id = b.id);
+----
+1 Alice
+3 Charlie
+NULL Dave
+
+# Test 14c: Verify with EXPLAIN that NOT EXISTS doesn't use null-aware
+query TT
+EXPLAIN SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE c.id = b.id);
+----
+logical_plan
+01)LeftAnti Join: c.id = __correlated_sq_1.id
+02)--SubqueryAlias: c
+03)----TableScan: customers projection=[id, name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: b
+06)------TableScan: banned projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 15: NOT EXISTS - No NULLs
+#############
+
+statement ok
+CREATE TABLE active_customers(id INT) AS VALUES (1), (3);
+
+# Should return only Bob (id=2) and Dave (id=NULL)
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM active_customers a WHERE c.id = a.id);
+----
+2 Bob
+NULL Dave
+
+#############
+## Test 16: NOT EXISTS - Correlated subquery
+#############
+
+statement ok
+CREATE TABLE orders_test(order_id INT, customer_id INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, NULL);
+
+statement ok
+CREATE TABLE customers_test(customer_id INT, name TEXT) AS VALUES
+(100, 'Alice'),
+(200, 'Bob'),
+(300, 'Charlie'),
+(NULL, 'Unknown');
+
+# Find customers with no orders
+# Should return Charlie (300) and Unknown (NULL)
+query IT rowsort
+SELECT * FROM customers_test c
+WHERE NOT EXISTS (
+    SELECT 1 FROM orders_test o WHERE o.customer_id = c.customer_id
+);
+----
+300 Charlie
+NULL Unknown
+
+#############
+## Test 17: NOT EXISTS with all NULL subquery
+#############
+
+statement ok
+CREATE TABLE all_null_banned(id INT) AS VALUES (NULL), (NULL);
+
+# NOT EXISTS should return all rows because NULL = NULL is FALSE (no matches)
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM all_null_banned b WHERE c.id = b.id);
+----
+1 Alice
+2 Bob
+3 Charlie
+NULL Dave
+
+# Compare with NOT IN which returns empty
+query IT rowsort
+SELECT * FROM customers WHERE id NOT IN (SELECT id FROM all_null_banned);
+----
+
+#############
+## Test 18: Nested NOT EXISTS and NOT IN
+#############
+
+# NOT EXISTS outside, NOT IN inside - should work correctly
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (
+    SELECT 1 FROM banned b
+    WHERE c.id = b.id
+    AND b.id NOT IN (SELECT id FROM active_customers)
+);
+----
+1 Alice
+3 Charlie
+NULL Dave
+
+#############
 ## Cleanup
 #############
 
@@ -259,3 +394,21 @@ DROP TABLE payments;
 
 statement ok
 DROP TABLE duplicates_with_null;
+
+statement ok
+DROP TABLE customers;
+
+statement ok
+DROP TABLE banned;
+
+statement ok
+DROP TABLE active_customers;
+
+statement ok
+DROP TABLE orders_test;
+
+statement ok
+DROP TABLE customers_test;
+
+statement ok
+DROP TABLE all_null_banned;
