@@ -244,10 +244,6 @@ impl ArrowHeap for StringHeap {
         self.heap.worst_map_idx()
     }
 
-    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
-        self.heap.renumber(heap_to_map);
-    }
-
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
         let new_str = self.value(row_idx).to_string();
         let new_val = Some(new_str);
