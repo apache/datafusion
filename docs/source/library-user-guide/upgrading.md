@@ -769,31 +769,25 @@ The way schemas are passed to file sources and scan configurations has been sign
 
    ```diff
    - let source = ParquetSource::default();
-   + let source = ParquetSource::new(table_schema);
+   + let source = ParquetSource::new(TableParquetOptions::default());
    ```
 
-2. **FileScanConfigBuilder no longer takes schema as a parameter**: The schema is now passed via the FileSource:
-
-   ```diff
-   - FileScanConfigBuilder::new(url, schema, source)
-   + FileScanConfigBuilder::new(url, source)
-   ```
-
-3. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
+2. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
 
    ```diff
    + let table_schema = TableSchema::new(
    +     file_schema,
    +     vec![Arc::new(Field::new("date", DataType::Utf8, false))],
    + );
-   + let source = ParquetSource::new(table_schema);
-     let config = FileScanConfigBuilder::new(url, source)
+   + let source = ParquetSource::new(TableParquetOptions::default())
+   +    .with_schema(table_schema);
+     let config = FileScanConfigBuilder::new(url, schema, source)
    -     .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
          .with_file(partitioned_file)
          .build();
    ```
 
-4. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
+3. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
    ```diff
    impl FileFormat for MyFileFormat {
    -   fn file_source(&self) -> Arc<dyn FileSource> {
@@ -810,10 +804,9 @@ For Parquet files:
 
 ```diff
 - let source = Arc::new(ParquetSource::default());
-- let config = FileScanConfigBuilder::new(url, schema, source)
 + let table_schema = TableSchema::new(schema, vec![]);
-+ let source = Arc::new(ParquetSource::new(table_schema));
-+ let config = FileScanConfigBuilder::new(url, source)
++ let source = Arc::new(ParquetSource::new(TableParquetOptions::default()).with_schema(table_schema));
+  let config = FileScanConfigBuilder::new(url, schema, source)
       .with_file(partitioned_file)
       .build();
 ```
@@ -822,8 +815,6 @@ For CSV files with partition columns:
 
 ```diff
 - let source = Arc::new(CsvSource::new(true, b',', b'"'));
-- let config = FileScanConfigBuilder::new(url, file_schema, source)
--     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
 + let options = CsvOptions {
 +     has_header: Some(true),
 +     delimiter: b',',
@@ -835,7 +826,8 @@ For CSV files with partition columns:
 +     vec![Arc::new(Field::new("year", DataType::Int32, false))],
 + );
 + let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));
-+ let config = FileScanConfigBuilder::new(url, source)
+  let config = FileScanConfigBuilder::new(url, file_schema, source)
+-     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
       .build();
 ```
 
