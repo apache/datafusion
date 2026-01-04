@@ -1012,7 +1012,14 @@ impl LogicalPlanBuilder {
         filter: Option<Expr>,
         null_equality: NullEquality,
     ) -> Result<Self> {
-        self.join_detailed_with_options(right, join_type, join_keys, filter, null_equality, false)
+        self.join_detailed_with_options(
+            right,
+            join_type,
+            join_keys,
+            filter,
+            null_equality,
+            false,
+        )
     }
 
     pub fn join_detailed_with_options(

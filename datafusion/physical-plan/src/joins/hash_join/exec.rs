@@ -5534,8 +5534,10 @@ mod tests {
     /// Test that null_aware validation rejects non-LeftAnti join types
     #[tokio::test]
     async fn test_null_aware_validation_wrong_join_type() {
-        let left = build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
-        let right = build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+        let left =
+            build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+        let right =
+            build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
 
         let on = vec![(
             Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
@@ -5556,25 +5558,19 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("null_aware can only be true for LeftAnti joins"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware can only be true for LeftAnti joins")
+        );
     }
 
     /// Test that null_aware validation rejects multi-column joins
     #[tokio::test]
     async fn test_null_aware_validation_multi_column() {
-        let left = build_table(
-            ("a", &vec![1]),
-            ("b", &vec![2]),
-            ("c", &vec![3]),
-        );
-        let right = build_table(
-            ("x", &vec![1]),
-            ("y", &vec![2]),
-            ("z", &vec![3]),
-        );
+        let left = build_table(("a", &vec![1]), ("b", &vec![2]), ("c", &vec![3]));
+        let right = build_table(("x", &vec![1]), ("y", &vec![2]), ("z", &vec![3]));
 
         // Try multi-column join
         let on = vec![
@@ -5602,9 +5598,11 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("null_aware anti join only supports single column join key"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware anti join only supports single column join key")
+        );
     }
 }

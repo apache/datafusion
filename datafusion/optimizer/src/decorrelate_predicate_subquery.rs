@@ -422,8 +422,8 @@ fn build_join(
     // - NOT IN: Uses three-valued logic, requires null-aware handling
     // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
     // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
-    let null_aware = matches!(join_type, JoinType::LeftAnti)
-        && in_predicate_opt.is_some();
+    let null_aware =
+        matches!(join_type, JoinType::LeftAnti) && in_predicate_opt.is_some();
 
     // join our sub query into the main plan
     let new_plan = if null_aware {
