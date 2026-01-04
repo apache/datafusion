@@ -621,7 +621,6 @@ impl FileOpener for ParquetOpener {
             // These will be evaluated as part of the projection and then
             // used to filter the batch before removing the filter columns.
             let original_projection_len = projection.as_ref().len();
-            let num_post_scan_filters = post_scan_filters.len();
 
             let projection = if post_scan_filters.is_empty() {
                 projection
@@ -645,6 +644,9 @@ impl FileOpener for ParquetOpener {
 
             let projector = projection.make_projector(&stream_schema)?;
 
+            // Clone for use in the stream mapping closure
+            let post_scan_tracker = Arc::clone(&selectivity_tracker);
+
             let stream = stream.map_err(DataFusionError::from).map(move |b| {
                 b.and_then(|mut b| {
                     copy_arrow_reader_metrics(
@@ -655,11 +657,12 @@ impl FileOpener for ParquetOpener {
                     b = projector.project_batch(&b)?;
 
                     // Apply post-scan filters if present
-                    if num_post_scan_filters > 0 {
+                    if !post_scan_filters.is_empty() {
                         b = apply_post_scan_filters(
                             b,
                             original_projection_len,
-                            num_post_scan_filters,
+                            &post_scan_filters,
+                            &post_scan_tracker,
                         )?;
                     }
 
@@ -717,13 +720,19 @@ impl FileOpener for ParquetOpener {
 ///
 /// This function:
 /// 1. Extracts the filter columns (boolean arrays) from the end of the batch
-/// 2. Combines them with AND
-/// 3. Applies the combined filter mask to the data columns
-/// 4. Returns a new batch with only the data columns
+/// 2. Tracks per-filter selectivity for adaptive filter reordering
+/// 3. Combines them with AND
+/// 4. Applies the combined filter mask to the data columns
+/// 5. Returns a new batch with only the data columns
+///
+/// The selectivity tracking here provides accurate measurements because all
+/// post-scan filters see the same input rows (unlike row filters which run
+/// sequentially and see progressively fewer rows).
 fn apply_post_scan_filters(
     batch: RecordBatch,
     original_projection_len: usize,
-    num_filters: usize,
+    filter_exprs: &[Arc<dyn PhysicalExpr>],
+    selectivity_tracker: &std::sync::RwLock<crate::selectivity::SelectivityTracker>,
 ) -> Result<RecordBatch> {
     use arrow::array::{BooleanArray, as_boolean_array};
     use arrow::compute::{and, filter_record_batch};
@@ -734,7 +743,20 @@ fn apply_post_scan_filters(
     let data_columns: Vec<_> = columns[..original_projection_len].to_vec();
     let filter_columns: Vec<_> = columns[original_projection_len..].to_vec();
 
-    debug_assert_eq!(filter_columns.len(), num_filters);
+    debug_assert_eq!(filter_columns.len(), filter_exprs.len());
+
+    // Track per-filter selectivity before combining.
+    // This gives us accurate marginal selectivity since all filters see the same input.
+    let input_rows = num_rows as u64;
+    if input_rows > 0 {
+        if let Ok(mut tracker) = selectivity_tracker.write() {
+            for (expr, col) in filter_exprs.iter().zip(filter_columns.iter()) {
+                let bool_arr = as_boolean_array(col.as_ref());
+                let rows_matched = bool_arr.true_count() as u64;
+                tracker.update(expr, rows_matched, input_rows);
+            }
+        }
+    }
 
     // Combine filter columns with AND
     let combined_mask: BooleanArray = filter_columns
@@ -1779,13 +1801,16 @@ mod test {
         assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 1);
 
-        // Filter should not match the partition value or the data value
+        // Filter should not match the partition value or the data value.
+        // With adaptive selectivity tracking, unknown filters start in post_scan
+        // to learn their effectiveness. So the file is read and then filtered,
+        // resulting in 1 batch with 0 rows (rather than pruning the file entirely).
         let expr = col("part").eq(lit(2)).or(col("a").eq(lit(3)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = opener.open(file).unwrap().await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
-        assert_eq!(num_batches, 0);
+        assert_eq!(num_batches, 1);
         assert_eq!(num_rows, 0);
     }
 

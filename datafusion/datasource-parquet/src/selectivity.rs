@@ -152,10 +152,13 @@ impl SelectivityTracker {
 
     /// Partition filters into row_filters and post_scan based on effectiveness.
     ///
-    /// - Filters with effectiveness >= threshold stay as row filters (push down)
-    /// - Filters with effectiveness < threshold go to post-scan
-    /// - Filters with unknown effectiveness (no stats) stay as row filters
-    ///   to gather statistics
+    /// Filters start in post_scan phase where we can measure their true marginal
+    /// selectivity (since all post-scan filters see the same input rows). Once we
+    /// learn a filter is effective, it gets promoted to row_filters for pushdown.
+    ///
+    /// - Filters with effectiveness >= threshold → row_filters (push down)
+    /// - Filters with effectiveness < threshold → post_scan (not worth pushing)
+    /// - Filters with unknown effectiveness → post_scan (to learn selectivity)
     pub fn partition_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
@@ -166,13 +169,13 @@ impl SelectivityTracker {
         for filter in filters {
             let key = ExprKey(Arc::clone(&filter));
             match self.stats.get(&key) {
-                Some(stats) if stats.effectiveness() < self.threshold => {
-                    // Known to be ineffective - demote to post-scan
-                    post_scan.push(filter);
+                Some(stats) if stats.effectiveness() >= self.threshold => {
+                    // Known to be effective - promote to row filter
+                    row_filters.push(filter);
                 }
                 _ => {
-                    // Effective or unknown - keep as row filter
-                    row_filters.push(filter);
+                    // Unknown or ineffective - keep in post-scan to learn/confirm
+                    post_scan.push(filter);
                 }
             }
         }
@@ -300,14 +303,14 @@ mod tests {
         let filter1 = make_filter("a", 5);
         let filter2 = make_filter("a", 10);
 
-        // Unknown filters should stay as row filters
+        // Unknown filters should go to post_scan to learn their selectivity
         let PartitionedFilters {
             row_filters,
             post_scan,
         } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
-        assert_eq!(row_filters.len(), 2);
-        assert_eq!(post_scan.len(), 0);
+        assert_eq!(row_filters.len(), 0);
+        assert_eq!(post_scan.len(), 2);
     }
 
     #[test]
@@ -325,9 +328,22 @@ mod tests {
             post_scan,
         } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
-        // filter1 is effective (0.9 >= 0.8), filter2 is unknown
-        assert_eq!(row_filters.len(), 2);
-        assert_eq!(post_scan.len(), 0);
+        // filter1 is effective (0.9 >= 0.8) → row_filters, filter2 is unknown → post_scan
+        assert_eq!(row_filters.len(), 1);
+        assert_eq!(post_scan.len(), 1);
+
+        // The effective filter should be in row_filters
+        assert!(
+            row_filters
+                .iter()
+                .any(|f| ExprKey(f.clone()) == ExprKey(filter1.clone()))
+        );
+        // The unknown filter should be in post_scan
+        assert!(
+            post_scan
+                .iter()
+                .any(|f| ExprKey(f.clone()) == ExprKey(filter2.clone()))
+        );
     }
 
     #[test]
@@ -345,22 +361,9 @@ mod tests {
             post_scan,
         } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
-        // filter1 is ineffective (0.5 < 0.8), filter2 is unknown
-        assert_eq!(row_filters.len(), 1);
-        assert_eq!(post_scan.len(), 1);
-
-        // The unknown filter should be in row_filters
-        assert!(
-            row_filters
-                .iter()
-                .any(|f| ExprKey(f.clone()) == ExprKey(filter2.clone()))
-        );
-        // The ineffective filter should be in post_scan
-        assert!(
-            post_scan
-                .iter()
-                .any(|f| ExprKey(f.clone()) == ExprKey(filter1.clone()))
-        );
+        // filter1 is ineffective (0.5 < 0.8) → post_scan, filter2 is unknown → post_scan
+        assert_eq!(row_filters.len(), 0);
+        assert_eq!(post_scan.len(), 2);
     }
 
     #[test]
