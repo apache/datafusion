@@ -150,7 +150,8 @@ fn left_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
                     chars_buf.extend(string.chars());
                     let len = chars_buf.len() as i64;
 
-                    Some(if n.abs() < len {
+                    // For negative n, take (len + n) chars if n > -len (avoiding abs() which panics on i64::MIN)
+                    Some(if n > -len {
                         chars_buf
                             .iter()
                             .take((len + n) as usize)
