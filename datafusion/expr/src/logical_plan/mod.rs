@@ -41,9 +41,9 @@ pub use plan::{
     Aggregate, Analyze, ColumnUnnestList, DescribeTable, Distinct, DistinctOn,
     EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
     JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-    RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan, Subquery,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
-    projection_schema,
+    ProjectionExprs, RecursiveQuery, Repartition, SkipType, Sort, StringifiedPlan,
+    Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Unnest, Values, Window,
+    projection_exprs_from_schema_and_indices, projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,

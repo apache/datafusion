@@ -132,8 +132,7 @@ ORDER BY int_col, bigint_col, nulls_first_col NULLS FIRST, nulls_last_col NULLS 
 logical_plan
 01)Projection: test_table.string_col
 02)--Sort: test_table.int_col ASC NULLS LAST, test_table.bigint_col ASC NULLS LAST, test_table.nulls_first_col ASC NULLS FIRST, test_table.nulls_last_col ASC NULLS LAST
-03)----Projection: test_table.string_col, test_table.int_col, test_table.bigint_col, test_table.nulls_first_col, test_table.nulls_last_col
-04)------TableScan: test_table projection=[int_col, string_col, bigint_col, nulls_first_col, nulls_last_col]
+03)----TableScan: test_table projection=[string_col, int_col, bigint_col, nulls_first_col, nulls_last_col]
 physical_plan
 01)ProjectionExec: expr=[string_col@0 as string_col]
 02)--SortPreservingMergeExec: [int_col@1 ASC NULLS LAST, bigint_col@2 ASC NULLS LAST, nulls_first_col@3 ASC, nulls_last_col@4 ASC NULLS LAST]

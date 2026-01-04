@@ -67,7 +67,7 @@ use crate::execution::RecordBatchStream;
 pub fn scan_empty(
     name: Option<&str>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());
     let provider = Arc::new(EmptyTable::new(table_schema));
@@ -79,7 +79,7 @@ pub fn scan_empty(
 pub fn scan_empty_with_partitions(
     name: Option<&str>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
     partitions: usize,
 ) -> Result<LogicalPlanBuilder> {
     let table_schema = Arc::new(table_schema.clone());

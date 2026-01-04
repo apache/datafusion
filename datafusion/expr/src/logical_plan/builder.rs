@@ -408,7 +408,7 @@ impl LogicalPlanBuilder {
     pub fn scan(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
     ) -> Result<Self> {
         Self::scan_with_filters(table_name, table_source, projection, vec![])
     }
@@ -481,7 +481,7 @@ impl LogicalPlanBuilder {
     pub fn scan_with_filters(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
         Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
@@ -491,7 +491,7 @@ impl LogicalPlanBuilder {
     pub fn scan_with_filters_fetch(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
@@ -507,38 +507,19 @@ impl LogicalPlanBuilder {
     fn scan_with_filters_inner(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
+        projection: Option<Vec<Expr>>,
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        let table_scan =
-            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
-
-        // Inline TableScan
-        if table_scan.filters.is_empty()
-            && let Some(p) = table_scan.source.get_logical_plan()
-        {
-            let sub_plan = p.into_owned();
-
-            if let Some(proj) = table_scan.projection {
-                let projection_exprs = proj
-                    .into_iter()
-                    .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
-                    })
-                    .collect::<Vec<_>>();
-                return Self::new(sub_plan)
-                    .project(projection_exprs)?
-                    .alias(table_scan.table_name);
-            }
-
-            // Ensures that the reference to the inlined table remains the
-            // same, meaning we don't have to change any of the parent nodes
-            // that reference this table.
-            return Self::new(sub_plan).alias(table_scan.table_name);
+        let mut builder = TableScanBuilder::new(table_source).with_name(table_name);
+        if let Some(projection) = projection {
+            builder = builder.with_projection(projection);
         }
-
-        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
+        builder = builder.with_filters(filters);
+        if let Some(fetch) = fetch {
+            builder = builder.with_fetch(fetch);
+        }
+        builder.build()
     }
 
     /// Wrap a plan in a window
@@ -1996,12 +1977,82 @@ pub fn subquery_alias(
     SubqueryAlias::try_new(Arc::new(plan), alias).map(LogicalPlan::SubqueryAlias)
 }
 
+pub struct TableScanBuilder {
+    name: TableReference,
+    table_source: Arc<dyn TableSource>,
+    projection: Option<Vec<Expr>>,
+    filters: Vec<Expr>,
+    fetch: Option<usize>,
+}
+
+impl TableScanBuilder {
+    pub fn new(table_source: Arc<dyn TableSource>) -> Self {
+        Self {
+            name: TableReference::bare(UNNAMED_TABLE),
+            table_source,
+            projection: None,
+            filters: vec![],
+            fetch: None,
+        }
+    }
+
+    pub fn with_projection(mut self, projection: Vec<Expr>) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    pub fn with_filters(mut self, filters: Vec<Expr>) -> Self {
+        self.filters = filters;
+        self
+    }
+
+    pub fn with_fetch(mut self, fetch: usize) -> Self {
+        self.fetch = Some(fetch);
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<TableReference>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn build(self) -> Result<LogicalPlanBuilder> {
+        let table_scan = TableScan::try_new(
+            self.name,
+            self.table_source,
+            self.projection,
+            self.filters,
+            self.fetch,
+        )?;
+
+        // Inline TableScan
+        if table_scan.filters.is_empty()
+            && let Some(p) = table_scan.source.get_logical_plan()
+        {
+            let sub_plan = p.into_owned();
+
+            if let Some(projection_exprs) = table_scan.projection {
+                return LogicalPlanBuilder::new(sub_plan)
+                    .project(projection_exprs)?
+                    .alias(table_scan.table_name);
+            }
+
+            // Ensures that the reference to the inlined table remains the
+            // same, meaning we don't have to change any of the parent nodes
+            // that reference this table.
+            return LogicalPlanBuilder::new(sub_plan).alias(table_scan.table_name);
+        }
+
+        Ok(LogicalPlanBuilder::new(LogicalPlan::TableScan(table_scan)))
+    }
+}
+
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema.
 /// This is mostly used for testing and documentation.
 pub fn table_scan(
     name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
 ) -> Result<LogicalPlanBuilder> {
     table_scan_with_filters(name, table_schema, projection, vec![])
 }
@@ -2012,7 +2063,7 @@ pub fn table_scan(
 pub fn table_scan_with_filters(
     name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
     filters: Vec<Expr>,
 ) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
@@ -2028,7 +2079,7 @@ pub fn table_scan_with_filters(
 pub fn table_scan_with_filter_and_fetch(
     name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
 ) -> Result<LogicalPlanBuilder> {
@@ -2246,11 +2297,14 @@ mod tests {
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
-                .project(vec![col("id")])?
-                .build()?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("id"), col("state")]),
+        )?
+        .filter(col("state").eq(lit("CO")))?
+        .project(vec![col("id")])?
+        .build()?;
 
         assert_snapshot!(plan, @r#"
         Projection: employee_csv.id
@@ -2293,13 +2347,16 @@ mod tests {
 
     #[test]
     fn plan_builder_sort() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-                .sort(vec![
-                    expr::Sort::new(col("state"), true, true),
-                    expr::Sort::new(col("salary"), false, false),
-                ])?
-                .build()?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state"), col("salary")]),
+        )?
+        .sort(vec![
+            expr::Sort::new(col("state"), true, true),
+            expr::Sort::new(col("salary"), false, false),
+        ])?
+        .build()?;
 
         assert_snapshot!(plan, @r"
         Sort: employee_csv.state ASC NULLS FIRST, employee_csv.salary DESC NULLS LAST
@@ -2311,8 +2368,11 @@ mod tests {
 
     #[test]
     fn plan_builder_union() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state"), col("salary")]),
+        )?;
 
         let plan = plan
             .clone()
@@ -2336,8 +2396,11 @@ mod tests {
 
     #[test]
     fn plan_builder_union_distinct() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state"), col("salary")]),
+        )?;
 
         let plan = plan
             .clone()
@@ -2364,12 +2427,15 @@ mod tests {
 
     #[test]
     fn plan_builder_simple_distinct() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![0, 3]))?
-                .filter(col("state").eq(lit("CO")))?
-                .project(vec![col("id")])?
-                .distinct()?
-                .build()?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("id"), col("state")]),
+        )?
+        .filter(col("state").eq(lit("CO")))?
+        .project(vec![col("id")])?
+        .distinct()?
+        .build()?;
 
         assert_snapshot!(plan, @r#"
         Distinct:
@@ -2470,8 +2536,8 @@ mod tests {
         let plan = table_scan(
             Some("employee_csv"),
             &employee_schema(),
-            // project id and first_name by column index
-            Some(vec![0, 1]),
+            // project id and first_name by column expression
+            Some(vec![col("id"), col("first_name")]),
         )?
         // two columns with the same name => error
         .project(vec![col("id"), col("first_name").alias("id")]);
@@ -2553,10 +2619,16 @@ mod tests {
 
     #[test]
     fn plan_builder_intersect_different_num_columns_error() -> Result<()> {
-        let plan1 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3]))?;
-        let plan2 =
-            table_scan(TableReference::none(), &employee_schema(), Some(vec![3, 4]))?;
+        let plan1 = table_scan(
+            TableReference::none(),
+            &employee_schema(),
+            Some(vec![col("state")]),
+        )?;
+        let plan2 = table_scan(
+            TableReference::none(),
+            &employee_schema(),
+            Some(vec![col("state"), col("salary")]),
+        )?;
 
         let err_msg1 =
             LogicalPlanBuilder::intersect(plan1.build()?, plan2.build()?, true)
@@ -2773,13 +2845,16 @@ mod tests {
 
     #[test]
     fn plan_builder_from_logical_plan() -> Result<()> {
-        let plan =
-            table_scan(Some("employee_csv"), &employee_schema(), Some(vec![3, 4]))?
-                .sort(vec![
-                    expr::Sort::new(col("state"), true, true),
-                    expr::Sort::new(col("salary"), false, false),
-                ])?
-                .build()?;
+        let plan = table_scan(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![col("state"), col("salary")]),
+        )?
+        .sort(vec![
+            expr::Sort::new(col("state"), true, true),
+            expr::Sort::new(col("salary"), false, false),
+        ])?
+        .build()?;
 
         let plan_expected = format!("{plan}");
         let plan_builder: LogicalPlanBuilder = Arc::new(plan).into();
@@ -2794,10 +2869,13 @@ mod tests {
             Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
         let table_source = table_source_with_constraints(&employee_schema(), constraints);
 
-        let plan =
-            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
-                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
-                .build()?;
+        let plan = LogicalPlanBuilder::scan(
+            "employee_csv",
+            table_source,
+            Some(vec![col("id"), col("state"), col("salary")]),
+        )?
+        .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+        .build()?;
 
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
@@ -2815,11 +2893,14 @@ mod tests {
 
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
-        let plan =
-            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
-                .with_options(options)
-                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
-                .build()?;
+        let plan = LogicalPlanBuilder::scan(
+            "employee_csv",
+            table_source,
+            Some(vec![col("id"), col("state"), col("salary")]),
+        )?
+        .with_options(options)
+        .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+        .build()?;
 
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]

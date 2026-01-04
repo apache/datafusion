@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err, project_schema,
+    Constraints, SchemaExt, Statistics, internal_datafusion_err, plan_err,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -38,7 +38,10 @@ use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{Expr, TableProviderFilterPushDown, TableType};
+use datafusion_expr::{
+    Expr, ProjectionExprs, TableProviderFilterPushDown, TableType,
+    projection_exprs_from_schema_and_indices,
+};
 use datafusion_physical_expr::create_lex_ordering;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -384,8 +387,11 @@ impl TableProvider for ListingTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let projection_exprs = projection
+            .map(|p| projection_exprs_from_schema_and_indices(&self.schema(), p))
+            .transpose()?;
         let options = ScanArgs::default()
-            .with_projection(projection.map(|p| p.as_slice()))
+            .with_projection(projection_exprs.as_deref())
             .with_filters(Some(filters))
             .with_limit(limit);
         Ok(self.scan_with_args(state, options).await?.into_inner())
@@ -434,8 +440,7 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
-            return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
+            return Ok(ScanResult::new(Arc::new(EmptyExec::new(self.schema()))));
         }
 
         let output_ordering = self.try_create_output_ordering(state.execution_props())?;
@@ -478,6 +483,12 @@ impl TableProvider for ListingTable {
 
         let file_source = self.create_file_source();
 
+        // Convert projection expressions to indices for FileScanConfigBuilder
+        let projection_indices = projection
+            .as_ref()
+            .map(|p| p.projection_column_indices(&self.schema()))
+            .transpose()?;
+
         // create the execution plan
         let plan = self
             .options
@@ -488,7 +499,7 @@ impl TableProvider for ListingTable {
                     .with_file_groups(partitioned_file_lists)
                     .with_constraints(self.constraints.clone())
                     .with_statistics(statistics)
-                    .with_projection_indices(projection)?
+                    .with_projection_indices(projection_indices)?
                     .with_limit(limit)
                     .with_output_ordering(output_ordering)
                     .with_expr_adapter(self.expr_adapter_factory.clone())

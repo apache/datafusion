@@ -82,7 +82,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, ExprFunctionExt, ExprSchemable,
     LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator, PartitionEvaluator,
     ScalarUDF, Signature, TryCast, Volatility, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
+    WindowFrameUnits, WindowFunctionDefinition, WindowUDF, WindowUDFImpl, col,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -2813,8 +2813,8 @@ async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Resul
 
     let projection = ["part", "value"]
         .iter()
-        .map(|field_name| listing_table.schema().index_of(field_name))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|field_name| col(*field_name))
+        .collect::<Vec<_>>();
 
     let plan = LogicalPlanBuilder::scan(
         "hive_style",
