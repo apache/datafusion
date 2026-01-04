@@ -27,8 +27,8 @@ use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
-use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::split_conjunction;
+use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -482,9 +482,7 @@ impl FileOpener for ParquetOpener {
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            debug!(
-                                "Ignoring error building row filter: {e}"
-                            );
+                            debug!("Ignoring error building row filter: {e}");
                         }
                     };
                 }
@@ -730,7 +728,7 @@ fn apply_post_scan_filters(
     use arrow::array::{BooleanArray, as_boolean_array};
     use arrow::compute::{and, filter_record_batch};
 
-    let (schema, columns, _num_rows) = batch.into_parts();
+    let (schema, columns, num_rows) = batch.into_parts();
 
     // Extract data columns and filter columns
     let data_columns: Vec<_> = columns[..original_projection_len].to_vec();
@@ -751,7 +749,8 @@ fn apply_post_scan_filters(
     ));
 
     // Create batch with data columns only
-    let data_batch = RecordBatch::try_new(data_schema, data_columns)?;
+    let opts = RecordBatchOptions::new().with_row_count(Some(num_rows));
+    let data_batch = RecordBatch::try_new_with_options(data_schema, data_columns, &opts)?;
 
     // Apply the filter
     let filtered = filter_record_batch(&data_batch, &combined_mask)?;

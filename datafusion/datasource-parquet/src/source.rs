@@ -296,7 +296,8 @@ pub struct ParquetSource {
     /// Tracks filter selectivity across files for adaptive filter reordering.
     /// Shared across all openers - each opener reads stats and makes its own
     /// decision about which filters to push down vs. apply post-scan.
-    pub(crate) selectivity_tracker: Arc<std::sync::RwLock<crate::selectivity::SelectivityTracker>>,
+    pub(crate) selectivity_tracker:
+        Arc<std::sync::RwLock<crate::selectivity::SelectivityTracker>>,
 }
 
 impl ParquetSource {

@@ -186,10 +186,7 @@ impl SelectivityTracker {
     /// Update stats for a filter expression after processing a file.
     pub fn update(&mut self, expr: &Arc<dyn PhysicalExpr>, matched: u64, total: u64) {
         let key = ExprKey(Arc::clone(expr));
-        self.stats
-            .entry(key)
-            .or_default()
-            .update(matched, total);
+        self.stats.entry(key).or_default().update(matched, total);
     }
 
     /// Get the current stats for a filter expression, if any.
@@ -202,9 +199,9 @@ impl SelectivityTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{col, lit, BinaryExpr};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
     use std::sync::Arc;
 
     fn test_schema() -> Schema {
@@ -353,13 +350,17 @@ mod tests {
         assert_eq!(post_scan.len(), 1);
 
         // The unknown filter should be in row_filters
-        assert!(row_filters
-            .iter()
-            .any(|f| ExprKey(f.clone()) == ExprKey(filter2.clone())));
+        assert!(
+            row_filters
+                .iter()
+                .any(|f| ExprKey(f.clone()) == ExprKey(filter2.clone()))
+        );
         // The ineffective filter should be in post_scan
-        assert!(post_scan
-            .iter()
-            .any(|f| ExprKey(f.clone()) == ExprKey(filter1.clone())));
+        assert!(
+            post_scan
+                .iter()
+                .any(|f| ExprKey(f.clone()) == ExprKey(filter1.clone()))
+        );
     }
 
     #[test]
