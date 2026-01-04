@@ -140,32 +140,19 @@ fn spark_space_scalar(scalar: &ScalarValue) -> Result<ScalarValue> {
 }
 
 fn spark_space_array_inner(array: &Int32Array) -> StringArray {
-    let values = array.values();
-    let data_capacity = values
-        .iter()
-        .map(|l| if *l < 0 { 0 } else { *l as usize })
-        .sum();
-
-    let max_length = values
-        .iter()
-        .filter(|&&l| l > 0)
-        .max()
-        .copied()
-        .unwrap_or(0) as usize;
-
-    let space_buffer = " ".repeat(max_length);
-    let mut builder = StringBuilder::with_capacity(array.len(), data_capacity);
-
-    for i in 0..array.len() {
-        if array.is_null(i) {
-            builder.append_null();
-        } else {
-            let len = array.value(i);
-            if len <= 0 {
-                builder.append_value("");
-            } else {
-                builder.append_value(&space_buffer[..len as usize]);
+    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 16);
+    let mut space_buf = String::new();
+    for value in array.iter() {
+        match value {
+            None => builder.append_null(),
+            Some(l) if l > 0 => {
+                let l = l as usize;
+                if space_buf.len() < l {
+                    space_buf = " ".repeat(l);
+                }
+                builder.append_value(&space_buf[..l]);
             }
+            Some(_) => builder.append_value(""),
         }
     }
     builder.finish()
