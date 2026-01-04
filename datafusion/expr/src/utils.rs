@@ -937,6 +937,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float32)
 /// ```
 #[expect(clippy::needless_pass_by_value)]
+#[deprecated(since = "52.0.0", note = "Internal function")]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,
@@ -956,6 +957,26 @@ pub fn generate_signature_error_msg(
         TypeSignature::join_types(input_expr_types, ", "),
         candidate_signatures
     )
+}
+
+/// Creates a detailed error message for a function with wrong signature.
+///
+/// For example, a query like `select round(3.14, 1.1);` would yield:
+/// ```text
+/// Error during planning: No function matches 'round(Float64, Float64)'. You might need to add explicit type casts.
+///     Candidate functions:
+///     round(Float64, Int64)
+///     round(Float32, Int64)
+///     round(Float64)
+///     round(Float32)
+/// ```
+pub(crate) fn generate_signature_error_message(
+    func_name: &str,
+    func_signature: &Signature,
+    input_expr_types: &[DataType],
+) -> String {
+    #[expect(deprecated)]
+    generate_signature_error_msg(func_name, func_signature.clone(), input_expr_types)
 }
 
 /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
@@ -1734,7 +1755,8 @@ mod tests {
         .expect("valid parameter names");
 
         // Generate error message with only 1 argument provided
-        let error_msg = generate_signature_error_msg("substr", sig, &[DataType::Utf8]);
+        let error_msg =
+            generate_signature_error_message("substr", &sig, &[DataType::Utf8]);
 
         assert!(
             error_msg.contains("str: Utf8, start_pos: Int64"),
@@ -1753,7 +1775,8 @@ mod tests {
             Volatility::Immutable,
         );
 
-        let error_msg = generate_signature_error_msg("my_func", sig, &[DataType::Int32]);
+        let error_msg =
+            generate_signature_error_message("my_func", &sig, &[DataType::Int32]);
 
         assert!(
             error_msg.contains("Any, Any"),

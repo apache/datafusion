@@ -94,58 +94,6 @@ impl UDFCoercionExt for WindowUDF {
     }
 }
 
-/// Performs type coercion for scalar function arguments.
-///
-/// Returns the data types to which each argument must be coerced to
-/// match `signature`.
-///
-/// For more details on coercion in general, please see the
-/// [`type_coercion`](crate::type_coercion) module.
-#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
-pub fn data_types_with_scalar_udf(
-    current_types: &[DataType],
-    func: &ScalarUDF,
-) -> Result<Vec<DataType>> {
-    let current_fields = current_types
-        .iter()
-        .map(|dt| Arc::new(Field::new("f", dt.clone(), true)))
-        .collect::<Vec<_>>();
-    Ok(fields_with_udf(&current_fields, func)?
-        .iter()
-        .map(|f| f.data_type().clone())
-        .collect())
-}
-
-/// Performs type coercion for aggregate function arguments.
-///
-/// Returns the fields to which each argument must be coerced to
-/// match `signature`.
-///
-/// For more details on coercion in general, please see the
-/// [`type_coercion`](crate::type_coercion) module.
-#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
-pub fn fields_with_aggregate_udf(
-    current_fields: &[FieldRef],
-    func: &AggregateUDF,
-) -> Result<Vec<FieldRef>> {
-    fields_with_udf(current_fields, func)
-}
-
-/// Performs type coercion for window function arguments.
-///
-/// Returns the data types to which each argument must be coerced to
-/// match `signature`.
-///
-/// For more details on coercion in general, please see the
-/// [`type_coercion`](crate::type_coercion) module.
-#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
-pub fn fields_with_window_udf(
-    current_fields: &[FieldRef],
-    func: &WindowUDF,
-) -> Result<Vec<FieldRef>> {
-    fields_with_udf(current_fields, func)
-}
-
 /// Performs type coercion for UDF arguments.
 ///
 /// Returns the data types to which each argument must be coerced to
@@ -198,6 +146,58 @@ pub fn fields_with_udf<F: UDFCoercionExt>(
         })
         .map(Arc::new)
         .collect())
+}
+
+/// Performs type coercion for scalar function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
+pub fn data_types_with_scalar_udf(
+    current_types: &[DataType],
+    func: &ScalarUDF,
+) -> Result<Vec<DataType>> {
+    let current_fields = current_types
+        .iter()
+        .map(|dt| Arc::new(Field::new("f", dt.clone(), true)))
+        .collect::<Vec<_>>();
+    Ok(fields_with_udf(&current_fields, func)?
+        .iter()
+        .map(|f| f.data_type().clone())
+        .collect())
+}
+
+/// Performs type coercion for aggregate function arguments.
+///
+/// Returns the fields to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
+pub fn fields_with_aggregate_udf(
+    current_fields: &[FieldRef],
+    func: &AggregateUDF,
+) -> Result<Vec<FieldRef>> {
+    fields_with_udf(current_fields, func)
+}
+
+/// Performs type coercion for window function arguments.
+///
+/// Returns the data types to which each argument must be coerced to
+/// match `signature`.
+///
+/// For more details on coercion in general, please see the
+/// [`type_coercion`](crate::type_coercion) module.
+#[deprecated(since = "52.0.0", note = "use fields_with_udf")]
+pub fn fields_with_window_udf(
+    current_fields: &[FieldRef],
+    func: &WindowUDF,
+) -> Result<Vec<FieldRef>> {
+    fields_with_udf(current_fields, func)
 }
 
 /// Performs type coercion for function arguments.
@@ -487,7 +487,7 @@ fn get_valid_types(
     let valid_types = match signature {
         TypeSignature::Variadic(valid_types) => valid_types
             .iter()
-            .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
+            .map(|valid_type| vec![valid_type.clone(); current_types.len()])
             .collect(),
         TypeSignature::String(number) => {
             function_length_check(function_name, current_types.len(), *number)?;
@@ -655,7 +655,7 @@ fn get_valid_types(
 
             valid_types
                 .iter()
-                .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
+                .map(|valid_type| vec![valid_type.clone(); *number])
                 .collect()
         }
         TypeSignature::UserDefined => {
@@ -722,7 +722,7 @@ fn get_valid_types(
                     current_types.len()
                 );
             }
-            vec![(0..*number).map(|i| current_types[i].clone()).collect()]
+            vec![current_types.to_vec()]
         }
         TypeSignature::OneOf(types) => types
             .iter()
@@ -800,6 +800,7 @@ fn maybe_data_types_without_coercion(
 /// (losslessly converted) into a value of `type_to`
 ///
 /// See the module level documentation for more detail on coercion.
+#[deprecated(since = "52.0.0", note = "Unused internal function")]
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     if type_into == type_from {
         return true;
@@ -934,12 +935,12 @@ mod tests {
     #[test]
     fn test_string_conversion() {
         let cases = vec![
-            (DataType::Utf8View, DataType::Utf8, true),
-            (DataType::Utf8View, DataType::LargeUtf8, true),
+            (DataType::Utf8View, DataType::Utf8),
+            (DataType::Utf8View, DataType::LargeUtf8),
         ];
 
         for case in cases {
-            assert_eq!(can_coerce_from(&case.0, &case.1), case.2);
+            assert_eq!(coerced_from(&case.0, &case.1), Some(case.0));
         }
     }
 
