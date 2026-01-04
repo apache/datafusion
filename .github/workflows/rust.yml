@@ -708,6 +708,11 @@ jobs:
           # If you encounter an error, run './dev/update_function_docs.sh' and commit
           ./dev/update_function_docs.sh
           git diff --exit-code
+      - name: Check if metrics.md has been modified
+        run: |
+          # If you encounter an error, run './dev/update_metric_docs.sh' and commit
+          ./dev/update_metric_docs.sh
+          git diff --exit-code
 
   examples-docs-check:
     name: check example README is up-to-date

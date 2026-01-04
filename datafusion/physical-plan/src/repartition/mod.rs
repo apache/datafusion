@@ -54,6 +54,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -674,6 +675,7 @@ impl BatchPartitioner {
 /// system Paper](https://dl.acm.org/doi/pdf/10.1145/93605.98720)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
+#[metric_doc(RepartitionMetrics)]
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -690,6 +692,7 @@ pub struct RepartitionExec {
     cache: PlanProperties,
 }
 
+#[metric_doc]
 #[derive(Debug, Clone)]
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches

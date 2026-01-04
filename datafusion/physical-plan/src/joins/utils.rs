@@ -34,6 +34,7 @@ use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::{
     ColumnStatistics, ExecutionPlan, ExecutionPlanProperties, Partitioning, Statistics,
 };
+use datafusion_macros::metric_doc;
 // compatibility
 pub use super::join_filter::JoinFilter;
 pub use super::join_hash_map::JoinHashMapType;
@@ -1350,6 +1351,7 @@ fn append_probe_indices_in_order(
 }
 
 /// Metrics for build & probe joins
+#[metric_doc(common)]
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) baseline: BaselineMetrics,

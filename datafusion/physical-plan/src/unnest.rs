@@ -47,6 +47,7 @@ use datafusion_common::{
     internal_err,
 };
 use datafusion_execution::TaskContext;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
@@ -59,6 +60,7 @@ use log::trace;
 /// Thus the original RecordBatch with dimension (n x m) may have new dimension (n' x m')
 ///
 /// See [`UnnestOptions`] for more details and an example.
+#[metric_doc(UnnestMetrics)]
 #[derive(Debug, Clone)]
 pub struct UnnestExec {
     /// Input execution plan
@@ -269,6 +271,7 @@ impl ExecutionPlan for UnnestExec {
     }
 }
 
+#[metric_doc]
 #[derive(Clone, Debug)]
 struct UnnestMetrics {
     /// Execution metrics

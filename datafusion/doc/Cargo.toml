@@ -39,3 +39,9 @@ workspace = true
 
 [lib]
 name = "datafusion_doc"
+
+[dependencies]
+inventory = "0.3"
+
+[dev-dependencies]
+datafusion-macros = { workspace = true }

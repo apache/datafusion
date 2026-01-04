@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+[package.metadata.cargo-machete]
+ignored = ["datafusion-doc"]
+
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
 # https://github.com/rust-lang/cargo/issues/13157
@@ -54,11 +57,13 @@ arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
+datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
 futures = { workspace = true }

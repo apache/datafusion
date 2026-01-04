@@ -18,7 +18,9 @@
 //! Metrics for the various group-by implementations.
 
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder, Time};
+use datafusion_macros::metric_doc;
 
+#[metric_doc]
 pub(crate) struct GroupByMetrics {
     /// Time spent calculating the group IDs from the evaluated grouping columns.
     pub(crate) time_calculating_group_ids: Time,

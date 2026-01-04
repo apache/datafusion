@@ -54,7 +54,9 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
+datafusion-doc = { workspace = true }
 datafusion-expr = { workspace = true, default-features = false }
+datafusion-macros = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }
