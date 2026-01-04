@@ -19,12 +19,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    types::ArrowDictionaryKeyType, Array, ArrayRef, ArrowNativeTypeOp, AsArray,
-    BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array, DictionaryArray,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, LargeBinaryArray, LargeStringArray, StringArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray,
+    Array, ArrayRef, ArrowNativeTypeOp, AsArray, BinaryArray, BooleanArray, Date32Array,
+    Date64Array, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
+    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
+    LargeStringArray, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, types::ArrowDictionaryKeyType,
 };
 use arrow::compute::take;
 use arrow::datatypes::{ArrowNativeType, DataType, TimeUnit};
@@ -232,7 +231,11 @@ fn hash_column_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
-fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32], first_col: bool) -> Result<()> {
+fn hash_column_murmur3(
+    col: &ArrayRef,
+    hashes: &mut [u32],
+    first_col: bool,
+) -> Result<()> {
     match col.data_type() {
         DataType::Boolean => {
             let array = col.as_any().downcast_ref::<BooleanArray>().unwrap();
@@ -437,10 +440,7 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32], first_col: bool) -> R
             }
         }
         DataType::FixedSizeBinary(_) => {
-            let array = col
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .unwrap();
+            let array = col.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
             for (i, hash) in hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
                     *hash = spark_compatible_murmur3_hash(array.value(i), *hash);
@@ -471,55 +471,37 @@ fn hash_column_murmur3(col: &ArrayRef, hashes: &mut [u32], first_col: bool) -> R
         DataType::Null => {
             // Nulls don't update the hash
         }
-        DataType::Dictionary(key_type, _) => {
-            match key_type.as_ref() {
-                DataType::Int8 => {
-                    hash_column_dictionary::<arrow::datatypes::Int8Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::Int16 => {
-                    hash_column_dictionary::<arrow::datatypes::Int16Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::Int32 => {
-                    hash_column_dictionary::<arrow::datatypes::Int32Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::Int64 => {
-                    hash_column_dictionary::<arrow::datatypes::Int64Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::UInt8 => {
-                    hash_column_dictionary::<arrow::datatypes::UInt8Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::UInt16 => {
-                    hash_column_dictionary::<arrow::datatypes::UInt16Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::UInt32 => {
-                    hash_column_dictionary::<arrow::datatypes::UInt32Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                DataType::UInt64 => {
-                    hash_column_dictionary::<arrow::datatypes::UInt64Type>(
-                        col, hashes, first_col,
-                    )?
-                }
-                dt => {
-                    return internal_err!(
-                        "Unsupported dictionary key type for murmur3_hash: {dt}"
-                    );
-                }
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 => hash_column_dictionary::<arrow::datatypes::Int8Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::Int16 => hash_column_dictionary::<arrow::datatypes::Int16Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::Int32 => hash_column_dictionary::<arrow::datatypes::Int32Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::Int64 => hash_column_dictionary::<arrow::datatypes::Int64Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::UInt8 => hash_column_dictionary::<arrow::datatypes::UInt8Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::UInt16 => hash_column_dictionary::<arrow::datatypes::UInt16Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::UInt32 => hash_column_dictionary::<arrow::datatypes::UInt32Type>(
+                col, hashes, first_col,
+            )?,
+            DataType::UInt64 => hash_column_dictionary::<arrow::datatypes::UInt64Type>(
+                col, hashes, first_col,
+            )?,
+            dt => {
+                return internal_err!(
+                    "Unsupported dictionary key type for murmur3_hash: {dt}"
+                );
             }
-        }
+        },
         dt => {
             return internal_err!("Unsupported data type for murmur3_hash: {dt}");
         }
