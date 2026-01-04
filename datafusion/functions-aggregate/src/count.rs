@@ -598,7 +598,9 @@ impl GroupsAccumulator for CountGroupsAccumulator {
             values.logical_nulls().as_ref(),
             opt_filter,
             |group_index| {
-                self.counts[group_index] += 1;
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += 1;
             },
         );
 

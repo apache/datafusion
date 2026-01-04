@@ -314,12 +314,16 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
         let prods = emit_to.take_needed(&mut self.prods);
         let nulls = self.null_state.build(emit_to);
 
-        assert_eq!(nulls.len(), prods.len());
+        if let Some(nulls) = &nulls {
+            assert_eq!(nulls.len(), counts.len());
+        }
         assert_eq!(counts.len(), prods.len());
 
         // don't evaluate geometric mean with null inputs to avoid errors on null values
 
-        let array: PrimitiveArray<Float64Type> = if nulls.null_count() > 0 {
+        let array: PrimitiveArray<Float64Type> = if let Some(nulls) = &nulls
+            && nulls.null_count() > 0
+        {
             let mut builder = PrimitiveBuilder::<Float64Type>::with_capacity(nulls.len());
             let iter = prods.into_iter().zip(counts).zip(nulls.iter());
 
@@ -337,7 +341,7 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
                 .zip(counts)
                 .map(|(prod, count)| prod.powf(1.0 / count as f64))
                 .collect::<Vec<_>>();
-            PrimitiveArray::new(geo_mean.into(), Some(nulls)) // no copy
+            PrimitiveArray::new(geo_mean.into(), nulls) // no copy
                 .with_data_type(self.return_data_type.clone())
         };
 
@@ -347,7 +351,6 @@ impl GroupsAccumulator for GeometricMeanGroupsAccumulator {
     // return arrays for counts and prods
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         let nulls = self.null_state.build(emit_to);
-        let nulls = Some(nulls);
 
         let counts = emit_to.take_needed(&mut self.counts);
         let counts = UInt32Array::new(counts.into(), nulls.clone()); // zero copy
