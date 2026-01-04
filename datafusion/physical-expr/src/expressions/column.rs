@@ -146,6 +146,10 @@ impl PhysicalExpr for Column {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
     }
+
+    fn is_trivial(&self) -> bool {
+        true
+    }
 }
 
 impl Column {
