@@ -28,7 +28,7 @@ use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{conjunction, split_conjunction};
+use datafusion_physical_expr::split_conjunction;
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -466,9 +466,8 @@ impl FileOpener for ParquetOpener {
 
                 // Build row filter with only the high-effectiveness filters
                 if !row_filters.is_empty() {
-                    let row_filter_predicate = conjunction(row_filters);
                     let row_filter_result = row_filter::build_row_filter_with_metrics(
-                        &row_filter_predicate,
+                        row_filters,
                         &physical_file_schema,
                         builder.metadata(),
                         reorder_predicates,
@@ -484,7 +483,7 @@ impl FileOpener for ParquetOpener {
                         Ok(None) => {}
                         Err(e) => {
                             debug!(
-                                "Ignoring error building row filter for '{row_filter_predicate:?}': {e}"
+                                "Ignoring error building row filter: {e}"
                             );
                         }
                     };

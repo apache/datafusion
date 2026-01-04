@@ -535,7 +535,7 @@ pub fn build_row_filter(
 /// * `Ok(None)` if no expressions can be used as a RowFilter
 /// * `Err(e)` if an error occurs while building the filter
 pub fn build_row_filter_with_metrics(
-    expr: &Arc<dyn PhysicalExpr>,
+    predicates: Vec<Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
@@ -546,18 +546,14 @@ pub fn build_row_filter_with_metrics(
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    // Split into conjuncts:
-    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
-
     // Determine which conjuncts can be evaluated as ArrowPredicates, if any
     // We need to preserve the original expressions before building candidates
     let mut candidates_with_exprs: Vec<(Arc<dyn PhysicalExpr>, FilterCandidate)> =
         predicates
             .into_iter()
             .filter_map(|expr| {
-                let original_expr = Arc::clone(expr);
-                FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+                let original_expr = Arc::clone(&expr);
+                FilterCandidateBuilder::new(expr, Arc::clone(file_schema))
                     .build(metadata)
                     .ok()
                     .flatten()
