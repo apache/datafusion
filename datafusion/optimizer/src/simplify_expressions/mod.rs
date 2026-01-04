@@ -22,6 +22,7 @@ pub mod expr_simplifier;
 mod inlist_simplifier;
 mod regex;
 pub mod simplify_exprs;
+pub mod simplify_literal;
 mod simplify_predicates;
 mod unwrap_cast;
 mod utils;
