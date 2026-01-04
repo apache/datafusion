@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use datafusion_common::Result;
 use datafusion_physical_expr::utils::{
-    collect_columns, have_unknown_columns, reassign_expr_columns,
+    collect_columns, has_unknown_columns, reassign_expr_columns,
 };
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
@@ -341,9 +341,9 @@ impl ChildFilterDescription {
                 .iter()
                 .all(|col| child_column_names.contains(col.name()));
 
-            let have_unknown_columns = have_unknown_columns(filter);
+            let has_unknown_columns = has_unknown_columns(filter);
 
-            if all_columns_exist && !have_unknown_columns {
+            if all_columns_exist && !has_unknown_columns {
                 // All columns exist in child - we can push down
                 // Need to reassign column indices to match child schema
                 let reassigned_filter =
