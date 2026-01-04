@@ -5342,6 +5342,7 @@ mod tests {
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
+                null_aware: false,
             }))
         }
 
@@ -5453,6 +5454,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             match join_type {
@@ -5598,6 +5600,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::Using,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5649,6 +5652,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5698,6 +5702,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNull,
+                false,
             )?;
 
             assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
@@ -5740,6 +5745,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5779,6 +5785,7 @@ mod tests {
             JoinType::Inner,
             JoinConstraint::Using,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
 
         assert_eq!(
