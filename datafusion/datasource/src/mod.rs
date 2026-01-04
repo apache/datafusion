@@ -350,6 +350,10 @@ pub async fn calculate_range(
                 0
             };
 
+            if start + start_delta > end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
             let end_delta = if end != file_size {
                 find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
@@ -358,7 +362,7 @@ pub async fn calculate_range(
 
             let range = start + start_delta..end + end_delta;
 
-            if range.start == range.end {
+            if range.start >= range.end {
                 return Ok(RangeCalculation::TerminateEarly);
             }
 
@@ -722,5 +726,32 @@ mod tests {
 
         // testing an empty path with `ignore_subdirectory` set to false
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/19605>
+    #[tokio::test]
+    async fn test_calculate_range_single_line_file() {
+        use super::{PartitionedFile, RangeCalculation, calculate_range};
+        use object_store::ObjectStore;
+        use object_store::memory::InMemory;
+
+        let content = r#"{"id":1,"data":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        let file_size = content.len() as u64;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store.put(&path, content.into()).await.unwrap();
+
+        let mid = file_size / 2;
+        let partitioned_file = PartitionedFile::new_with_range(
+            path.to_string(),
+            file_size,
+            mid as i64,
+            file_size as i64,
+        );
+
+        let result = calculate_range(&partitioned_file, &store, None).await;
+
+        assert!(matches!(result, Ok(RangeCalculation::TerminateEarly)));
     }
 }
