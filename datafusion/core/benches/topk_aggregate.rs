@@ -17,10 +17,6 @@
 
 mod data_utils;
 
-use arrow::array::builder::{Int64Builder, StringBuilder};
-use arrow::array::{ArrayRef, StringViewBuilder};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::make_data;
