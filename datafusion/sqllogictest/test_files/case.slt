@@ -384,8 +384,7 @@ SELECT column2, column3, column4  FROM t;
 {foo: a, xxx: b} {xxx: c, foo: d} {xxx: e}
 
 # coerce structs with different field orders,
-# (note the *value*s are from column2 but the field name is 'xxx', as the coerced
-# type takes the field name from the last argument (column3)
+# should keep the same field values
 query ?
 SELECT
   case
@@ -394,7 +393,7 @@ SELECT
   end
 FROM t;
 ----
-{xxx: a, foo: b}
+{xxx: b, foo: a}
 
 # coerce structs with different field orders
 query ?
