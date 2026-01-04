@@ -23,6 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -742,7 +743,7 @@ config_namespace! {
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".to_string()
+        pub writer_version: DFParquetWriterVersion, default = DFParquetWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -3454,5 +3455,38 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_writer_version_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetWriterVersion};
+
+        let mut config = ConfigOptions::default();
+
+        // Valid values should work
+        config
+            .set("datafusion.execution.parquet.writer_version", "1.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V1_0
+        );
+
+        config
+            .set("datafusion.execution.parquet.writer_version", "2.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V2_0
+        );
+
+        // Invalid value should error immediately at SET time
+        let err = config
+            .set("datafusion.execution.parquet.writer_version", "3.0")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
+        );
     }
 }

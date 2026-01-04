@@ -951,7 +951,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as usize,
             write_batch_size: value.write_batch_size as usize,
-            writer_version: value.writer_version.clone(),
+            writer_version: value.writer_version.parse().map_err(|e| {
+                DataFusionError::Internal(format!("Failed to parse writer_version: {e}"))
+            })?,
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),

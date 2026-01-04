@@ -51,6 +51,7 @@ pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
 mod null_equality;
+pub mod parquet_config;
 pub mod parsers;
 pub mod pruning;
 pub mod rounding;
@@ -61,7 +62,6 @@ pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
-
 /// Reexport arrow crate
 pub use arrow;
 pub use column::Column;

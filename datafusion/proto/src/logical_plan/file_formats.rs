@@ -381,7 +381,7 @@ mod parquet {
                 force_filter_selections: global_options.global.force_filter_selections,
                 data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
                 write_batch_size: global_options.global.write_batch_size as u64,
-                writer_version: global_options.global.writer_version.clone(),
+                writer_version: global_options.global.writer_version.to_string(),
                 compression_opt: global_options.global.compression.map(|compression| {
                     parquet_options::CompressionOpt::Compression(compression)
                 }),
@@ -477,7 +477,10 @@ mod parquet {
             force_filter_selections: proto.force_filter_selections,
             data_pagesize_limit: proto.data_pagesize_limit as usize,
             write_batch_size: proto.write_batch_size as usize,
-            writer_version: proto.writer_version.clone(),
+                   // TODO: Consider changing to TryFrom to avoid panic on invalid proto data
+            writer_version: proto.writer_version.parse().expect("
+                Invalid parquet writer version in proto, expected '1.0' or '2.0'
+            "),
             compression: proto.compression_opt.as_ref().map(|opt| match opt {
                 parquet_options::CompressionOpt::Compression(compression) => compression.clone(),
             }),
