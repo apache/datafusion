@@ -17,6 +17,10 @@
 
 mod data_utils;
 
+use arrow::array::builder::{Int64Builder, StringBuilder};
+use arrow::array::{ArrayRef, StringViewBuilder};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::make_data;
@@ -36,8 +40,14 @@ async fn create_context(
     asc: bool,
     use_topk: bool,
     use_view: bool,
+    repeated_trace_ids: bool,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<TaskContext>)> {
-    let (schema, parts) = make_data(partition_cnt, sample_cnt, asc, use_view).unwrap();
+    let (schema, parts) = if repeated_trace_ids {
+        make_repeated_trace_data(partition_cnt, sample_cnt, asc, use_view)
+            .map_err(|e| datafusion::error::DataFusionError::ArrowError(Box::new(e), None))?
+    } else {
+        make_data(partition_cnt, sample_cnt, asc, use_view).unwrap()
+    };
     let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
 
     // Create the DataFrame
@@ -112,7 +122,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let real = rt.block_on(async {
-                    create_context(limit, partitions, samples, false, false, false)
+                    create_context(limit, partitions, samples, false, false, false, false)
                         .await
                         .unwrap()
                 });
@@ -126,7 +136,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let asc = rt.block_on(async {
-                    create_context(limit, partitions, samples, true, false, false)
+                    create_context(limit, partitions, samples, true, false, false, false)
                         .await
                         .unwrap()
                 });
@@ -144,7 +154,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let topk_real = rt.block_on(async {
-                    create_context(limit, partitions, samples, false, true, false)
+                    create_context(limit, partitions, samples, false, true, false, false)
                         .await
                         .unwrap()
                 });
@@ -162,7 +172,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let topk_asc = rt.block_on(async {
-                    create_context(limit, partitions, samples, true, true, false)
+                    create_context(limit, partitions, samples, true, true, false, false)
                         .await
                         .unwrap()
                 });
@@ -181,7 +191,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let topk_real = rt.block_on(async {
-                    create_context(limit, partitions, samples, false, true, true)
+                    create_context(limit, partitions, samples, false, true, true, false)
                         .await
                         .unwrap()
                 });
@@ -200,7 +210,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let topk_asc = rt.block_on(async {
-                    create_context(limit, partitions, samples, true, true, true)
+                    create_context(limit, partitions, samples, true, true, true, false)
                         .await
                         .unwrap()
                 });
@@ -208,6 +218,87 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         },
     );
+
+    c.bench_function("top k=10 aggregate repeated Utf8View keys", |b| {
+        b.iter(|| {
+            let repeated_view = rt.block_on(async {
+                create_context(limit, partitions, samples, true, true, true, true)
+                    .await
+                    .unwrap()
+            });
+            run(&rt, repeated_view.0.clone(), repeated_view.1.clone(), true)
+        })
+    });
+
+    c.bench_function("top k=10 aggregate high-cardinality Utf8View keys", |b| {
+        b.iter(|| {
+            let high_card_view = rt.block_on(async {
+                create_context(limit, partitions, samples, true, true, true, false)
+                    .await
+                    .unwrap()
+            });
+            run(
+                &rt,
+                high_card_view.0.clone(),
+                high_card_view.1.clone(),
+                true,
+            )
+        })
+    });
+}
+
+fn make_repeated_trace_data(
+    partition_cnt: i32,
+    sample_cnt: i32,
+    asc: bool,
+    use_view: bool,
+) -> arrow::error::Result<(Arc<Schema>, Vec<Vec<RecordBatch>>)> {
+    let schema = if use_view {
+        Arc::new(Schema::new(vec![
+            Field::new("trace_id", DataType::Utf8View, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+        ]))
+    } else {
+        Arc::new(Schema::new(vec![
+            Field::new("trace_id", DataType::Utf8, false),
+            Field::new("timestamp_ms", DataType::Int64, false),
+        ]))
+    };
+
+    let mut partitions = Vec::with_capacity(partition_cnt as usize);
+    let mut cur_time = 16909000000000i64;
+    let trace_ids: Vec<String> = (0..32).map(|idx| format!("trace-{idx:04}")).collect();
+
+    for _ in 0..partition_cnt {
+        let mut ts_builder = Int64Builder::new();
+        let id_array: ArrayRef;
+
+        if use_view {
+            let mut id_builder = StringViewBuilder::new();
+            for i in 0..sample_cnt {
+                let trace_id = &trace_ids[(i as usize) % trace_ids.len()];
+                id_builder.append_value(trace_id);
+                ts_builder.append_value(cur_time);
+                cur_time += if asc { 1 } else { -1 };
+            }
+            id_array = Arc::new(id_builder.finish());
+        } else {
+            let mut id_builder = StringBuilder::new();
+            for i in 0..sample_cnt {
+                let trace_id = &trace_ids[(i as usize) % trace_ids.len()];
+                id_builder.append_value(trace_id);
+                ts_builder.append_value(cur_time);
+                cur_time += if asc { 1 } else { -1 };
+            }
+            id_array = Arc::new(id_builder.finish());
+        }
+
+        let ts_array = Arc::new(ts_builder.finish()) as ArrayRef;
+        let batch = RecordBatch::try_new(schema.clone(), vec![id_array, ts_array])?;
+        partitions.push(vec![batch]);
+    }
+
+    Ok((schema, partitions))
 }
 
 criterion_group!(benches, criterion_benchmark);
