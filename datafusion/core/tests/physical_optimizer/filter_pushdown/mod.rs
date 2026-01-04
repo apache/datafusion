@@ -3455,6 +3455,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
                 None,
                 PartitionMode::CollectLeft,
                 datafusion_common::NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
