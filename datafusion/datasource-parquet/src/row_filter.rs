@@ -575,11 +575,8 @@ pub fn build_row_filter_with_metrics(
                 // Both have known effectiveness: sort by effectiveness descending
                 // (higher effectiveness = more selective = should come first)
                 (Some(e1), Some(e2)) => e2.partial_cmp(&e1).unwrap_or(Ordering::Equal),
-                // Known effectiveness comes before unknown
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                // Both unknown: fall back to existing heuristics
-                (None, None) => match c1.can_use_index.cmp(&c2.can_use_index) {
+                // Either unknown: fall back to existing heuristics
+                _ => match c1.can_use_index.cmp(&c2.can_use_index) {
                     Ordering::Equal => c1.required_bytes.cmp(&c2.required_bytes),
                     ord => ord,
                 },
