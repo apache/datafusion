@@ -459,7 +459,10 @@ impl FileOpener for ParquetOpener {
 
                 // Acquire the tracker lock for both partitioning and row filter building
                 let tracker = selectivity_tracker.read().unwrap();
-                let (row_filters, post_scan) = tracker.partition_filters(conjuncts);
+                let crate::selectivity::PartitionedFilters {
+                    row_filters,
+                    post_scan,
+                } = tracker.partition_filters(conjuncts);
 
                 // Build row filter with only the high-effectiveness filters
                 if !row_filters.is_empty() {

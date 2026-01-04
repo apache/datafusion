@@ -31,6 +31,19 @@ use std::sync::Arc;
 
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+/// Result of partitioning filters based on their effectiveness.
+///
+/// Filters are split into two groups:
+/// - `row_filters`: Filters that should be pushed down as row filters
+/// - `post_scan`: Filters that should be applied after scanning
+#[derive(Debug, Clone, Default)]
+pub struct PartitionedFilters {
+    /// Filters to push down as row filters (effective or unknown effectiveness)
+    pub row_filters: Vec<Arc<dyn PhysicalExpr>>,
+    /// Filters to apply post-scan (known to be ineffective)
+    pub post_scan: Vec<Arc<dyn PhysicalExpr>>,
+}
+
 /// Wrapper for `Arc<dyn PhysicalExpr>` that uses structural Hash/Eq.
 ///
 /// This is needed because `Arc<dyn PhysicalExpr>` uses pointer equality by default,
@@ -137,17 +150,16 @@ impl SelectivityTracker {
         self.stats.get(&key).map(|s| s.effectiveness())
     }
 
-    /// Partition filters into (row_filters, post_scan_filters) based on effectiveness.
+    /// Partition filters into row_filters and post_scan based on effectiveness.
     ///
     /// - Filters with effectiveness >= threshold stay as row filters (push down)
     /// - Filters with effectiveness < threshold go to post-scan
     /// - Filters with unknown effectiveness (no stats) stay as row filters
     ///   to gather statistics
-    #[expect(clippy::type_complexity)]
     pub fn partition_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
-    ) -> (Vec<Arc<dyn PhysicalExpr>>, Vec<Arc<dyn PhysicalExpr>>) {
+    ) -> PartitionedFilters {
         let mut row_filters = Vec::new();
         let mut post_scan = Vec::new();
 
@@ -165,7 +177,10 @@ impl SelectivityTracker {
             }
         }
 
-        (row_filters, post_scan)
+        PartitionedFilters {
+            row_filters,
+            post_scan,
+        }
     }
 
     /// Update stats for a filter expression after processing a file.
@@ -289,8 +304,10 @@ mod tests {
         let filter2 = make_filter("a", 10);
 
         // Unknown filters should stay as row filters
-        let (row_filters, post_scan) =
-            tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
+        let PartitionedFilters {
+            row_filters,
+            post_scan,
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
         assert_eq!(row_filters.len(), 2);
         assert_eq!(post_scan.len(), 0);
@@ -306,8 +323,10 @@ mod tests {
         // Update filter1 with high effectiveness (90% filtered)
         tracker.update(&filter1, 10, 100);
 
-        let (row_filters, post_scan) =
-            tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
+        let PartitionedFilters {
+            row_filters,
+            post_scan,
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
         // filter1 is effective (0.9 >= 0.8), filter2 is unknown
         assert_eq!(row_filters.len(), 2);
@@ -324,8 +343,10 @@ mod tests {
         // Update filter1 with low effectiveness (50% filtered)
         tracker.update(&filter1, 50, 100);
 
-        let (row_filters, post_scan) =
-            tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
+        let PartitionedFilters {
+            row_filters,
+            post_scan,
+        } = tracker.partition_filters(vec![filter1.clone(), filter2.clone()]);
 
         // filter1 is ineffective (0.5 < 0.8), filter2 is unknown
         assert_eq!(row_filters.len(), 1);
@@ -351,7 +372,10 @@ mod tests {
         tracker.update(&filter, 20, 100);
         assert_eq!(tracker.get_effectiveness(&filter), Some(0.8));
 
-        let (row_filters, post_scan) = tracker.partition_filters(vec![filter.clone()]);
+        let PartitionedFilters {
+            row_filters,
+            post_scan,
+        } = tracker.partition_filters(vec![filter.clone()]);
 
         // At threshold boundary, should stay as row filter (>= threshold)
         assert_eq!(row_filters.len(), 1);
@@ -368,7 +392,10 @@ mod tests {
         tracker.update(&filter, 21, 100);
         assert!((tracker.get_effectiveness(&filter).unwrap() - 0.79).abs() < 0.001);
 
-        let (row_filters, post_scan) = tracker.partition_filters(vec![filter.clone()]);
+        let PartitionedFilters {
+            row_filters,
+            post_scan,
+        } = tracker.partition_filters(vec![filter.clone()]);
 
         // Below threshold, should be demoted to post_scan
         assert_eq!(row_filters.len(), 0);
