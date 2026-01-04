@@ -108,6 +108,17 @@ impl ScalarUDFImpl for ConcatFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
 
+        // If all arguments are arrays, delegate to array_concat
+        let all_arrays = args.iter().all(|arg| matches!(arg, ColumnarValue::Array(_)));
+        if all_arrays {
+            use crate::array::array_concat;
+            return array_concat().invoke_with_args(ScalarFunctionArgs {
+                args,
+                ..Default::default()
+            });
+        }
+
+
         let mut return_datatype = DataType::Utf8;
         args.iter().for_each(|col| {
             if col.data_type() == DataType::Utf8View {
@@ -384,6 +395,47 @@ mod tests {
     use arrow::array::{ArrayRef, StringArray};
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
+
+        #[test]
+    fn concat_array_should_match_array_concat() -> Result<()> {
+        use arrow::array::Int64Array;
+        use arrow::datatypes::{DataType, Field};
+
+        let a = ColumnarValue::Array(Arc::new(
+            Int64Array::from(vec![Some(1), Some(2), Some(3)])
+        ));
+        let b = ColumnarValue::Array(Arc::new(
+            Int64Array::from(vec![Some(4), Some(5)])
+        ));
+
+        let args = ScalarFunctionArgs {
+            args: vec![a, b],
+            arg_fields: vec![
+                Arc::new(Field::new("a", DataType::Int64, true)),
+                Arc::new(Field::new("b", DataType::Int64, true)),
+            ],
+            number_rows: 3,
+            return_field: Field::new(
+                "f",
+                DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                true,
+            )
+            .into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+
+        let result = ConcatFunc::new().invoke_with_args(args)?;
+
+        match result {
+            ColumnarValue::Array(array) => {
+                assert_eq!(array.len(), 5); // [1,2,3,4,5]
+            }
+            _ => panic!("Expected array output"),
+        }
+
+        Ok(())
+    }
+
 
     #[test]
     fn test_functions() -> Result<()> {
