@@ -728,6 +728,7 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
             WriteOp::Delete => protobuf::dml_node::Type::Delete,
             WriteOp::Update => protobuf::dml_node::Type::Update,
             WriteOp::Ctas => protobuf::dml_node::Type::Ctas,
+            WriteOp::Truncate => protobuf::dml_node::Type::Truncate,
         }
     }
 }

@@ -353,6 +353,14 @@ pub trait TableProvider: Debug + Sync + Send {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("UPDATE not supported for {} table", self.table_type())
     }
+
+    /// Truncate rows
+    async fn truncate(
+        &self,
+        _state: &dyn Session,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("TRUNCATE not supported for {}", self.table_type())
+    }
 }
 
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].

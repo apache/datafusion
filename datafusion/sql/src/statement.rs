@@ -1362,6 +1362,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     exec_err!("Function name not provided")
                 }
             }
+            Statement::Truncate { table_names, .. } => {
+                if table_names.len() != 1 {
+                    return not_impl_err!("TRUNCATE with multiple tables is not supported");
+                }
+
+                let target = &table_names[0]; // TruncateTableTarget
+                let table = self.object_name_to_table_reference(target.name.clone())?;
+                let source = self.context_provider.get_table_source(table.clone())?;
+
+                Ok(LogicalPlan::Dml(DmlStatement {
+                    table_name: table.clone(),
+                    target: source,
+                    op: WriteOp::Truncate,
+                    input: Arc::new(LogicalPlan::EmptyRelation(
+                        EmptyRelation {
+                            produce_one_row: false,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        },
+                    )),
+                    output_schema: DFSchemaRef::new(DFSchema::empty()),
+                }))
+            }
             Statement::CreateIndex(CreateIndex {
                 name,
                 table_name,

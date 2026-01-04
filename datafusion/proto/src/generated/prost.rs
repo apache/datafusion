@@ -444,6 +444,7 @@ pub mod dml_node {
         InsertAppend = 3,
         InsertOverwrite = 4,
         InsertReplace = 5,
+        Truncate = 6,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -458,6 +459,7 @@ pub mod dml_node {
                 Self::InsertAppend => "INSERT_APPEND",
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
+                Self::Truncate => "TRUNCATE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
