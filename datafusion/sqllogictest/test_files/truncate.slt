@@ -31,9 +31,11 @@ explain truncate table t1;
 ----
 logical_plan
 01)Dml: op=[Truncate] table=[t1]
-physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base
 
 # Test TRUNCATE with fully qualified table name
 statement ok
@@ -47,6 +49,8 @@ explain truncate table test_schema.t5;
 ----
 logical_plan
 01)Dml: op=[Truncate] table=[test_schema.t5]
-physical_plan
-01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 'test_schema.t5'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base

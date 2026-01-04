@@ -669,10 +669,7 @@ impl DefaultPhysicalPlanner {
                         .truncate(session_state)
                         .await
                         .map_err(|e| {
-                            e.context(format!(
-                                "TRUNCATE operation on table '{}'",
-                                table_name
-                            ))
+                            e.context(format!("TRUNCATE operation on table '{}'", table_name))
                         })?
                 } else {
                     return exec_err!(
