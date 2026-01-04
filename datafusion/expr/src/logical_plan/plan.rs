@@ -4761,7 +4761,7 @@ mod tests {
         let f2 = count_window_function(schema_without_metadata());
         assert_eq!(f, f2);
         assert_eq!(hash(&f), hash(&f2));
-        assert_eq!(f.partial_cmp(&f2), Some(Ordering::Equal));
+        assert_eq!(f.partial_cmp(&f2), None);
 
         // Same like `f`, except for schema metadata
         let o = count_window_function(schema_with_metadata());

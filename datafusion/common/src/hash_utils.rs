@@ -276,6 +276,7 @@ fn hash_array<T>(
 /// HAS_NULLS: do we have to check null in the inner loop
 /// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
 /// REHASH: if true, combining with existing hash, otherwise initializing
+#[cfg(not(feature = "force_hash_collisions"))]
 #[inline(never)]
 fn hash_string_view_array_inner<
     T: ByteViewType,
