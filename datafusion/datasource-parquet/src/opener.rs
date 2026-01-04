@@ -26,8 +26,9 @@ use crate::{
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::DataType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::{conjunction, split_conjunction};
 use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -118,6 +119,10 @@ pub(super) struct ParquetOpener {
     pub max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Shared selectivity tracker for adaptive filter reordering.
+    /// Each opener reads stats and decides which filters to push down.
+    pub selectivity_tracker:
+        Arc<std::sync::RwLock<crate::selectivity::SelectivityTracker>>,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -274,6 +279,7 @@ impl FileOpener for ParquetOpener {
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
         let reverse_row_groups = self.reverse_row_groups;
+        let selectivity_tracker = Arc::clone(&self.selectivity_tracker);
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -438,26 +444,52 @@ impl FileOpener for ParquetOpener {
             let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
 
             // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
-                let row_filter = row_filter::build_row_filter(
-                    &predicate,
-                    &physical_file_schema,
-                    builder.metadata(),
-                    reorder_predicates,
-                    &file_metrics,
-                );
+            // First, partition filters based on selectivity tracking
+            // filter_metrics will be populated if we successfully build a row filter
+            let mut filter_metrics: Vec<row_filter::FilterMetrics> = vec![];
 
-                match row_filter {
-                    Ok(Some(filter)) => {
-                        builder = builder.with_row_filter(filter);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        debug!(
-                            "Ignoring error building row filter for '{predicate:?}': {e}"
-                        );
-                    }
-                };
+            let post_scan_filters: Vec<Arc<dyn PhysicalExpr>> = if let Some(predicate) =
+                pushdown_filters.then_some(predicate.as_ref()).flatten()
+            {
+                // Split predicate into conjuncts and partition based on selectivity
+                let conjuncts: Vec<Arc<dyn PhysicalExpr>> = split_conjunction(predicate)
+                    .into_iter()
+                    .map(Arc::clone)
+                    .collect();
+
+                // Acquire the tracker lock for both partitioning and row filter building
+                let tracker = selectivity_tracker.read().unwrap();
+                let (row_filters, post_scan) = tracker.partition_filters(conjuncts);
+
+                // Build row filter with only the high-effectiveness filters
+                if !row_filters.is_empty() {
+                    let row_filter_predicate = conjunction(row_filters);
+                    let row_filter_result = row_filter::build_row_filter_with_metrics(
+                        &row_filter_predicate,
+                        &physical_file_schema,
+                        builder.metadata(),
+                        reorder_predicates,
+                        &file_metrics,
+                        &tracker,
+                    );
+
+                    match row_filter_result {
+                        Ok(Some(result)) => {
+                            builder = builder.with_row_filter(result.row_filter);
+                            filter_metrics = result.filter_metrics;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            debug!(
+                                "Ignoring error building row filter for '{row_filter_predicate:?}': {e}"
+                            );
+                        }
+                    };
+                }
+
+                post_scan
+            } else {
+                vec![]
             };
             if force_filter_selections {
                 builder =
@@ -584,6 +616,30 @@ impl FileOpener for ParquetOpener {
             // Rebase column indices to match the narrowed stream schema.
             // The projection expressions have indices based on physical_file_schema,
             // but the stream only contains the columns selected by the ProjectionMask.
+            //
+            // Extend projection with post-scan filter expressions (if any).
+            // These will be evaluated as part of the projection and then
+            // used to filter the batch before removing the filter columns.
+            let original_projection_len = projection.as_ref().len();
+            let num_post_scan_filters = post_scan_filters.len();
+
+            let projection = if post_scan_filters.is_empty() {
+                projection
+            } else {
+                // Create extended projection with filter expressions
+                let mut extended_exprs: Vec<ProjectionExpr> =
+                    projection.iter().cloned().collect();
+
+                for (i, filter) in post_scan_filters.iter().enumerate() {
+                    extended_exprs.push(ProjectionExpr {
+                        expr: Arc::clone(filter),
+                        alias: format!("__filter_{i}"),
+                    });
+                }
+
+                ProjectionExprs::new(extended_exprs)
+            };
+
             let projection = projection
                 .try_map_exprs(|expr| reassign_expr_columns(expr, &stream_schema))?;
 
@@ -597,6 +653,16 @@ impl FileOpener for ParquetOpener {
                         &predicate_cache_records,
                     );
                     b = projector.project_batch(&b)?;
+
+                    // Apply post-scan filters if present
+                    if num_post_scan_filters > 0 {
+                        b = apply_post_scan_filters(
+                            b,
+                            original_projection_len,
+                            num_post_scan_filters,
+                        )?;
+                    }
+
                     if replace_schema {
                         // Ensure the output batch has the expected schema.
                         // This handles things like schema level and field level metadata, which may not be present
@@ -621,6 +687,18 @@ impl FileOpener for ParquetOpener {
                 })
             });
 
+            // Wrap with SelectivityUpdatingStream if we have filter metrics to track
+            let stream = if !filter_metrics.is_empty() {
+                SelectivityUpdatingStream::new(
+                    stream,
+                    filter_metrics,
+                    Arc::clone(&selectivity_tracker),
+                )
+                .boxed()
+            } else {
+                stream.boxed()
+            };
+
             if let Some(file_pruner) = file_pruner {
                 Ok(EarlyStoppingStream::new(
                     stream,
@@ -629,10 +707,54 @@ impl FileOpener for ParquetOpener {
                 )
                 .boxed())
             } else {
-                Ok(stream.boxed())
+                Ok(stream)
             }
         }))
     }
+}
+
+/// Apply post-scan filters to a record batch.
+///
+/// This function:
+/// 1. Extracts the filter columns (boolean arrays) from the end of the batch
+/// 2. Combines them with AND
+/// 3. Applies the combined filter mask to the data columns
+/// 4. Returns a new batch with only the data columns
+fn apply_post_scan_filters(
+    batch: RecordBatch,
+    original_projection_len: usize,
+    num_filters: usize,
+) -> Result<RecordBatch> {
+    use arrow::array::{BooleanArray, as_boolean_array};
+    use arrow::compute::{and, filter_record_batch};
+
+    let (schema, columns, _num_rows) = batch.into_parts();
+
+    // Extract data columns and filter columns
+    let data_columns: Vec<_> = columns[..original_projection_len].to_vec();
+    let filter_columns: Vec<_> = columns[original_projection_len..].to_vec();
+
+    debug_assert_eq!(filter_columns.len(), num_filters);
+
+    // Combine filter columns with AND
+    let combined_mask: BooleanArray = filter_columns
+        .iter()
+        .map(|col| as_boolean_array(col.as_ref()).clone())
+        .reduce(|acc, col| and(&acc, &col).unwrap())
+        .unwrap_or_else(|| BooleanArray::from(vec![true; data_columns[0].len()]));
+
+    // Build a schema with only the data columns
+    let data_schema = Arc::new(arrow::datatypes::Schema::new(
+        schema.fields()[..original_projection_len].to_vec(),
+    ));
+
+    // Create batch with data columns only
+    let data_batch = RecordBatch::try_new(data_schema, data_columns)?;
+
+    // Apply the filter
+    let filtered = filter_record_batch(&data_batch, &combined_mask)?;
+
+    Ok(filtered)
 }
 
 /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
@@ -784,6 +906,83 @@ where
                 let output = self.check_prune(input_batch);
                 Poll::Ready(output.transpose())
             }
+        }
+    }
+}
+
+/// A stream wrapper that updates the [`SelectivityTracker`] when the inner stream completes.
+///
+/// This captures per-filter metrics during stream processing and updates the shared
+/// selectivity tracker when the stream ends (either normally or due to early termination).
+/// The metrics are used to adaptively reorder filters in subsequent file scans.
+struct SelectivityUpdatingStream<S> {
+    /// The inner stream producing record batches
+    inner: S,
+    /// Has the stream finished processing?
+    done: bool,
+    /// Per-filter metrics collected during stream processing
+    filter_metrics: Vec<row_filter::FilterMetrics>,
+    /// Shared selectivity tracker to update when stream completes
+    selectivity_tracker: Arc<std::sync::RwLock<crate::selectivity::SelectivityTracker>>,
+}
+
+impl<S> SelectivityUpdatingStream<S> {
+    fn new(
+        stream: S,
+        filter_metrics: Vec<row_filter::FilterMetrics>,
+        selectivity_tracker: Arc<
+            std::sync::RwLock<crate::selectivity::SelectivityTracker>,
+        >,
+    ) -> Self {
+        Self {
+            inner: stream,
+            done: false,
+            filter_metrics,
+            selectivity_tracker,
+        }
+    }
+
+    /// Update the selectivity tracker with the collected metrics.
+    /// Called when the stream completes (either normally or due to early termination).
+    fn update_selectivity(&self) {
+        // Try to acquire write lock; if we can't, skip the update
+        // (this is a best-effort optimization, not critical)
+        if let Ok(mut tracker) = self.selectivity_tracker.write() {
+            for metrics in &self.filter_metrics {
+                let matched = metrics.get_rows_matched() as u64;
+                let total = metrics.get_rows_total() as u64;
+
+                // Only update if we actually processed some rows
+                if total > 0 {
+                    tracker.update(&metrics.expr, matched, total);
+                }
+            }
+        }
+    }
+}
+
+impl<S> Stream for SelectivityUpdatingStream<S>
+where
+    S: Stream<Item = Result<RecordBatch>> + Unpin,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+
+        match ready!(self.inner.poll_next_unpin(cx)) {
+            None => {
+                // Stream completed - update selectivity tracker
+                self.done = true;
+                self.update_selectivity();
+                Poll::Ready(None)
+            }
+            Some(result) => Poll::Ready(Some(result)),
         }
     }
 }
@@ -1148,6 +1347,9 @@ mod test {
                 encryption_factory: None,
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
+                selectivity_tracker: Arc::new(std::sync::RwLock::new(
+                    crate::selectivity::SelectivityTracker::default(),
+                )),
             }
         }
     }
