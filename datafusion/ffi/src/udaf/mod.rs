@@ -15,44 +15,38 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RResult, RStr, RString, RVec},
-};
+use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RResult, RStr, RString, RVec};
 use accumulator::FFI_Accumulator;
 use accumulator_args::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
 use arrow::datatypes::{DataType, Field};
 use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
-use datafusion::{
-    error::DataFusionError,
-    logical_expr::{
-        Accumulator, GroupsAccumulator,
-        function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-        type_coercion::functions::fields_with_aggregate_udf,
-        utils::AggregateOrderSensitivity,
-    },
+use datafusion_common::{DataFusionError, Result, ffi_datafusion_err};
+use datafusion_expr::function::AggregateFunctionSimplification;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
+use datafusion_expr::{
+    Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
-use datafusion::{
-    error::Result,
-    logical_expr::{AggregateUDF, AggregateUDFImpl, Signature},
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, StateFieldsArgs,
 };
-use datafusion_common::ffi_datafusion_err;
+use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_proto_common::from_proto::parse_proto_fields_to_fields;
 use groups_accumulator::FFI_GroupsAccumulator;
-use std::hash::{Hash, Hasher};
-use std::{ffi::c_void, sync::Arc};
-
-use crate::util::{
-    FFIResult, rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped,
-};
-use crate::{
-    arrow_wrappers::WrappedSchema,
-    df_result, rresult, rresult_return,
-    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
-    volatility::FFI_Volatility,
-};
 use prost::{DecodeError, Message};
+
+use crate::arrow_wrappers::WrappedSchema;
+use crate::util::{
+    FFIResult, rvec_wrapped_to_vec_datatype, rvec_wrapped_to_vec_fieldref,
+    vec_datatype_to_rvec_wrapped, vec_fieldref_to_rvec_wrapped,
+};
+use crate::volatility::FFI_Volatility;
+use crate::{df_result, rresult, rresult_return};
 
 mod accumulator;
 mod accumulator_args;
@@ -61,7 +55,6 @@ mod groups_accumulator;
 /// A stable struct for sharing a [`AggregateUDF`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `name` of a [`AggregateUDF`]
     pub name: RString,
@@ -100,7 +93,6 @@ pub struct FFI_AggregateUDF {
         -> FFIResult<FFI_Accumulator>,
 
     /// FFI equivalent to [`AggregateUDF::state_fields`]
-    #[allow(clippy::type_complexity)]
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         name: &RStr,
@@ -348,7 +340,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
             .map(|dt| Field::new("f", dt.clone(), true))
             .map(Arc::new)
             .collect::<Vec<_>>();
-        let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf))
+        let return_types = rresult_return!(fields_with_udf(&arg_fields, udaf.as_ref()))
             .into_iter()
             .map(|f| f.data_type().to_owned())
             .collect::<Vec<_>>();
@@ -618,7 +610,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,
@@ -650,15 +641,17 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use arrow::datatypes::Schema;
-    use datafusion::{
-        common::create_array, functions_aggregate::sum::Sum,
-        physical_expr::PhysicalSortExpr, physical_plan::expressions::col,
-        scalar::ScalarValue,
-    };
     use std::any::Any;
     use std::collections::HashMap;
+
+    use arrow::datatypes::Schema;
+    use datafusion::common::create_array;
+    use datafusion::functions_aggregate::sum::Sum;
+    use datafusion::physical_expr::PhysicalSortExpr;
+    use datafusion::physical_plan::expressions::col;
+    use datafusion::scalar::ScalarValue;
+
+    use super::*;
 
     #[derive(Default, Debug, Hash, Eq, PartialEq)]
     struct SumWithCopiedMetadata {

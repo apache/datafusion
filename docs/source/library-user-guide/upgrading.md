@@ -45,15 +45,26 @@ directly on the `Field`. For example:
 In prior versions, `ListingTableProvider` would issue `LIST` commands to
 the underlying object store each time it needed to list files for a query.
 To improve performance, `ListingTableProvider` now caches the results of
-`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+`LIST` commands for the lifetime of the `ListingTableProvider` instance or
+until a cache entry expires.
 
 Note that by default the cache has no expiration time, so if files are added or removed
 from the underlying object store, the `ListingTableProvider` will not see
 those changes until the `ListingTableProvider` instance is dropped and recreated.
 
-You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+You can configure the maximum cache size and cache entry expiration time via configuration options:
 
-See <https://github.com/apache/datafusion/issues/19056> for more details.
+- `datafusion.runtime.list_files_cache_limit` - Limits the size of the cache in bytes
+- `datafusion.runtime.list_files_cache_ttl` - Limits the TTL (time-to-live) of an entry in seconds
+
+Detailed configuration information can be found in the [DataFusion Runtime
+Configuration](https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings) user's guide.
+
+Caching can be disabled by setting the limit to 0:
+
+```sql
+SET datafusion.runtime.list_files_cache_limit TO "0K";
+```
 
 Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
 
@@ -395,6 +406,47 @@ Instead this should now be:
     let foreign_udf: Arc<dyn ScalarUDFImpl> = ffi_udf.into();
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
+
+When creating any of the following structs, we now require the user to
+provide a `TaskContextProvider` and optionally a `LogicalExtensionCodec`:
+
+- `FFI_CatalogListProvider`
+- `FFI_CatalogProvider`
+- `FFI_SchemaProvider`
+- `FFI_TableProvider`
+- `FFI_TableFunction`
+
+Each of these structs has a `new()` and a `new_with_ffi_codec()` method for
+instantiation. For example, when you previously would write
+
+```rust,ignore
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None);
+```
+
+Now you will need to provide a `TaskContextProvider`. The most common
+implementation of this trait is `SessionContext`.
+
+```rust,ignore
+   let ctx = Arc::new(SessionContext::default());
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None, ctx, None);
+```
+
+The alternative function to create these structures may be more convenient
+if you are doing many of these operations. A `FFI_LogicalExtensionCodec` will
+store the `TaskContextProvider` as well.
+
+```rust,ignore
+   let codec = Arc::new(DefaultLogicalExtensionCodec {});
+   let ctx = Arc::new(SessionContext::default());
+   let ffi_codec = FFI_LogicalExtensionCodec::new(codec, None, ctx);
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new_with_ffi_codec(table, None, ffi_codec);
+```
+
+Additional information about the usage of the `TaskContextProvider` can be
+found in the crate README.
 
 Additionally, the FFI structure for Scalar UDF's no longer contains a
 `return_type` call. This code was not used since the `ForeignScalarUDF`
