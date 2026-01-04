@@ -55,7 +55,7 @@ impl FileStatisticsCache for DefaultFileStatisticsCache {
                     num_rows: stats.num_rows,
                     num_columns: stats.column_statistics.len(),
                     table_size_bytes: stats.total_byte_size,
-                    statistics_size_bytes: 0, // TODO: set to the real size in the future
+                    statistics_size_bytes: stats.heap_size(),
                 },
             );
         }
@@ -196,7 +196,7 @@ mod tests {
                     num_rows: Precision::Absent,
                     num_columns: 1,
                     table_size_bytes: Precision::Absent,
-                    statistics_size_bytes: 0,
+                    statistics_size_bytes: 320,
                 }
             )])
         );

@@ -321,6 +321,13 @@ impl Statistics {
         }
     }
 
+    /// Returns the memory size in bytes.
+    pub fn heap_size(&self) -> usize {
+        // column_statistics + num_rows + total_byte_size
+        self.column_statistics.capacity() * size_of::<ColumnStatistics>()
+            + size_of::<Precision<usize>>() * 2
+    }
+
     /// Calculates `total_byte_size` based on the schema and `num_rows`.
     /// If any of the columns has non-primitive width, `total_byte_size` is set to inexact.
     pub fn calculate_total_byte_size(&mut self, schema: &Schema) {
@@ -1756,5 +1763,55 @@ mod tests {
 
         // total_byte_size should fall back to scaling: 8000 * 0.1 = 800
         assert_eq!(result.total_byte_size, Precision::Inexact(800));
+    }
+
+    #[test]
+    fn test_statistics_heap_size() {
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![],
+        };
+
+        assert_eq!(stats.heap_size(), 32);
+
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Absent,
+                min_value: Precision::Absent,
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Exact(100),
+            }],
+        };
+
+        assert_eq!(stats.heap_size(), 320);
+
+        let stats = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(100),
+            column_statistics: vec![
+                ColumnStatistics {
+                    null_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(100),
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(10),
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Exact(100),
+                },
+            ],
+        };
+        assert_eq!(stats.heap_size(), 608);
     }
 }
