@@ -170,7 +170,8 @@ where
                 // Build from_map using reusable buffer
                 from_graphemes.extend(from.graphemes(true));
                 for (index, c) in from_graphemes.iter().enumerate() {
-                    from_map.insert(*c, index);
+                    // Ignore characters that already exist in from_map, else insert
+                    from_map.entry(*c).or_insert(index);
                 }
 
                 // Build to_graphemes
@@ -255,6 +256,18 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Utf8(None))
             ],
             Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            TranslateFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("abcabc")),
+                ColumnarValue::Scalar(ScalarValue::from("aa")),
+                ColumnarValue::Scalar(ScalarValue::from("de"))
+            ],
+            Ok(Some("dbcdbc")),
             &str,
             Utf8,
             StringArray
