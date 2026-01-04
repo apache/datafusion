@@ -233,6 +233,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -354,6 +355,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -418,6 +420,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -981,6 +984,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1170,6 +1174,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1363,6 +1368,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1531,6 +1537,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1550,6 +1557,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1665,6 +1673,7 @@ async fn test_hashjoin_parent_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -2771,6 +2780,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -2899,6 +2909,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3049,6 +3060,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3199,6 +3211,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3333,6 +3346,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
