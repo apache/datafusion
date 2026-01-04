@@ -1091,6 +1091,7 @@ impl DefaultPhysicalPlanner {
                 filter,
                 join_type,
                 null_equality,
+                null_aware,
                 schema: join_schema,
                 ..
             }) => {
@@ -1497,6 +1498,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::Auto,
                         *null_equality,
+                        *null_aware,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1508,6 +1510,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::CollectLeft,
                         *null_equality,
+                        *null_aware,
                     )?)
                 };
 
