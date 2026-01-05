@@ -117,7 +117,7 @@ fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         Float16 => Ok(Arc::new(BooleanArray::from_unary(
             args[0].as_primitive::<Float16Type>(),
-            |x| x.to_f32() == 0.0,
+            |x| x.is_zero(),
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),
