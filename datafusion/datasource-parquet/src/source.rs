@@ -329,6 +329,14 @@ impl ParquetSource {
         }
     }
 
+    /// Set the selectivity for converting filters to pre-materialization row filters.
+    pub fn with_filter_pushdown_selectivity(mut self, selectivity: f64) -> Self {
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
+            crate::selectivity::SelectivityTracker::new(selectivity),
+        ));
+        self
+    }
+
     /// Set the `TableParquetOptions` for this ParquetSource.
     pub fn with_table_parquet_options(
         mut self,

@@ -462,7 +462,17 @@ impl FileOpener for ParquetOpener {
                             .into_iter()
                             .map(Arc::clone)
                             .collect();
-
+                    #[cfg(debug_assertions)]
+                    {
+                        use datafusion_physical_expr_common::physical_expr::fmt_sql;
+                        for (expr, selectivity) in tracker.iter() {
+                            println!(
+                                "effectiveness for expr {}: {:.2}%",
+                                fmt_sql(expr.as_ref()),
+                                selectivity.effectiveness() * 100.0,
+                            );
+                        }
+                    }
                     tracker.partition_filters(conjuncts)
                 } else {
                     PartitionedFilters {
@@ -470,6 +480,22 @@ impl FileOpener for ParquetOpener {
                         post_scan: vec![],
                     }
                 };
+
+                #[cfg(debug_assertions)]
+                {
+                    println!(
+                        "ParquetOpener: pushing down {} filters, deferring {} filters",
+                        row_filters.len(),
+                        post_scan.len(),
+                    );
+                    if !row_filters.is_empty() {
+                        println!("  Row filters:");
+                        for filter in &row_filters {
+                            use datafusion_physical_expr_common::physical_expr::fmt_sql;
+                            println!("    {}", fmt_sql(filter.as_ref()));
+                        }
+                    }
+                }
 
                 // Extend projection with post-scan filter expressions BEFORE computing
                 // column indices, so the mask includes columns needed by filters.
@@ -649,6 +675,16 @@ impl FileOpener for ParquetOpener {
 
             let projector = projection.make_projector(&stream_schema)?;
 
+            // Pre-compute the data schema for post-scan filtering (excludes filter columns)
+            let post_scan_data_schema = if !post_scan_filters.is_empty() {
+                let proj_schema = projector.output_schema();
+                Some(Arc::new(arrow::datatypes::Schema::new(
+                    proj_schema.fields()[..original_projection_len].to_vec(),
+                )))
+            } else {
+                None
+            };
+
             // Clone for use in the stream mapping closure
             let post_scan_tracker = Arc::clone(&selectivity_tracker);
 
@@ -662,10 +698,10 @@ impl FileOpener for ParquetOpener {
                     b = projector.project_batch(&b)?;
 
                     // Apply post-scan filters if present
-                    if !post_scan_filters.is_empty() {
+                    if let Some(ref data_schema) = post_scan_data_schema {
                         b = apply_post_scan_filters(
                             b,
-                            original_projection_len,
+                            Arc::clone(data_schema),
                             &post_scan_filters,
                             &post_scan_tracker,
                         )?;
@@ -735,18 +771,19 @@ impl FileOpener for ParquetOpener {
 /// sequentially and see progressively fewer rows).
 fn apply_post_scan_filters(
     batch: RecordBatch,
-    original_projection_len: usize,
+    data_schema: SchemaRef,
     filter_exprs: &[Arc<dyn PhysicalExpr>],
     selectivity_tracker: &parking_lot::RwLock<SelectivityTracker>,
 ) -> Result<RecordBatch> {
     use arrow::array::{BooleanArray, as_boolean_array};
     use arrow::compute::{and, filter_record_batch};
 
-    let (schema, columns, num_rows) = batch.into_parts();
+    let (_batch_schema, columns, num_rows) = batch.into_parts();
+    let num_data_cols = data_schema.fields().len();
 
     // Extract data columns and filter columns
-    let data_columns: Vec<_> = columns[..original_projection_len].to_vec();
-    let filter_columns: Vec<_> = columns[original_projection_len..].to_vec();
+    let data_columns: Vec<_> = columns[..num_data_cols].to_vec();
+    let filter_columns: Vec<_> = columns[num_data_cols..].to_vec();
 
     debug_assert_eq!(filter_columns.len(), filter_exprs.len());
 
@@ -762,17 +799,21 @@ fn apply_post_scan_filters(
         }
     }
 
-    // Combine filter columns with AND
-    let combined_mask: BooleanArray = filter_columns
-        .iter()
-        .map(|col| as_boolean_array(col.as_ref()).clone())
-        .reduce(|acc, col| and(&acc, &col).unwrap())
-        .unwrap_or_else(|| BooleanArray::from(vec![true; data_columns[0].len()]));
-
-    // Build a schema with only the data columns
-    let data_schema = Arc::new(arrow::datatypes::Schema::new(
-        schema.fields()[..original_projection_len].to_vec(),
-    ));
+    // Combine filter columns with AND (avoiding unnecessary clones)
+    let combined_mask: BooleanArray = match filter_columns.len() {
+        0 => BooleanArray::from(vec![true; num_rows]),
+        1 => as_boolean_array(filter_columns[0].as_ref()).clone(),
+        _ => {
+            // Start with and() of first two - creates a new array, no clone needed
+            let first = as_boolean_array(filter_columns[0].as_ref());
+            let second = as_boolean_array(filter_columns[1].as_ref());
+            let mut acc = and(first, second)?;
+            for col in &filter_columns[2..] {
+                acc = and(&acc, as_boolean_array(col.as_ref()))?;
+            }
+            acc
+        }
+    };
 
     // Create batch with data columns only
     let opts = RecordBatchOptions::new().with_row_count(Some(num_rows));

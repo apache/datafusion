@@ -182,6 +182,15 @@ impl SelectivityTracker {
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
     ) -> PartitionedFilters {
+        // If the selectivity is set to 0.0, all filters are promoted to row filters
+        // even if we have no stats on them.
+        if self.threshold == 0.0 {
+            return PartitionedFilters {
+                row_filters: filters,
+                post_scan: Vec::new(),
+            };
+        }
+
         let mut row_filters = Vec::new();
         let mut post_scan = Vec::new();
 
