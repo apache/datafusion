@@ -416,7 +416,6 @@ mod tests {
     use super::*;
     use arrow::array::TimestampMillisecondArray;
     use arrow_schema::TimeUnit;
-    use std::collections::BTreeMap;
 
     #[test]
     fn should_emit_correct_type() -> Result<()> {
