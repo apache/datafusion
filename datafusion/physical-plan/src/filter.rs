@@ -198,7 +198,7 @@ impl FilterExec {
     ///
     /// # Deprecated
     /// Use [`FilterExecBuilder::with_default_selectivity`] instead
-    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_default_selectivity instead")]
+    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_default_selectivity instead")]
     pub fn with_default_selectivity(
         self,
         default_selectivity: u8,
@@ -215,7 +215,7 @@ impl FilterExec {
     ///
     /// # Deprecated
     /// Use [`FilterExecBuilder::with_projection`] instead
-    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_projection instead")]
+    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_projection instead")]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  Check if the projection is valid
         can_project(&self.schema(), projection.as_ref())?;
@@ -240,7 +240,7 @@ impl FilterExec {
     ///
     /// # Deprecated
     /// Use [`FilterExecBuilder::with_batch_size`] instead
-    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_batch_size instead")]
+    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_batch_size instead")]
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
         FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
             .with_projection(self.projection.clone())
