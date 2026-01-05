@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-#
+
 #   http://www.apache.org/licenses/LICENSE-2.0
-#
+
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -15,35 +15,27 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Security audit
+query T
+SELECT concat(space(1::INT), 'Spark');
+----
+ Spark
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
+query T
+SELECT concat(space(5::INT), 'Spark');
+----
+     Spark
 
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
+query T
+SELECT space(0::INT);
+----
+(empty)
 
-  pull_request:
-    paths:
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-  
-  merge_group:
+query T
+SELECT space(-1::INT);
+----
+(empty)
 
-jobs:
-  security_audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@0e76c5c569f13f7eb21e8e5b26fe710062b57b62  # v2.65.13
-        with:
-          tool: cargo-audit
-      - name: Run audit check
-        run: cargo audit
+query T
+SELECT space(NULL);
+----
+NULL
