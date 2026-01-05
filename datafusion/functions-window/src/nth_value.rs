@@ -36,7 +36,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::cmp::Ordering;
-use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Range;
@@ -522,24 +521,14 @@ impl NthValueEvaluator {
                     }
                     Ordering::Less => {
                         let reverse_index = (-self.n) as usize;
-                        if nulls.len() < reverse_index {
-                            // Outside the range, return NULL to avoid allocating
-                            // for the sliding window that will be discarded in the end.
+                        let valid_indices_len = nulls.len() - nulls.null_count();
+                        if reverse_index > valid_indices_len {
                             return None;
                         }
-                        let mut window = VecDeque::with_capacity(reverse_index);
-                        for idx in nulls.valid_indices() {
-                            if window.len() == reverse_index {
-                                window.pop_front();
-                            }
-                            window.push_back(idx + offset);
-                        }
-
-                        if window.len() == reverse_index {
-                            Some(window.pop_front().unwrap())
-                        } else {
-                            None
-                        }
+                        nulls
+                            .valid_indices()
+                            .nth(valid_indices_len - reverse_index)
+                            .map(|idx| idx + offset)
                     }
                     Ordering::Equal => None,
                 }
