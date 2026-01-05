@@ -1778,8 +1778,9 @@ mod tests {
             },
             schema,
         ));
+        let input: Arc<dyn ExecutionPlan> = input;
 
-        let predicate = Arc::new(BinaryExpr::new(
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("a", 0)),
             Operator::Lt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(50)))),
@@ -1788,7 +1789,7 @@ mod tests {
         let projection = Some(vec![0, 2]);
 
         // Method 1: Builder with projection (one call to compute_properties)
-        let filter1 = FilterExecBuilder::new(predicate.clone(), input.clone())
+        let filter1 = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
             .with_projection(projection.clone())
             .build()?;
 
