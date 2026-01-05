@@ -229,7 +229,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
     expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            columns.get_or_insert_owned(column);
+            columns.get_or_insert_with(column, |c| c.clone());
         }
         Ok(TreeNodeRecursion::Continue)
     })
