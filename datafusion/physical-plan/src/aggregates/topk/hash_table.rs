@@ -282,11 +282,6 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         }
     }
 
-    pub fn find(&self, hash: u64, mut eq: impl FnMut(&ID) -> bool) -> Option<usize> {
-        let eq = |&idx: &usize| eq(&self.store[idx].as_ref().unwrap().id);
-        self.map.find(hash, eq).copied()
-    }
-
     pub fn heap_idx_at(&self, map_idx: usize) -> usize {
         self.store[map_idx].as_ref().unwrap().heap_idx
     }
