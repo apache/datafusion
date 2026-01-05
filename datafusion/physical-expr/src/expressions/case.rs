@@ -189,92 +189,9 @@ impl CaseBody {
             .map(|(k, _)| *k)
             .collect::<Vec<_>>();
 
-        // Compute sub-projections for each "then" expression.
-        // These allow filtering only the columns needed by each specific expression,
-        // rather than all columns in the globally projected batch.
-        let then_sub_projections = projected_body
-            .when_then_expr
-            .iter()
-            .map(|(_, then_expr)| {
-                Self::compute_sub_projection(then_expr, projection.len())
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let else_sub_projection = projected_body
-            .else_expr
-            .as_ref()
-            .map(|e| Self::compute_sub_projection(e, projection.len()))
-            .transpose()?;
-
         Ok(ProjectedCaseBody {
             projection,
             body: projected_body,
-            then_sub_projections,
-            else_sub_projection,
-        })
-    }
-
-    /// Computes a [SubProjection] for a single expression.
-    ///
-    /// This identifies which columns (relative to the parent batch) the expression
-    /// needs, creates a projection vector, and rewrites the expression with new
-    /// column indices relative to the sub-projection.
-    fn compute_sub_projection(
-        expr: &Arc<dyn PhysicalExpr>,
-        parent_num_columns: usize,
-    ) -> Result<SubProjection> {
-        // Collect column indices used by this expression (relative to parent batch)
-        let mut used_indices = IndexSet::<usize>::new();
-        expr.apply(|e| {
-            if let Some(column) = e.as_any().downcast_ref::<Column>() {
-                used_indices.insert(column.index());
-            }
-            Ok(TreeNodeRecursion::Continue)
-        })
-        .expect("Closure cannot fail");
-
-        // If the expression uses all columns, no sub-projection needed
-        if used_indices.len() == parent_num_columns {
-            return Ok(SubProjection {
-                projection: (0..parent_num_columns).collect(),
-                expr: Arc::clone(expr),
-            });
-        }
-
-        // Build mapping from parent indices to sub-projection indices
-        let index_map: IndexMap<usize, usize> = used_indices
-            .iter()
-            .enumerate()
-            .map(|(sub_idx, &parent_idx)| (parent_idx, sub_idx))
-            .collect();
-
-        // Rewrite expression with sub-projection indices
-        let rewritten_expr = Arc::clone(expr)
-            .transform_down(|e| {
-                if let Some(column) = e.as_any().downcast_ref::<Column>() {
-                    let parent_idx = column.index();
-                    let sub_idx = *index_map.get(&parent_idx).unwrap();
-                    if sub_idx != parent_idx {
-                        return Ok(Transformed::yes(Arc::new(Column::new(
-                            column.name(),
-                            sub_idx,
-                        ))));
-                    }
-                }
-                Ok(Transformed::no(e))
-            })
-            .map(|t| t.data)?;
-
-        // Build projection vector (parent indices in sub-projection order)
-        let projection: Vec<usize> = index_map
-            .iter()
-            .sorted_by_key(|(_, sub_idx)| *sub_idx)
-            .map(|(&parent_idx, _)| parent_idx)
-            .collect();
-
-        Ok(SubProjection {
-            projection,
-            expr: rewritten_expr,
         })
     }
 }
@@ -306,353 +223,10 @@ impl CaseBody {
 ///
 /// The projection vector and the rewritten expression (which only differs from the original in
 /// column reference indices) are held in a `ProjectedCaseBody`.
-/// Sub-projection for a single expression within a CASE.
-///
-/// This allows filtering only the columns needed by a specific expression,
-/// rather than all columns in the parent batch. Since `RecordBatch::project()`
-/// is O(1) (just creates column references) while `filter_record_batch()` is
-/// O(rows × columns), projecting first then filtering is more efficient when
-/// the expression uses fewer columns than the parent batch contains.
-#[derive(Debug)]
-struct SubProjection {
-    /// Indices into the parent (globally projected) batch
-    projection: Vec<usize>,
-    /// Expression rewritten with column indices relative to this sub-projection
-    expr: Arc<dyn PhysicalExpr>,
-}
-
-impl PartialEq for SubProjection {
-    fn eq(&self, other: &Self) -> bool {
-        self.projection == other.projection && self.expr.eq(&other.expr)
-    }
-}
-
-impl Eq for SubProjection {}
-
-impl Hash for SubProjection {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.projection.hash(state);
-        self.expr.hash(state);
-    }
-}
-
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
     projection: Vec<usize>,
     body: CaseBody,
-    /// Per-expression sub-projections for "then" expressions.
-    /// Each sub-projection contains indices into the globally projected batch
-    /// and a rewritten expression with column indices relative to the sub-projection.
-    then_sub_projections: Vec<SubProjection>,
-    /// Sub-projection for the else expression, if present.
-    else_sub_projection: Option<SubProjection>,
-}
-
-impl ProjectedCaseBody {
-    /// Evaluates the CASE expression using sub-projections to minimize filtering overhead.
-    ///
-    /// This method is similar to [CaseBody::case_when_no_expr] but uses the pre-computed
-    /// sub-projections to filter only the columns needed by each then/else expression,
-    /// rather than filtering all columns in the batch.
-    fn case_when_no_expr(
-        &self,
-        batch: &RecordBatch,
-        return_type: &DataType,
-    ) -> Result<ColumnarValue> {
-        let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
-
-        // `remainder_rows` contains the indices of the rows that need to be evaluated
-        let mut remainder_rows: ArrayRef =
-            Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
-        // `remainder_batch` contains the rows themselves that need to be evaluated
-        let mut remainder_batch = Cow::Borrowed(batch);
-
-        for i in 0..self.body.when_then_expr.len() {
-            // Evaluate the 'when' predicate for the remainder batch
-            let when_predicate = &self.body.when_then_expr[i].0;
-            let when_value = when_predicate
-                .evaluate(&remainder_batch)?
-                .into_array(remainder_batch.num_rows())?;
-            let when_value = as_boolean_array(&when_value).map_err(|_| {
-                internal_datafusion_err!("WHEN expression did not return a BooleanArray")
-            })?;
-
-            let when_true_count = when_value.true_count();
-
-            // If the 'when' predicate did not match any rows, continue to the next branch
-            if when_true_count == 0 {
-                continue;
-            }
-
-            // If the 'when' predicate matched all remaining rows, no need to filter
-            if when_true_count == remainder_batch.num_rows() {
-                let sub_proj = &self.then_sub_projections[i];
-                // Project to only needed columns before evaluating
-                let then_value =
-                    if sub_proj.projection.len() < remainder_batch.num_columns() {
-                        let projected = remainder_batch.project(&sub_proj.projection)?;
-                        sub_proj.expr.evaluate(&projected)?
-                    } else {
-                        self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
-                    };
-                result_builder.add_branch_result(&remainder_rows, then_value)?;
-                return result_builder.finish();
-            }
-
-            // Filter and evaluate the then expression using sub-projection
-            let then_filter = create_filter(when_value, true);
-            let then_rows = filter_array(&remainder_rows, &then_filter)?;
-
-            let sub_proj = &self.then_sub_projections[i];
-            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns()
-            {
-                // Project to only needed columns, then filter (fewer columns to filter)
-                let projected = remainder_batch.project(&sub_proj.projection)?;
-                let then_batch = filter_record_batch(&projected, &then_filter)?;
-                sub_proj.expr.evaluate(&then_batch)?
-            } else {
-                // No benefit from sub-projection, filter all columns
-                let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
-                self.body.when_then_expr[i].1.evaluate(&then_batch)?
-            };
-            result_builder.add_branch_result(&then_rows, then_value)?;
-
-            // If this is the last branch and no else, we're done
-            if self.body.else_expr.is_none() && i == self.body.when_then_expr.len() - 1 {
-                return result_builder.finish();
-            }
-
-            // Prepare for next branch - must filter all columns since we need them
-            // for subsequent when/then expressions
-            let next_selection = match when_value.null_count() {
-                0 => not(when_value),
-                _ => not(&prep_null_mask_filter(when_value)),
-            }?;
-            let next_filter = create_filter(&next_selection, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
-            remainder_rows = filter_array(&remainder_rows, &next_filter)?;
-        }
-
-        // Handle else expression with sub-projection
-        if let Some(else_sub_proj) = &self.else_sub_projection {
-            let else_value = if else_sub_proj.projection.len()
-                < remainder_batch.num_columns()
-            {
-                let projected = remainder_batch.project(&else_sub_proj.projection)?;
-                else_sub_proj.expr.evaluate(&projected)?
-            } else if let Some(e) = &self.body.else_expr {
-                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-                expr.evaluate(&remainder_batch)?
-            } else {
-                unreachable!("else_sub_projection exists but else_expr doesn't")
-            };
-            result_builder.add_branch_result(&remainder_rows, else_value)?;
-        }
-
-        result_builder.finish()
-    }
-
-    /// Evaluates the CASE WHEN expr = value form using sub-projections.
-    fn case_when_with_expr(
-        &self,
-        batch: &RecordBatch,
-        return_type: &DataType,
-    ) -> Result<ColumnarValue> {
-        let mut result_builder = ResultBuilder::new(return_type, batch.num_rows());
-
-        let mut remainder_rows: ArrayRef =
-            Arc::new(UInt32Array::from_iter(0..batch.num_rows() as u32));
-        let mut remainder_batch = Cow::Borrowed(batch);
-
-        // Evaluate the base expression
-        let base_expr = self.body.expr.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("case_when_with_expr called without base expression")
-        })?;
-        let base_value = base_expr.evaluate(batch)?;
-        let base_value_is_nested = base_value.data_type().is_nested();
-        let mut base_values = base_value.into_array(batch.num_rows())?;
-
-        // Handle null base values
-        let base_null_count = base_values.logical_null_count();
-        if base_null_count > 0 {
-            let base_not_nulls = is_not_null(base_values.as_ref())?;
-            let base_all_null = base_null_count == remainder_batch.num_rows();
-
-            if let Some(e) = &self.body.else_expr {
-                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-
-                if base_all_null {
-                    let nulls_value = expr.evaluate(&remainder_batch)?;
-                    result_builder.add_branch_result(&remainder_rows, nulls_value)?;
-                } else {
-                    let nulls_filter = create_filter(&not(&base_not_nulls)?, true);
-                    let nulls_batch =
-                        filter_record_batch(&remainder_batch, &nulls_filter)?;
-                    let nulls_rows = filter_array(&remainder_rows, &nulls_filter)?;
-                    let nulls_value = expr.evaluate(&nulls_batch)?;
-                    result_builder.add_branch_result(&nulls_rows, nulls_value)?;
-                }
-            }
-
-            if base_all_null {
-                return result_builder.finish();
-            }
-
-            // Remove null rows from remainder
-            let not_null_filter = create_filter(&base_not_nulls, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &not_null_filter)?);
-            remainder_rows = filter_array(&remainder_rows, &not_null_filter)?;
-            base_values = filter_array(&base_values, &not_null_filter)?;
-        }
-
-        for i in 0..self.body.when_then_expr.len() {
-            let when_expr = &self.body.when_then_expr[i].0;
-            let when_value = match when_expr.evaluate(&remainder_batch)? {
-                ColumnarValue::Array(a) => {
-                    compare_with_eq(&a, &base_values, base_value_is_nested)
-                }
-                ColumnarValue::Scalar(s) => {
-                    compare_with_eq(&s.to_scalar()?, &base_values, base_value_is_nested)
-                }
-            }?;
-
-            let when_true_count = when_value.true_count();
-
-            if when_true_count == 0 {
-                continue;
-            }
-
-            if when_true_count == remainder_batch.num_rows() {
-                let sub_proj = &self.then_sub_projections[i];
-                let then_value =
-                    if sub_proj.projection.len() < remainder_batch.num_columns() {
-                        let projected = remainder_batch.project(&sub_proj.projection)?;
-                        sub_proj.expr.evaluate(&projected)?
-                    } else {
-                        self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
-                    };
-                result_builder.add_branch_result(&remainder_rows, then_value)?;
-                return result_builder.finish();
-            }
-
-            let then_filter = create_filter(&when_value, true);
-            let then_rows = filter_array(&remainder_rows, &then_filter)?;
-
-            let sub_proj = &self.then_sub_projections[i];
-            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns()
-            {
-                let projected = remainder_batch.project(&sub_proj.projection)?;
-                let then_batch = filter_record_batch(&projected, &then_filter)?;
-                sub_proj.expr.evaluate(&then_batch)?
-            } else {
-                let then_batch = filter_record_batch(&remainder_batch, &then_filter)?;
-                self.body.when_then_expr[i].1.evaluate(&then_batch)?
-            };
-            result_builder.add_branch_result(&then_rows, then_value)?;
-
-            if self.body.else_expr.is_none() && i == self.body.when_then_expr.len() - 1 {
-                return result_builder.finish();
-            }
-
-            let next_selection = match when_value.null_count() {
-                0 => not(&when_value),
-                _ => not(&prep_null_mask_filter(&when_value)),
-            }?;
-            let next_filter = create_filter(&next_selection, true);
-            remainder_batch =
-                Cow::Owned(filter_record_batch(&remainder_batch, &next_filter)?);
-            remainder_rows = filter_array(&remainder_rows, &next_filter)?;
-            base_values = filter_array(&base_values, &next_filter)?;
-        }
-
-        if let Some(else_sub_proj) = &self.else_sub_projection {
-            let else_value = if else_sub_proj.projection.len()
-                < remainder_batch.num_columns()
-            {
-                let projected = remainder_batch.project(&else_sub_proj.projection)?;
-                else_sub_proj.expr.evaluate(&projected)?
-            } else if let Some(e) = &self.body.else_expr {
-                let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
-                expr.evaluate(&remainder_batch)?
-            } else {
-                unreachable!("else_sub_projection exists but else_expr doesn't")
-            };
-            result_builder.add_branch_result(&remainder_rows, else_value)?;
-        }
-
-        result_builder.finish()
-    }
-
-    /// Evaluates CASE WHEN condition THEN expr ELSE expr END with sub-projections.
-    fn expr_or_expr(
-        &self,
-        batch: &RecordBatch,
-        when_value: &BooleanArray,
-    ) -> Result<ColumnarValue> {
-        let when_value = match when_value.null_count() {
-            0 => Cow::Borrowed(when_value),
-            _ => Cow::Owned(prep_null_mask_filter(when_value)),
-        };
-
-        let optimize_filter = batch.num_columns() > 1
-            || (batch.num_columns() == 1 && multiple_arrays(batch.column(0).data_type()));
-
-        let when_filter = create_filter(&when_value, optimize_filter);
-
-        // Evaluate then expression with sub-projection
-        let then_sub_proj = &self.then_sub_projections[0];
-        let then_value = if then_sub_proj.projection.len() < batch.num_columns() {
-            let projected = batch.project(&then_sub_proj.projection)?;
-            let then_batch = filter_record_batch(&projected, &when_filter)?;
-            then_sub_proj.expr.evaluate(&then_batch)?
-        } else {
-            let then_batch = filter_record_batch(batch, &when_filter)?;
-            self.body.when_then_expr[0].1.evaluate(&then_batch)?
-        };
-
-        // Evaluate else expression with sub-projection
-        let else_selection = not(&when_value)?;
-        let else_filter = create_filter(&else_selection, optimize_filter);
-
-        let else_value = if let Some(else_sub_proj) = &self.else_sub_projection {
-            if else_sub_proj.projection.len() < batch.num_columns() {
-                let projected = batch.project(&else_sub_proj.projection)?;
-                let else_batch = filter_record_batch(&projected, &else_filter)?;
-                else_sub_proj.expr.evaluate(&else_batch)?
-            } else {
-                let else_batch = filter_record_batch(batch, &else_filter)?;
-                let e = self.body.else_expr.as_ref().unwrap();
-                let return_type = self.body.data_type(&batch.schema())?;
-                let else_expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
-                    .unwrap_or_else(|_| Arc::clone(e));
-                else_expr.evaluate(&else_batch)?
-            }
-        } else {
-            let else_batch = filter_record_batch(batch, &else_filter)?;
-            let e = self.body.else_expr.as_ref().unwrap();
-            let return_type = self.body.data_type(&batch.schema())?;
-            let else_expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
-                .unwrap_or_else(|_| Arc::clone(e));
-            else_expr.evaluate(&else_batch)?
-        };
-
-        Ok(ColumnarValue::Array(match (then_value, else_value) {
-            (ColumnarValue::Array(t), ColumnarValue::Array(e)) => {
-                merge(&when_value, &t, &e)
-            }
-            (ColumnarValue::Scalar(t), ColumnarValue::Array(e)) => {
-                merge(&when_value, &t.to_scalar()?, &e)
-            }
-            (ColumnarValue::Array(t), ColumnarValue::Scalar(e)) => {
-                merge(&when_value, &t, &e.to_scalar()?)
-            }
-            (ColumnarValue::Scalar(t), ColumnarValue::Scalar(e)) => {
-                merge(&when_value, &t.to_scalar()?, &e.to_scalar()?)
-            }
-        }?))
-    }
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -1109,7 +683,6 @@ impl CaseExpr {
     }
 }
 
-#[allow(dead_code)] // These methods are superseded by ProjectedCaseBody methods but kept for reference
 impl CaseBody {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         // since all then results have the same data type, we can choose any one as the
@@ -1432,12 +1005,11 @@ impl CaseExpr {
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
         if projected.projection.len() < batch.num_columns() {
-            // Project to only columns used by any expression in the CASE,
-            // then use sub-projections for individual then/else expressions
             let projected_batch = batch.project(&projected.projection)?;
-            projected.case_when_with_expr(&projected_batch, &return_type)
+            projected
+                .body
+                .case_when_with_expr(&projected_batch, &return_type)
         } else {
-            // No global projection benefit - use original body
             self.body.case_when_with_expr(batch, &return_type)
         }
     }
@@ -1456,12 +1028,11 @@ impl CaseExpr {
     ) -> Result<ColumnarValue> {
         let return_type = self.data_type(&batch.schema())?;
         if projected.projection.len() < batch.num_columns() {
-            // Project to only columns used by any expression in the CASE,
-            // then use sub-projections for individual then/else expressions
             let projected_batch = batch.project(&projected.projection)?;
-            projected.case_when_no_expr(&projected_batch, &return_type)
+            projected
+                .body
+                .case_when_no_expr(&projected_batch, &return_type)
         } else {
-            // No global projection benefit - use original body
             self.body.case_when_no_expr(batch, &return_type)
         }
     }
@@ -1569,11 +1140,11 @@ impl CaseExpr {
             self.body.else_expr.as_ref().unwrap().evaluate(batch)
         } else if projected.projection.len() < batch.num_columns() {
             // The case expressions do not use all the columns of the input batch.
-            // Project first to reduce time spent filtering, then use sub-projections.
+            // Project first to reduce time spent filtering.
             let projected_batch = batch.project(&projected.projection)?;
-            projected.expr_or_expr(&projected_batch, when_value)
+            projected.body.expr_or_expr(&projected_batch, when_value)
         } else {
-            // No global projection benefit - use original body
+            // All columns are used in the case expressions, so there is no need to project.
             self.body.expr_or_expr(batch, when_value)
         }
     }
