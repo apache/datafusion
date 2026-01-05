@@ -32,17 +32,18 @@ use arrow::array::types::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{self, Null, Time32, Time64, Timestamp, Utf8, Utf8View};
+use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
+use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
 };
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TIMEZONE_WILDCARD, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 use chrono::{
@@ -183,55 +184,22 @@ impl DateTruncFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    // Timestamp signatures
-                    Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Timestamp,
+                            // Allow implicit cast from string and date to timestamp for backward compatibility
+                            vec![
+                                TypeSignatureClass::Native(logical_string()),
+                                TypeSignatureClass::Native(logical_date()),
+                            ],
+                            NativeType::Timestamp(Nanosecond, None),
+                        ),
                     ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Time),
                     ]),
-                    Exact(vec![Utf8, Timestamp(Microsecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Microsecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Microsecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Millisecond, None)]),
-                    Exact(vec![Utf8View, Timestamp(Millisecond, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Millisecond, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Timestamp(Second, None)]),
-                    Exact(vec![Utf8View, Timestamp(Second, None)]),
-                    Exact(vec![
-                        Utf8,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![
-                        Utf8View,
-                        Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
-                    ]),
-                    Exact(vec![Utf8, Time64(Nanosecond)]),
-                    Exact(vec![Utf8View, Time64(Nanosecond)]),
-                    Exact(vec![Utf8, Time64(Microsecond)]),
-                    Exact(vec![Utf8View, Time64(Microsecond)]),
-                    Exact(vec![Utf8, Time32(Millisecond)]),
-                    Exact(vec![Utf8View, Time32(Millisecond)]),
-                    Exact(vec![Utf8, Time32(Second)]),
-                    Exact(vec![Utf8View, Time32(Second)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -254,19 +222,10 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[1] {
-            Timestamp(Nanosecond, None) | Utf8 | DataType::Date32 | Null => {
-                Ok(Timestamp(Nanosecond, None))
-            }
-            Timestamp(Nanosecond, tz_opt) => Ok(Timestamp(Nanosecond, tz_opt.clone())),
-            Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
-            Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
-            Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
-            Time64(tu) => Ok(Time64(*tu)),
-            Time32(tu) => Ok(Time32(*tu)),
-            _ => plan_err!(
-                "The date_trunc function can only accept timestamp or time as the second arg."
-            ),
+        if arg_types[1].is_null() {
+            Ok(Timestamp(Nanosecond, None))
+        } else {
+            Ok(arg_types[1].clone())
         }
     }
 
@@ -289,6 +248,22 @@ impl ScalarUDFImpl for DateTruncFunc {
         };
 
         let granularity = DateTruncGranularity::from_str(&granularity_str)?;
+
+        // Check upfront if granularity is valid for Time types
+        let is_time_type = match array {
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(_))
+            | ColumnarValue::Scalar(ScalarValue::Time64Microsecond(_))
+            | ColumnarValue::Scalar(ScalarValue::Time32Millisecond(_))
+            | ColumnarValue::Scalar(ScalarValue::Time32Second(_)) => true,
+            ColumnarValue::Array(arr) => matches!(arr.data_type(), Time64(_) | Time32(_)),
+            _ => false,
+        };
+        if is_time_type && !granularity.valid_for_time() {
+            return exec_err!(
+                "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                granularity_str
+            );
+        }
 
         fn process_array<T: ArrowTimestampType>(
             array: &dyn Array,
@@ -337,6 +312,10 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
 
         Ok(match array {
+            ColumnarValue::Scalar(ScalarValue::Null) => {
+                // NULL input returns NULL timestamp
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, None))
+            }
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
                 process_scalar::<TimestampNanosecondType>(v, granularity, tz_opt)?
             }
@@ -350,122 +329,65 @@ impl ScalarUDFImpl for DateTruncFunc {
                 process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
             }
             ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
-                if !granularity.valid_for_time() {
-                    return exec_err!(
-                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                        granularity_str
-                    );
-                }
                 let truncated = v.map(|val| truncate_time_nanos(val, granularity));
                 ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(truncated))
             }
             ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)) => {
-                if !granularity.valid_for_time() {
-                    return exec_err!(
-                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                        granularity_str
-                    );
-                }
                 let truncated = v.map(|val| truncate_time_micros(val, granularity));
                 ColumnarValue::Scalar(ScalarValue::Time64Microsecond(truncated))
             }
             ColumnarValue::Scalar(ScalarValue::Time32Millisecond(v)) => {
-                if !granularity.valid_for_time() {
-                    return exec_err!(
-                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                        granularity_str
-                    );
-                }
                 let truncated = v.map(|val| truncate_time_millis(val, granularity));
                 ColumnarValue::Scalar(ScalarValue::Time32Millisecond(truncated))
             }
             ColumnarValue::Scalar(ScalarValue::Time32Second(v)) => {
-                if !granularity.valid_for_time() {
-                    return exec_err!(
-                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                        granularity_str
-                    );
-                }
                 let truncated = v.map(|val| truncate_time_secs(val, granularity));
                 ColumnarValue::Scalar(ScalarValue::Time32Second(truncated))
             }
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
                 match array_type {
-                    Timestamp(unit, tz_opt) => match unit {
-                        Second => process_array::<TimestampSecondType>(
-                            array,
-                            granularity,
-                            tz_opt,
-                        )?,
-                        Millisecond => process_array::<TimestampMillisecondType>(
-                            array,
-                            granularity,
-                            tz_opt,
-                        )?,
-                        Microsecond => process_array::<TimestampMicrosecondType>(
-                            array,
-                            granularity,
-                            tz_opt,
-                        )?,
-                        Nanosecond => process_array::<TimestampNanosecondType>(
-                            array,
-                            granularity,
-                            tz_opt,
-                        )?,
-                    },
-                    Time64(unit) => {
-                        if !granularity.valid_for_time() {
-                            return exec_err!(
-                                "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                                granularity_str
-                            );
-                        }
-                        match unit {
-                            Nanosecond => {
-                                let arr =
-                                    as_primitive_array::<Time64NanosecondType>(array)?;
-                                let result: PrimitiveArray<Time64NanosecondType> =
-                                    arr.unary(|v| truncate_time_nanos(v, granularity));
-                                ColumnarValue::Array(Arc::new(result))
-                            }
-                            Microsecond => {
-                                let arr =
-                                    as_primitive_array::<Time64MicrosecondType>(array)?;
-                                let result: PrimitiveArray<Time64MicrosecondType> =
-                                    arr.unary(|v| truncate_time_micros(v, granularity));
-                                ColumnarValue::Array(Arc::new(result))
-                            }
-                            _ => {
-                                return exec_err!("Unsupported Time64 unit: {:?}", unit);
-                            }
-                        }
+                    Timestamp(Second, tz_opt) => {
+                        process_array::<TimestampSecondType>(array, granularity, tz_opt)?
                     }
-                    Time32(unit) => {
-                        if !granularity.valid_for_time() {
-                            return exec_err!(
-                                "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
-                                granularity_str
-                            );
-                        }
-                        match unit {
-                            Millisecond => {
-                                let arr =
-                                    as_primitive_array::<Time32MillisecondType>(array)?;
-                                let result: PrimitiveArray<Time32MillisecondType> =
-                                    arr.unary(|v| truncate_time_millis(v, granularity));
-                                ColumnarValue::Array(Arc::new(result))
-                            }
-                            Second => {
-                                let arr = as_primitive_array::<Time32SecondType>(array)?;
-                                let result: PrimitiveArray<Time32SecondType> =
-                                    arr.unary(|v| truncate_time_secs(v, granularity));
-                                ColumnarValue::Array(Arc::new(result))
-                            }
-                            _ => {
-                                return exec_err!("Unsupported Time32 unit: {:?}", unit);
-                            }
-                        }
+                    Timestamp(Millisecond, tz_opt) => process_array::<
+                        TimestampMillisecondType,
+                    >(
+                        array, granularity, tz_opt
+                    )?,
+                    Timestamp(Microsecond, tz_opt) => process_array::<
+                        TimestampMicrosecondType,
+                    >(
+                        array, granularity, tz_opt
+                    )?,
+                    Timestamp(Nanosecond, tz_opt) => process_array::<
+                        TimestampNanosecondType,
+                    >(
+                        array, granularity, tz_opt
+                    )?,
+                    Time64(Nanosecond) => {
+                        let arr = as_primitive_array::<Time64NanosecondType>(array)?;
+                        let result: PrimitiveArray<Time64NanosecondType> =
+                            arr.unary(|v| truncate_time_nanos(v, granularity));
+                        ColumnarValue::Array(Arc::new(result))
+                    }
+                    Time64(Microsecond) => {
+                        let arr = as_primitive_array::<Time64MicrosecondType>(array)?;
+                        let result: PrimitiveArray<Time64MicrosecondType> =
+                            arr.unary(|v| truncate_time_micros(v, granularity));
+                        ColumnarValue::Array(Arc::new(result))
+                    }
+                    Time32(Millisecond) => {
+                        let arr = as_primitive_array::<Time32MillisecondType>(array)?;
+                        let result: PrimitiveArray<Time32MillisecondType> =
+                            arr.unary(|v| truncate_time_millis(v, granularity));
+                        ColumnarValue::Array(Arc::new(result))
+                    }
+                    Time32(Second) => {
+                        let arr = as_primitive_array::<Time32SecondType>(array)?;
+                        let result: PrimitiveArray<Time32SecondType> =
+                            arr.unary(|v| truncate_time_secs(v, granularity));
+                        ColumnarValue::Array(Arc::new(result))
                     }
                     _ => {
                         return exec_err!(
