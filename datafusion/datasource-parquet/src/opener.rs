@@ -19,7 +19,7 @@
 
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::row_group_filter::RowGroupAccessPlanFilter;
-use crate::selectivity::PartitionedFilters;
+use crate::selectivity::{PartitionedFilters, SelectivityTracker};
 use crate::{
     ParquetAccessPlan, ParquetFileMetrics, ParquetFileReaderFactory,
     apply_file_schema_type_coercions, coerce_int96_to_resolution, row_filter,
@@ -122,8 +122,7 @@ pub(super) struct ParquetOpener {
     pub reverse_row_groups: bool,
     /// Shared selectivity tracker for adaptive filter reordering.
     /// Each opener reads stats and decides which filters to push down.
-    pub selectivity_tracker:
-        Arc<parking_lot::RwLock<crate::selectivity::SelectivityTracker>>,
+    pub selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
 }
 
 /// Represents a prepared access plan with optional row selection
@@ -738,7 +737,7 @@ fn apply_post_scan_filters(
     batch: RecordBatch,
     original_projection_len: usize,
     filter_exprs: &[Arc<dyn PhysicalExpr>],
-    selectivity_tracker: &parking_lot::RwLock<crate::selectivity::SelectivityTracker>,
+    selectivity_tracker: &parking_lot::RwLock<SelectivityTracker>,
 ) -> Result<RecordBatch> {
     use arrow::array::{BooleanArray, as_boolean_array};
     use arrow::compute::{and, filter_record_batch};
@@ -954,16 +953,14 @@ struct SelectivityUpdatingStream<S> {
     /// Last reported values for each filter (to compute deltas)
     last_reported: Vec<(u64, u64)>, // (matched, total) per filter
     /// Shared selectivity tracker to update when stream completes
-    selectivity_tracker: Arc<parking_lot::RwLock<crate::selectivity::SelectivityTracker>>,
+    selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
 }
 
 impl<S> SelectivityUpdatingStream<S> {
     fn new(
         stream: S,
         filter_metrics: Vec<row_filter::FilterMetrics>,
-        selectivity_tracker: Arc<
-            parking_lot::RwLock<crate::selectivity::SelectivityTracker>,
-        >,
+        selectivity_tracker: Arc<parking_lot::RwLock<SelectivityTracker>>,
     ) -> Self {
         let last_reported = vec![(0, 0); filter_metrics.len()];
         Self {
@@ -1208,7 +1205,10 @@ mod test {
     use std::sync::Arc;
 
     use super::{ConstantColumns, constant_columns_from_stats};
-    use crate::{DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener};
+    use crate::{
+        DefaultParquetFileReaderFactory, RowGroupAccess, opener::ParquetOpener,
+        selectivity::SelectivityTracker,
+    };
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -1387,7 +1387,7 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 selectivity_tracker: Arc::new(parking_lot::RwLock::new(
-                    crate::selectivity::SelectivityTracker::default(),
+                    SelectivityTracker::default(),
                 )),
             }
         }
