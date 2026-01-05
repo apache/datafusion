@@ -163,7 +163,7 @@ impl DateTruncGranularity {
     ),
     argument(
         name = "expression",
-        description = "Timestamp or Time expression to operate on. Can be a constant, column, or function."
+        description = "Timestamp or time expression to operate on. Can be a constant, column, or function."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
