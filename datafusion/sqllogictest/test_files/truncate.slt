@@ -35,7 +35,7 @@ logical_plan
 physical_plan_error
 01)TRUNCATE operation on table 't1'
 02)caused by
-03)This feature is not implemented: TRUNCATE not supported for Base
+03)This feature is not implemented: TRUNCATE not supported for Base table
 
 # Test TRUNCATE with fully qualified table name
 statement ok
@@ -53,4 +53,12 @@ logical_plan
 physical_plan_error
 01)TRUNCATE operation on table 'test_schema.t5'
 02)caused by
-03)This feature is not implemented: TRUNCATE not supported for Base
+03)This feature is not implemented: TRUNCATE not supported for Base table
+
+# Test TRUNCATE with CASCADE option
+statement error TRUNCATE with CASCADE/RESTRICT is not supported
+TRUNCATE TABLE t1 CASCADE;
+
+# Test TRUNCATE with multiple tables
+statement error TRUNCATE with multiple tables is not supported
+TRUNCATE TABLE t1, t2;
