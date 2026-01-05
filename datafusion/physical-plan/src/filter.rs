@@ -194,20 +194,28 @@ impl FilterExec {
         FilterExecBuilder::new(predicate, input).build()
     }
 
+    /// Set the default selectivity
+    ///
+    /// # Deprecated
+    /// Use [`FilterExecBuilder::with_default_selectivity`] instead
+    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_default_selectivity instead")]
     pub fn with_default_selectivity(
-        mut self,
+        self,
         default_selectivity: u8,
     ) -> Result<Self, DataFusionError> {
-        if default_selectivity > 100 {
-            return plan_err!(
-                "Default filter selectivity value needs to be less than or equal to 100"
-            );
-        }
-        self.default_selectivity = default_selectivity;
-        Ok(self)
+        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+            .with_projection(self.projection.clone())
+            .with_default_selectivity(default_selectivity)
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .build()
     }
 
     /// Return new instance of [FilterExec] with the given projection.
+    ///
+    /// # Deprecated
+    /// Use [`FilterExecBuilder::with_projection`] instead
+    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_projection instead")]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  Check if the projection is valid
         can_project(&self.schema(), projection.as_ref())?;
@@ -220,35 +228,26 @@ impl FilterExec {
             None => None,
         };
 
-        let cache = Self::compute_properties(
-            &self.input,
-            &self.predicate,
-            self.default_selectivity,
-            projection.as_ref(),
-        )?;
-        Ok(Self {
-            predicate: Arc::clone(&self.predicate),
-            input: Arc::clone(&self.input),
-            metrics: self.metrics.clone(),
-            default_selectivity: self.default_selectivity,
-            cache,
-            projection,
-            batch_size: self.batch_size,
-            fetch: self.fetch,
-        })
+        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+            .with_projection(projection)
+            .with_default_selectivity(self.default_selectivity)
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .build()
     }
 
+    /// Set the batch size
+    ///
+    /// # Deprecated
+    /// Use [`FilterExecBuilder::with_batch_size`] instead
+    #[deprecated(since = "51.0.0", note = "Use FilterExecBuilder::with_batch_size instead")]
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
-        Ok(Self {
-            predicate: Arc::clone(&self.predicate),
-            input: Arc::clone(&self.input),
-            metrics: self.metrics.clone(),
-            default_selectivity: self.default_selectivity,
-            cache: self.cache.clone(),
-            projection: self.projection.clone(),
-            batch_size,
-            fetch: self.fetch,
-        })
+        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+            .with_projection(self.projection.clone())
+            .with_default_selectivity(self.default_selectivity)
+            .with_batch_size(batch_size)
+            .with_fetch(self.fetch)
+            .build()
     }
 
     /// The expression to filter on. This expression must evaluate to a boolean value.
