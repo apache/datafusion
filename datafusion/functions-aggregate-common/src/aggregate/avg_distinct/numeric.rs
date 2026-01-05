@@ -19,6 +19,7 @@ use std::fmt::Debug;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Float64Type};
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 
@@ -72,7 +73,7 @@ impl Accumulator for Float64DistinctAvgAccumulator {
         }
     }
 
-    fn size(&self) -> usize {
-        self.sum_accumulator.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.sum_accumulator.size(pool)
     }
 }

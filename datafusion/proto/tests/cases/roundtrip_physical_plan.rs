@@ -30,6 +30,7 @@ use crate::cases::{
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use arrow_buffer::MemoryPool;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
@@ -711,7 +712,7 @@ fn roundtrip_aggregate_udaf() -> Result<()> {
             Ok(ScalarValue::Int64(Some(0)))
         }
 
-        fn size(&self) -> usize {
+        fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
             0
         }
     }

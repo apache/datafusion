@@ -23,6 +23,7 @@ use arrow::{
     },
     datatypes::DataType,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     Result, internal_err,
     scalar::{copy_array_data, partial_cmp_struct},
@@ -154,8 +155,8 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
         true
     }
 
-    fn size(&self) -> usize {
-        self.inner.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.inner.size(pool)
     }
 }
 
@@ -293,7 +294,7 @@ impl MinMaxStructState {
         }
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.total_data_bytes + self.min_max.len() * size_of::<Option<StructArray>>()
     }
 }

@@ -32,6 +32,7 @@ use arrow::{
     compute::take_arrays,
     datatypes::UInt32Type,
 };
+use arrow_buffer::MemoryPool;
 use datafusion_common::{Result, ScalarValue, arrow_datafusion_err};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
@@ -121,8 +122,8 @@ impl AccumulatorState {
     }
 
     /// Returns the amount of memory taken by this structure and its accumulator
-    fn size(&self) -> usize {
-        self.accumulator.size() + size_of_val(self) + self.indices.allocated_size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        self.accumulator.size(pool) + size_of_val(self) + self.indices.allocated_size()
     }
 }
 
@@ -151,7 +152,7 @@ impl GroupsAccumulatorAdapter {
         for _ in 0..new_accumulators {
             let accumulator = (self.factory)()?;
             let state = AccumulatorState::new(accumulator);
-            self.add_allocation(state.size());
+            self.add_allocation(state.size(None));
             self.states.push(state);
         }
 
@@ -247,7 +248,7 @@ impl GroupsAccumulatorAdapter {
         let mut sizes_post = 0;
         for (&group_idx, offsets) in iter {
             let state = &mut self.states[group_idx];
-            sizes_pre += state.size();
+            sizes_pre += state.size(None);
 
             let values_to_accumulate = slice_and_maybe_filter(
                 &values,
@@ -259,7 +260,7 @@ impl GroupsAccumulatorAdapter {
             // clear out the state so they are empty for next
             // iteration
             state.indices.clear();
-            sizes_post += state.size();
+            sizes_post += state.size(None);
         }
 
         self.adjust_allocation(sizes_pre, sizes_post);
@@ -323,7 +324,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let results: Vec<ScalarValue> = states
             .into_iter()
             .map(|mut state| {
-                self.free_allocation(state.size());
+                self.free_allocation(state.size(None));
                 state.accumulator.evaluate()
             })
             .collect::<Result<_>>()?;
@@ -345,7 +346,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let mut results: Vec<Vec<ScalarValue>> = vec![];
 
         for mut state in states {
-            self.free_allocation(state.size());
+            self.free_allocation(state.size(None));
             let accumulator_state = state.accumulator.state()?;
             results.resize_with(accumulator_state.len(), Vec::new);
             for (idx, state_val) in accumulator_state.into_iter().enumerate() {
@@ -391,7 +392,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         self.allocation_bytes
     }
 

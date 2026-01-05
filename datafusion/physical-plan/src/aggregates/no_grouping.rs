@@ -25,6 +25,7 @@ use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use arrow_buffer::{MemoryPool, TrackingMemoryPool};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -71,6 +72,7 @@ struct AggregateStreamInner {
 
     // ==== Execution Resources ====
     baseline_metrics: BaselineMetrics,
+    arrow_pool: TrackingMemoryPool,
     reservation: MemoryReservation,
 }
 
@@ -321,6 +323,7 @@ impl AggregateStream {
             aggregate_expressions,
             filter_expressions,
             accumulators,
+            arrow_pool: TrackingMemoryPool::default(),
             reservation,
             finished: false,
             agg_dyn_filter_state: maybe_dynamic_filter,
@@ -343,6 +346,7 @@ impl AggregateStream {
                                 &mut this.accumulators,
                                 &this.aggregate_expressions,
                                 &this.filter_expressions,
+                                &this.arrow_pool,
                             )
                         };
 
@@ -430,8 +434,10 @@ fn aggregate_batch(
     accumulators: &mut [AccumulatorItem],
     expressions: &[Vec<Arc<dyn PhysicalExpr>>],
     filters: &[Option<Arc<dyn PhysicalExpr>>],
+    arrow_pool: &TrackingMemoryPool,
 ) -> Result<usize> {
     let mut allocated = 0usize;
+    let pool_size_pre = arrow_pool.used();
 
     // 1.1 iterate accumulators and respective expressions together
     // 1.2 filter the batch if necessary
@@ -454,7 +460,7 @@ fn aggregate_batch(
             let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
 
             // 1.4
-            let size_pre = accum.size();
+            let size_pre = accum.size(Some(arrow_pool));
             let res = match mode {
                 AggregateMode::Partial
                 | AggregateMode::Single
@@ -463,10 +469,13 @@ fn aggregate_batch(
                     accum.merge_batch(&values)
                 }
             };
-            let size_post = accum.size();
+            let size_post = accum.size(Some(arrow_pool));
             allocated += size_post.saturating_sub(size_pre);
             res
         })?;
+
+    let pool_size_post = arrow_pool.used();
+    allocated += pool_size_post.saturating_sub(pool_size_pre);
 
     Ok(allocated)
 }

@@ -32,6 +32,7 @@ use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
 };
+use arrow_buffer::MemoryPool;
 use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate_multiple;
 use log::debug;
@@ -228,12 +229,12 @@ impl Accumulator for CorrelationAccumulator {
         Ok(ScalarValue::Float64(None))
     }
 
-    fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.covar) + self.covar.size()
+    fn size(&self, pool: Option<&dyn MemoryPool>) -> usize {
+        size_of_val(self) - size_of_val(&self.covar) + self.covar.size(pool)
             - size_of_val(&self.stddev1)
-            + self.stddev1.size()
+            + self.stddev1.size(pool)
             - size_of_val(&self.stddev2)
-            + self.stddev2.size()
+            + self.stddev2.size(pool)
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -536,7 +537,7 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(&self.count)
             + size_of_val(&self.sum_x)
             + size_of_val(&self.sum_y)

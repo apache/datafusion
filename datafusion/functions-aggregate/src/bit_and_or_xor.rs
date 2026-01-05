@@ -30,6 +30,7 @@ use arrow::datatypes::{
     Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
+use arrow_buffer::MemoryPool;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -356,7 +357,7 @@ where
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -401,7 +402,7 @@ where
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -455,7 +456,7 @@ where
         ScalarValue::new_primitive::<T>(self.value, &T::DATA_TYPE)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self)
     }
 
@@ -518,7 +519,7 @@ where
         ScalarValue::new_primitive::<T>(v, &T::DATA_TYPE)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) + self.values.capacity() * size_of::<T::Native>()
     }
 

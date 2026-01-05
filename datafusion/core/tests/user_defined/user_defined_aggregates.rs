@@ -629,7 +629,7 @@ impl Accumulator for TimeSum {
         Ok(ScalarValue::TimestampNanosecond(Some(self.sum), None))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         // accurate size estimates are not important for this example
         42
     }
@@ -781,7 +781,7 @@ impl Accumulator for FirstSelector {
         self.update_batch(states)
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         size_of_val(self)
     }
 }
@@ -835,7 +835,7 @@ impl Accumulator for TestGroupsAccumulator {
         Ok(ScalarValue::from(self.result))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         size_of::<u64>()
     }
 
@@ -883,7 +883,7 @@ impl GroupsAccumulator for TestGroupsAccumulator {
         Ok(())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         size_of::<u64>()
     }
 }
@@ -999,7 +999,7 @@ impl Accumulator for MetadataBasedAccumulator {
         Ok(ScalarValue::from(v))
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn arrow_buffer::MemoryPool>) -> usize {
         9
     }
 

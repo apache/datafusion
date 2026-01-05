@@ -31,6 +31,7 @@ use arrow::array::{
 };
 use arrow::compute;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use arrow_buffer::MemoryPool;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err,
 };
@@ -459,7 +460,7 @@ impl Accumulator for MaxAccumulator {
         Ok(self.max.clone())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.max) + self.max.size()
     }
 }
@@ -501,7 +502,7 @@ impl Accumulator for MinAccumulator {
         Ok(self.min.clone())
     }
 
-    fn size(&self) -> usize {
+    fn size(&self, _pool: Option<&dyn MemoryPool>) -> usize {
         size_of_val(self) - size_of_val(&self.min) + self.min.size()
     }
 }
