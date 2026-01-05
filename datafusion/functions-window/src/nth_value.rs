@@ -474,8 +474,9 @@ impl NthValueEvaluator {
         if self.ignore_nulls {
             // Calculate valid indices, inside the window frame boundaries.
             let slice = array.slice(range.start, n_range);
-            if let Some(nulls) = slice.nulls() {
-                assert_eq!(nulls.len(), n_range);
+            if let Some(nulls) = slice.nulls()
+                && nulls.null_count() > 0
+            {
                 return self.valid_index_with_nulls(nulls, range.start);
             }
         }
