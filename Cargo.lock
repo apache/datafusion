@@ -2310,6 +2310,7 @@ dependencies = [
  "blake2",
  "blake3",
  "chrono",
+ "chrono-tz",
  "criterion",
  "ctor",
  "datafusion-common",
