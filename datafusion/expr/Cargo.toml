@@ -64,5 +64,6 @@ sqlparser = { workspace = true, optional = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+datafusion-macros = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
