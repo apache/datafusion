@@ -243,6 +243,9 @@ impl ScalarUDFImpl for DateTruncFunc {
         } else if let ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v))) = granularity
         {
             v.to_lowercase()
+        } else if let ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(v))) = granularity
+        {
+            v.to_lowercase()
         } else {
             return exec_err!("Granularity of `date_trunc` must be non-null scalar Utf8");
         };
@@ -250,14 +253,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         let granularity = DateTruncGranularity::from_str(&granularity_str)?;
 
         // Check upfront if granularity is valid for Time types
-        let is_time_type = match array {
-            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(_))
-            | ColumnarValue::Scalar(ScalarValue::Time64Microsecond(_))
-            | ColumnarValue::Scalar(ScalarValue::Time32Millisecond(_))
-            | ColumnarValue::Scalar(ScalarValue::Time32Second(_)) => true,
-            ColumnarValue::Array(arr) => matches!(arr.data_type(), Time64(_) | Time32(_)),
-            _ => false,
-        };
+        let is_time_type = matches!(array.data_type(), Time64(_) | Time32(_));
         if is_time_type && !granularity.valid_for_time() {
             return exec_err!(
                 "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
