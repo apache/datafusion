@@ -19,7 +19,7 @@ mod data_utils;
 
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
-use data_utils::make_data;
+use data_utils::{make_data, make_distinct_data};
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
@@ -48,8 +48,38 @@ async fn create_context(
     Ok(ctx)
 }
 
+async fn create_context_distinct(
+    partition_cnt: i32,
+    sample_cnt: i32,
+    use_topk: bool,
+) -> Result<SessionContext> {
+    // Use deterministic data generation for DISTINCT queries to ensure consistent results
+    let (schema, parts) = make_distinct_data(partition_cnt, sample_cnt).unwrap();
+    let mem_table = Arc::new(MemTable::try_new(schema, parts).unwrap());
+
+    // Create the DataFrame
+    let mut cfg = SessionConfig::new();
+    let opts = cfg.options_mut();
+    opts.optimizer.enable_topk_aggregation = use_topk;
+    let ctx = SessionContext::new_with_config(cfg);
+    let _ = ctx.register_table("traces", mem_table)?;
+
+    Ok(ctx)
+}
+
 fn run(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool, asc: bool) {
     black_box(rt.block_on(async { aggregate(ctx, limit, use_topk, asc).await })).unwrap();
+}
+
+fn run_distinct(
+    rt: &Runtime,
+    ctx: SessionContext,
+    limit: usize,
+    use_topk: bool,
+    asc: bool,
+) {
+    black_box(rt.block_on(async { aggregate_distinct(ctx, limit, use_topk, asc).await }))
+        .unwrap();
 }
 
 async fn aggregate(
@@ -94,6 +124,84 @@ async fn aggregate(
     .trim();
     if asc {
         assert_eq!(actual.trim(), expected_asc);
+    }
+
+    Ok(())
+}
+
+async fn aggregate_distinct(
+    ctx: SessionContext,
+    limit: usize,
+    use_topk: bool,
+    asc: bool,
+) -> Result<()> {
+    let order_direction = if asc { "asc" } else { "desc" };
+    let sql = format!(
+        "select id from traces group by id order by id {order_direction} limit {limit};"
+    );
+    let df = ctx.sql(sql.as_str()).await?;
+    let plan = df.create_physical_plan().await?;
+    let actual_phys_plan = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(
+        actual_phys_plan.contains(&format!("lim=[{limit}]")),
+        use_topk
+    );
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(batches.len(), 1);
+    let batch = batches.first().unwrap();
+    assert_eq!(batch.num_rows(), 10);
+
+    let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
+
+    let expected_asc = r#"
++----+
+| id |
++----+
+| 0  |
+| 1  |
+| 2  |
+| 3  |
+| 4  |
+| 5  |
+| 6  |
+| 7  |
+| 8  |
+| 9  |
++----+
+"#
+    .trim();
+
+    let expected_desc = r#"
++---------+
+| id      |
++---------+
+| 9999999 |
+| 9999998 |
+| 9999997 |
+| 9999996 |
+| 9999995 |
+| 9999994 |
+| 9999993 |
+| 9999992 |
+| 9999991 |
+| 9999990 |
++---------+
+"#
+    .trim();
+
+    // Verify exact results match expected values
+    if asc {
+        assert_eq!(
+            actual.trim(),
+            expected_asc,
+            "Ascending DISTINCT results do not match expected values"
+        );
+    } else {
+        assert_eq!(
+            actual.trim(),
+            expected_desc,
+            "Descending DISTINCT results do not match expected values"
+        );
     }
 
     Ok(())
@@ -169,6 +277,36 @@ fn criterion_benchmark(c: &mut Criterion) {
         )
         .as_str(),
         |b| b.iter(|| run(&rt, ctx.clone(), limit, true, true)),
+    );
+
+    let ctx = rt.block_on(async {
+        create_context_distinct(partitions, samples, false)
+            .await
+            .unwrap()
+    });
+    c.bench_function(
+        format!("distinct {} rows desc [no TopK]", partitions * samples).as_str(),
+        |b| b.iter(|| run_distinct(&rt, ctx.clone(), limit, false, false)),
+    );
+
+    c.bench_function(
+        format!("distinct {} rows asc [no TopK]", partitions * samples).as_str(),
+        |b| b.iter(|| run_distinct(&rt, ctx.clone(), limit, false, true)),
+    );
+
+    let ctx_topk = rt.block_on(async {
+        create_context_distinct(partitions, samples, true)
+            .await
+            .unwrap()
+    });
+    c.bench_function(
+        format!("distinct {} rows desc [TopK]", partitions * samples).as_str(),
+        |b| b.iter(|| run_distinct(&rt, ctx_topk.clone(), limit, true, false)),
+    );
+
+    c.bench_function(
+        format!("distinct {} rows asc [TopK]", partitions * samples).as_str(),
+        |b| b.iter(|| run_distinct(&rt, ctx_topk.clone(), limit, true, true)),
     );
 }
 

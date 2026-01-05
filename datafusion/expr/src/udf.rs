@@ -25,9 +25,7 @@ use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    ExprSchema, Result, ScalarValue, assert_or_internal_err, not_impl_err,
-};
+use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -245,7 +243,7 @@ impl ScalarUDF {
         {
             let result_data_type = result.data_type();
             let expected_type = return_field.data_type();
-            assert_or_internal_err!(
+            datafusion_common::assert_or_internal_err!(
                 result_data_type == *expected_type,
                 "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
                 self.name(),

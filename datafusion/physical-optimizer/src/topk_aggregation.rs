@@ -26,7 +26,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -48,13 +48,10 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // ensure the sort direction matches aggregate function
-        let (field, desc) = aggr.get_minmax_desc()?;
-        if desc != order_desc {
-            return None;
-        }
-        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
+        // Only support single group key
+        let (group_key, group_key_alias) =
+            aggr.group_expr().expr().iter().exactly_one().ok()?;
+        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
         if !kt.is_primitive()
             && kt != DataType::Utf8
             && kt != DataType::Utf8View
@@ -66,8 +63,28 @@ impl TopKAggregation {
             return None;
         }
 
-        // ensure the sort is on the same field as the aggregate output
-        if order_by != field.name() {
+        // Check if this is ordering by an aggregate function (MIN/MAX)
+        if let Some((field, desc)) = aggr.get_minmax_desc() {
+            // ensure the sort direction matches aggregate function
+            if desc != order_desc {
+                return None;
+            }
+            // ensure the sort is on the same field as the aggregate output
+            if order_by != field.name() {
+                return None;
+            }
+        } else if aggr.aggr_expr().is_empty() {
+            // TODO: remove this after https://github.com/apache/datafusion/issues/19219
+            if !kt.is_primitive() {
+                return None;
+            }
+            // This is a GROUP BY without aggregates (DISTINCT-like operation)
+            // Check if ordering is on the group key itself
+            if order_by != group_key_alias {
+                return None;
+            }
+        } else {
+            // Has aggregates but not MIN/MAX, or doesn't match our patterns
             return None;
         }
 
@@ -81,7 +98,7 @@ impl TopKAggregation {
             aggr.input_schema(),
         )
         .expect("Unable to copy Aggregate!")
-        .with_limit(Some(limit));
+        .with_limit_options(Some(LimitOptions::new_with_order(limit, order_desc)));
         Some(Arc::new(new_aggr))
     }
 
