@@ -30,7 +30,6 @@ You can see the current [status of the `52.0.0`release here](https://github.com/
 The following methods on `FilterExec` have been deprecated in favor of using `FilterExecBuilder`:
 
 - `with_projection()`
-- `with_default_selectivity()`
 - `with_batch_size()`
 
 **Who is affected:**
@@ -46,7 +45,7 @@ Use `FilterExecBuilder` instead of chaining method calls on `FilterExec`:
 ```rust,ignore
 let filter = FilterExec::try_new(predicate, input)?
     .with_projection(Some(vec![0, 2]))?
-    .with_default_selectivity(30)?;
+    .with_batch_size(8192)?;
 ```
 
 **After:**
@@ -54,11 +53,13 @@ let filter = FilterExec::try_new(predicate, input)?
 ```rust,ignore
 let filter = FilterExecBuilder::new(predicate, input)
     .with_projection(Some(vec![0, 2]))
-    .with_default_selectivity(30)
+    .with_batch_size(8192)
     .build()?;
 ```
 
 The builder pattern is more efficient as it computes properties once during `build()` rather than recomputing them for each method call.
+
+Note: `with_default_selectivity()` is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.
 
 ### Changes to DFSchema API
 

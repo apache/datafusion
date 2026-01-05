@@ -195,20 +195,17 @@ impl FilterExec {
     }
 
     /// Set the default selectivity
-    ///
-    /// # Deprecated
-    /// Use [`FilterExecBuilder::with_default_selectivity`] instead
-    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_default_selectivity instead")]
     pub fn with_default_selectivity(
-        self,
+        mut self,
         default_selectivity: u8,
     ) -> Result<Self, DataFusionError> {
-        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
-            .with_projection(self.projection.clone())
-            .with_default_selectivity(default_selectivity)
-            .with_batch_size(self.batch_size)
-            .with_fetch(self.fetch)
-            .build()
+        if default_selectivity > 100 {
+            return plan_err!(
+                "Default filter selectivity value needs to be less than or equal to 100"
+            );
+        }
+        self.default_selectivity = default_selectivity;
+        Ok(self)
     }
 
     /// Return new instance of [FilterExec] with the given projection.
