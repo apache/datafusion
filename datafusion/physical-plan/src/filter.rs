@@ -203,7 +203,7 @@ impl FilterExec {
         self,
         default_selectivity: u8,
     ) -> Result<Self, DataFusionError> {
-        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
             .with_projection(self.projection.clone())
             .with_default_selectivity(default_selectivity)
             .with_batch_size(self.batch_size)
@@ -228,7 +228,7 @@ impl FilterExec {
             None => None,
         };
 
-        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
             .with_projection(projection)
             .with_default_selectivity(self.default_selectivity)
             .with_batch_size(self.batch_size)
@@ -242,7 +242,7 @@ impl FilterExec {
     /// Use [`FilterExecBuilder::with_batch_size`] instead
     #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_batch_size instead")]
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
-        FilterExecBuilder::new(self.predicate.clone(), self.input.clone())
+        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
             .with_projection(self.projection.clone())
             .with_default_selectivity(self.default_selectivity)
             .with_batch_size(batch_size)
@@ -467,13 +467,13 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExec::try_new(Arc::clone(&self.predicate), children.swap_remove(0))
-            .and_then(|e| {
-                let selectivity = e.default_selectivity();
-                e.with_default_selectivity(selectivity)
-            })
-            .and_then(|e| e.with_projection(self.projection().cloned()))
-            .map(|e| e.with_fetch(self.fetch).unwrap())
+        FilterExecBuilder::new(Arc::clone(&self.predicate), children.swap_remove(0))
+            .with_default_selectivity(self.default_selectivity())
+            .with_projection(self.projection().cloned())
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .build()
+            .map(|e| Arc::new(e) as _)
     }
 
     fn execute(
@@ -539,14 +539,12 @@ impl ExecutionPlan for FilterExec {
             if let Some(new_predicate) =
                 update_expr(self.predicate(), projection.expr(), false)?
             {
-                return FilterExec::try_new(
+                return FilterExecBuilder::new(
                     new_predicate,
                     make_with_child(projection, self.input())?,
                 )
-                .and_then(|e| {
-                    let selectivity = self.default_selectivity();
-                    e.with_default_selectivity(selectivity)
-                })
+                .with_default_selectivity(self.default_selectivity())
+                .build()
                 .map(|e| Some(Arc::new(e) as _));
             }
         }
@@ -685,7 +683,23 @@ impl ExecutionPlan for FilterExec {
 
 impl EmbeddedProjection for FilterExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        self.with_projection(projection)
+        // Check if the projection is valid
+        can_project(&self.schema(), projection.as_ref())?;
+
+        let projection = match projection {
+            Some(projection) => match &self.projection {
+                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
+                None => Some(projection),
+            },
+            None => None,
+        };
+
+        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
+            .with_projection(projection)
+            .with_default_selectivity(self.default_selectivity)
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .build()
     }
 }
 
