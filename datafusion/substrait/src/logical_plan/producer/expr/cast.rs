@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_type_from_field, SubstraitProducer};
 use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type_from_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
@@ -81,7 +80,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        DefaultSubstraitProducer, to_substrait_type, to_substrait_extended_expr,
+        DefaultSubstraitProducer, to_substrait_extended_expr, to_substrait_type,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;

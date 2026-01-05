@@ -445,8 +445,9 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::{Operator, col, lit, datatype::DataTypeExt};
-  
+    use datafusion_common::datatype::DataTypeExt;
+    use datafusion_expr::{Operator, col, lit};
+
     use super::*;
 
     #[test]
@@ -505,10 +506,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message().contains("arrow.uuid"));
-      
+
         Ok(())
     }
-  
+
     /// Test that deeply nested expressions do not cause a stack overflow.
     ///
     /// This test only runs when the `recursive_protection` feature is enabled,

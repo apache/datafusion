@@ -20,9 +20,9 @@
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::error::ArrowError;
 use datafusion_common::{
-    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err,
-    exec_datafusion_err, utils::take_function_args, types::logical_string,
-    datatype::DataTypeExt,
+    Result, ScalarValue, arrow_datafusion_err, datatype::DataTypeExt,
+    exec_datafusion_err, exec_err, internal_err, types::logical_string,
+    utils::take_function_args,
 };
 use std::any::Any;
 
