@@ -61,3 +61,7 @@ criterion = { workspace = true }
 [[bench]]
 harness = false
 name = "char"
+
+[[bench]]
+harness = false
+name = "space"

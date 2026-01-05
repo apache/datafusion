@@ -21,6 +21,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Scalar};
 use arrow::compute::kernels::comparison::starts_with as arrow_starts_with;
 use arrow::datatypes::DataType;
+use datafusion_common::utils::take_function_args;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::type_coercion::binary::{
     binary_to_string_coercion, string_coercion,
@@ -92,12 +93,7 @@ impl ScalarUDFImpl for StartsWithFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [str_arg, prefix_arg] = args.args.as_slice() else {
-            return exec_err!(
-                "starts_with was called with {} arguments, expected 2",
-                args.args.len()
-            );
-        };
+        let [str_arg, prefix_arg] = take_function_args(self.name(), &args.args)?;
 
         // Determine the common type for coercion
         let coercion_type = string_coercion(
