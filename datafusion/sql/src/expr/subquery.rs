@@ -178,10 +178,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::ExprWithAlias { alias, .. } = item {
-                    if let Some(span) = Span::try_from_sqlparser_span(alias.span) {
-                        spans.add_span(span);
-                    }
+                if let SelectItem::ExprWithAlias { alias, .. } = item
+                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                {
+                    spans.add_span(span);
                 }
             }
         }

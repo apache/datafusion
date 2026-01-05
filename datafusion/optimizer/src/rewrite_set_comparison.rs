@@ -38,7 +38,7 @@ use datafusion_expr::utils::merge_schema;
 pub struct RewriteSetComparison;
 
 impl RewriteSetComparison {
-    #[allow(missing_docs)]
+    /// Create a new `RewriteSetComparison` optimizer rule.
     pub fn new() -> Self {
         Self
     }
