@@ -297,7 +297,7 @@ pub struct ParquetSource {
     /// Shared across all openers - each opener reads stats and makes its own
     /// decision about which filters to push down vs. apply post-scan.
     pub(crate) selectivity_tracker:
-        Arc<std::sync::RwLock<crate::selectivity::SelectivityTracker>>,
+        Arc<parking_lot::RwLock<crate::selectivity::SelectivityTracker>>,
 }
 
 impl ParquetSource {
@@ -323,7 +323,7 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
-            selectivity_tracker: Arc::new(std::sync::RwLock::new(
+            selectivity_tracker: Arc::new(parking_lot::RwLock::new(
                 crate::selectivity::SelectivityTracker::default(),
             )),
         }
@@ -336,7 +336,7 @@ impl ParquetSource {
     ) -> Self {
         // Update the selectivity tracker threshold from the config
         let threshold = table_parquet_options.global.filter_effectiveness_threshold;
-        self.selectivity_tracker = Arc::new(std::sync::RwLock::new(
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
             crate::selectivity::SelectivityTracker::new(threshold),
         ));
         self.table_parquet_options = table_parquet_options;
@@ -484,7 +484,7 @@ impl ParquetSource {
         self.table_parquet_options
             .global
             .filter_effectiveness_threshold = threshold;
-        self.selectivity_tracker = Arc::new(std::sync::RwLock::new(
+        self.selectivity_tracker = Arc::new(parking_lot::RwLock::new(
             crate::selectivity::SelectivityTracker::new(threshold),
         ));
         self

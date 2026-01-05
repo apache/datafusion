@@ -48,8 +48,27 @@ pub struct PartitionedFilters {
 ///
 /// This is needed because `Arc<dyn PhysicalExpr>` uses pointer equality by default,
 /// but we want to use the structural equality provided by `DynEq` and `DynHash`.
+///
+/// For dynamic expressions (like `DynamicFilterPhysicalExpr`), we use the snapshot
+/// of the expression to ensure stable hash/eq values even as the dynamic expression
+/// updates. This is critical for HashMap correctness.
 #[derive(Clone, Debug)]
-pub struct ExprKey(pub Arc<dyn PhysicalExpr>);
+pub struct ExprKey(Arc<dyn PhysicalExpr>);
+
+impl ExprKey {
+    /// Create a new ExprKey from an expression.
+    ///
+    /// For dynamic expressions, this takes a snapshot to ensure stable hash/eq.
+    pub fn new(expr: &Arc<dyn PhysicalExpr>) -> Self {
+        // Try to get a snapshot; if available, use it for stable hash/eq
+        let stable_expr = expr
+            .snapshot()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Arc::clone(expr));
+        Self(stable_expr)
+    }
+}
 
 impl Hash for ExprKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -146,7 +165,7 @@ impl SelectivityTracker {
 
     /// Get the effectiveness for a filter expression, if known.
     pub fn get_effectiveness(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<f64> {
-        let key = ExprKey(Arc::clone(expr));
+        let key = ExprKey::new(expr);
         self.stats.get(&key).map(|s| s.effectiveness())
     }
 
@@ -167,7 +186,7 @@ impl SelectivityTracker {
         let mut post_scan = Vec::new();
 
         for filter in filters {
-            let key = ExprKey(Arc::clone(&filter));
+            let key = ExprKey::new(&filter);
             match self.stats.get(&key) {
                 Some(stats) if stats.effectiveness() >= self.threshold => {
                     // Known to be effective - promote to row filter
@@ -188,14 +207,21 @@ impl SelectivityTracker {
 
     /// Update stats for a filter expression after processing a file.
     pub fn update(&mut self, expr: &Arc<dyn PhysicalExpr>, matched: u64, total: u64) {
-        let key = ExprKey(Arc::clone(expr));
+        let key = ExprKey::new(expr);
         self.stats.entry(key).or_default().update(matched, total);
     }
 
     /// Get the current stats for a filter expression, if any.
     pub fn get_stats(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<&SelectivityStats> {
-        let key = ExprKey(Arc::clone(expr));
+        let key = ExprKey::new(expr);
         self.stats.get(&key)
+    }
+
+    /// Iterate all known selectivities.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&Arc<dyn PhysicalExpr>, &SelectivityStats)> {
+        self.stats.iter().map(|(key, stats)| (&key.0, stats))
     }
 }
 
@@ -229,9 +255,9 @@ mod tests {
         let filter2 = make_filter("a", 5);
         let filter3 = make_filter("a", 10);
 
-        let key1 = ExprKey(filter1);
-        let key2 = ExprKey(filter2);
-        let key3 = ExprKey(filter3);
+        let key1 = ExprKey::new(&filter1);
+        let key2 = ExprKey::new(&filter2);
+        let key3 = ExprKey::new(&filter3);
 
         // Same expression structure should be equal
         assert_eq!(key1, key2);
@@ -246,8 +272,8 @@ mod tests {
         let filter1 = make_filter("a", 5);
         let filter2 = make_filter("a", 5);
 
-        let key1 = ExprKey(filter1);
-        let key2 = ExprKey(filter2);
+        let key1 = ExprKey::new(&filter1);
+        let key2 = ExprKey::new(&filter2);
 
         let mut hasher1 = DefaultHasher::new();
         let mut hasher2 = DefaultHasher::new();
@@ -336,13 +362,13 @@ mod tests {
         assert!(
             row_filters
                 .iter()
-                .any(|f| ExprKey(f.clone()) == ExprKey(filter1.clone()))
+                .any(|f| ExprKey::new(f) == ExprKey::new(&filter1))
         );
         // The unknown filter should be in post_scan
         assert!(
             post_scan
                 .iter()
-                .any(|f| ExprKey(f.clone()) == ExprKey(filter2.clone()))
+                .any(|f| ExprKey::new(f) == ExprKey::new(&filter2))
         );
     }
 
