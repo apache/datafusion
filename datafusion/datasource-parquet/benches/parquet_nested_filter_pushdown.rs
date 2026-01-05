@@ -64,16 +64,20 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
     group.throughput(Throughput::Elements(TOTAL_ROWS as u64));
 
     group.bench_function("no_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&create_predicate(), &file_schema);
         b.iter(|| {
-            let matched = scan_with_filter(&dataset_path, false)
+            let matched = scan_with_predicate(&dataset_path, &predicate, false)
                 .expect("baseline parquet scan with filter succeeded");
             assert_eq!(matched, ROW_GROUP_SIZE);
         });
     });
 
     group.bench_function("with_pushdown", |b| {
+        let file_schema = setup_reader(&dataset_path);
+        let predicate = logical2physical(&create_predicate(), &file_schema);
         b.iter(|| {
-            let matched = scan_with_filter(&dataset_path, true)
+            let matched = scan_with_predicate(&dataset_path, &predicate, true)
                 .expect("pushdown parquet scan with filter succeeded");
             assert_eq!(matched, ROW_GROUP_SIZE);
         });
@@ -82,25 +86,37 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
     group.finish();
 }
 
-fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<usize> {
+fn setup_reader(path: &Path) -> SchemaRef {
+    let file = std::fs::File::open(path).expect("failed to open file");
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(file).expect("failed to build reader");
+    Arc::clone(builder.schema())
+}
+
+fn create_predicate() -> Expr {
+    array_has(
+        col(COLUMN_NAME),
+        Expr::Literal(ScalarValue::Utf8(Some(TARGET_VALUE.to_string())), None),
+    )
+}
+
+fn scan_with_predicate(
+    path: &Path,
+    predicate: &Arc<dyn datafusion_physical_expr::PhysicalExpr>,
+    pushdown: bool,
+) -> datafusion_common::Result<usize> {
     let file = std::fs::File::open(path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let metadata = builder.metadata().clone();
     let file_schema = builder.schema();
     let projection = ProjectionMask::all();
 
-    let predicate = array_has(
-        col(COLUMN_NAME),
-        Expr::Literal(ScalarValue::Utf8(Some(TARGET_VALUE.to_string())), None),
-    );
-    let predicate = logical2physical(&predicate, file_schema);
-
     let metrics = ExecutionPlanMetricsSet::new();
     let file_metrics = ParquetFileMetrics::new(0, &path.display().to_string(), &metrics);
 
     let builder = if pushdown {
         if let Some(row_filter) =
-            build_row_filter(&predicate, file_schema, &metadata, false, &file_metrics)?
+            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
         {
             builder.with_row_filter(row_filter)
         } else {
@@ -115,7 +131,7 @@ fn scan_with_filter(path: &Path, pushdown: bool) -> datafusion_common::Result<us
     let mut matched_rows = 0usize;
     for batch in reader {
         let batch = batch?;
-        matched_rows += count_matches(&predicate, &batch)?;
+        matched_rows += count_matches(predicate, &batch)?;
     }
 
     if pushdown {
