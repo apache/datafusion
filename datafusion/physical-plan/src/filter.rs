@@ -148,7 +148,7 @@ impl FilterExecBuilder {
             other => {
                 return plan_err!(
                     "Filter predicate must return BOOLEAN values, got {other:?}"
-                )
+                );
             }
         }
 
@@ -187,7 +187,6 @@ impl FilterExecBuilder {
 
 impl FilterExec {
     /// Create a FilterExec on an input using the builder pattern
-    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         predicate: Arc<dyn PhysicalExpr>,
         input: Arc<dyn ExecutionPlan>,
@@ -1707,8 +1706,7 @@ mod tests {
         ));
 
         // Create filter without projection using builder
-        let filter = FilterExecBuilder::new(predicate, input)
-            .build()?;
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
 
         // Verify no projection is set
         assert_eq!(filter.projection(), None);
@@ -1795,8 +1793,8 @@ mod tests {
             .build()?;
 
         // Method 2: try_new().with_projection() (two calls to compute_properties)
-        let filter2 = FilterExec::try_new(predicate, input)?
-            .with_projection(projection)?;
+        let filter2 =
+            FilterExec::try_new(predicate, input)?.with_projection(projection)?;
 
         // Both methods should produce equivalent results
         assert_eq!(filter1.schema(), filter2.schema());
