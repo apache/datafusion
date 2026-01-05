@@ -524,15 +524,20 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
+        // SortMergeJoinExec uses symmetric hash partitioning where both left and right
+        // inputs are hash-partitioned on the join keys. This means partition `i` of the
+        // left input is joined with partition `i` of the right input.
+        //
+        // Therefore, partition-specific statistics can be computed by getting the
+        // partition-specific statistics from both children and combining them via
+        // `estimate_join_statistics`.
+        //
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
+            self.left.partition_statistics(partition)?,
+            self.right.partition_statistics(partition)?,
             &self.on,
             &self.join_type,
             &self.schema,

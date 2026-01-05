@@ -43,7 +43,7 @@ use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
     expr_vec_fmt,
@@ -101,11 +101,7 @@ impl ScalarFunctionExpr {
             .collect::<Result<Vec<_>>>()?;
 
         // verify that input data types is consistent with function's `TypeSignature`
-        let arg_types = arg_fields
-            .iter()
-            .map(|f| f.data_type().clone())
-            .collect::<Vec<_>>();
-        data_types_with_scalar_udf(&arg_types, &fun)?;
+        fields_with_udf(&arg_fields, fun.as_ref())?;
 
         let arguments = args
             .iter()

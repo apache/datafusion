@@ -187,7 +187,7 @@ required-features = ["unicode_expressions"]
 
 [[bench]]
 harness = false
-name = "ltrim"
+name = "trim"
 required-features = ["string_expressions"]
 
 [[bench]]
@@ -294,3 +294,13 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "levenshtein"
 required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "left"
+required-features = ["unicode_expressions"]
+
+[[bench]]
+harness = false
+name = "factorial"
+required-features = ["math_expressions"]
