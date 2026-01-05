@@ -27,6 +27,12 @@ use datafusion_physical_expr::{
 };
 
 /// Rewrite column references in a physical expr according to a mapping.
+///
+/// This rewriter traverses the expression tree and replaces [`Column`] nodes
+/// with the corresponding expression found in the `column_map`.
+///
+/// If a column is found in the map, it is replaced by the mapped expression.
+/// If a column is NOT found in the map, it is replaced by an [`UnKnownColumn`].
 pub struct PhysicalColumnRewriter {
     /// Mapping from original column to new column.
     pub column_map: HashMap<Column, Arc<dyn PhysicalExpr>>,
