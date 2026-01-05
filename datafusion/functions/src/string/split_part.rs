@@ -235,7 +235,7 @@ where
                             // rsplit iterates in reverse, so -1 means first from rsplit (index 0)
                             let idx: usize = (-n - 1).try_into().map_err(|_| {
                                 exec_datafusion_err!(
-                                    "split_part index {n} exceeds maximum supported value"
+                                    "split_part index {n} exceeds minimum supported value"
                                 )
                             })?;
                             string.rsplit(delimiter).nth(idx)
