@@ -1831,7 +1831,6 @@ pub struct AggLimit {
     #[prost(uint64, tag = "1")]
     pub limit: u64,
     /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
-    /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
     #[prost(bool, optional, tag = "2")]
     pub descending: ::core::option::Option<bool>,
 }

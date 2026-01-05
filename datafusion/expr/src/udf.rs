@@ -245,7 +245,7 @@ impl ScalarUDF {
         {
             let result_data_type = result.data_type();
             let expected_type = return_field.data_type();
-            datafusion_common::assert_or_internal_err!(
+            assert_or_internal_err!(
                 result_data_type == *expected_type,
                 "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
                 self.name(),
