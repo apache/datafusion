@@ -109,6 +109,13 @@ Plan with Metrics
 statement ok
 set datafusion.explain.analyze_level = dev;
 
+query IIT
+SELECT id, value AS v, name FROM (SELECT * FROM test_parquet UNION ALL SELECT * FROM test_parquet) ORDER BY v DESC LIMIT 3;
+----
+10 1000 j
+10 1000 j
+9 900 i
+
 # Disable TopK dynamic filter pushdown
 statement ok
 SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
@@ -122,6 +129,13 @@ logical_plan
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[value@1 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value, name], file_type=parquet
+
+query IIT
+SELECT id, value AS v, name FROM (SELECT * FROM test_parquet UNION ALL SELECT * FROM test_parquet) ORDER BY v DESC LIMIT 3;
+----
+10 1000 j
+10 1000 j
+9 900 i
 
 # Re-enable for next tests
 statement ok
