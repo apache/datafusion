@@ -359,34 +359,6 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         (store_idx, true)
     }
 
-    /// Insert a new entry with a specific heap_idx. Should only be called after
-    /// confirming the entry doesn't exist.
-    #[allow(dead_code)]
-    pub fn insert_with_heap_idx(&mut self, hash: u64, id: ID, heap_idx: usize) -> usize {
-        let mi = HashTableItem::new(hash, id.clone(), heap_idx);
-        let store_idx = if let Some(idx) = self.free_index.take() {
-            self.store[idx] = Some(mi);
-            idx
-        } else {
-            self.store.push(Some(mi));
-            self.store.len() - 1
-        };
-
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
-        if self.map.len() == self.map.capacity() {
-            self.map.reserve(self.limit, hasher);
-        }
-
-        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == id;
-        match self.map.entry(hash, eq_fn, hasher) {
-            Entry::Occupied(_) => unreachable!("Item should not exist"),
-            Entry::Vacant(vacant) => {
-                vacant.insert(store_idx);
-            }
-        }
-        store_idx
-    }
-
     pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
         let mi = HashTableItem::new(hash, id.clone(), heap_idx);
         let store_idx = if let Some(idx) = self.free_index.take() {
