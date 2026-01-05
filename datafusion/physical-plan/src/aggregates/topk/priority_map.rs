@@ -63,40 +63,26 @@ impl PriorityMap {
         // handle new groups we haven't seen yet
         map.clear();
         let replace_idx = self.heap.worst_map_idx();
-        // JUSTIFICATION
-        //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-        //  Soundness: replace_idx kept valid during resizes
-        let (map_idx, did_insert) =
-            unsafe { self.map.find_or_insert(row_idx, replace_idx, map) };
+
+        let (map_idx, did_insert) = self.map.find_or_insert(row_idx, replace_idx);
         if did_insert {
-            self.heap.renumber(map);
-            map.clear();
             self.heap.insert(row_idx, map_idx, map);
-            // JUSTIFICATION
-            //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-            //  Soundness: the map was created on the line above, so all the indexes should be valid
-            unsafe { self.map.update_heap_idx(map) };
+            self.map.update_heap_idx(map);
             return Ok(());
         };
 
         // this is a value for an existing group
         map.clear();
-        // JUSTIFICATION
-        //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-        //  Soundness: map_idx was just found, so it is valid
-        let heap_idx = unsafe { self.map.heap_idx_at(map_idx) };
+        let heap_idx = self.map.heap_idx_at(map_idx);
         self.heap.replace_if_better(heap_idx, row_idx, map);
-        // JUSTIFICATION
-        //  Benefit:  ~15% speedup + required to index into RawTable from binary heap
-        //  Soundness: the index map was just built, so it will be valid
-        unsafe { self.map.update_heap_idx(map) };
+        self.map.update_heap_idx(map);
 
         Ok(())
     }
 
     pub fn emit(&mut self) -> Result<Vec<ArrayRef>> {
         let (vals, map_idxs) = self.heap.drain();
-        let ids = unsafe { self.map.take_all(map_idxs) };
+        let ids = self.map.take_all(map_idxs);
         Ok(vec![ids, vals])
     }
 
@@ -182,13 +168,13 @@ mod tests {
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
 
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -207,13 +193,13 @@ mod tests {
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
 
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -231,13 +217,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 2        | 2            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 2        | 2            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -255,13 +241,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -279,13 +265,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 2            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 2            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -303,13 +289,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -327,13 +313,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 2        | 2            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 2        | 2            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -351,13 +337,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -375,13 +361,13 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-| 1        | 2            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        | 1        | 2            |
+        +----------+--------------+
+        "
         );
 
         Ok(())
@@ -400,14 +386,14 @@ mod tests {
         let cols = agg.emit()?;
         let batch = RecordBatch::try_new(test_schema(), cols)?;
         let actual = format!("{}", pretty_format_batches(&[batch])?);
-        assert_snapshot!(actual, @r#"
-+----------+--------------+
-| trace_id | timestamp_ms |
-+----------+--------------+
-|          | 3            |
-| 1        | 1            |
-+----------+--------------+
-        "#
+        assert_snapshot!(actual, @r"
+        +----------+--------------+
+        | trace_id | timestamp_ms |
+        +----------+--------------+
+        |          | 3            |
+        | 1        | 1            |
+        +----------+--------------+
+        "
         );
 
         Ok(())

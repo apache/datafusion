@@ -30,7 +30,9 @@ use super::{
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
+use crate::sort_pushdown::SortOrderPushdownResult;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
@@ -283,6 +285,42 @@ impl ExecutionPlan for CoalescePartitionsExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // CoalescePartitionsExec merges multiple partitions into one, which loses
+        // global ordering. However, we can still push the sort requirement down
+        // to optimize individual partitions - the Sort operator above will handle
+        // the global ordering.
+        //
+        // Note: The result will always be at most Inexact (never Exact) when there
+        // are multiple partitions, because merging destroys global ordering.
+        let result = self.input.try_pushdown_sort(order)?;
+
+        // If we have multiple partitions, we can't return Exact even if the
+        // underlying source claims Exact - merging destroys global ordering
+        let has_multiple_partitions =
+            self.input.output_partitioning().partition_count() > 1;
+
+        result
+            .try_map(|new_input| {
+                Ok(
+                    Arc::new(
+                        CoalescePartitionsExec::new(new_input).with_fetch(self.fetch),
+                    ) as Arc<dyn ExecutionPlan>,
+                )
+            })
+            .map(|r| {
+                if has_multiple_partitions {
+                    // Downgrade Exact to Inexact when merging multiple partitions
+                    r.into_inexact()
+                } else {
+                    r
+                }
+            })
     }
 }
 

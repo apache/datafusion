@@ -569,8 +569,16 @@ fn count_matches(
             ));
         }
 
-        let find_slice = value.chars().skip(start as usize - 1).collect::<String>();
-        let count = pattern.find_iter(find_slice.as_str()).count();
+        // Find the byte offset for the start position (1-based character index)
+        let byte_offset = value
+            .char_indices()
+            .nth((start as usize).saturating_sub(1))
+            .map(|(idx, _)| idx)
+            .unwrap_or(value.len());
+
+        // Use string slicing instead of collecting chars into a new String
+        let find_slice = &value[byte_offset..];
+        let count = pattern.find_iter(find_slice).count();
         Ok(count as i64)
     } else {
         let count = pattern.find_iter(value).count();

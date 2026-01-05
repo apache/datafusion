@@ -16,13 +16,14 @@
 // under the License.
 
 use crate::logical_plan::producer::{to_substrait_type_from_field, SubstraitProducer};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_type_from_field};
 use crate::variation_const::DEFAULT_TYPE_VARIATION_REF;
 use datafusion::common::{DFSchemaRef, ScalarValue};
 use datafusion::logical_expr::{Cast, Expr, TryCast};
+use substrait::proto::Expression;
 use substrait::proto::expression::cast::FailureBehavior;
 use substrait::proto::expression::literal::LiteralType;
 use substrait::proto::expression::{Literal, RexType};
-use substrait::proto::Expression;
 
 pub fn from_cast(
     producer: &mut impl SubstraitProducer,
@@ -80,7 +81,7 @@ pub fn from_try_cast(
 mod tests {
     use super::*;
     use crate::logical_plan::producer::{
-        to_substrait_extended_expr, to_substrait_type, DefaultSubstraitProducer,
+        DefaultSubstraitProducer, to_substrait_type, to_substrait_extended_expr,
     };
     use datafusion::arrow::datatypes::{DataType, Field};
     use datafusion::common::DFSchema;

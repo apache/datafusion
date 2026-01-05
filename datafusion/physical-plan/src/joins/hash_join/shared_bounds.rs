@@ -26,10 +26,10 @@ use crate::ExecutionPlanProperties;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
-use crate::joins::hash_join::partitioned_hash_eval::{HashExpr, HashTableLookupExpr};
+use crate::joins::hash_join::partitioned_hash_eval::{
+    HashExpr, HashTableLookupExpr, SeededRandomState,
+};
 use crate::joins::utils::JoinHashMapType;
-
-use ahash::RandomState;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -88,7 +88,7 @@ impl PartitionBounds {
 fn create_membership_predicate(
     on_right: &[PhysicalExprRef],
     pushdown: PushdownStrategy,
-    random_state: &RandomState,
+    random_state: &SeededRandomState,
     schema: &Schema,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     match pushdown {
@@ -230,7 +230,7 @@ pub(crate) struct SharedBuildAccumulator {
     on_right: Vec<PhysicalExprRef>,
     /// Random state for partitioning (RepartitionExec's hash function with 0,0,0,0 seeds)
     /// Used for PartitionedHashLookupPhysicalExpr
-    repartition_random_state: RandomState,
+    repartition_random_state: SeededRandomState,
     /// Schema of the probe (right) side for evaluating filter expressions
     probe_schema: Arc<Schema>,
 }
@@ -308,7 +308,7 @@ impl SharedBuildAccumulator {
         right_child: &dyn ExecutionPlan,
         dynamic_filter: Arc<DynamicFilterPhysicalExpr>,
         on_right: Vec<PhysicalExprRef>,
-        repartition_random_state: RandomState,
+        repartition_random_state: SeededRandomState,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()

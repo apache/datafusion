@@ -105,6 +105,7 @@ use datafusion_expr::{
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
 ///   to qualified or unqualified fields by name.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 pub fn create_physical_expr(
     e: &Expr,
     input_dfschema: &DFSchema,
@@ -444,10 +445,8 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field};
-
-    use datafusion_common::datatype::DataTypeExt;
-    use datafusion_expr::{col, lit};
-
+    use datafusion_expr::{Operator, col, lit, datatype::DataTypeExt};
+  
     use super::*;
 
     #[test]
@@ -506,6 +505,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message().contains("arrow.uuid"));
+      
+        Ok(())
+    }
+  
+    /// Test that deeply nested expressions do not cause a stack overflow.
+    ///
+    /// This test only runs when the `recursive_protection` feature is enabled,
+    /// as it would overflow the stack otherwise.
+    #[test]
+    #[cfg_attr(not(feature = "recursive_protection"), ignore)]
+    fn test_deeply_nested_binary_expr() -> Result<()> {
+        // Create a deeply nested binary expression tree: ((((a + a) + a) + a) + ... )
+        // With 1000 levels of nesting, this would overflow the stack without recursion protection.
+        let depth = 1000;
+
+        let mut expr = col("a");
+        for _ in 0..depth {
+            expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(expr),
+                op: Operator::Plus,
+                right: Box::new(col("a")),
+            });
+        }
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema)?;
+
+        // This should not stack overflow
+        let _physical_expr =
+            create_physical_expr(&expr, &df_schema, &ExecutionProps::new())?;
+
         Ok(())
     }
 }

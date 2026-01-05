@@ -71,7 +71,7 @@ resolver = "2"
 
 [workspace.package]
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
-edition = "2021"
+edition = "2024"
 homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
@@ -156,10 +156,10 @@ flate2 = "1.1.5"
 futures = "0.3"
 glob = "0.3.0"
 half = { version = "2.7.0", default-features = false }
-hashbrown = { version = "0.14.5", features = ["raw"] }
+hashbrown = { version = "0.16.1" }
 hex = { version = "0.4.3" }
 indexmap = "2.12.1"
-insta = { version = "1.44.3", features = ["glob", "filters"] }
+insta = { version = "1.46.0", features = ["glob", "filters"] }
 itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
@@ -185,8 +185,7 @@ sqlparser = { version = "0.59.0", default-features = false, features = ["std", "
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tempfile = "3"
-testcontainers = { version = "0.25.2", features = ["default"] }
-testcontainers-modules = { version = "0.13" }
+testcontainers-modules = { version = "0.14" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
 zstd = { version = "0.13", default-features = false }
