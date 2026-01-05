@@ -121,6 +121,25 @@ impl StringHashTable {
             data_type,
         }
     }
+
+    /// Extracts the string value at the given row index, handling nulls and different string types
+    fn extract_string_value(&self, row_idx: usize) -> Option<String> {
+        match self.data_type {
+            DataType::Utf8 => {
+                let arr = self.owned.as_string::<i32>();
+                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+            }
+            DataType::LargeUtf8 => {
+                let arr = self.owned.as_string::<i64>();
+                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+            }
+            DataType::Utf8View => {
+                let arr = self.owned.as_string_view();
+                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+            }
+            _ => panic!("Unsupported data type"),
+        }
+    }
 }
 
 impl ArrowHashTable for StringHashTable {
@@ -151,52 +170,14 @@ impl ArrowHashTable for StringHashTable {
     }
 
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool) {
-        let id = match self.data_type {
-            DataType::Utf8 => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .expect("Expected StringArray for DataType::Utf8");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            DataType::LargeUtf8 => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<LargeStringArray>()
-                    .expect("Expected LargeStringArray for DataType::LargeUtf8");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            DataType::Utf8View => {
-                let ids = self
-                    .owned
-                    .as_any()
-                    .downcast_ref::<StringViewArray>()
-                    .expect("Expected StringViewArray for DataType::Utf8View");
-                if ids.is_null(row_idx) {
-                    None
-                } else {
-                    Some(ids.value(row_idx))
-                }
-            }
-            _ => panic!("Unsupported data type"),
-        };
+        let id = self.extract_string_value(row_idx);
 
-        let hash = self.rnd.hash_one(id);
-        let eq = |mi: &Option<String>| id == mi.as_ref().map(|id| id.as_str());
-        let id_owned = id.map(|id| id.to_string());
+        let hash = self.rnd.hash_one(id.as_deref());
+        let id_for_eq = id.clone();
+        let eq = move |mi: &Option<String>| id_for_eq.as_deref() == mi.as_deref();
 
         // Use entry API to avoid double lookup
-        self.map.find_or_insert(hash, id_owned, replace_idx, eq)
+        self.map.find_or_insert(hash, id, replace_idx, eq)
     }
 }
 
