@@ -2579,7 +2579,7 @@ date_trunc(precision, expression)
   - millisecond / MILLISECOND
   - microsecond / MICROSECOND
 
-- **expression**: Timestamp or Time expression to operate on. Can be a constant, column, or function.
+- **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
 
 #### Aliases
 
