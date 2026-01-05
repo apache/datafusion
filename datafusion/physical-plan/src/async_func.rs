@@ -212,8 +212,6 @@ impl ExecutionPlan for AsyncFuncExec {
             let baseline_metrics_captured = baseline_metrics.clone();
 
             async move {
-                let timer = baseline_metrics_captured.elapsed_compute().timer();
-
                 let batch = batch?;
                 // append the result of evaluating the async expressions to the output
                 let mut output_arrays = batch.columns().to_vec();
@@ -224,8 +222,6 @@ impl ExecutionPlan for AsyncFuncExec {
                     output_arrays.push(output.to_array(batch.num_rows())?);
                 }
                 let batch = RecordBatch::try_new(schema_captured, output_arrays)?;
-
-                timer.done();
 
                 Ok(batch.record_output(&baseline_metrics_captured))
             }
