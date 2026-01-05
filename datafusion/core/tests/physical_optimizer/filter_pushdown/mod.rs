@@ -1864,7 +1864,10 @@ async fn run_projection_dyn_filter_case(case: ProjectionDynFilterTestCase) {
         .optimize(Arc::clone(&sort), &config)
         .unwrap();
 
-    pretty_assertions::assert_eq!(format!("{}", format_plan_for_test(&optimized_plan)).trim(), expected_plans[0].trim());
+    pretty_assertions::assert_eq!(
+        format!("{}", format_plan_for_test(&optimized_plan)).trim(),
+        expected_plans[0].trim()
+    );
 
     let config = SessionConfig::new().with_batch_size(2);
     let session_ctx = SessionContext::new_with_config(config);
@@ -1878,7 +1881,12 @@ async fn run_projection_dyn_filter_case(case: ProjectionDynFilterTestCase) {
     for (idx, expected_plan) in expected_plans.iter().enumerate().skip(1) {
         stream.next().await.unwrap().unwrap();
         let formatted_plan = format_plan_for_test(&optimized_plan);
-        pretty_assertions::assert_eq!(formatted_plan.trim(), expected_plan.trim(), "Mismatch at iteration {}", idx);
+        pretty_assertions::assert_eq!(
+            formatted_plan.trim(),
+            expected_plan.trim(),
+            "Mismatch at iteration {}",
+            idx
+        );
     }
 }
 
