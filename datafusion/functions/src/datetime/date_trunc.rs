@@ -22,15 +22,17 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::temporal_conversions::{
-    as_datetime_with_timezone, timestamp_ns_to_datetime,
+    MICROSECONDS, MILLISECONDS, NANOSECONDS, as_datetime_with_timezone,
+    timestamp_ns_to_datetime,
 };
 use arrow::array::timezone::Tz;
 use arrow::array::types::{
-    ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
+    ArrowTimestampType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
-use arrow::datatypes::DataType::{self, Null, Timestamp, Utf8, Utf8View};
+use arrow::datatypes::DataType::{self, Null, Time32, Time64, Timestamp, Utf8, Utf8View};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::{
@@ -116,16 +118,30 @@ impl DateTruncGranularity {
     fn is_fine_granularity_utc(&self) -> bool {
         self.is_fine_granularity() || matches!(self, Self::Hour | Self::Day)
     }
+
+    /// Returns true if this granularity is valid for Time types
+    /// Time types don't have date components, so day/week/month/quarter/year are not valid
+    fn valid_for_time(&self) -> bool {
+        matches!(
+            self,
+            Self::Hour
+                | Self::Minute
+                | Self::Second
+                | Self::Millisecond
+                | Self::Microsecond
+        )
+    }
 }
 
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
-    description = "Truncates a timestamp value to a specified precision.",
+    description = "Truncates a timestamp or time value to a specified precision.",
     syntax_example = "date_trunc(precision, expression)",
     argument(
         name = "precision",
         description = r#"Time precision to truncate to. The following precisions are supported:
 
+    For Timestamp types:
     - year / YEAR
     - quarter / QUARTER
     - month / MONTH
@@ -136,11 +152,18 @@ impl DateTruncGranularity {
     - second / SECOND
     - millisecond / MILLISECOND
     - microsecond / MICROSECOND
+
+    For Time types (hour, minute, second, millisecond, microsecond only):
+    - hour / HOUR
+    - minute / MINUTE
+    - second / SECOND
+    - millisecond / MILLISECOND
+    - microsecond / MICROSECOND
 "#
     ),
     argument(
         name = "expression",
-        description = "Time expression to operate on. Can be a constant, column, or function."
+        description = "Timestamp or Time expression to operate on. Can be a constant, column, or function."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -160,6 +183,7 @@ impl DateTruncFunc {
         Self {
             signature: Signature::one_of(
                 vec![
+                    // Timestamp signatures
                     Exact(vec![Utf8, Timestamp(Nanosecond, None)]),
                     Exact(vec![Utf8View, Timestamp(Nanosecond, None)]),
                     Exact(vec![
@@ -200,6 +224,14 @@ impl DateTruncFunc {
                         Utf8View,
                         Timestamp(Second, Some(TIMEZONE_WILDCARD.into())),
                     ]),
+                    Exact(vec![Utf8, Time64(Nanosecond)]),
+                    Exact(vec![Utf8View, Time64(Nanosecond)]),
+                    Exact(vec![Utf8, Time64(Microsecond)]),
+                    Exact(vec![Utf8View, Time64(Microsecond)]),
+                    Exact(vec![Utf8, Time32(Millisecond)]),
+                    Exact(vec![Utf8View, Time32(Millisecond)]),
+                    Exact(vec![Utf8, Time32(Second)]),
+                    Exact(vec![Utf8View, Time32(Second)]),
                 ],
                 Volatility::Immutable,
             ),
@@ -230,8 +262,10 @@ impl ScalarUDFImpl for DateTruncFunc {
             Timestamp(Microsecond, tz_opt) => Ok(Timestamp(Microsecond, tz_opt.clone())),
             Timestamp(Millisecond, tz_opt) => Ok(Timestamp(Millisecond, tz_opt.clone())),
             Timestamp(Second, tz_opt) => Ok(Timestamp(Second, tz_opt.clone())),
+            Time64(tu) => Ok(Time64(*tu)),
+            Time32(tu) => Ok(Time32(*tu)),
             _ => plan_err!(
-                "The date_trunc function can only accept timestamp as the second arg."
+                "The date_trunc function can only accept timestamp or time as the second arg."
             ),
         }
     }
@@ -315,10 +349,50 @@ impl ScalarUDFImpl for DateTruncFunc {
             ColumnarValue::Scalar(ScalarValue::TimestampSecond(v, tz_opt)) => {
                 process_scalar::<TimestampSecondType>(v, granularity, tz_opt)?
             }
+            ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(v)) => {
+                if !granularity.valid_for_time() {
+                    return exec_err!(
+                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                        granularity_str
+                    );
+                }
+                let truncated = v.map(|val| truncate_time_nanos(val, granularity));
+                ColumnarValue::Scalar(ScalarValue::Time64Nanosecond(truncated))
+            }
+            ColumnarValue::Scalar(ScalarValue::Time64Microsecond(v)) => {
+                if !granularity.valid_for_time() {
+                    return exec_err!(
+                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                        granularity_str
+                    );
+                }
+                let truncated = v.map(|val| truncate_time_micros(val, granularity));
+                ColumnarValue::Scalar(ScalarValue::Time64Microsecond(truncated))
+            }
+            ColumnarValue::Scalar(ScalarValue::Time32Millisecond(v)) => {
+                if !granularity.valid_for_time() {
+                    return exec_err!(
+                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                        granularity_str
+                    );
+                }
+                let truncated = v.map(|val| truncate_time_millis(val, granularity));
+                ColumnarValue::Scalar(ScalarValue::Time32Millisecond(truncated))
+            }
+            ColumnarValue::Scalar(ScalarValue::Time32Second(v)) => {
+                if !granularity.valid_for_time() {
+                    return exec_err!(
+                        "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                        granularity_str
+                    );
+                }
+                let truncated = v.map(|val| truncate_time_secs(val, granularity));
+                ColumnarValue::Scalar(ScalarValue::Time32Second(truncated))
+            }
             ColumnarValue::Array(array) => {
                 let array_type = array.data_type();
-                if let Timestamp(unit, tz_opt) = array_type {
-                    match unit {
+                match array_type {
+                    Timestamp(unit, tz_opt) => match unit {
                         Second => process_array::<TimestampSecondType>(
                             array,
                             granularity,
@@ -339,16 +413,70 @@ impl ScalarUDFImpl for DateTruncFunc {
                             granularity,
                             tz_opt,
                         )?,
+                    },
+                    Time64(unit) => {
+                        if !granularity.valid_for_time() {
+                            return exec_err!(
+                                "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                                granularity_str
+                            );
+                        }
+                        match unit {
+                            Nanosecond => {
+                                let arr =
+                                    as_primitive_array::<Time64NanosecondType>(array)?;
+                                let result: PrimitiveArray<Time64NanosecondType> =
+                                    arr.unary(|v| truncate_time_nanos(v, granularity));
+                                ColumnarValue::Array(Arc::new(result))
+                            }
+                            Microsecond => {
+                                let arr =
+                                    as_primitive_array::<Time64MicrosecondType>(array)?;
+                                let result: PrimitiveArray<Time64MicrosecondType> =
+                                    arr.unary(|v| truncate_time_micros(v, granularity));
+                                ColumnarValue::Array(Arc::new(result))
+                            }
+                            _ => {
+                                return exec_err!("Unsupported Time64 unit: {:?}", unit);
+                            }
+                        }
                     }
-                } else {
-                    return exec_err!(
-                        "second argument of `date_trunc` is an unsupported array type: {array_type}"
-                    );
+                    Time32(unit) => {
+                        if !granularity.valid_for_time() {
+                            return exec_err!(
+                                "date_trunc does not support '{}' granularity for Time types. Valid values are: hour, minute, second, millisecond, microsecond",
+                                granularity_str
+                            );
+                        }
+                        match unit {
+                            Millisecond => {
+                                let arr =
+                                    as_primitive_array::<Time32MillisecondType>(array)?;
+                                let result: PrimitiveArray<Time32MillisecondType> =
+                                    arr.unary(|v| truncate_time_millis(v, granularity));
+                                ColumnarValue::Array(Arc::new(result))
+                            }
+                            Second => {
+                                let arr = as_primitive_array::<Time32SecondType>(array)?;
+                                let result: PrimitiveArray<Time32SecondType> =
+                                    arr.unary(|v| truncate_time_secs(v, granularity));
+                                ColumnarValue::Array(Arc::new(result))
+                            }
+                            _ => {
+                                return exec_err!("Unsupported Time32 unit: {:?}", unit);
+                            }
+                        }
+                    }
+                    _ => {
+                        return exec_err!(
+                            "second argument of `date_trunc` is an unsupported array type: {array_type}"
+                        );
+                    }
                 }
             }
             _ => {
                 return exec_err!(
-                    "second argument of `date_trunc` must be timestamp scalar or array"
+                    "second argument of `date_trunc` must be timestamp, time scalar or array"
                 );
             }
         })
@@ -371,6 +499,76 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+const NANOS_PER_MICROSECOND: i64 = NANOSECONDS / MICROSECONDS;
+const NANOS_PER_MILLISECOND: i64 = NANOSECONDS / MILLISECONDS;
+const NANOS_PER_SECOND: i64 = NANOSECONDS;
+const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
+const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
+
+const MICROS_PER_MILLISECOND: i64 = MICROSECONDS / MILLISECONDS;
+const MICROS_PER_SECOND: i64 = MICROSECONDS;
+const MICROS_PER_MINUTE: i64 = 60 * MICROS_PER_SECOND;
+const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
+
+const MILLIS_PER_SECOND: i32 = MILLISECONDS as i32;
+const MILLIS_PER_MINUTE: i32 = 60 * MILLIS_PER_SECOND;
+const MILLIS_PER_HOUR: i32 = 60 * MILLIS_PER_MINUTE;
+
+const SECS_PER_MINUTE: i32 = 60;
+const SECS_PER_HOUR: i32 = 60 * SECS_PER_MINUTE;
+
+/// Truncate time in nanoseconds to the specified granularity
+fn truncate_time_nanos(value: i64, granularity: DateTruncGranularity) -> i64 {
+    match granularity {
+        DateTruncGranularity::Hour => value - (value % NANOS_PER_HOUR),
+        DateTruncGranularity::Minute => value - (value % NANOS_PER_MINUTE),
+        DateTruncGranularity::Second => value - (value % NANOS_PER_SECOND),
+        DateTruncGranularity::Millisecond => value - (value % NANOS_PER_MILLISECOND),
+        DateTruncGranularity::Microsecond => value - (value % NANOS_PER_MICROSECOND),
+        // Other granularities are not valid for time - should be caught earlier
+        _ => value,
+    }
+}
+
+/// Truncate time in microseconds to the specified granularity
+fn truncate_time_micros(value: i64, granularity: DateTruncGranularity) -> i64 {
+    match granularity {
+        DateTruncGranularity::Hour => value - (value % MICROS_PER_HOUR),
+        DateTruncGranularity::Minute => value - (value % MICROS_PER_MINUTE),
+        DateTruncGranularity::Second => value - (value % MICROS_PER_SECOND),
+        DateTruncGranularity::Millisecond => value - (value % MICROS_PER_MILLISECOND),
+        DateTruncGranularity::Microsecond => value, // Already at microsecond precision
+        // Other granularities are not valid for time
+        _ => value,
+    }
+}
+
+/// Truncate time in milliseconds to the specified granularity
+fn truncate_time_millis(value: i32, granularity: DateTruncGranularity) -> i32 {
+    match granularity {
+        DateTruncGranularity::Hour => value - (value % MILLIS_PER_HOUR),
+        DateTruncGranularity::Minute => value - (value % MILLIS_PER_MINUTE),
+        DateTruncGranularity::Second => value - (value % MILLIS_PER_SECOND),
+        DateTruncGranularity::Millisecond => value, // Already at millisecond precision
+        DateTruncGranularity::Microsecond => value, // Can't truncate to finer precision
+        // Other granularities are not valid for time
+        _ => value,
+    }
+}
+
+/// Truncate time in seconds to the specified granularity
+fn truncate_time_secs(value: i32, granularity: DateTruncGranularity) -> i32 {
+    match granularity {
+        DateTruncGranularity::Hour => value - (value % SECS_PER_HOUR),
+        DateTruncGranularity::Minute => value - (value % SECS_PER_MINUTE),
+        DateTruncGranularity::Second => value, // Already at second precision
+        DateTruncGranularity::Millisecond => value, // Can't truncate to finer precision
+        DateTruncGranularity::Microsecond => value, // Can't truncate to finer precision
+        // Other granularities are not valid for time
+        _ => value,
     }
 }
 
