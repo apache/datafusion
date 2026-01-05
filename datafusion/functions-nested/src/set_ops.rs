@@ -22,7 +22,7 @@ use arrow::array::{
     Array, ArrayRef, GenericListArray, LargeListArray, ListArray, OffsetSizeTrait,
     new_null_array,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -363,18 +363,23 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
     let mut offsets = vec![OffsetSize::usize_as(0)];
     let mut new_arrays = vec![];
+    let mut new_null_buf = vec![];
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
     for (first_arr, second_arr) in l.iter().zip(r.iter()) {
+        let mut ele_should_be_null = false;
+
         let l_values = if let Some(first_arr) = first_arr {
             converter.convert_columns(&[first_arr])?
         } else {
-            converter.convert_columns(&[])?
+            ele_should_be_null = true;
+            converter.empty_rows(0, 0)
         };
 
         let r_values = if let Some(second_arr) = second_arr {
             converter.convert_columns(&[second_arr])?
         } else {
-            converter.convert_columns(&[])?
+            ele_should_be_null = true;
+            converter.empty_rows(0, 0)
         };
 
         let l_iter = l_values.iter().sorted().dedup();
@@ -414,13 +419,19 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
             }
         };
 
+        new_null_buf.push(!ele_should_be_null);
         new_arrays.push(array);
     }
 
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref: Vec<_> = new_arrays.iter().map(|v| v.as_ref()).collect();
     let values = compute::concat(&new_arrays_ref)?;
-    let arr = GenericListArray::<OffsetSize>::try_new(field, offsets, values, None)?;
+    let arr = GenericListArray::<OffsetSize>::try_new(
+        field,
+        offsets,
+        values,
+        Some(NullBuffer::new(new_null_buf.into())),
+    )?;
     Ok(Arc::new(arr))
 }
 
