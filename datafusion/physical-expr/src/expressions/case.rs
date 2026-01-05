@@ -195,7 +195,9 @@ impl CaseBody {
         let then_sub_projections = projected_body
             .when_then_expr
             .iter()
-            .map(|(_, then_expr)| Self::compute_sub_projection(then_expr, projection.len()))
+            .map(|(_, then_expr)| {
+                Self::compute_sub_projection(then_expr, projection.len())
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let else_sub_projection = projected_body
@@ -386,12 +388,13 @@ impl ProjectedCaseBody {
             if when_true_count == remainder_batch.num_rows() {
                 let sub_proj = &self.then_sub_projections[i];
                 // Project to only needed columns before evaluating
-                let then_value = if sub_proj.projection.len() < remainder_batch.num_columns() {
-                    let projected = remainder_batch.project(&sub_proj.projection)?;
-                    sub_proj.expr.evaluate(&projected)?
-                } else {
-                    self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
-                };
+                let then_value =
+                    if sub_proj.projection.len() < remainder_batch.num_columns() {
+                        let projected = remainder_batch.project(&sub_proj.projection)?;
+                        sub_proj.expr.evaluate(&projected)?
+                    } else {
+                        self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
+                    };
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
@@ -401,7 +404,8 @@ impl ProjectedCaseBody {
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
             let sub_proj = &self.then_sub_projections[i];
-            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns() {
+            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns()
+            {
                 // Project to only needed columns, then filter (fewer columns to filter)
                 let projected = remainder_batch.project(&sub_proj.projection)?;
                 let then_batch = filter_record_batch(&projected, &then_filter)?;
@@ -432,7 +436,9 @@ impl ProjectedCaseBody {
 
         // Handle else expression with sub-projection
         if let Some(else_sub_proj) = &self.else_sub_projection {
-            let else_value = if else_sub_proj.projection.len() < remainder_batch.num_columns() {
+            let else_value = if else_sub_proj.projection.len()
+                < remainder_batch.num_columns()
+            {
                 let projected = remainder_batch.project(&else_sub_proj.projection)?;
                 else_sub_proj.expr.evaluate(&projected)?
             } else if let Some(e) = &self.body.else_expr {
@@ -520,12 +526,13 @@ impl ProjectedCaseBody {
 
             if when_true_count == remainder_batch.num_rows() {
                 let sub_proj = &self.then_sub_projections[i];
-                let then_value = if sub_proj.projection.len() < remainder_batch.num_columns() {
-                    let projected = remainder_batch.project(&sub_proj.projection)?;
-                    sub_proj.expr.evaluate(&projected)?
-                } else {
-                    self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
-                };
+                let then_value =
+                    if sub_proj.projection.len() < remainder_batch.num_columns() {
+                        let projected = remainder_batch.project(&sub_proj.projection)?;
+                        sub_proj.expr.evaluate(&projected)?
+                    } else {
+                        self.body.when_then_expr[i].1.evaluate(&remainder_batch)?
+                    };
                 result_builder.add_branch_result(&remainder_rows, then_value)?;
                 return result_builder.finish();
             }
@@ -534,7 +541,8 @@ impl ProjectedCaseBody {
             let then_rows = filter_array(&remainder_rows, &then_filter)?;
 
             let sub_proj = &self.then_sub_projections[i];
-            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns() {
+            let then_value = if sub_proj.projection.len() < remainder_batch.num_columns()
+            {
                 let projected = remainder_batch.project(&sub_proj.projection)?;
                 let then_batch = filter_record_batch(&projected, &then_filter)?;
                 sub_proj.expr.evaluate(&then_batch)?
@@ -560,7 +568,9 @@ impl ProjectedCaseBody {
         }
 
         if let Some(else_sub_proj) = &self.else_sub_projection {
-            let else_value = if else_sub_proj.projection.len() < remainder_batch.num_columns() {
+            let else_value = if else_sub_proj.projection.len()
+                < remainder_batch.num_columns()
+            {
                 let projected = remainder_batch.project(&else_sub_proj.projection)?;
                 else_sub_proj.expr.evaluate(&projected)?
             } else if let Some(e) = &self.body.else_expr {
