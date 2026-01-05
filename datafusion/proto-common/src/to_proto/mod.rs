@@ -860,7 +860,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             force_filter_selections: value.force_filter_selections,
             data_pagesize_limit: value.data_pagesize_limit as u64,
             write_batch_size: value.write_batch_size as u64,
-            writer_version: value.writer_version.clone(),
+            writer_version: value.writer_version.to_string(),
             compression_opt: value.compression.clone().map(protobuf::parquet_options::CompressionOpt::Compression),
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
