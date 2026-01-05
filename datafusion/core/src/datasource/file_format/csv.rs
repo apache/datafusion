@@ -1536,4 +1536,94 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.csv", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
+        df.write_csv(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_record_batch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let empty_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(Vec::<i64>::new())),
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+            ],
+        )?;
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_batch.csv", tmp_dir.path().to_string_lossy());
+
+        // Write empty RecordBatch
+        let df = ctx.read_batch(empty_batch.clone())?;
+        df.write_csv(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist
+        assert!(std::path::Path::new(&path).exists());
+
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 2);
+        assert_eq!(stream.schema().field(0).name(), "id");
+        assert_eq!(stream.schema().field(1).name(), "name");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_with_zero_max_records() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let root = format!("{}/csv", arrow_test_data());
+        let format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(0); // Set to 0 to disable inference
+        let exec = scan_format(
+            &state,
+            &format,
+            None,
+            &root,
+            "aggregate_test_100.csv",
+            None,
+            None,
+        )
+        .await?;
+
+        // related to https://github.com/apache/datafusion/issues/19417
+        for f in exec.schema().fields() {
+            assert_eq!(*f.data_type(), DataType::Utf8);
+        }
+
+        Ok(())
+    }
 }

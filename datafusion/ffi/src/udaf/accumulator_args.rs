@@ -36,7 +36,6 @@ use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 /// defined in [`AccumulatorArgs`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_AccumulatorArgs {
     return_field: WrappedSchema,
     schema: WrappedSchema,

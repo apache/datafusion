@@ -63,7 +63,6 @@ rust_decimal = { version = "1.38.0", features = ["tokio-pg"] }
 sqllogictest = "0.28.4"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
-testcontainers = { workspace = true, optional = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
 thiserror = "2.0.17"
 tokio = { workspace = true }
@@ -77,7 +76,6 @@ postgres = [
     "chrono",
     "postgres-types",
     "postgres-protocol",
-    "testcontainers",
     "testcontainers-modules",
     "tokio-postgres",
 ]

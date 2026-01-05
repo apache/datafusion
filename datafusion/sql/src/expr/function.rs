@@ -23,7 +23,9 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
-    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition, expr,
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
+    arguments::ArgumentName,
+    expr,
     expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
     planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
 };
@@ -217,7 +219,7 @@ impl FunctionArgs {
 }
 
 // Helper type for extracting WITHIN GROUP ordering and prepended args
-type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<String>>);
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
@@ -745,7 +747,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         sql: FunctionArg,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Expr, Option<String>)> {
+    ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
             FunctionArg::Named {
                 name,
@@ -753,7 +755,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Named {
@@ -766,7 +771,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
@@ -803,7 +811,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::ExprNamed {
@@ -816,7 +827,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
@@ -839,8 +853,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         args: Vec<FunctionArg>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
-        let results: Result<Vec<(Expr, Option<String>)>> = args
+    ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
+        let results: Result<Vec<(Expr, Option<ArgumentName>)>> = args
             .into_iter()
             .map(|a| {
                 self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
@@ -848,7 +862,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect();
 
         let pairs = results?;
-        let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
+        let (exprs, names): (Vec<Expr>, Vec<Option<ArgumentName>>) =
+            pairs.into_iter().unzip();
         Ok((exprs, names))
     }
 
@@ -856,7 +871,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         within_group: Vec<OrderByExpr>,
         mut args: Vec<Expr>,
-        mut arg_names: Vec<Option<String>>,
+        mut arg_names: Vec<Option<ArgumentName>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<WithinGroupExtraction> {

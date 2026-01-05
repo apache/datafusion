@@ -28,7 +28,7 @@ use arrow::ffi::FFI_ArrowSchema;
 use arrow_schema::FieldRef;
 use datafusion_common::{DataFusionError, Result, ffi_datafusion_err};
 use datafusion_expr::function::AggregateFunctionSimplification;
-use datafusion_expr::type_coercion::functions::fields_with_aggregate_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     Accumulator, AggregateUDF, AggregateUDFImpl, GroupsAccumulator, Signature,
 };
@@ -55,7 +55,6 @@ mod groups_accumulator;
 /// A stable struct for sharing a [`AggregateUDF`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_AggregateUDF {
     /// FFI equivalent to the `name` of a [`AggregateUDF`]
     pub name: RString,
@@ -94,7 +93,6 @@ pub struct FFI_AggregateUDF {
         -> FFIResult<FFI_Accumulator>,
 
     /// FFI equivalent to [`AggregateUDF::state_fields`]
-    #[allow(clippy::type_complexity)]
     pub state_fields: unsafe extern "C" fn(
         udaf: &FFI_AggregateUDF,
         name: &RStr,
@@ -342,7 +340,7 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
             .map(|dt| Field::new("f", dt.clone(), true))
             .map(Arc::new)
             .collect::<Vec<_>>();
-        let return_types = rresult_return!(fields_with_aggregate_udf(&arg_fields, udaf))
+        let return_types = rresult_return!(fields_with_udf(&arg_fields, udaf.as_ref()))
             .into_iter()
             .map(|f| f.data_type().to_owned())
             .collect::<Vec<_>>();
@@ -612,7 +610,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_AggregateOrderSensitivity {
     Insensitive,
     HardRequirement,
