@@ -191,23 +191,12 @@ impl ArrowHashTable for StringHashTable {
             _ => panic!("Unsupported data type"),
         };
 
-        // TODO: avoid double lookup by using entry API
-
         let hash = self.rnd.hash_one(id);
-        if let Some(map_idx) = self
-            .map
-            .find(hash, |mi| id == mi.as_ref().map(|id| id.as_str()))
-        {
-            return (map_idx, false);
-        }
+        let eq = |mi: &Option<String>| id == mi.as_ref().map(|id| id.as_str());
+        let id_owned = id.map(|id| id.to_string());
 
-        // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
-
-        // add the new group
-        let id = id.map(|id| id.to_string());
-        let map_idx = self.map.insert(hash, &id, heap_idx);
-        (map_idx, true)
+        // Use entry API to avoid double lookup
+        self.map.find_or_insert(hash, id_owned, replace_idx, eq)
     }
 }
 
@@ -275,17 +264,10 @@ where
         };
 
         let hash: u64 = id.hash(&self.rnd);
-        // TODO: avoid double lookup by using entry API
-        if let Some(map_idx) = self.map.find(hash, |mi| id == *mi) {
-            return (map_idx, false);
-        }
+        let eq = |mi: &Option<VAL::Native>| id == *mi;
 
-        // we're full and this is a better value, so remove the worst
-        let heap_idx = self.map.remove_if_full(replace_idx);
-
-        // add the new group
-        let map_idx = self.map.insert(hash, &id, heap_idx);
-        (map_idx, true)
+        // Use entry API to avoid double lookup
+        self.map.find_or_insert(hash, id, replace_idx, eq)
     }
 }
 
@@ -335,6 +317,74 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         for (m, h) in mapper {
             self.store[*m].as_mut().unwrap().heap_idx = *h;
         }
+    }
+
+    /// Find an existing entry or insert a new one, avoiding double hash table lookup.
+    /// Returns (map_idx, is_new) where is_new indicates if this was a new insertion.
+    /// If inserting a new entry and the table is full, replaces the entry at replace_idx.
+    pub fn find_or_insert(
+        &mut self,
+        hash: u64,
+        id: ID,
+        replace_idx: usize,
+        mut eq: impl FnMut(&ID) -> bool,
+    ) -> (usize, bool) {
+        // Check if entry exists - this is the only hash table lookup
+        {
+            let eq_fn = |idx: &usize| eq(&self.store[*idx].as_ref().unwrap().id);
+            if let Some(&map_idx) = self.map.find(hash, eq_fn) {
+                return (map_idx, false);
+            }
+        }
+
+        // Entry doesn't exist - compute heap_idx and prepare item
+        let heap_idx = self.remove_if_full(replace_idx);
+        let mi = HashTableItem::new(hash, id, heap_idx);
+        let store_idx = if let Some(idx) = self.free_index.take() {
+            self.store[idx] = Some(mi);
+            idx
+        } else {
+            self.store.push(Some(mi));
+            self.store.len() - 1
+        };
+
+        // Reserve space if needed
+        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        if self.map.len() == self.map.capacity() {
+            self.map.reserve(self.limit, hasher);
+        }
+
+        // Insert without checking again since we already confirmed it doesn't exist
+        self.map.insert_unique(hash, store_idx, hasher);
+        (store_idx, true)
+    }
+
+    /// Insert a new entry with a specific heap_idx. Should only be called after
+    /// confirming the entry doesn't exist.
+    #[allow(dead_code)]
+    pub fn insert_with_heap_idx(&mut self, hash: u64, id: ID, heap_idx: usize) -> usize {
+        let mi = HashTableItem::new(hash, id.clone(), heap_idx);
+        let store_idx = if let Some(idx) = self.free_index.take() {
+            self.store[idx] = Some(mi);
+            idx
+        } else {
+            self.store.push(Some(mi));
+            self.store.len() - 1
+        };
+
+        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
+        if self.map.len() == self.map.capacity() {
+            self.map.reserve(self.limit, hasher);
+        }
+
+        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == id;
+        match self.map.entry(hash, eq_fn, hasher) {
+            Entry::Occupied(_) => unreachable!("Item should not exist"),
+            Entry::Vacant(vacant) => {
+                vacant.insert(store_idx);
+            }
+        }
+        store_idx
     }
 
     pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
