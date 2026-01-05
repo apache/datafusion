@@ -21,30 +21,29 @@
 //! - [Extended window function benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
 
 use crate::util::{BenchmarkRun, CommonOpt, print_memory_stats};
+use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{error::Result, prelude::SessionContext};
 use datafusion_common::{
     DataFusionError, TableReference, exec_datafusion_err, instant::Instant, internal_err,
 };
 use std::path::{Path, PathBuf};
-use structopt::StructOpt;
 
 /// Run the H2O benchmark
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to queries.sql (single file)
     /// default value is the groupby.sql file in the h2o benchmark
-    #[structopt(
-        parse(from_os_str),
-        short = "r",
+    #[arg(
+        short = 'r',
         long = "queries-path",
         default_value = "benchmarks/queries/h2o/groupby.sql"
     )]
@@ -53,9 +52,8 @@ pub struct RunOpt {
     /// Path to data file (parquet or csv)
     /// Default value is the G1_1e7_1e7_100_0.csv file in the h2o benchmark
     /// This is the small csv file with 10^7 rows
-    #[structopt(
-        parse(from_os_str),
-        short = "p",
+    #[arg(
+        short = 'p',
         long = "path",
         default_value = "benchmarks/data/h2o/G1_1e7_1e7_100_0.csv"
     )]
@@ -64,15 +62,15 @@ pub struct RunOpt {
     /// Path to data files (parquet or csv), using , to separate the paths
     /// Default value is the small files for join x table, small table, medium table, big table files in the h2o benchmark
     /// This is the small csv file case
-    #[structopt(
-        short = "join-paths",
+    #[arg(
+        short = 'j',
         long = "join-paths",
         default_value = "benchmarks/data/h2o/J1_1e7_NA_0.csv,benchmarks/data/h2o/J1_1e7_1e1_0.csv,benchmarks/data/h2o/J1_1e7_1e4_0.csv,benchmarks/data/h2o/J1_1e7_1e7_NA.csv"
     )]
     join_paths: String,
 
     /// If present, write results json here
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 }
 

@@ -17,15 +17,16 @@
 
 //! Optimizer rule for type validation and coercion
 
-use std::sync::Arc;
-
+use arrow::compute::can_cast_types;
 use datafusion_expr::binary::BinaryTypeCoercer;
 use itertools::{Itertools as _, izip};
-
-use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use std::sync::Arc;
 
 use crate::analyzer::AnalyzerRule;
 use crate::utils::NamePreserver;
+
+use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
 use datafusion_common::{
@@ -41,18 +42,16 @@ use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
-use datafusion_expr::type_coercion::functions::{
-    data_types_with_scalar_udf, fields_with_aggregate_udf,
-};
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
 use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    AggregateUDF, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator, Projection,
-    ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits, is_false,
-    is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
+    AggregateUDF, Cast, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
+    Projection, ScalarUDF, Union, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -290,17 +289,150 @@ impl<'a> TypeCoercionRewriter<'a> {
         right: Expr,
         right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = BinaryTypeCoercer::new(
-            &left.get_type(left_schema)?,
-            &op,
-            &right.get_type(right_schema)?,
-        )
-        .get_input_types()?;
+        let left_data_type = left.get_type(left_schema)?;
+        let right_data_type = right.get_type(right_schema)?;
+        let (left_type, right_type) =
+            BinaryTypeCoercer::new(&left_data_type, &op, &right_data_type)
+                .get_input_types()?;
+        let left_cast_ok = can_cast_types(&left_data_type, &left_type);
+        let right_cast_ok = can_cast_types(&right_data_type, &right_type);
 
-        Ok((
-            left.cast_to(&left_type, left_schema)?,
-            right.cast_to(&right_type, right_schema)?,
-        ))
+        // handle special cases for
+        // * Date +/- int => Date
+        // * Date + time => Timestamp
+        let left_expr = if !left_cast_ok {
+            Self::coerce_date_time_math_op(
+                left,
+                &op,
+                &left_data_type,
+                &left_type,
+                &right_type,
+            )?
+        } else {
+            left.cast_to(&left_type, left_schema)?
+        };
+
+        let right_expr = if !right_cast_ok {
+            Self::coerce_date_time_math_op(
+                right,
+                &op,
+                &right_data_type,
+                &right_type,
+                &left_type,
+            )?
+        } else {
+            right.cast_to(&right_type, right_schema)?
+        };
+
+        Ok((left_expr, right_expr))
+    }
+
+    fn coerce_date_time_math_op(
+        expr: Expr,
+        op: &Operator,
+        left_current_type: &DataType,
+        left_target_type: &DataType,
+        right_target_type: &DataType,
+    ) -> Result<Expr, DataFusionError> {
+        use DataType::*;
+
+        fn cast(expr: Expr, target_type: DataType) -> Expr {
+            Expr::Cast(Cast::new(Box::new(expr), target_type))
+        }
+
+        fn time_to_nanos(
+            expr: Expr,
+            expr_type: &DataType,
+        ) -> Result<Expr, DataFusionError> {
+            let expr = match expr_type {
+                Time32(TimeUnit::Second) => {
+                    cast(cast(expr, Int32), Int64)
+                        * lit(ScalarValue::Int64(Some(1_000_000_000)))
+                }
+                Time32(TimeUnit::Millisecond) => {
+                    cast(cast(expr, Int32), Int64)
+                        * lit(ScalarValue::Int64(Some(1_000_000)))
+                }
+                Time64(TimeUnit::Microsecond) => {
+                    cast(expr, Int64) * lit(ScalarValue::Int64(Some(1_000)))
+                }
+                Time64(TimeUnit::Nanosecond) => cast(expr, Int64),
+                t => return internal_err!("Unexpected time data type {t}"),
+            };
+
+            Ok(expr)
+        }
+
+        let e = match (
+            &op,
+            &left_current_type,
+            &left_target_type,
+            &right_target_type,
+        ) {
+            // int +/- date => date
+            (
+                Operator::Plus | Operator::Minus,
+                Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64,
+                Interval(IntervalUnit::MonthDayNano),
+                Date32 | Date64,
+            ) => {
+                // cast to i64 first
+                let expr = match *left_current_type {
+                    Int64 => expr,
+                    _ => cast(expr, Int64),
+                };
+                // next, multiply by 86400 to get seconds
+                let expr = expr * lit(ScalarValue::from(SECONDS_IN_DAY));
+                // cast to duration
+                let expr = cast(expr, Duration(TimeUnit::Second));
+                // finally cast to interval
+                cast(expr, Interval(IntervalUnit::MonthDayNano))
+            }
+            // These might seem to be a bit convoluted, however for arrow to do date + time arithmetic
+            // date must be cast to Timestamp(Nanosecond) and time cast to Duration(Nanosecond)
+            // (they must be the same timeunit).
+            //
+            // For Time32/64 we first need to cast to an Int64, convert that to nanoseconds based
+            // on the time unit, then cast that to duration.
+            //
+            // Time + date -> timestamp or
+            (
+                Operator::Plus | Operator::Minus,
+                Time32(_) | Time64(_),
+                Duration(TimeUnit::Nanosecond),
+                Timestamp(TimeUnit::Nanosecond, None),
+            ) => {
+                // cast to int64, convert to nanoseconds
+                let expr = time_to_nanos(expr, left_current_type)?;
+                // cast to duration
+                cast(expr, Duration(TimeUnit::Nanosecond))
+            }
+            // Similar to above, for arrow to do time - time we need to convert to an interval.
+            // To do that we first need to cast to an Int64, convert that to nanoseconds based
+            // on the time unit, then cast that to duration, then finally cast to an interval.
+            //
+            // Time - time -> timestamp
+            (
+                Operator::Plus | Operator::Minus,
+                Time32(_) | Time64(_),
+                Interval(IntervalUnit::MonthDayNano),
+                Interval(IntervalUnit::MonthDayNano),
+            ) => {
+                // cast to int64, convert to nanoseconds
+                let expr = time_to_nanos(expr, left_current_type)?;
+                // cast to duration
+                let expr = cast(expr, Duration(TimeUnit::Nanosecond));
+                // finally cast to interval
+                cast(expr, Interval(IntervalUnit::MonthDayNano))
+            }
+            _ => {
+                return plan_err!(
+                    "Cannot automatically convert {left_current_type} to {left_target_type}"
+                );
+            }
+        };
+
+        Ok(e)
     }
 }
 
@@ -833,17 +965,20 @@ fn coerce_arguments_for_signature_with_scalar_udf(
         return Ok(expressions);
     }
 
-    let current_types = expressions
+    let current_fields = expressions
         .iter()
-        .map(|e| e.get_type(schema))
+        .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = data_types_with_scalar_udf(&current_types, func)?;
+    let coerced_types = fields_with_udf(&current_fields, func)?
+        .into_iter()
+        .map(|f| f.data_type().clone())
+        .collect::<Vec<_>>();
 
     expressions
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
         .collect()
 }
 
@@ -865,7 +1000,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let new_types = fields_with_aggregate_udf(&current_fields, func)?
+    let coerced_types = fields_with_udf(&current_fields, func)?
         .into_iter()
         .map(|f| f.data_type().clone())
         .collect::<Vec<_>>();
@@ -873,7 +1008,7 @@ fn coerce_arguments_for_signature_with_aggregate_udf(
     expressions
         .into_iter()
         .enumerate()
-        .map(|(i, expr)| expr.cast_to(&new_types[i], schema))
+        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
         .collect()
 }
 

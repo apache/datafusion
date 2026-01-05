@@ -28,7 +28,6 @@ use crate::physical_expr::FFI_PhysicalExpr;
 /// See ['Partitioning'] for the meaning of each variant.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_Partitioning {
     RoundRobinBatch(usize),
     Hash(RVec<FFI_PhysicalExpr>, usize),
