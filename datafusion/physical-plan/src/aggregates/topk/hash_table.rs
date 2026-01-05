@@ -335,31 +335,6 @@ impl<ID: KeyType + PartialEq> TopKHashTable<ID> {
         (store_idx, true)
     }
 
-    pub fn insert(&mut self, hash: u64, id: &ID, heap_idx: usize) -> usize {
-        let mi = HashTableItem::new(hash, id.clone(), heap_idx);
-        let store_idx = if let Some(idx) = self.free_index.take() {
-            self.store[idx] = Some(mi);
-            idx
-        } else {
-            self.store.push(Some(mi));
-            self.store.len() - 1
-        };
-
-        let hasher = |idx: &usize| self.store[*idx].as_ref().unwrap().hash;
-        if self.map.len() == self.map.capacity() {
-            self.map.reserve(self.limit, hasher);
-        }
-
-        let eq_fn = |idx: &usize| self.store[*idx].as_ref().unwrap().id == *id;
-        match self.map.entry(hash, eq_fn, hasher) {
-            Entry::Occupied(_) => unreachable!("Item should not exist"),
-            Entry::Vacant(vacant) => {
-                vacant.insert(store_idx);
-            }
-        }
-        store_idx
-    }
-
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -453,27 +428,6 @@ mod tests {
         ht.find_or_insert(0, 0);
         let ids = ht.take_all(vec![0]);
         assert_eq!(ids.data_type(), &dt);
-
-        Ok(())
-    }
-
-    #[test]
-    fn should_resize_properly() -> Result<()> {
-        let mut heap_to_map = BTreeMap::<usize, usize>::new();
-        let mut map = TopKHashTable::<Option<String>>::new(5, 3);
-        for (heap_idx, id) in vec!["1", "2", "3", "4", "5"].into_iter().enumerate() {
-            let hash = heap_idx as u64;
-            let map_idx = map.insert(hash, &Some(id.to_string()), heap_idx);
-            let _ = heap_to_map.insert(heap_idx, map_idx);
-        }
-
-        let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();
-        let ids = map.take_all(map_idxs);
-        assert_eq!(
-            format!("{ids:?}"),
-            r#"[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]"#
-        );
-        assert_eq!(map.len(), 0, "Map should have been cleared!");
 
         Ok(())
     }
