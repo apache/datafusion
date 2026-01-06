@@ -110,6 +110,7 @@ SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM empty_table);
 2 b
 3 c
 4 d
+NULL e
 
 #############
 ## Test 6: NOT IN with complex expression

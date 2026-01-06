@@ -230,6 +230,10 @@ pub(super) struct HashJoinStream {
     /// Only relevant when null_aware is true.
     /// For LeftAnti with null-aware semantics, if probe side has NULL, no rows should be output.
     probe_side_has_null: bool,
+    /// Whether any probe batches were processed (i.e., probe side was non-empty)
+    /// Only relevant when null_aware is true.
+    /// Used to distinguish between empty probe side (should return NULL rows) vs non-empty (should filter NULL rows).
+    probe_side_non_empty: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -411,6 +415,7 @@ impl HashJoinStream {
             output_buffer,
             null_aware,
             probe_side_has_null: false,
+            probe_side_non_empty: false,
         }
     }
 
@@ -613,6 +618,9 @@ impl HashJoinStream {
         // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
         // 2. LEFT rows with NULL keys should not be output (handled in final stage)
         if self.null_aware {
+            // Mark that we've seen a probe batch (probe side is non-empty)
+            self.probe_side_non_empty = true;
+
             // Check if probe side (RIGHT) contains NULL
             // Since null_aware validation ensures single column join, we only check the first column
             let probe_key_column = &state.values[0];
@@ -820,7 +828,9 @@ impl HashJoinStream {
         );
 
         // For null-aware anti join, filter out LEFT rows with NULL in join keys
-        if self.null_aware && self.join_type == JoinType::LeftAnti {
+        // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
+        // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
+        if self.null_aware && self.join_type == JoinType::LeftAnti && self.probe_side_non_empty {
             // Since null_aware validation ensures single column join, we only check the first column
             let build_key_column = &build_side.left_data.values()[0];
 
