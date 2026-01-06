@@ -16,10 +16,10 @@
 // under the License.
 
 use async_trait::async_trait;
+use bigdecimal::BigDecimal;
 use bytes::Bytes;
 use datafusion::common::runtime::SpawnedTask;
 use futures::{SinkExt, StreamExt};
-use bigdecimal::BigDecimal;
 use log::{debug, info};
 use sqllogictest::DBOutput;
 /// Postgres engine implementation for sqllogictest.
@@ -35,7 +35,6 @@ use indicatif::ProgressBar;
 use postgres_types::Type;
 use tokio::time::Instant;
 use tokio_postgres::{SimpleQueryMessage, SimpleQueryRow};
-
 
 // default connect string, can be overridden by the `PG_URL` environment variable
 const PG_URI: &str = "postgresql://postgres@127.0.0.1/test";
@@ -373,7 +372,9 @@ fn cell_to_string(row: &SimpleQueryRow, column_type: &Type, idx: usize) -> Strin
         (&Type::INT2, Some(value)) => value.parse::<i16>().unwrap().to_string(),
         (&Type::INT4, Some(value)) => value.parse::<i32>().unwrap().to_string(),
         (&Type::INT8, Some(value)) => value.parse::<i64>().unwrap().to_string(),
-        (&Type::NUMERIC, Some(value)) => decimal_to_str(BigDecimal::from_str(value).unwrap()),
+        (&Type::NUMERIC, Some(value)) => {
+            decimal_to_str(BigDecimal::from_str(value).unwrap())
+        }
         // Parse date/time strings explicitly to avoid locale-specific formatting.
         (&Type::DATE, Some(value)) => NaiveDate::parse_from_str(value, "%Y-%m-%d")
             .unwrap()
@@ -383,9 +384,7 @@ fn cell_to_string(row: &SimpleQueryRow, column_type: &Type, idx: usize) -> Strin
             .to_string(),
         (&Type::TIMESTAMP, Some(value)) => {
             let parsed = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
-                .or_else(|_| {
-                    NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
-                })
+                .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f"))
                 .unwrap();
             format!("{parsed:?}")
         }
@@ -397,7 +396,9 @@ fn cell_to_string(row: &SimpleQueryRow, column_type: &Type, idx: usize) -> Strin
             };
             bool_to_str(parsed)
         }
-        (&Type::BPCHAR | &Type::VARCHAR | &Type::TEXT, Some(value)) => varchar_to_str(value),
+        (&Type::BPCHAR | &Type::VARCHAR | &Type::TEXT, Some(value)) => {
+            varchar_to_str(value)
+        }
         (&Type::FLOAT4, Some(value)) => f32_to_str(value.parse::<f32>().unwrap()),
         (&Type::FLOAT8, Some(value)) => f64_to_str(value.parse::<f64>().unwrap()),
         (&Type::REGTYPE, Some(value)) => value.to_string(),
