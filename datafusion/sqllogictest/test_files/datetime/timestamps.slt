@@ -193,6 +193,8 @@ SELECT TIMESTAMPTZ '2000-01-01T01:01:01'
 ----
 2000-01-01T01:01:01Z
 
+statement ok
+RESET datafusion.execution.time_zone
 
 ##########
 ## cast tests
@@ -2331,7 +2333,7 @@ CREATE TABLE foo (time TIMESTAMPTZ) AS VALUES
     ('2020-01-01T03:00:00+05:00')
 
 statement ok
-SET TIME ZONE = '+00'
+RESET datafusion.execution.time_zone
 
 # verify column type
 query T
@@ -2445,7 +2447,7 @@ true true true true true true
 # known issues. currently overflows (expects default precision to be microsecond instead of nanoseconds. Work pending)
 #verify extreme values
 #query PPPPPPPP
-#SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp)
+#SELECT to_timestamp(-62125747200), to_timestamp(1926632005177), -62125747200::timestamp as t1, 1926632005177::timestamp, cast(-62125747200 as timestamp), cast(1926632005177 as timestamp) as t2
 #----
 #0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37 0001-04-25T00:00:00 +63022-07-16T12:59:37
 
@@ -2771,8 +2773,8 @@ SELECT t1.ts, t1.ts + INTERVAL '1' SECOND FROM t1;
 query PT
 SELECT t1.ts::timestamptz, arrow_typeof(t1.ts::timestamptz) FROM t1;
 ----
-2018-07-01T06:00:00Z Timestamp(ns, "+00")
-2018-07-01T07:00:00Z Timestamp(ns, "+00")
+2018-07-01T06:00:00 Timestamp(ns)
+2018-07-01T07:00:00 Timestamp(ns)
 
 query D
 SELECT 0::TIME
@@ -4339,7 +4341,7 @@ SELECT
     arrow_cast(a, 'LargeUtf8')
 FROM (SELECT CAST('2005-09-10 13:31:00 +02:00' AS timestamp with time zone) AS a)
 ----
-Timestamp(ns, "+00") 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z 2005-09-10T11:31:00Z
+Timestamp(ns) 2005-09-10T11:31:00 2005-09-10T11:31:00 2005-09-10T11:31:00 2005-09-10T11:31:00
 
 query P
 SELECT
