@@ -156,9 +156,10 @@ impl ExprSchemable for Expr {
                 let return_type = self.to_field(schema)?.1.data_type().clone();
                 Ok(return_type)
             }
-            Expr::WindowFunction(window_function) => self
-                .data_type_and_nullable_with_window_function(schema, window_function)
-                .map(|(return_type, _)| return_type),
+            Expr::WindowFunction(window_function) => Ok(self
+                .window_function_field(schema, window_function)?
+                .data_type()
+                .clone()),
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params: AggregateFunctionParams { args, .. },
@@ -357,12 +358,9 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(window_function) => self
-                .data_type_and_nullable_with_window_function(
-                    input_schema,
-                    window_function,
-                )
-                .map(|(_, nullable)| nullable),
+            Expr::WindowFunction(window_function) => Ok(self
+                .window_function_field(input_schema, window_function)?
+                .is_nullable()),
             Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
             Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -694,15 +692,6 @@ impl Expr {
     ///
     /// Otherwise, returns an error if there's a type mismatch between
     /// the window function's signature and the provided arguments.
-    fn data_type_and_nullable_with_window_function(
-        &self,
-        schema: &dyn ExprSchema,
-        window_function: &WindowFunction,
-    ) -> Result<(DataType, bool)> {
-        let return_field = self.window_function_field(schema, window_function)?;
-        Ok((return_field.data_type().clone(), return_field.is_nullable()))
-    }
-
     fn window_function_field(
         &self,
         schema: &dyn ExprSchema,
