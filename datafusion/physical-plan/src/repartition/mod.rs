@@ -434,39 +434,54 @@ pub const REPARTITION_RANDOM_STATE: SeededRandomState =
     SeededRandomState::with_seeds(0, 0, 0, 0);
 
 impl BatchPartitioner {
-    /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
+    /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
-    /// The time spent repartitioning will be recorded to `timer`
-    /// Create a new [`BatchPartitioner`] for hash partitioning
-    pub fn try_new_hash(
+    /// # Parameters
+    /// - `exprs`: Expressions used to compute the hash for each input row.
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    ///
+    /// # Notes
+    /// This constructor cannot fail and performs no validation.
+    pub fn new_hash_partitioner(
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         timer: metrics::Time,
-    ) -> Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             state: BatchPartitionerState::Hash {
                 exprs,
                 num_partitions,
                 hash_buffer: vec![],
             },
             timer,
-        })
+        }
     }
 
-    /// Create a new [`BatchPartitioner`] for round-robin partitioning
-    pub fn try_new_round_robin(
+    /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
+    ///
+    /// # Parameters
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    /// - `input_partition`: Index of the current input partition.
+    /// - `num_input_partitions`: Total number of input partitions.
+    ///
+    /// # Notes
+    /// The starting output partition is derived from the input partition
+    /// to avoid skew when multiple input partitions are used.
+    pub fn new_round_robin_partitioner(
         num_partitions: usize,
         timer: metrics::Time,
         input_partition: usize,
         num_input_partitions: usize,
-    ) -> Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             state: BatchPartitionerState::RoundRobin {
                 num_partitions,
                 next_idx: (input_partition * num_partitions) / num_input_partitions,
             },
             timer,
-        })
+        }
     }
 
     pub fn try_new(
@@ -477,14 +492,16 @@ impl BatchPartitioner {
     ) -> Result<Self> {
         match partitioning {
             Partitioning::Hash(exprs, num_partitions) => {
-                Self::try_new_hash(exprs, num_partitions, timer)
+                Ok(Self::new_hash_partitioner(exprs, num_partitions, timer))
             }
-            Partitioning::RoundRobinBatch(num_partitions) => Self::try_new_round_robin(
-                num_partitions,
-                timer,
-                input_partition,
-                num_input_partitions,
-            ),
+            Partitioning::RoundRobinBatch(num_partitions) => {
+                Ok(Self::new_round_robin_partitioner(
+                    num_partitions,
+                    timer,
+                    input_partition,
+                    num_input_partitions,
+                ))
+            }
             other => {
                 not_impl_err!("Unsupported repartitioning scheme {other:?}")
             }
@@ -1274,18 +1291,20 @@ impl RepartitionExec {
         num_input_partitions: usize,
     ) -> Result<()> {
         let mut partitioner = match &partitioning {
-            Partitioning::Hash(exprs, num_partitions) => BatchPartitioner::try_new_hash(
-                exprs.clone(),
-                *num_partitions,
-                metrics.repartition_time.clone(),
-            )?,
+            Partitioning::Hash(exprs, num_partitions) => {
+                BatchPartitioner::new_hash_partitioner(
+                    exprs.clone(),
+                    *num_partitions,
+                    metrics.repartition_time.clone(),
+                )
+            }
             Partitioning::RoundRobinBatch(num_partitions) => {
-                BatchPartitioner::try_new_round_robin(
+                BatchPartitioner::new_round_robin_partitioner(
                     *num_partitions,
                     metrics.repartition_time.clone(),
                     input_partition,
                     num_input_partitions,
-                )?
+                )
             }
             other => {
                 return not_impl_err!("Unsupported repartitioning scheme {other:?}");
