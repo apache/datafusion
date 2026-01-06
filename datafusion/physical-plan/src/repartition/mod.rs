@@ -483,6 +483,19 @@ impl BatchPartitioner {
             timer,
         }
     }
+    /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
+    ///
+    /// This is a convenience constructor that delegates to the specialized
+    /// hash or round-robin constructors depending on the partitioning variant.
+    ///
+    /// # Parameters
+    /// - `partitioning`: Partitioning scheme to apply (hash or round-robin).
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    /// - `input_partition`: Index of the current input partition.
+    /// - `num_input_partitions`: Total number of input partitions.
+    ///
+    /// # Errors
+    /// Returns an error if the provided partitioning scheme is not supported.
 
     pub fn try_new(
         partitioning: Partitioning,
