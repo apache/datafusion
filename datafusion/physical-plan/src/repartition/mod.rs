@@ -437,7 +437,7 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
-        /// Create a new [`BatchPartitioner`] for hash partitioning
+    /// Create a new [`BatchPartitioner`] for hash partitioning
     pub fn try_new_hash(
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
@@ -475,23 +475,20 @@ impl BatchPartitioner {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<Self> {
-         match partitioning {
-    Partitioning::Hash(exprs, num_partitions) => {
-        Self::try_new_hash(exprs, num_partitions, timer)
-    }
-    Partitioning::RoundRobinBatch(num_partitions) => {
-        Self::try_new_round_robin(
-            num_partitions,
-            timer,
-            input_partition,
-            num_input_partitions,
-        )
-    }
-    other => {
-        not_impl_err!("Unsupported repartitioning scheme {other:?}")
-    }
-}
-
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                Self::try_new_hash(exprs, num_partitions, timer)
+            }
+            Partitioning::RoundRobinBatch(num_partitions) => Self::try_new_round_robin(
+                num_partitions,
+                timer,
+                input_partition,
+                num_input_partitions,
+            ),
+            other => {
+                not_impl_err!("Unsupported repartitioning scheme {other:?}")
+            }
+        }
     }
 
     /// Partition the provided [`RecordBatch`] into one or more partitioned [`RecordBatch`]
@@ -1276,27 +1273,24 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-         let mut partitioner = match &partitioning {
-    Partitioning::Hash(exprs, num_partitions) => {
-        BatchPartitioner::try_new_hash(
-            exprs.clone(),
-            *num_partitions,
-            metrics.repartition_time.clone(),
-        )?
-    }
-    Partitioning::RoundRobinBatch(num_partitions) => {
-        BatchPartitioner::try_new_round_robin(
-            *num_partitions,
-            metrics.repartition_time.clone(),
-            input_partition,
-            num_input_partitions,
-        )?
-    }
-    other => {
-        return not_impl_err!("Unsupported repartitioning scheme {other:?}");
-    }
-};
-
+        let mut partitioner = match &partitioning {
+            Partitioning::Hash(exprs, num_partitions) => BatchPartitioner::try_new_hash(
+                exprs.clone(),
+                *num_partitions,
+                metrics.repartition_time.clone(),
+            )?,
+            Partitioning::RoundRobinBatch(num_partitions) => {
+                BatchPartitioner::try_new_round_robin(
+                    *num_partitions,
+                    metrics.repartition_time.clone(),
+                    input_partition,
+                    num_input_partitions,
+                )?
+            }
+            other => {
+                return not_impl_err!("Unsupported repartitioning scheme {other:?}");
+            }
+        };
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
