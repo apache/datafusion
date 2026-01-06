@@ -175,6 +175,7 @@ impl ArrowHashTable for StringHashTable {
     fn find_or_insert(&mut self, row_idx: usize, replace_idx: usize) -> (usize, bool) {
         let id = self.extract_string_value(row_idx);
 
+        // Compute hash and create equality closure for hash table lookup.
         let hash = self.rnd.hash_one(id.as_deref());
         let id_for_eq = id.clone();
         let eq = move |mi: &Option<String>| id_for_eq.as_deref() == mi.as_deref();
@@ -246,7 +247,7 @@ where
         } else {
             Some(ids.value(row_idx))
         };
-
+        // Compute hash and create equality closure for hash table lookup.
         let hash: u64 = id.hash(&self.rnd);
         let eq = |mi: &Option<VAL::Native>| id == *mi;
 
