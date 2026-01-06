@@ -1198,7 +1198,7 @@ impl GroupedHashAggregateStream {
             // instead.
             // Spilling to disk and reading back also ensures batch size is consistent
             // rather than potentially having one significantly larger last batch.
-            self.spill()?;
+            self.spill()?; // TODO: use sort_batch_chunked instead?
 
             // Mark that we're switching to stream merging mode.
             self.spill_state.is_stream_merging = true;
