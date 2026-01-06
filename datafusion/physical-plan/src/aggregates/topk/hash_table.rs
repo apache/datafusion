@@ -122,25 +122,31 @@ impl StringHashTable {
         }
     }
 
-    /// Extracts the string value at the given row index, handling nulls and different string types
+    /// Extracts the string value at the given row index, handling nulls and different string types.
+    ///
+    /// Returns `None` if the value is null, otherwise `Some(value.to_string())`.
     fn extract_string_value(&self, row_idx: usize) -> Option<String> {
-        // Helper to extract value if not null - avoids duplicating the null check logic
-        let extract = |is_null: bool, value: &str| (!is_null).then(|| value.to_string());
-
-        match self.data_type {
+        let is_null_and_value = match self.data_type {
             DataType::Utf8 => {
                 let arr = self.owned.as_string::<i32>();
-                extract(arr.is_null(row_idx), arr.value(row_idx))
+                (arr.is_null(row_idx), arr.value(row_idx))
             }
             DataType::LargeUtf8 => {
                 let arr = self.owned.as_string::<i64>();
-                extract(arr.is_null(row_idx), arr.value(row_idx))
+                (arr.is_null(row_idx), arr.value(row_idx))
             }
             DataType::Utf8View => {
                 let arr = self.owned.as_string_view();
-                extract(arr.is_null(row_idx), arr.value(row_idx))
+                (arr.is_null(row_idx), arr.value(row_idx))
             }
             _ => panic!("Unsupported data type"),
+        };
+
+        let (is_null, value) = is_null_and_value;
+        if is_null {
+            None
+        } else {
+            Some(value.to_string())
         }
     }
 }
