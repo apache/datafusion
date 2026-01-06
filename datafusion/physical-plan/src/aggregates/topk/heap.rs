@@ -171,15 +171,6 @@ where
 /// borrowed strings are compared before allocation, and only allocated when the
 /// heap confirms they improve the top-K set.
 ///
-/// Implementation note:
-/// Historically this code used a per-batch string interning cache (mapping
-/// hashes to `Arc<str>`) to reduce allocations for duplicate strings. That
-/// approach required cache bookkeeping, collision checks, and risked
-/// accidental retention of references across batches. We moved to a simpler
-/// compare-first design that stores `Option<String>` in the heap. The new
-/// approach keeps ownership local to the heap, avoids most allocations by
-/// comparing borrowed `&str` values first, and makes lifetimes easier to
-/// reason about and audit for safety.
 pub struct StringHeap {
     batch: ArrayRef,
     heap: TopKHeap<Option<String>>,
@@ -241,7 +232,7 @@ impl ArrowHeap for StringHeap {
         }
         // Compare borrowed `&str` against the worst heap value first to avoid
         // allocating a `String` unless this row would actually replace an
-        // existing heap entry. This is the core of the compare-first design.
+        // existing heap entry.
         let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
         match worst_val {
@@ -279,8 +270,7 @@ impl ArrowHeap for StringHeap {
             .expect("Missing heap item");
 
         // Compare borrowed reference first—no allocation yet.
-        // We intentionally avoid a per-batch interning cache here. Instead we
-        // compare the borrowed `&str` with the stored `Option<String>` and
+        // We compare the borrowed `&str` with the stored `Option<String>` and
         // only allocate (`to_string()`) when a replacement is required. This
         // reduces allocations in the common case and simplifies lifetime and
         // ownership reasoning compared to `Arc<str>` + cache management.
@@ -307,8 +297,7 @@ impl ArrowHeap for StringHeap {
         let (vals, map_idxs) = self.heap.drain();
         // Use Arrow builders to safely construct arrays from the owned
         // `Option<String>` values. Builders avoid needing to maintain
-        // references to temporary storage and are the idiomatic, safe way
-        // to produce Arrow arrays element-by-element.
+        // references to temporary storage.
         let arr: ArrayRef = match self.data_type {
             DataType::Utf8 => {
                 let mut builder = StringBuilder::new();
