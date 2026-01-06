@@ -496,7 +496,6 @@ impl BatchPartitioner {
     ///
     /// # Errors
     /// Returns an error if the provided partitioning scheme is not supported.
-
     pub fn try_new(
         partitioning: Partitioning,
         timer: metrics::Time,
