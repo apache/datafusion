@@ -1803,9 +1803,10 @@ mod tests {
             .with_projection(projection.clone())
             .build()?;
 
-        // Method 2: try_new().with_projection() (two calls to compute_properties)
-        let filter2 =
-            FilterExec::try_new(predicate, input)?.with_projection(projection)?;
+        // Method 2: Also using builder for comparison (deprecated try_new().with_projection() removed)
+        let filter2 = FilterExecBuilder::new(predicate, input)
+            .with_projection(projection)
+            .build()?;
 
         // Both methods should produce equivalent results
         assert_eq!(filter1.schema(), filter2.schema());
