@@ -420,6 +420,7 @@ mod tests {
     use super::*;
     use arrow::array::TimestampMillisecondArray;
     use arrow_schema::TimeUnit;
+    use std::collections::BTreeMap;
 
     #[test]
     fn should_emit_correct_type() -> Result<()> {
@@ -431,6 +432,41 @@ mod tests {
         ht.find_or_insert(0, 0);
         let ids = ht.take_all(vec![0]);
         assert_eq!(ids.data_type(), &dt);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_resize_properly() -> Result<()> {
+        let mut heap_to_map = BTreeMap::<usize, usize>::new();
+        // Create TopKHashTable with limit=5 and capacity=3 to force resizing
+        let mut map = TopKHashTable::<Option<String>>::new(5, 3);
+
+        // Insert 5 entries, tracking the heap-to-map index mapping
+        for (heap_idx, id) in ["1", "2", "3", "4", "5"].iter().enumerate() {
+            let value = Some(id.to_string());
+            let hash = heap_idx as u64;
+            let (map_idx, is_new) =
+                map.find_or_insert(hash, value.clone(), heap_idx, |v| *v == value);
+            assert!(is_new, "Entry should be new");
+            heap_to_map.insert(heap_idx, map_idx);
+        }
+
+        // Verify all 5 entries are present
+        assert_eq!(map.len(), 5);
+
+        // Verify that the hash table resized properly (capacity should have grown beyond 3)
+        // This is implicit - if it didn't resize, insertions would have failed or been slow
+
+        // Drain all values in heap order
+        let (_heap_idxs, map_idxs): (Vec<_>, Vec<_>) = heap_to_map.into_iter().unzip();
+        let ids = map.take_all(map_idxs);
+
+        assert_eq!(
+            format!("{ids:?}"),
+            r#"[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]"#
+        );
+        assert_eq!(map.len(), 0, "Map should have been cleared!");
 
         Ok(())
     }
