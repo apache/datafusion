@@ -303,8 +303,8 @@ mod tests {
     async fn filter_pushdown_view() -> Result<()> {
         // Disable parquet pushdown_filters to ensure filters stay as FilterExec nodes
         // rather than being pushed into the Parquet reader
-        let config =
-            SessionConfig::new().set_bool("datafusion.execution.parquet.pushdown_filters", false);
+        let config = SessionConfig::new()
+            .set_bool("datafusion.execution.parquet.pushdown_filters", false);
         let ctx = SessionContext::new_with_config(config);
 
         ctx.register_parquet(
