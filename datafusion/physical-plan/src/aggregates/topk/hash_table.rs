@@ -124,18 +124,21 @@ impl StringHashTable {
 
     /// Extracts the string value at the given row index, handling nulls and different string types
     fn extract_string_value(&self, row_idx: usize) -> Option<String> {
+        // Helper to extract value if not null - avoids duplicating the null check logic
+        let extract = |is_null: bool, value: &str| (!is_null).then(|| value.to_string());
+
         match self.data_type {
             DataType::Utf8 => {
                 let arr = self.owned.as_string::<i32>();
-                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+                extract(arr.is_null(row_idx), arr.value(row_idx))
             }
             DataType::LargeUtf8 => {
                 let arr = self.owned.as_string::<i64>();
-                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+                extract(arr.is_null(row_idx), arr.value(row_idx))
             }
             DataType::Utf8View => {
                 let arr = self.owned.as_string_view();
-                (!arr.is_null(row_idx)).then(|| arr.value(row_idx).to_string())
+                extract(arr.is_null(row_idx), arr.value(row_idx))
             }
             _ => panic!("Unsupported data type"),
         }
