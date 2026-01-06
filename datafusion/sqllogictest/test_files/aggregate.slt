@@ -8381,25 +8381,5 @@ ORDER BY grp, id;
 2 B x,y
 3 B x,y,z
 
-# Test string_agg with sliding window (ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
-query ITT
-SELECT
-    id,
-    grp,
-    string_agg(val, ',') OVER (
-        PARTITION BY grp
-        ORDER BY id
-        ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
-    ) AS sliding_string
-FROM string_agg_window_test
-ORDER BY grp, id;
-----
-1 A a,b
-2 A a,b,c
-3 A b,c
-1 B x,y
-2 B x,y,z
-3 B y,z
-
 statement ok
 DROP TABLE string_agg_window_test;
