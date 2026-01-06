@@ -437,30 +437,61 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
+        /// Create a new [`BatchPartitioner`] for hash partitioning
+    pub fn try_new_hash(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        timer: metrics::Time,
+    ) -> Result<Self> {
+        Ok(Self {
+            state: BatchPartitionerState::Hash {
+                exprs,
+                num_partitions,
+                hash_buffer: vec![],
+            },
+            timer,
+        })
+    }
+
+    /// Create a new [`BatchPartitioner`] for round-robin partitioning
+    pub fn try_new_round_robin(
+        num_partitions: usize,
+        timer: metrics::Time,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            state: BatchPartitionerState::RoundRobin {
+                num_partitions,
+                next_idx: (input_partition * num_partitions) / num_input_partitions,
+            },
+            timer,
+        })
+    }
+
     pub fn try_new(
         partitioning: Partitioning,
         timer: metrics::Time,
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<Self> {
-        let state = match partitioning {
-            Partitioning::RoundRobinBatch(num_partitions) => {
-                BatchPartitionerState::RoundRobin {
-                    num_partitions,
-                    // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
-                    // to avoid they all start at partition 0 and heavily skew on the lower partitions
-                    next_idx: ((input_partition * num_partitions) / num_input_partitions),
-                }
-            }
-            Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
-                exprs,
-                num_partitions,
-                hash_buffer: vec![],
-            },
-            other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
-        };
+         match partitioning {
+    Partitioning::Hash(exprs, num_partitions) => {
+        Self::try_new_hash(exprs, num_partitions, timer)
+    }
+    Partitioning::RoundRobinBatch(num_partitions) => {
+        Self::try_new_round_robin(
+            num_partitions,
+            timer,
+            input_partition,
+            num_input_partitions,
+        )
+    }
+    other => {
+        not_impl_err!("Unsupported repartitioning scheme {other:?}")
+    }
+}
 
-        Ok(Self { state, timer })
     }
 
     /// Partition the provided [`RecordBatch`] into one or more partitioned [`RecordBatch`]
@@ -1245,12 +1276,27 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner = BatchPartitioner::try_new(
-            partitioning,
+         let mut partitioner = match &partitioning {
+    Partitioning::Hash(exprs, num_partitions) => {
+        BatchPartitioner::try_new_hash(
+            exprs.clone(),
+            *num_partitions,
+            metrics.repartition_time.clone(),
+        )?
+    }
+    Partitioning::RoundRobinBatch(num_partitions) => {
+        BatchPartitioner::try_new_round_robin(
+            *num_partitions,
             metrics.repartition_time.clone(),
             input_partition,
             num_input_partitions,
-        )?;
+        )?
+    }
+    other => {
+        return not_impl_err!("Unsupported repartitioning scheme {other:?}");
+    }
+};
+
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
