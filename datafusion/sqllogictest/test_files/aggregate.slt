@@ -3162,7 +3162,7 @@ set datafusion.execution.target_partitions = 1;
 
 # Bucket 1: CORR = 1, -1, 1, -1 (y varies)
 # Bucket 2: CORR = NULL (y constant, zero variance)
-statement error DataFusion error: Arrow error: Invalid argument error: all columns in a record batch must have the same length
+query IIR
 SELECT bucket, grp, CORR(x, y) FROM (
     SELECT * FROM (VALUES
         (1, 1, 1.0, 1.0), (1, 1, 2.0, 2.0),
@@ -3179,6 +3179,15 @@ SELECT bucket, grp, CORR(x, y) FROM (
 ) AS ordered_data
 GROUP BY bucket, grp
 ORDER BY bucket, grp;
+----
+1 1 1
+1 2 -1
+1 3 1
+1 4 -1
+2 1 NULL
+2 2 NULL
+2 3 NULL
+2 4 NULL
 
 statement ok
 set datafusion.execution.target_partitions = 4;
