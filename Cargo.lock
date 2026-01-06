@@ -2654,7 +2654,6 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
- "postgres-protocol",
  "postgres-types",
  "regex",
  "sqllogictest",
