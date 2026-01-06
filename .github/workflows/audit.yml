@@ -42,8 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
       - name: Install cargo-audit
-        uses: taiki-e/install-action@a983ca795126a4be4e8a44879ac5c4c3ef66cae1  # v2.65.11
+        uses: taiki-e/install-action@0e76c5c569f13f7eb21e8e5b26fe710062b57b62  # v2.65.13
         with:
           tool: cargo-audit
       - name: Run audit check
-        run: cargo audit
+        # RUSTSEC-2026-0001: https://rustsec.org/advisories/RUSTSEC-2026-0001.html
+        # underlying rkyv is patched, but rustsec database not yet updated
+        # Can remove when this is merged: https://github.com/rustsec/advisory-db/pull/2565
+        run: cargo audit --ignore RUSTSEC-2026-0001
