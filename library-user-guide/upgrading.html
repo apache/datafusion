@@ -477,6 +477,84 @@ Configuration</a> user’s guide.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature flag has been removed. This feature has been migrated to
 the <code class="docutils literal notranslate"><span class="pre">datafusion-python</span></code> repository since version <code class="docutils literal notranslate"><span class="pre">44.0.0</span></code>.</p>
 </section>
+<section id="refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">
+<h3>Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront<a class="headerlink" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront" title="Link to this heading">#</a></h3>
+<p>The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> no longer takes a separate schema parameter.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who create <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> or file sources (<code class="docutils literal notranslate"><span class="pre">ParquetSource</span></code>, <code class="docutils literal notranslate"><span class="pre">CsvSource</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonSource</span></code>, <code class="docutils literal notranslate"><span class="pre">AvroSource</span></code>) directly</p></li>
+<li><p>Users who implement custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations</p></li>
+</ul>
+<p><strong>Key changes:</strong></p>
+<ol class="arabic">
+<li><p><strong>FileSource constructors now require TableSchema</strong>: All built-in file sources now take the schema in their constructor:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = ParquetSource::default();</span>
+<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>FileScanConfigBuilder no longer takes schema as a parameter</strong>: The schema is now passed via the FileSource:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- FileScanConfigBuilder::new(url, schema, source)</span>
+<span class="gi">+ FileScanConfigBuilder::new(url, source)</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Partition columns are now part of TableSchema</strong>: The <code class="docutils literal notranslate"><span class="pre">with_table_partition_cols()</span></code> method has been removed from <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>. Partition columns are now passed as part of the <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> to the FileSource constructor:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gi">+ let table_schema = TableSchema::new(</span>
+<span class="gi">+     file_schema,</span>
+<span class="gi">+     vec![Arc::new(Field::new(&quot;date&quot;, DataType::Utf8, false))],</span>
+<span class="gi">+ );</span>
+<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
+<span class="w"> </span> let config = FileScanConfigBuilder::new(url, source)
+<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;date&quot;, DataType::Utf8, false)])</span>
+<span class="w"> </span>     .with_file(partitioned_file)
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+</li>
+<li><p><strong>FileFormat::file_source() now takes TableSchema parameter</strong>: Custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations must be updated:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl FileFormat for MyFileFormat {
+<span class="gd">-   fn file_source(&amp;self) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="gi">+   fn file_source(&amp;self, table_schema: TableSchema) -&gt; Arc&lt;dyn FileSource&gt; {</span>
+<span class="gd">-       Arc::new(MyFileSource::default())</span>
+<span class="gi">+       Arc::new(MyFileSource::new(table_schema))</span>
+<span class="w"> </span>   }
+}
+</pre></div>
+</div>
+</li>
+</ol>
+<p><strong>Migration examples:</strong></p>
+<p>For Parquet files:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(ParquetSource::default());</span>
+<span class="gd">- let config = FileScanConfigBuilder::new(url, schema, source)</span>
+<span class="gi">+ let table_schema = TableSchema::new(schema, vec![]);</span>
+<span class="gi">+ let source = Arc::new(ParquetSource::new(table_schema));</span>
+<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
+<span class="w"> </span>     .with_file(partitioned_file)
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+<p>For CSV files with partition columns:</p>
+<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(CsvSource::new(true, b&#39;,&#39;, b&#39;&quot;&#39;));</span>
+<span class="gd">- let config = FileScanConfigBuilder::new(url, file_schema, source)</span>
+<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;year&quot;, DataType::Int32, false)])</span>
+<span class="gi">+ let options = CsvOptions {</span>
+<span class="gi">+     has_header: Some(true),</span>
+<span class="gi">+     delimiter: b&#39;,&#39;,</span>
+<span class="gi">+     quote: b&#39;&quot;&#39;,</span>
+<span class="gi">+     ..Default::default()</span>
+<span class="gi">+ };</span>
+<span class="gi">+ let table_schema = TableSchema::new(</span>
+<span class="gi">+     file_schema,</span>
+<span class="gi">+     vec![Arc::new(Field::new(&quot;year&quot;, DataType::Int32, false))],</span>
+<span class="gi">+ );</span>
+<span class="gi">+ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));</span>
+<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
+<span class="w"> </span>     .build();
+</pre></div>
+</div>
+</section>
 <section id="adaptive-filter-representation-in-parquet-filter-pushdown">
 <h3>Adaptive filter representation in Parquet filter pushdown<a class="headerlink" href="#adaptive-filter-representation-in-parquet-filter-pushdown" title="Link to this heading">#</a></h3>
 <p>As of Arrow 57.1.0, DataFusion uses a new adaptive filter strategy when
@@ -1014,84 +1092,6 @@ to the previous value you can execute the sql:</p>
 </div>
 <p>This change was made to better support using the default timezone in scalar UDF functions such as
 <code class="docutils literal notranslate"><span class="pre">now</span></code>, <code class="docutils literal notranslate"><span class="pre">current_date</span></code>, <code class="docutils literal notranslate"><span class="pre">current_time</span></code>, and <code class="docutils literal notranslate"><span class="pre">to_timestamp</span></code> among others.</p>
-</section>
-<section id="refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">
-<h3>Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront<a class="headerlink" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront" title="Link to this heading">#</a></h3>
-<p>The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> no longer takes a separate schema parameter.</p>
-<p><strong>Who is affected:</strong></p>
-<ul class="simple">
-<li><p>Users who create <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> or file sources (<code class="docutils literal notranslate"><span class="pre">ParquetSource</span></code>, <code class="docutils literal notranslate"><span class="pre">CsvSource</span></code>, <code class="docutils literal notranslate"><span class="pre">JsonSource</span></code>, <code class="docutils literal notranslate"><span class="pre">AvroSource</span></code>) directly</p></li>
-<li><p>Users who implement custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations</p></li>
-</ul>
-<p><strong>Key changes:</strong></p>
-<ol class="arabic">
-<li><p><strong>FileSource constructors now require TableSchema</strong>: All built-in file sources now take the schema in their constructor:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = ParquetSource::default();</span>
-<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
-</pre></div>
-</div>
-</li>
-<li><p><strong>FileScanConfigBuilder no longer takes schema as a parameter</strong>: The schema is now passed via the FileSource:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- FileScanConfigBuilder::new(url, schema, source)</span>
-<span class="gi">+ FileScanConfigBuilder::new(url, source)</span>
-</pre></div>
-</div>
-</li>
-<li><p><strong>Partition columns are now part of TableSchema</strong>: The <code class="docutils literal notranslate"><span class="pre">with_table_partition_cols()</span></code> method has been removed from <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code>. Partition columns are now passed as part of the <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> to the FileSource constructor:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gi">+ let table_schema = TableSchema::new(</span>
-<span class="gi">+     file_schema,</span>
-<span class="gi">+     vec![Arc::new(Field::new(&quot;date&quot;, DataType::Utf8, false))],</span>
-<span class="gi">+ );</span>
-<span class="gi">+ let source = ParquetSource::new(table_schema);</span>
-<span class="w"> </span> let config = FileScanConfigBuilder::new(url, source)
-<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;date&quot;, DataType::Utf8, false)])</span>
-<span class="w"> </span>     .with_file(partitioned_file)
-<span class="w"> </span>     .build();
-</pre></div>
-</div>
-</li>
-<li><p><strong>FileFormat::file_source() now takes TableSchema parameter</strong>: Custom <code class="docutils literal notranslate"><span class="pre">FileFormat</span></code> implementations must be updated:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span>impl FileFormat for MyFileFormat {
-<span class="gd">-   fn file_source(&amp;self) -&gt; Arc&lt;dyn FileSource&gt; {</span>
-<span class="gi">+   fn file_source(&amp;self, table_schema: TableSchema) -&gt; Arc&lt;dyn FileSource&gt; {</span>
-<span class="gd">-       Arc::new(MyFileSource::default())</span>
-<span class="gi">+       Arc::new(MyFileSource::new(table_schema))</span>
-<span class="w"> </span>   }
-}
-</pre></div>
-</div>
-</li>
-</ol>
-<p><strong>Migration examples:</strong></p>
-<p>For Parquet files:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(ParquetSource::default());</span>
-<span class="gd">- let config = FileScanConfigBuilder::new(url, schema, source)</span>
-<span class="gi">+ let table_schema = TableSchema::new(schema, vec![]);</span>
-<span class="gi">+ let source = Arc::new(ParquetSource::new(table_schema));</span>
-<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
-<span class="w"> </span>     .with_file(partitioned_file)
-<span class="w"> </span>     .build();
-</pre></div>
-</div>
-<p>For CSV files with partition columns:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gd">- let source = Arc::new(CsvSource::new(true, b&#39;,&#39;, b&#39;&quot;&#39;));</span>
-<span class="gd">- let config = FileScanConfigBuilder::new(url, file_schema, source)</span>
-<span class="gd">-     .with_table_partition_cols(vec![Field::new(&quot;year&quot;, DataType::Int32, false)])</span>
-<span class="gi">+ let options = CsvOptions {</span>
-<span class="gi">+     has_header: Some(true),</span>
-<span class="gi">+     delimiter: b&#39;,&#39;,</span>
-<span class="gi">+     quote: b&#39;&quot;&#39;,</span>
-<span class="gi">+     ..Default::default()</span>
-<span class="gi">+ };</span>
-<span class="gi">+ let table_schema = TableSchema::new(</span>
-<span class="gi">+     file_schema,</span>
-<span class="gi">+     vec![Arc::new(Field::new(&quot;year&quot;, DataType::Int32, false))],</span>
-<span class="gi">+ );</span>
-<span class="gi">+ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));</span>
-<span class="gi">+ let config = FileScanConfigBuilder::new(url, source)</span>
-<span class="w"> </span>     .build();
-</pre></div>
-</div>
 </section>
 <section id="introduction-of-tableschema-and-changes-to-filesource-with-schema-method">
 <h3>Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method<a class="headerlink" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method" title="Link to this heading">#</a></h3>
@@ -2120,6 +2120,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtableprovider-now-caches-list-commands">ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#newlines-in-values-moved-from-filescanconfig-to-csvoptions"><code class="docutils literal notranslate"><span class="pre">newlines_in_values</span></code> moved from <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> to <code class="docutils literal notranslate"><span class="pre">CsvOptions</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#removal-of-pyarrow-feature">Removal of <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code> feature</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptive-filter-representation-in-parquet-filter-pushdown">Adaptive filter representation in Parquet filter pushdown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics-handling-moved-from-filesource-to-filescanconfig">Statistics handling moved from <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> to <code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partition-column-handling-moved-out-of-physicalexpradapter">Partition column handling moved out of <code class="docutils literal notranslate"><span class="pre">PhysicalExprAdapter</span></code></a></li>
@@ -2144,7 +2145,6 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-projection-renamed-to-filescanconfig-projection-exprs"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection</span></code> renamed to <code class="docutils literal notranslate"><span class="pre">FileScanConfig::projection_exprs</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#describe-query-support"><code class="docutils literal notranslate"><span class="pre">DESCRIBE</span> <span class="pre">query</span></code> support</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-execution-time-zone-default-configuration-changed"><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> default configuration changed</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#refactoring-of-filesource-constructors-and-filescanconfigbuilder-to-accept-schemas-upfront">Refactoring of <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> constructors and <code class="docutils literal notranslate"><span class="pre">FileScanConfigBuilder</span></code> to accept schemas upfront</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction-of-tableschema-and-changes-to-filesource-with-schema-method">Introduction of <code class="docutils literal notranslate"><span class="pre">TableSchema</span></code> and changes to <code class="docutils literal notranslate"><span class="pre">FileSource::with_schema()</span></code> method</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-ordered-set-aggregate-has-been-renamed-to-aggregateudfimpl-supports-within-group-clause"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_ordered_set_aggregate</span></code> has been renamed to <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::supports_within_group_clause</span></code></a></li>
 </ul>
