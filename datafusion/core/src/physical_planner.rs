@@ -938,9 +938,12 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), physical_input)
-                            .with_batch_size(session_state.config().batch_size())
-                            .build()?
+                        FilterExecBuilder::new(
+                            Arc::clone(&runtime_expr[0]),
+                            physical_input,
+                        )
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     PlanAsyncExpr::Async(
                         async_map,

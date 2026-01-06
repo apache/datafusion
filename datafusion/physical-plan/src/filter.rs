@@ -212,7 +212,10 @@ impl FilterExec {
     ///
     /// # Deprecated
     /// Use [`FilterExecBuilder::with_projection`] instead
-    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_projection instead")]
+    #[deprecated(
+        since = "52.0.0",
+        note = "Use FilterExecBuilder::with_projection instead"
+    )]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  Check if the projection is valid
         can_project(&self.schema(), projection.as_ref())?;
@@ -237,7 +240,10 @@ impl FilterExec {
     ///
     /// # Deprecated
     /// Use [`FilterExecBuilder::with_batch_size`] instead
-    #[deprecated(since = "52.0.0", note = "Use FilterExecBuilder::with_batch_size instead")]
+    #[deprecated(
+        since = "52.0.0",
+        note = "Use FilterExecBuilder::with_batch_size instead"
+    )]
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
         FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
             .with_projection(self.projection.clone())
