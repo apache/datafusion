@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::logical_expr::Expr;
 use datafusion_catalog::Session;
 use datafusion_physical_plan::ExecutionPlan;
@@ -346,11 +346,9 @@ async fn test_update_assignments() -> Result<()> {
 #[tokio::test]
 async fn test_truncate_calls_provider() -> Result<()> {
     let provider = Arc::new(CaptureTruncateProvider::new(test_schema()));
-    let ctx = SessionContext::new();
-    ctx.state()
-        .write()
-        .config_mut()
-        .set("datafusion.optimizer.max_passes", "0");
+    let config = SessionConfig::new().set("datafusion.optimizer.max_passes", "0");
+
+    let ctx = SessionContext::new_with_config(config);
 
     ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
 
