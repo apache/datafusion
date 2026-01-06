@@ -20,6 +20,7 @@ use arrow::datatypes::DataType;
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::Arc;
+use crate::array::array_concat;
 
 use crate::string::concat;
 use crate::strings::{
@@ -109,14 +110,13 @@ impl ScalarUDFImpl for ConcatFunc {
         let ScalarFunctionArgs { args, .. } = args;
 
         // If all arguments are arrays, delegate to array_concat
+        // If all arguments are arrays, delegate to array_concat
         let all_arrays = args.iter().all(|arg| matches!(arg, ColumnarValue::Array(_)));
-        if all_arrays {
-            use crate::array::array_concat;
-            return array_concat().invoke_with_args(ScalarFunctionArgs {
-                args,
-                ..Default::default()
-            });
-        }
+            if all_arrays {
+                use crate::array::array_concat;
+                return array_concat().invoke_with_args(args.into());
+            }
+
 
 
         let mut return_datatype = DataType::Utf8;
@@ -399,7 +399,6 @@ mod tests {
         #[test]
     fn concat_array_should_match_array_concat() -> Result<()> {
         use arrow::array::Int64Array;
-        use arrow::datatypes::{DataType, Field};
 
         let a = ColumnarValue::Array(Arc::new(
             Int64Array::from(vec![Some(1), Some(2), Some(3)])
@@ -417,7 +416,7 @@ mod tests {
             number_rows: 3,
             return_field: Field::new(
                 "f",
-                DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                List(Arc::new(Field::new("item", Int64, true))),
                 true,
             )
             .into(),
@@ -428,7 +427,19 @@ mod tests {
 
         match result {
             ColumnarValue::Array(array) => {
-                assert_eq!(array.len(), 5); // [1,2,3,4,5]
+                let values = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>()
+                    .unwrap();
+
+                let inner = values
+                    .value(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap();
+
+                assert_eq!(inner.values(), &[1, 2, 3, 4, 5]);
+
             }
             _ => panic!("Expected array output"),
         }
