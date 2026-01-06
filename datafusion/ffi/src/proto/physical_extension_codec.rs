@@ -18,8 +18,8 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RSlice, RStr, RVec};
 use datafusion_common::error::Result;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{
@@ -40,7 +40,6 @@ use crate::{df_result, rresult_return};
 /// A stable struct for sharing [`PhysicalExtensionCodec`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PhysicalExtensionCodec {
     /// Decode bytes into an execution plan.
     try_decode: unsafe extern "C" fn(
@@ -145,7 +144,7 @@ unsafe extern "C" fn try_decode_fn_wrapper(
     let plan =
         rresult_return!(codec.try_decode(buf.as_ref(), &inputs, task_ctx.as_ref()));
 
-    RResult::ROk(FFI_ExecutionPlan::new(plan, task_ctx, None))
+    RResult::ROk(FFI_ExecutionPlan::new(plan, None))
 }
 
 unsafe extern "C" fn try_encode_fn_wrapper(
@@ -242,9 +241,12 @@ unsafe extern "C" fn try_encode_udwf_fn_wrapper(
 }
 
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_PhysicalExtensionCodec) {
-    let private_data =
-        Box::from_raw(provider.private_data as *mut PhysicalExtensionCodecPrivateData);
-    drop(private_data);
+    unsafe {
+        let private_data = Box::from_raw(
+            provider.private_data as *mut PhysicalExtensionCodecPrivateData,
+        );
+        drop(private_data);
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(
@@ -326,12 +328,9 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let task_ctx = (&self.0.task_ctx_provider).try_into()?;
         let inputs = inputs
             .iter()
-            .map(|plan| {
-                FFI_ExecutionPlan::new(Arc::clone(plan), Arc::clone(&task_ctx), None)
-            })
+            .map(|plan| FFI_ExecutionPlan::new(Arc::clone(plan), None))
             .collect();
 
         let plan =
@@ -342,8 +341,7 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
     }
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
-        let task_ctx = (&self.0.task_ctx_provider).try_into()?;
-        let plan = FFI_ExecutionPlan::new(node, task_ctx, None);
+        let plan = FFI_ExecutionPlan::new(node, None);
         let bytes = df_result!(unsafe { (self.0.try_encode)(&self.0, plan) })?;
 
         buf.extend(bytes);
@@ -412,7 +410,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};

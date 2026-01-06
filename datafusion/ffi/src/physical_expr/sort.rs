@@ -29,7 +29,6 @@ use crate::physical_expr::FFI_PhysicalExpr;
 /// See [`PhysicalSortExpr`] for the meaning of each field.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PhysicalSortExpr {
     expr: FFI_PhysicalExpr,
     options: FFI_SortOptions,
@@ -55,12 +54,14 @@ impl From<&FFI_PhysicalSortExpr> for PhysicalSortExpr {
 
 #[cfg(test)]
 mod tests {
-    use crate::physical_expr::sort::FFI_PhysicalSortExpr;
+    use std::sync::Arc;
+
     use arrow_schema::SortOptions;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-    use std::sync::Arc;
+
+    use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 
     #[test]
     fn ffi_sort_expr_round_trip() {

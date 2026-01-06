@@ -99,25 +99,25 @@ OPTIONS('COMPRESSION' 'gzip');
 
 The following options are available when reading or writing CSV files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
 
-| Option               | Description                                                                                                                       | Default Value      |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| COMPRESSION          | Sets the compression that should be applied to the entire CSV file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED. | UNCOMPRESSED       |
-| HAS_HEADER           | Sets if the CSV file should include column headers. If not set, uses session or system default.                                   | None               |
-| DELIMITER            | Sets the character which should be used as the column delimiter within the CSV file.                                              | `,` (comma)        |
-| QUOTE                | Sets the character which should be used for quoting values within the CSV file.                                                   | `"` (double quote) |
-| TERMINATOR           | Sets the character which should be used as the line terminator within the CSV file.                                               | None               |
-| ESCAPE               | Sets the character which should be used for escaping special characters within the CSV file.                                      | None               |
-| DOUBLE_QUOTE         | Sets if quotes within quoted fields should be escaped by doubling them (e.g., `"aaa""bbb"`).                                      | None               |
-| NEWLINES_IN_VALUES   | Sets if newlines in quoted values are supported. If not set, uses session or system default.                                      | None               |
-| DATE_FORMAT          | Sets the format that dates should be encoded in within the CSV file.                                                              | None               |
-| DATETIME_FORMAT      | Sets the format that datetimes should be encoded in within the CSV file.                                                          | None               |
-| TIMESTAMP_FORMAT     | Sets the format that timestamps should be encoded in within the CSV file.                                                         | None               |
-| TIMESTAMP_TZ_FORMAT  | Sets the format that timestamps with timezone should be encoded in within the CSV file.                                           | None               |
-| TIME_FORMAT          | Sets the format that times should be encoded in within the CSV file.                                                              | None               |
-| NULL_VALUE           | Sets the string which should be used to indicate null values within the CSV file.                                                 | None               |
-| NULL_REGEX           | Sets the regex pattern to match null values when loading CSVs.                                                                    | None               |
-| SCHEMA_INFER_MAX_REC | Sets the maximum number of records to scan to infer the schema.                                                                   | None               |
-| COMMENT              | Sets the character which should be used to indicate comment lines in the CSV file.                                                | None               |
+| Option               | Description                                                                                                                                                      | Default Value      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| COMPRESSION          | Sets the compression that should be applied to the entire CSV file. Supported values are GZIP, BZIP2, XZ, ZSTD, and UNCOMPRESSED.                                | UNCOMPRESSED       |
+| HAS_HEADER           | Sets if the CSV file should include column headers. If not set, uses session or system default.                                                                  | None               |
+| DELIMITER            | Sets the character which should be used as the column delimiter within the CSV file.                                                                             | `,` (comma)        |
+| QUOTE                | Sets the character which should be used for quoting values within the CSV file.                                                                                  | `"` (double quote) |
+| TERMINATOR           | Sets the character which should be used as the line terminator within the CSV file.                                                                              | None               |
+| ESCAPE               | Sets the character which should be used for escaping special characters within the CSV file.                                                                     | None               |
+| DOUBLE_QUOTE         | Sets if quotes within quoted fields should be escaped by doubling them (e.g., `"aaa""bbb"`).                                                                     | None               |
+| NEWLINES_IN_VALUES   | Sets if newlines in quoted values are supported. If not set, uses session or system default.                                                                     | None               |
+| DATE_FORMAT          | Sets the format that dates should be encoded in within the CSV file.                                                                                             | None               |
+| DATETIME_FORMAT      | Sets the format that datetimes should be encoded in within the CSV file.                                                                                         | None               |
+| TIMESTAMP_FORMAT     | Sets the format that timestamps should be encoded in within the CSV file.                                                                                        | None               |
+| TIMESTAMP_TZ_FORMAT  | Sets the format that timestamps with timezone should be encoded in within the CSV file.                                                                          | None               |
+| TIME_FORMAT          | Sets the format that times should be encoded in within the CSV file.                                                                                             | None               |
+| NULL_VALUE           | Sets the string which should be used to indicate null values within the CSV file.                                                                                | None               |
+| NULL_REGEX           | Sets the regex pattern to match null values when loading CSVs.                                                                                                   | None               |
+| SCHEMA_INFER_MAX_REC | Sets the maximum number of records to scan to infer the schema. If set to 0, schema inference is disabled and all fields will be inferred as Utf8 (string) type. | None               |
+| COMMENT              | Sets the character which should be used to indicate comment lines in the CSV file.                                                                               | None               |
 
 **Example:**
 

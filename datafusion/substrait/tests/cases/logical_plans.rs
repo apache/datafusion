@@ -43,10 +43,10 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: NOT DATA.D AS EXPR$0
-              TableScan: DATA
-            "#
+        @r"
+        Projection: NOT DATA.D AS EXPR$0
+          TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -74,11 +74,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
-              WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
-                TableScan: DATA
-            "#
+        @r"
+        Projection: sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING AS LEAD_EXPR
+          WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]
+            TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -101,11 +101,11 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
-              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                TableScan: DATA
-            "#
+        @r"
+        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED
+          WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -130,12 +130,12 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
-              WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-                  TableScan: DATA
-            "#
+        @r"
+        Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$1
+          WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            WindowAggr: windowExpr=[[row_number() PARTITION BY [DATA.A] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+              TableScan: DATA
+        "
                 );
 
         // Trigger execution to ensure plan validity
@@ -165,7 +165,7 @@ mod tests {
         settings.bind(|| {
             assert_snapshot!(
                 plan,
-                @r#"
+                @r"
             Projection: left.A, left.[UUID] AS C, right.D, Utf8(NULL) AS [UUID] AS E
               Left Join: left.A = right.A
                 SubqueryAlias: left
@@ -176,7 +176,7 @@ mod tests {
                       TableScan: B
                 SubqueryAlias: right
                   TableScan: C
-            "#
+            "
             );
         });
 
@@ -198,9 +198,7 @@ mod tests {
 
         assert_snapshot!(
                 &plan,
-            @r#"
-        Values: (List([1, 2]))
-        "#
+            @"Values: (List([1, 2]))"
         );
 
         // Trigger execution to ensure plan validity
@@ -218,12 +216,12 @@ mod tests {
 
         assert_snapshot!(
         plan,
-        @r#"
-            Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
-              Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
-                Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
-                  TableScan: sales
-            "#
+        @r"
+        Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count
+          Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]
+            Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]
+              TableScan: sales
+        "
                 );
 
         // Trigger execution to ensure plan validity

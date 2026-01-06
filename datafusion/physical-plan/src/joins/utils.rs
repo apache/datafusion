@@ -411,7 +411,35 @@ struct PartialJoinStatistics {
     pub column_statistics: Vec<ColumnStatistics>,
 }
 
-/// Estimate the statistics for the given join's output.
+/// Estimates the output statistics for a join operation based on input statistics.
+///
+/// # Statistics Propagation
+///
+/// This function estimates join output statistics using the following approach:
+/// - **Row count estimation**: Uses the `on` parameter (equijoin keys) to estimate
+///   output cardinality via [`estimate_join_cardinality`]. The estimation is based on
+///   column-level statistics (distinct counts, min/max values) of the join keys.
+/// - **Column statistics**: Combines column statistics from both inputs. For join types
+///   that preserve all columns (Inner, Left, Right, Full), statistics from both sides
+///   are concatenated. For semi/anti joins, only the relevant side's statistics are kept.
+/// - **Byte size**: Always returns `Precision::Absent` as join output size is difficult
+///   to estimate without knowing the actual data.
+///
+/// # The `on` Parameter
+///
+/// The `on` parameter represents equijoin keys (e.g., `t1.id = t2.id`). When `on` is
+/// empty (as in NestedLoopJoinExec which handles non-equijoin predicates), the
+/// cardinality estimation cannot compute selectivity from join keys, and this function
+/// returns unknown statistics (`num_rows: Precision::Absent`).
+///
+/// # Limitations
+///
+/// - Does not account for selectivity of arbitrary join filter expressions
+///   (e.g., `(t1.v1 + t2.v1) % 2 = 0`). Such filters, common in NestedLoopJoinExec,
+///   are not factored into the cardinality estimation.
+/// - Column statistics for the output are simply combined from inputs without
+///   adjusting for join selectivity (acknowledged in the code as needing
+///   "filter selectivity analysis").
 pub(crate) fn estimate_join_statistics(
     left_stats: Statistics,
     right_stats: Statistics,

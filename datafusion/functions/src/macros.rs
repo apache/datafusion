@@ -41,6 +41,17 @@
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
 /// - Functions that require config (marked with `@config` prefix)
+///
+/// Note on configuration construction paths:
+/// - The convenience wrappers generated for `@config` functions call the inner
+///   constructor with `ConfigOptions::default()`. These wrappers are intended
+///   primarily for programmatic `Expr` construction and convenience usage.
+/// - When functions are registered in a session, DataFusion will call
+///   `with_updated_config()` to create a `ScalarUDF` instance using the session's
+///   actual `ConfigOptions`. This also happens when configuration changes at runtime
+///   (e.g., via `SET` statements). In short: the macro uses the default config for
+///   convenience constructors; the session config is applied when functions are
+///   registered or when configuration is updated.
 #[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
@@ -56,6 +67,24 @@ macro_rules! export_functions {
         pub fn $FUNC() -> datafusion_expr::Expr {
             use datafusion_common::config::ConfigOptions;
             super::$FUNC(&ConfigOptions::default()).call(vec![])
+        }
+    };
+
+    // function that requires config and takes a vector argument
+    (single $FUNC:ident, $DOC:expr, @config $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call($arg)
+        }
+    };
+
+    // function that requires config and variadic arguments
+    (single $FUNC:ident, $DOC:expr, @config $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![$($arg),*])
         }
     };
 

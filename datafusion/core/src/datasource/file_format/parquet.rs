@@ -1206,10 +1206,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1235,10 +1235,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1363,6 +1363,28 @@ mod tests {
         assert_eq!(stream.schema(), empty_record_batch.schema());
         let results = stream.collect::<Vec<_>>().await;
         assert_eq!(results.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_parquet_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.parquet", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS INT) AS id LIMIT 0").await?;
+        df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist
+        assert!(std::path::Path::new(&path).exists());
+        let read_df = ctx.read_parquet(&path, ParquetReadOptions::new()).await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
         Ok(())
     }
 

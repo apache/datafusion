@@ -20,7 +20,7 @@ name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -37,7 +37,7 @@ backtrace = ["datafusion/backtrace"]
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.8.11"
+aws-config = "1.8.12"
 aws-credential-types = "1.2.7"
 chrono = { workspace = true }
 clap = { version = "4.5.53", features = ["cargo", "derive"] }
@@ -74,5 +74,4 @@ ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.6.0"
 rstest = { workspace = true }
-testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["minio"] }
