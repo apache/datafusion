@@ -57,7 +57,7 @@ log = { workspace = true }
 object_store = { workspace = true }
 postgres-protocol = { version = "0.6.7", optional = true }
 postgres-types = { version = "0.2.11", features = ["derive", "with-chrono-0_4"], optional = true }
-rust_decimal = { version = "1.38.0", features = ["tokio-pg"] }
+rust_decimal = { version = "1.39.0", features = ["tokio-pg"] }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
 sqllogictest = "0.28.4"
