@@ -170,6 +170,16 @@ where
 /// String values are compared lexicographically using the compare-first pattern:
 /// borrowed strings are compared before allocation, and only allocated when the
 /// heap confirms they improve the top-K set.
+///
+/// Implementation note:
+/// Historically this code used a per-batch string interning cache (mapping
+/// hashes to `Arc<str>`) to reduce allocations for duplicate strings. That
+/// approach required cache bookkeeping, collision checks, and risked
+/// accidental retention of references across batches. We moved to a simpler
+/// compare-first design that stores `Option<String>` in the heap. The new
+/// approach keeps ownership local to the heap, avoids most allocations by
+/// comparing borrowed `&str` values first, and makes lifetimes easier to
+/// reason about and audit for safety.
 pub struct StringHeap {
     batch: ArrayRef,
     heap: TopKHeap<Option<String>>,
@@ -229,6 +239,9 @@ impl ArrowHeap for StringHeap {
         if !self.heap.is_full() {
             return false;
         }
+        // Compare borrowed `&str` against the worst heap value first to avoid
+        // allocating a `String` unless this row would actually replace an
+        // existing heap entry. This is the core of the compare-first design.
         let new_val = self.value(row_idx);
         let worst_val = self.heap.worst_val().expect("Missing root");
         match worst_val {
@@ -245,6 +258,10 @@ impl ArrowHeap for StringHeap {
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
+        // When appending (heap not full) we must allocate to own the string
+        // because it will be stored in the heap. For replacements we avoid
+        // allocation until `replace_if_better` confirms a replacement is
+        // necessary.
         let new_str = self.value(row_idx).to_string();
         let new_val = Some(new_str);
         self.heap.append_or_replace(new_val, map_idx, map);
@@ -261,7 +278,12 @@ impl ArrowHeap for StringHeap {
             .as_ref()
             .expect("Missing heap item");
 
-        // Compare borrowed reference first—no allocation yet
+        // Compare borrowed reference first—no allocation yet.
+        // We intentionally avoid a per-batch interning cache here. Instead we
+        // compare the borrowed `&str` with the stored `Option<String>` and
+        // only allocate (`to_string()`) when a replacement is required. This
+        // reduces allocations in the common case and simplifies lifetime and
+        // ownership reasoning compared to `Arc<str>` + cache management.
         match &existing.val {
             None => {
                 // Existing is null; new value always wins
@@ -283,6 +305,10 @@ impl ArrowHeap for StringHeap {
 
     fn drain(&mut self) -> (ArrayRef, Vec<usize>) {
         let (vals, map_idxs) = self.heap.drain();
+        // Use Arrow builders to safely construct arrays from the owned
+        // `Option<String>` values. Builders avoid needing to maintain
+        // references to temporary storage and are the idiomatic, safe way
+        // to produce Arrow arrays element-by-element.
         let arr: ArrayRef = match self.data_type {
             DataType::Utf8 => {
                 let mut builder = StringBuilder::new();
