@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray};
+use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 
