@@ -187,6 +187,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert a SQL interval expression to a DataFusion logical plan
     /// expression
     pub(super) fn sql_interval_to_expr(
+        &self,
         negative: bool,
         interval: Interval,
     ) -> Result<Expr> {
