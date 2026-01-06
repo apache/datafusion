@@ -347,6 +347,10 @@ async fn test_update_assignments() -> Result<()> {
 async fn test_truncate_calls_provider() -> Result<()> {
     let provider = Arc::new(CaptureTruncateProvider::new(test_schema()));
     let ctx = SessionContext::new();
+    ctx.state()
+        .write()
+        .config_mut()
+        .set("datafusion.optimizer.max_passes", "0");
 
     ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
 
