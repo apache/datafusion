@@ -747,7 +747,7 @@ fn test_update_infer_with_metadata() {
         ScalarAndMetadata::from(ScalarValue::from("Turing")),
         ScalarAndMetadata::new(
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
-            Some(uuid_field.metadata().into()),
+            Some(uuid_field.as_ref().into()),
         ),
     ];
 
@@ -819,7 +819,7 @@ fn test_insert_infer_with_metadata() {
     let param_values = vec![
         ScalarAndMetadata::new(
             ScalarValue::FixedSizeBinary(16, Some(uuid_bytes)),
-            Some(uuid_field.metadata().into()),
+            Some(uuid_field.as_ref().into()),
         ),
         ScalarAndMetadata::from(ScalarValue::from("Alan")),
         ScalarAndMetadata::from(ScalarValue::from("Turing")),

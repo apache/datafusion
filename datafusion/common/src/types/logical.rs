@@ -17,7 +17,9 @@
 
 use super::NativeType;
 use crate::error::Result;
+use arrow::array::Array;
 use arrow::datatypes::DataType;
+use arrow::util::display::{ArrayFormatter, FormatOptions};
 use core::fmt;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
 
@@ -32,7 +34,7 @@ pub enum TypeSignature<'a> {
     /// The `name` should contain the same value as 'ARROW:extension:name'.
     Extension {
         name: &'a str,
-        parameters: &'a [TypeParameter<'a>],
+        parameters: Vec<TypeParameter<'a>>,
     },
 }
 
@@ -86,6 +88,18 @@ pub trait LogicalType: Sync + Send {
     /// that is logically compatible with this logical type.
     fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
         self.native().default_cast_for(origin)
+    }
+
+    /// Returns an [`ArrayFormatter`] that can format values of this type.
+    ///
+    /// If `Ok(None)` is returned, the default implementation will be used.
+    /// If an error is returned, there was an error creating the formatter.
+    fn create_array_formatter<'fmt>(
+        &self,
+        _array: &'fmt dyn Array,
+        _options: &FormatOptions<'fmt>,
+    ) -> Result<Option<ArrayFormatter<'fmt>>> {
+        Ok(None)
     }
 }
 

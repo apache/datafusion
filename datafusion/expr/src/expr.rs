@@ -31,6 +31,7 @@ use crate::{AggregateUDF, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::util::display::FormatOptions;
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -39,10 +40,11 @@ use datafusion_common::{
     Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use itertools::Itertools;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
-    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement, display_comma_separated,
+    display_comma_separated, ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem,
+    RenameSelectItem, ReplaceSelectElement,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -3264,9 +3266,21 @@ impl Display for Expr {
             }
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v, metadata) => {
-                match metadata.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
-                    false => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
-                    true => write!(f, "{v:?}"),
+                match metadata.as_ref().and_then(|m| m.logical_type()) {
+                    None => write!(f, "{v:?}"),
+                    Some(logical_type) => {
+                        let array = v.to_array_of_size(1).expect("TODO");
+                        let pretty_printer = logical_type
+                            .create_array_formatter(
+                                array.as_ref(),
+                                &FormatOptions::default(),
+                            )
+                            .unwrap();
+                        match pretty_printer {
+                            None => write!(f, "{v:?} {:?}", metadata.as_ref().unwrap()),
+                            Some(pp) => write!(f, "{}", pp.value(0)),
+                        }
+                    }
                 }
             }
             Expr::Case(case) => {
@@ -3510,8 +3524,8 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 mod test {
     use crate::expr_fn::col;
     use crate::{
-        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
-        lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
+        case, lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility,
     };
     use arrow::datatypes::{Field, Schema};
     use sqlparser::ast;

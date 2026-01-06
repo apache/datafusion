@@ -17,6 +17,7 @@
 
 //! [`DataFrame`] API for building and executing query plans.
 
+mod array_formatter_factory;
 #[cfg(feature = "parquet")]
 mod parquet;
 
@@ -69,8 +70,11 @@ use datafusion_functions_aggregate::expr_fn::{
     avg, count, max, median, min, stddev, sum,
 };
 
+use crate::dataframe::array_formatter_factory::DFArrayFormatterFactory;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_expr::registry::ExtensionTypeRegistry;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -214,7 +218,7 @@ impl Default for DataFrameWriteOptions {
 #[derive(Debug, Clone)]
 pub struct DataFrame {
     // Box the (large) SessionState to reduce the size of DataFrame on the stack
-    session_state: Box<SessionState>,
+    session_state: Arc<SessionState>,
     plan: LogicalPlan,
     // Whether projection ops can skip validation or not. This flag if false
     // allows for an optimization in `with_column` and `with_column_renamed` functions
@@ -242,7 +246,7 @@ impl DataFrame {
     /// `DataFrame` from an existing datasource.
     pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
         Self {
-            session_state: Box::new(session_state),
+            session_state: Arc::new(session_state),
             plan,
             projection_requires_validation: true,
         }
@@ -558,6 +562,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
+        let predicate = self.resolve_types_expr(predicate)?.data;
         let plan = LogicalPlanBuilder::from(self.plan)
             .filter(predicate)?
             .build()?;
@@ -1485,6 +1490,13 @@ impl DataFrame {
         let options = self.session_state.config().options().format.clone();
         let arrow_options: arrow::util::display::FormatOptions = (&options).try_into()?;
 
+        let formatter_factory = DFArrayFormatterFactory::new(Arc::clone(
+            &self.session_state,
+        )
+            as Arc<dyn ExtensionTypeRegistry>);
+        let arrow_options =
+            arrow_options.with_formatter_factory(Some(&formatter_factory));
+
         let results = self.collect().await?;
         Ok(
             pretty::pretty_format_batches_with_options(&results, &arrow_options)?
@@ -1632,7 +1644,7 @@ impl DataFrame {
 
     /// Returns both the [`LogicalPlan`] and [`SessionState`] that comprise this [`DataFrame`]
     pub fn into_parts(self) -> (SessionState, LogicalPlan) {
-        (*self.session_state, self.plan)
+        (Arc::unwrap_or_clone(self.session_state), self.plan)
     }
 
     /// Return the [`LogicalPlan`] represented by this DataFrame without running
@@ -2353,7 +2365,10 @@ impl DataFrame {
         if let Some(cache_factory) = self.session_state.cache_factory() {
             let new_plan =
                 cache_factory.create(self.plan, self.session_state.as_ref())?;
-            Ok(Self::new(*self.session_state, new_plan))
+            Ok(Self::new(
+                Arc::unwrap_or_clone(self.session_state),
+                new_plan,
+            ))
         } else {
             let context = SessionContext::new_with_state((*self.session_state).clone());
             // The schema is consistent with the output
@@ -2498,6 +2513,34 @@ impl DataFrame {
         let ctx = SessionContext::new();
         let df = ctx.read_batch(batch)?;
         Ok(df)
+    }
+
+    /// Resolves the extension types in an expression, returning the same expression but with
+    /// resolved extension types. This is done by consulting the [`SessionState`].
+    ///
+    /// Only *unresolved* expressions will be resolved. If users already set the logical type
+    /// reference of an expression, this method does not check whether this is the "right" extension
+    /// type registered in the session.
+    fn resolve_types_expr(&self, expr: Expr) -> Result<Transformed<Expr>> {
+        match expr {
+            Expr::Literal(value, Some(metadata)) => {
+                let Some(extension_type_name) = metadata.extension_type_name() else {
+                    return Ok(Transformed::no(Expr::Literal(value, Some(metadata))));
+                };
+
+                let registration =
+                    self.session_state.extension_type(extension_type_name)?;
+                let logical_type = registration.create_logical_type(
+                    extension_type_name,
+                    metadata.extension_type_metadata(),
+                )?;
+                Ok(Transformed::yes(Expr::Literal(
+                    value,
+                    Some(metadata.with_logical_type(Some(logical_type))),
+                )))
+            }
+            expr => expr.map_children(|e| self.resolve_types_expr(e)),
+        }
     }
 }
 
