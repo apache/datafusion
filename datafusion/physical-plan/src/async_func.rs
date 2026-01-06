@@ -187,6 +187,8 @@ impl ExecutionPlan for AsyncFuncExec {
         // first execute the input stream
         let input_stream = self.input.execute(partition, Arc::clone(&context))?;
 
+        // TODO: Track `elapsed_compute` in `BaselineMetrics`
+        // Issue: <https://github.com/apache/datafusion/issues/19658>
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // now, for each record batch, evaluate the async expressions and add the columns to the result
