@@ -62,3 +62,12 @@ TRUNCATE TABLE t1 CASCADE;
 # Test TRUNCATE with multiple tables
 statement error TRUNCATE with multiple tables is not supported
 TRUNCATE TABLE t1, t2;
+
+statement error TRUNCATE with PARTITION is not supported
+TRUNCATE TABLE t1 PARTITION (p1);
+
+statement error TRUNCATE with ONLY is not supported
+TRUNCATE ONLY t1;
+
+statement error TRUNCATE with RESTART/CONTINUE IDENTITY is not supported
+TRUNCATE TABLE t1 RESTART IDENTITY;

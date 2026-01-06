@@ -20,7 +20,9 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
+use arrow::array::UInt64Array;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
@@ -29,6 +31,7 @@ use datafusion::logical_expr::Expr;
 use datafusion_catalog::Session;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::test::TestMemoryExec;
 
 /// A TableProvider that captures the filters passed to delete_from().
 struct CaptureDeleteProvider {
@@ -219,9 +222,20 @@ impl TableProvider for CaptureTruncateProvider {
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         *self.truncate_called.lock().unwrap() = true;
 
-        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
-            Field::new("count", DataType::UInt64, false),
-        ])))))
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "count",
+            DataType::UInt64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt64Array::from(vec![0u64]))],
+        )?;
+        Ok(Arc::new(TestMemoryExec::try_new(
+            &[vec![batch]],
+            schema,
+            None,
+        )?))
     }
 }
 
