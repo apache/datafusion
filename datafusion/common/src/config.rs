@@ -739,7 +739,7 @@ config_namespace! {
         /// promoted. A value of 0.0 means all filters will be promoted.
         /// Because there can be a high I/O cost to pushing down ineffective filters,
         /// recommended values are in the range [0.8, 0.95], depending on random I/0 costs.
-        pub filter_effectiveness_threshold: f64, default = 0.95
+        pub filter_effectiveness_threshold: f64, default = 1.0
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

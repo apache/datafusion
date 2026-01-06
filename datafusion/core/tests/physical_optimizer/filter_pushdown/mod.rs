@@ -1820,7 +1820,10 @@ async fn test_topk_dynamic_filter_pushdown_integration() {
     cfg.options_mut().execution.parquet.pushdown_filters = true;
     cfg.options_mut().execution.parquet.max_row_group_size = 128;
     // Always pushdown filters into row filters for this test
-    cfg.options_mut().execution.parquet.filter_effectiveness_threshold = 0.0;
+    cfg.options_mut()
+        .execution
+        .parquet
+        .filter_effectiveness_threshold = 0.0;
     let ctx = SessionContext::new_with_config(cfg);
     ctx.register_object_store(
         ObjectStoreUrl::parse("memory://").unwrap().as_ref(),
