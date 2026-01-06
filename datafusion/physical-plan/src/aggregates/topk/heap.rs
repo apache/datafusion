@@ -203,8 +203,7 @@ impl StringHeap {
 
 /// Helper to extract a string value from an ArrayRef at a given index.
 ///
-/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types. This helper reduces
-/// duplication between `StringHeap::value()` and `StringHeap::drain()`.
+/// Supports `Utf8`, `LargeUtf8`, and `Utf8View` data types.
 ///
 /// # Panics
 /// Panics if the index is out of bounds or if the data type is unsupported.
@@ -271,9 +270,7 @@ impl ArrowHeap for StringHeap {
 
         // Compare borrowed reference first—no allocation yet.
         // We compare the borrowed `&str` with the stored `Option<String>` and
-        // only allocate (`to_string()`) when a replacement is required. This
-        // reduces allocations in the common case and simplifies lifetime and
-        // ownership reasoning compared to `Arc<str>` + cache management.
+        // only allocate (`to_string()`) when a replacement is required.
         match &existing.val {
             None => {
                 // Existing is null; new value always wins
