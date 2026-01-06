@@ -703,7 +703,7 @@ impl FileOpener for ParquetOpener {
 
                     // Apply post-scan filters if present
                     if let Some(ref data_schema) = post_scan_data_schema {
-                        let start = std::time::Instant::now();
+                        let start = datafusion_common::instant::Instant::now();
                         b = apply_post_scan_filters(
                             b,
                             Arc::clone(data_schema),
