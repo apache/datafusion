@@ -29,6 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::logical_expr::Expr;
 use datafusion_catalog::Session;
+use datafusion_common::ScalarValue;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::test::TestMemoryExec;
@@ -346,7 +347,10 @@ async fn test_update_assignments() -> Result<()> {
 #[tokio::test]
 async fn test_truncate_calls_provider() -> Result<()> {
     let provider = Arc::new(CaptureTruncateProvider::new(test_schema()));
-    let config = SessionConfig::new().set("datafusion.optimizer.max_passes", "0");
+    let config = SessionConfig::new().set(
+        "datafusion.optimizer.max_passes",
+        &ScalarValue::UInt64(Some(0)),
+    );
 
     let ctx = SessionContext::new_with_config(config);
 
