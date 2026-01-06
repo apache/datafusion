@@ -295,37 +295,27 @@ impl ArrowHeap for StringHeap {
         // Use Arrow builders to safely construct arrays from the owned
         // `Option<String>` values. Builders avoid needing to maintain
         // references to temporary storage.
+
+        // Macro to eliminate duplication across string builder types.
+        // All three builders share the same interface for append_value,
+        // append_null, and finish, differing only in their concrete types.
+        macro_rules! build_string_array {
+            ($builder_type:ty) => {{
+                let mut builder = <$builder_type>::new();
+                for val in vals {
+                    match val {
+                        Some(s) => builder.append_value(&s),
+                        None => builder.append_null(),
+                    }
+                }
+                Arc::new(builder.finish())
+            }};
+        }
+
         let arr: ArrayRef = match self.data_type {
-            DataType::Utf8 => {
-                let mut builder = StringBuilder::new();
-                for val in vals {
-                    match val {
-                        Some(s) => builder.append_value(&s),
-                        None => builder.append_null(),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::LargeUtf8 => {
-                let mut builder = LargeStringBuilder::new();
-                for val in vals {
-                    match val {
-                        Some(s) => builder.append_value(&s),
-                        None => builder.append_null(),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
-            DataType::Utf8View => {
-                let mut builder = StringViewBuilder::new();
-                for val in vals {
-                    match val {
-                        Some(s) => builder.append_value(&s),
-                        None => builder.append_null(),
-                    }
-                }
-                Arc::new(builder.finish())
-            }
+            DataType::Utf8 => build_string_array!(StringBuilder),
+            DataType::LargeUtf8 => build_string_array!(LargeStringBuilder),
+            DataType::Utf8View => build_string_array!(StringViewBuilder),
             _ => unreachable!("Unsupported string type: {:?}", self.data_type),
         };
         (arr, map_idxs)
