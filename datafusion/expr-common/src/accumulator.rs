@@ -58,17 +58,37 @@ pub trait Accumulator: Send + Sync + Debug {
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
-    /// Returns the final aggregate value, consuming the internal state.
+    /// Returns the final aggregate value.
     ///
     /// For example, the `SUM` accumulator maintains a running sum,
     /// and `evaluate` will produce that running sum as its output.
     ///
-    /// This function should not be called twice, otherwise it will
-    /// result in potentially non-deterministic behavior.
-    ///
     /// This function gets `&mut self` to allow for the accumulator to build
     /// arrow-compatible internal state that can be returned without copying
-    /// when possible (for example distinct strings)
+    /// when possible (for example distinct strings).
+    ///
+    /// # Window Frame Queries
+    ///
+    /// When used in a window context without [`Self::supports_retract_batch`],
+    /// `evaluate()` may be called multiple times on the same accumulator instance
+    /// (once per row in the partition). In this case, implementations **must not**
+    /// consume or modify internal state. Use references or clones to preserve state:
+    ///
+    /// ```ignore
+    /// // GOOD: Preserves state for subsequent calls
+    /// fn evaluate(&mut self) -> Result<ScalarValue> {
+    ///     calculate_result(&self.values)  // Use reference
+    /// }
+    ///
+    /// // BAD: Consumes state, breaks window queries
+    /// fn evaluate(&mut self) -> Result<ScalarValue> {
+    ///     calculate_result(std::mem::take(&mut self.values))
+    /// }
+    /// ```
+    ///
+    /// For efficient sliding window calculations, consider implementing
+    /// [`Self::retract_batch`] which allows DataFusion to incrementally
+    /// update state rather than calling `evaluate()` repeatedly.
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
     /// Returns the allocated size required for this accumulator, in

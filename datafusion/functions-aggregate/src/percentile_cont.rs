@@ -437,16 +437,9 @@ impl<T: ArrowNumericType + Debug> Accumulator for PercentileContAccumulator<T> {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        // Cast to target type if needed (e.g., integer to Float64)
-        let values = if values[0].data_type() != &T::DATA_TYPE {
-            arrow::compute::cast(&values[0], &T::DATA_TYPE)?
-        } else {
-            Arc::clone(&values[0])
-        };
-
         let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
-        for i in 0..values.len() {
-            let v = ScalarValue::try_from_array(&values, i)?;
+        for i in 0..values[0].len() {
+            let v = ScalarValue::try_from_array(&values[0], i)?;
             if !v.is_null() {
                 *to_remove.entry(v).or_default() += 1;
             }
