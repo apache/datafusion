@@ -2340,9 +2340,10 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
     let hash_map = Arc::new(JoinHashMapU32::with_capacity(0));
-    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("col", 0));
+    let on_columns = vec![Arc::new(Column::new("col", 0)) as Arc<dyn PhysicalExpr>];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
-        hash_expr,
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
         hash_map,
         "test_lookup".to_string(),
     ));
