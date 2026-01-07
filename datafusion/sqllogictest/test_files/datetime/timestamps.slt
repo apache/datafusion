@@ -5098,6 +5098,10 @@ SELECT to_timestamp_millis(arrow_cast(4294967295000, 'UInt64'));
 ----
 2106-02-07T06:28:15
 
+# Test UInt64 value larger than i64::MAX (9223372036854775808 = i64::MAX + 1)
+query error Cast error: Can't cast value 9223372036854775808 to type Int64
+SELECT to_timestamp_nanos(arrow_cast(9223372036854775808, 'UInt64'));
+
 # Test boundary values for to_timestamp
 query P
 SELECT to_timestamp(arrow_cast(9223372036, 'Int64'));
