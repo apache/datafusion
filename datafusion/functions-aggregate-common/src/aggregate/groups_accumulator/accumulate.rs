@@ -43,7 +43,7 @@ pub enum SeenValues {
     All {
         num_values: usize,
     },
-    // some groups have not yet seen a non-null value
+    // Some groups have not yet seen a non-null value
     Some {
         values: BooleanBufferBuilder,
     },
