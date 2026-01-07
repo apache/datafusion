@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`ScalarUDFImpl`] definitions for array_except function.
+//! [`ScalarUDFImpl`] definition for array_except function.
 
 use crate::utils::{check_datatypes, make_scalar_function};
+use arrow::array::new_null_array;
 use arrow::array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait, cast::AsArray};
-use arrow::buffer::OffsetBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::utils::{ListCoercion, take_function_args};
@@ -28,6 +29,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -104,8 +106,11 @@ impl ScalarUDFImpl for ArrayExcept {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match (&arg_types[0].clone(), &arg_types[1].clone()) {
-            (DataType::Null, _) | (_, DataType::Null) => Ok(arg_types[0].clone()),
+        match (&arg_types[0], &arg_types[1]) {
+            (DataType::Null, DataType::Null) => {
+                Ok(DataType::new_list(DataType::Null, true))
+            }
+            (DataType::Null, dt) | (dt, DataType::Null) => Ok(dt.clone()),
             (dt, _) => Ok(dt.clone()),
         }
     }
@@ -129,8 +134,16 @@ impl ScalarUDFImpl for ArrayExcept {
 fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_except", args)?;
 
+    let len = array1.len();
     match (array1.data_type(), array2.data_type()) {
-        (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),
+        (DataType::Null, DataType::Null) => Ok(new_null_array(
+            &DataType::new_list(DataType::Null, true),
+            len,
+        )),
+        (DataType::Null, dt @ DataType::List(_))
+        | (DataType::Null, dt @ DataType::LargeList(_))
+        | (dt @ DataType::List(_), DataType::Null)
+        | (dt @ DataType::LargeList(_), DataType::Null) => Ok(new_null_array(dt, len)),
         (DataType::List(field), DataType::List(_)) => {
             check_datatypes("array_except", &[array1, array2])?;
             let list1 = array1.as_list::<i32>();
@@ -169,14 +182,25 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
     let mut rows = Vec::with_capacity(l_values.num_rows());
     let mut dedup = HashSet::new();
 
-    for (l_w, r_w) in l.offsets().windows(2).zip(r.offsets().windows(2)) {
-        let l_slice = l_w[0].as_usize()..l_w[1].as_usize();
-        let r_slice = r_w[0].as_usize()..r_w[1].as_usize();
-        for i in r_slice {
+    let nulls = NullBuffer::union(l.nulls(), r.nulls());
+
+    for (i, ((l_start, l_end), (r_start, r_end))) in l
+        .offsets()
+        .iter()
+        .tuple_windows()
+        .zip(r.offsets().iter().tuple_windows())
+        .enumerate()
+    {
+        if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
+            offsets.push(OffsetSize::usize_as(rows.len()));
+            continue;
+        }
+
+        for i in r_start.as_usize()..r_end.as_usize() {
             let right_row = r_values.row(i);
             dedup.insert(right_row);
         }
-        for i in l_slice {
+        for i in l_start.as_usize()..l_end.as_usize() {
             let left_row = l_values.row(i);
             if dedup.insert(left_row) {
                 rows.push(left_row);
@@ -192,7 +216,7 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
             field.to_owned(),
             OffsetBuffer::new(offsets.into()),
             values.to_owned(),
-            l.nulls().cloned(),
+            nulls,
         ))
     } else {
         internal_err!("array_except failed to convert rows")
