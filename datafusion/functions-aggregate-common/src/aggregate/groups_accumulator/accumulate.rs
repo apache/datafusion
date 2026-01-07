@@ -107,12 +107,12 @@ impl SeenValues {
 pub struct NullState {
     /// Have we seen any non-filtered input values for `group_index`?
     ///
-    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer[i] is true, have seen at least one non null
+    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is true, have seen at least one non null
     /// value for group `i`
     ///
-    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer[i] is false, have not seen any values that
+    /// If `seen_values` is `SeenValues::Some(buffer)` and buffer\[i\] is false, have not seen any values that
     /// pass the filter yet for group `i`
-    /// 
+    ///
     /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
     seen_values: SeenValues,
 }
