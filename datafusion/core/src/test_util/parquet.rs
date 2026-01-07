@@ -160,16 +160,8 @@ impl TestParquetFile {
                 .with_table_parquet_options(parquet_options.clone()),
         );
         let scan_config_builder =
-            FileScanConfigBuilder::new(self.object_store_url.clone(), source).with_file(
-                PartitionedFile {
-                    object_meta: self.object_meta.clone(),
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                },
-            );
+            FileScanConfigBuilder::new(self.object_store_url.clone(), source)
+                .with_file(PartitionedFile::new_from_meta(self.object_meta.clone()));
 
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 

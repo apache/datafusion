@@ -58,6 +58,7 @@ use chrono::TimeZone;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
+use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt};
 use object_store::{GetOptions, GetRange, ObjectStore};
 use object_store::{ObjectMeta, path::Path};
@@ -133,6 +134,16 @@ pub struct PartitionedFile {
     /// When set via [`Self::with_statistics`], partition column statistics are automatically
     /// computed from [`Self::partition_values`] with exact min/max/null_count/distinct_count.
     pub statistics: Option<Arc<Statistics>>,
+    /// The known lexicographical ordering of the rows in this file, if any.
+    ///
+    /// This describes how the data within the file is sorted with respect to one or more
+    /// columns, and is used by the optimizer for planning operations that depend on input
+    /// ordering (e.g. merges, sorts, and certain aggregations).
+    ///
+    /// When available, this is typically inferred from file-level metadata exposed by the
+    /// underlying format (for example, Parquet `sorting_columns`), but it may also be set
+    /// explicitly via [`Self::with_ordering`].
+    pub ordering: Option<LexOrdering>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes
@@ -153,6 +164,20 @@ impl PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            ordering: None,
+            extensions: None,
+            metadata_size_hint: None,
+        }
+    }
+
+    /// Create a file from a known ObjectMeta without partition
+    pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
+        Self {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
@@ -171,10 +196,18 @@ impl PartitionedFile {
             partition_values: vec![],
             range: Some(FileRange { start, end }),
             statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
         .with_range(start, end)
+    }
+
+    /// Attach partition values to this file.
+    /// This replaces any existing partition values.
+    pub fn with_partition_values(mut self, partition_values: Vec<ScalarValue>) -> Self {
+        self.partition_values = partition_values;
+        self
     }
 
     /// Size of the file to be scanned (taking into account the range, if present).
@@ -282,6 +315,15 @@ impl PartitionedFile {
             false
         }
     }
+
+    /// Set the known ordering of data in this file.
+    ///
+    /// The ordering represents the lexicographical sort order of the data,
+    /// typically inferred from file metadata (e.g., Parquet sorting_columns).
+    pub fn with_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
+        self.ordering = ordering;
+        self
+    }
 }
 
 impl From<ObjectMeta> for PartitionedFile {
@@ -291,6 +333,7 @@ impl From<ObjectMeta> for PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
@@ -487,6 +530,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     byte_size: Precision::Absent,
                 }],
             })),
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         };
