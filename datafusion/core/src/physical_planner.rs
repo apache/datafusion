@@ -2189,7 +2189,11 @@ pub fn create_aggregate_expr_and_maybe_filter(
     let (name, human_display, e) = match e {
         Expr::Alias(Alias { name, .. }) => {
             let unaliased = e.clone().unalias_nested().data;
-            (Some(name.clone()), e.human_display().to_string(), unaliased)
+            // Use the unaliased expression for human_display so that the
+            // physical plan EXPLAIN shows the actual aggregate expression,
+            // not just the alias name
+            let display = unaliased.human_display().to_string();
+            (Some(name.clone()), display, unaliased)
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
