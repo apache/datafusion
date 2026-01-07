@@ -935,7 +935,7 @@ config_namespace! {
         pub repartition_aggregations: bool, default = true
 
         /// Minimum total files size in bytes to perform file scan repartitioning.
-        pub repartition_file_min_size: usize, default = 10 * 1024 * 1024
+        pub repartition_file_min_size: usize, default = 128 * 1024
 
         /// Should DataFusion repartition data using the join keys to execute joins in parallel
         /// using the provided `target_partitions` level
