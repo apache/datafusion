@@ -52,6 +52,11 @@ fn run(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool, asc: boo
     black_box(rt.block_on(async { aggregate(ctx, limit, use_topk, asc).await })).unwrap();
 }
 
+fn run_string(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool) {
+    black_box(rt.block_on(async { aggregate_string(ctx, limit, use_topk).await }))
+        .unwrap();
+}
+
 async fn aggregate(
     ctx: SessionContext,
     limit: usize,
@@ -95,6 +100,33 @@ async fn aggregate(
     if asc {
         assert_eq!(actual.trim(), expected_asc);
     }
+
+    Ok(())
+}
+
+/// Benchmark for string aggregate functions with topk optimization.
+/// This tests grouping by a numeric column (timestamp_ms) and aggregating
+/// a string column (trace_id) with Utf8 or Utf8View data types.
+async fn aggregate_string(
+    ctx: SessionContext,
+    limit: usize,
+    use_topk: bool,
+) -> Result<()> {
+    let sql = format!(
+        "select max(trace_id) from traces group by timestamp_ms order by max(trace_id) desc limit {limit};"
+    );
+    let df = ctx.sql(sql.as_str()).await?;
+    let plan = df.create_physical_plan().await?;
+    let actual_phys_plan = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(
+        actual_phys_plan.contains(&format!("lim=[{limit}]")),
+        use_topk
+    );
+
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(batches.len(), 1);
+    let batch = batches.first().unwrap();
+    assert_eq!(batch.num_rows(), 10);
 
     Ok(())
 }
@@ -169,6 +201,55 @@ fn criterion_benchmark(c: &mut Criterion) {
         )
         .as_str(),
         |b| b.iter(|| run(&rt, ctx.clone(), limit, true, true)),
+    );
+
+    // String aggregate benchmarks - grouping by timestamp, aggregating string column
+    let ctx = rt
+        .block_on(create_context(partitions, samples, false, true, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} time-series rows [Utf8]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, true, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} worst-case rows [Utf8]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, false, true, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} time-series rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, true, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} worst-case rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
     );
 }
 
