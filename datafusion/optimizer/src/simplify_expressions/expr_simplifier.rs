@@ -40,7 +40,7 @@ use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
     binary::BinaryTypeCoercer, lit, or,
 };
-use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
+use datafusion_expr::{Cast, TryCast};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
 use datafusion_expr::{
     expr::{InList, InSubquery},
@@ -749,9 +749,48 @@ struct Simplifier<'a, S> {
     info: &'a S,
 }
 
-impl<'a, S> Simplifier<'a, S> {
+impl<'a, S: SimplifyInfo> Simplifier<'a, S> {
     pub fn new(info: &'a S) -> Self {
         Self { info }
+    }
+
+    fn simplify_scalar_function(
+        &self,
+        func: Arc<datafusion_expr::ScalarUDF>,
+        args: Vec<Expr>,
+    ) -> Result<Transformed<Expr>> {
+        if func.signature().volatility == Volatility::Volatile {
+            return Ok(Transformed::no(Expr::ScalarFunction(
+                ScalarFunction::new_udf(func, args),
+            )));
+        }
+
+        if !args.iter().all(|arg| matches!(arg, Expr::Literal(..))) {
+            return Ok(Transformed::no(Expr::ScalarFunction(
+                ScalarFunction::new_udf(func, args),
+            )));
+        }
+
+        let schema = Schema::new(Vec::<Field>::new());
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let batch = RecordBatch::new_empty(Arc::new(schema));
+
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::clone(&func),
+            args.clone(),
+        ));
+
+        let phys_expr =
+            create_physical_expr(&expr, &df_schema, self.info.execution_props())?;
+
+        let result = phys_expr.evaluate(&batch)?;
+
+        match result {
+            ColumnarValue::Scalar(s) => Ok(Transformed::yes(Expr::Literal(s, None))),
+            ColumnarValue::Array(_) => Ok(Transformed::no(Expr::ScalarFunction(
+                ScalarFunction::new_udf(func, args),
+            ))),
+        }
     }
 }
 
@@ -1569,16 +1608,9 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     .not(),
                 )
             }
+
             Expr::ScalarFunction(ScalarFunction { func: udf, args }) => {
-                match udf.simplify(args, info)? {
-                    ExprSimplifyResult::Original(args) => {
-                        Transformed::no(Expr::ScalarFunction(ScalarFunction {
-                            func: udf,
-                            args,
-                        }))
-                    }
-                    ExprSimplifyResult::Simplified(expr) => Transformed::yes(expr),
-                }
+                self.simplify_scalar_function(udf, args)?
             }
 
             Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction {
@@ -5018,5 +5050,60 @@ mod tests {
             when_then_expr: vec![(lit(true).into(), lit(then).into())],
             else_expr: None,
         })
+    }
+
+    #[test]
+    fn test_simplify_scalar_udf_invoke() {
+        use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+        struct ConstantUDF {
+            signature: Signature,
+        }
+
+        impl ConstantUDF {
+            fn new() -> Self {
+                Self {
+                    signature: Signature::exact(
+                        vec![DataType::Int32],
+                        Volatility::Immutable,
+                    ),
+                }
+            }
+        }
+
+        impl ScalarUDFImpl for ConstantUDF {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+            fn name(&self) -> &str {
+                "constant_udf"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Int32)
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: ScalarFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
+            }
+        }
+
+        let udf = Arc::new(ScalarUDF::from(ConstantUDF::new()));
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(udf, vec![lit(1)]));
+
+        let schema = test_schema();
+        let props = ExecutionProps::new();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+
+        let simplified = simplifier.simplify(expr).unwrap();
+
+        assert_eq!(simplified, lit(100));
     }
 }

@@ -23,10 +23,9 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -112,26 +111,11 @@ impl ScalarUDFImpl for NowFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: datafusion_expr::ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
-        internal_err!("invoke should not be called on a simplified now() function")
-    }
-
-    fn simplify(
-        &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
-    ) -> Result<ExprSimplifyResult> {
-        let now_ts = info
-            .execution_props()
-            .query_execution_start_time
-            .timestamp_nanos_opt();
-
-        Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, self.timezone.clone()),
-            None,
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let now = chrono::Utc::now();
+        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+            Some(now.timestamp_nanos_opt().unwrap_or(0)),
+            self.timezone.clone(),
         )))
     }
 
