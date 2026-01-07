@@ -269,7 +269,9 @@ fn leaf_indices_for_roots(
     let root_set: BTreeSet<_> = root_indices.iter().copied().collect();
 
     (0..schema_descr.num_columns())
-        .filter(|leaf_idx| root_set.contains(&schema_descr.get_column_root_idx(*leaf_idx)))
+        .filter(|leaf_idx| {
+            root_set.contains(&schema_descr.get_column_root_idx(*leaf_idx))
+        })
         .collect()
 }
 
