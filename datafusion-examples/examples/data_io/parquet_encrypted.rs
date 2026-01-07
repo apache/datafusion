@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
@@ -27,7 +26,7 @@ use datafusion::logical_expr::{col, lit};
 use datafusion::parquet::encryption::decrypt::FileDecryptionProperties;
 use datafusion::parquet::encryption::encrypt::FileEncryptionProperties;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use tempfile::TempDir;
 
 /// Read and write encrypted Parquet files using DataFusion
@@ -36,11 +35,8 @@ pub async fn parquet_encrypted() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Read the sample parquet file
     let parquet_df = ctx

@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -30,7 +29,7 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanVisitor, execute_stream, visit_execution_plan,
 };
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::StreamExt;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`
@@ -38,11 +37,8 @@ pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);

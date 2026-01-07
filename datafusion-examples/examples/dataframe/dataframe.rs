@@ -19,7 +19,6 @@
 
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
@@ -33,7 +32,7 @@ use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use tempfile::{TempDir, tempdir};
 use tokio::fs::create_dir_all;
 
@@ -82,11 +81,8 @@ pub async fn dataframe_example() -> Result<()> {
 /// 3. Select columns and rows
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
@@ -341,12 +337,8 @@ async fn where_exist_subquery(ctx: &SessionContext) -> Result<()> {
 }
 
 async fn register_cars_test_data(name: &str, ctx: &SessionContext) -> Result<()> {
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-
-    ctx.register_csv(name, csv_path.to_str().unwrap(), CsvReadOptions::default())
+    let dataset = ExampleDataset::Cars;
+    ctx.register_csv(name, dataset.path_str()?, CsvReadOptions::default())
         .await?;
     Ok(())
 }

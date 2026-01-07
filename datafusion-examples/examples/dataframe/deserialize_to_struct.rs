@@ -17,13 +17,11 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
-
 use arrow::array::{Array, Float64Array, StringViewArray};
 use datafusion::common::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::StreamExt;
 
 /// This example shows how to convert query results into Rust structs by using
@@ -38,11 +36,8 @@ pub async fn deserialize_to_struct() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     ctx.register_parquet(
         "cars",

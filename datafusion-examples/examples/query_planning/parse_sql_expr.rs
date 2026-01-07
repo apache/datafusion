@@ -17,8 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
-
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
@@ -29,7 +27,7 @@ use datafusion::{
     error::Result,
     prelude::{ParquetReadOptions, SessionContext},
 };
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates the programmatic parsing of SQL expressions using
 /// the DataFusion [`SessionContext::parse_sql_expr`] API or the [`DataFrame::parse_sql_expr`] API.
@@ -82,11 +80,8 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let df = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
@@ -103,11 +98,8 @@ async fn query_parquet_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let df = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
@@ -149,11 +141,8 @@ async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let df = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())

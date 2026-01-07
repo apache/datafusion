@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::ipc::writer::{CompressionContext, DictionaryTracker, IpcDataGenerator};
@@ -31,7 +30,7 @@ use datafusion::arrow::error::ArrowError;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTableUrl};
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::stream::BoxStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -86,12 +85,10 @@ impl FlightService for FlightServiceImpl {
                 let ctx = SessionContext::new();
 
                 // Convert the CSV input into a temporary Parquet directory for querying
-                let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("data")
-                    .join("csv")
-                    .join("cars.csv");
-                let parquet_temp =
-                    write_csv_to_parquet(&ctx, &csv_path).await.map_err(|e| {
+                let dataset = ExampleDataset::Cars;
+                let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path())
+                    .await
+                    .map_err(|e| {
                         Status::internal(format!("Error writing csv to parquet: {e}"))
                     })?;
                 let parquet_path = parquet_temp.path_str().map_err(|e| {

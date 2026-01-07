@@ -17,10 +17,9 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
-
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_examples::utils::datasets::ExampleDataset;
 
 /// This example demonstrates executing a simple query against an Arrow data source (CSV) and
 /// fetching results with streaming aggregation and streaming window
@@ -28,10 +27,8 @@ pub async fn csv_sql_streaming() -> Result<()> {
     // create local execution context
     let ctx = SessionContext::new();
 
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
+    let dataset = ExampleDataset::Cars;
+    let csv_path = dataset.path();
 
     // Register a table source and tell DataFusion the file is ordered by `car ASC`.
     // Note it is the responsibility of the user to make sure

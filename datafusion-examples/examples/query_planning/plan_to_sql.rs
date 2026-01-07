@@ -18,7 +18,6 @@
 //! See `main.rs` for how to run it.
 
 use std::fmt;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::common::DFSchemaRef;
@@ -40,7 +39,7 @@ use datafusion::sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
 use datafusion::sql::unparser::{Unparser, plan_to_sql};
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates the programmatic construction of SQL strings using
 /// the DataFusion Expr [`Expr`] and LogicalPlan [`LogicalPlan`] API.
@@ -119,11 +118,8 @@ async fn simple_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let df = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
@@ -147,11 +143,8 @@ async fn round_trip_plan_to_sql_demo() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // register parquet file with the execution context
     ctx.register_parquet(
@@ -244,11 +237,8 @@ async fn unparse_my_logical_plan_as_statement() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let inner_plan = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
@@ -301,11 +291,8 @@ async fn unparse_my_logical_plan_as_subquery() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let inner_plan = ctx
         .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())

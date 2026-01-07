@@ -17,17 +17,14 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema};
 
-/// Schema for the `data/csv/cars.csv` example dataset.
+/// Schema for the `data/csv/regex.csv` example dataset.
 pub fn schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
-        Field::new("car", DataType::Utf8, false),
-        Field::new("speed", DataType::Float64, false),
-        Field::new(
-            "time",
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-            false,
-        ),
+        Field::new("values", DataType::Utf8, false),
+        Field::new("patterns", DataType::Utf8, false),
+        Field::new("replacement", DataType::Utf8, false),
+        Field::new("flags", DataType::Utf8, true),
     ]))
 }

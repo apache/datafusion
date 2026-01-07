@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{UInt8Array, UInt64Array};
@@ -29,7 +28,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use object_store::local::LocalFileSystem;
 
 /// Examples of various ways to execute queries using SQL
@@ -116,11 +115,8 @@ async fn query_parquet() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);

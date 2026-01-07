@@ -19,7 +19,6 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use arrow::array::RecordBatch;
@@ -39,7 +38,7 @@ use datafusion::physical_planner::{
 };
 use datafusion::prelude::*;
 use datafusion_common::HashMap;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
 /// By default, [DataFrame::cache] in Datafusion is eager and creates an in-memory table. This example shows a basic alternative implementation for lazy caching.
@@ -56,11 +55,8 @@ pub async fn cache_dataframe_with_custom_logic() -> Result<()> {
     let ctx = SessionContext::new_with_state(session_state);
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx

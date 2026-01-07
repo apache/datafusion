@@ -18,7 +18,6 @@
 //! See `main.rs` for how to run it.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow_flight::flight_descriptor;
@@ -28,7 +27,7 @@ use arrow_flight::{FlightDescriptor, Ticket};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::util::pretty;
 use datafusion::prelude::SessionContext;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use tonic::transport::Endpoint;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -38,11 +37,8 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Create Flight client
     let endpoint = Endpoint::new("http://localhost:50051")?;

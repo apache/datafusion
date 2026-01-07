@@ -17,11 +17,10 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
-
 use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;
+use datafusion_examples::utils::datasets::ExampleDataset;
 
 /// This example demonstrates how to use the regexp_* functions
 ///
@@ -33,17 +32,10 @@ use datafusion::prelude::*;
 /// https://docs.rs/regex/latest/regex/#grouping-and-flags
 pub async fn regexp() -> Result<()> {
     let ctx = SessionContext::new();
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("regex.csv");
+    let dataset = ExampleDataset::Regex;
 
-    ctx.register_csv(
-        "examples",
-        csv_path.to_str().unwrap(),
-        CsvReadOptions::new(),
-    )
-    .await?;
+    ctx.register_csv("examples", dataset.path_str()?, CsvReadOptions::new())
+        .await?;
 
     //
     //

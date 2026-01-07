@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
@@ -35,7 +34,7 @@ use datafusion::{
 };
 
 use datafusion::datasource::physical_plan::FileScanConfigBuilder;
-use datafusion_examples::utils::datasets::cars;
+use datafusion_examples::utils::datasets::ExampleDataset;
 use futures::StreamExt;
 use object_store::{ObjectStore, local::LocalFileSystem, memory::InMemory};
 
@@ -51,12 +50,10 @@ pub async fn csv_json_opener() -> Result<()> {
 
 async fn csv_opener() -> Result<()> {
     let object_store = Arc::new(LocalFileSystem::new());
-    let schema = cars::schema();
 
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
+    let dataset = ExampleDataset::Cars;
+    let csv_path = dataset.path();
+    let schema = dataset.schema();
 
     let options = CsvOptions {
         has_header: Some(true),

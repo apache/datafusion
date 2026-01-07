@@ -52,7 +52,6 @@
 //! ```
 
 use std::any::Any;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use datafusion::common::runtime::{JoinSetTracer, set_join_set_tracer};
@@ -60,7 +59,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use tracing::{Instrument, Level, Span, info, instrument};
@@ -130,11 +129,8 @@ async fn run_instrumented_query() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options =

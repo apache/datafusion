@@ -17,7 +17,6 @@
 
 //! See `main.rs` for how to run it.
 
-use std::path::PathBuf;
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::Field;
@@ -41,6 +40,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
+use datafusion_examples::utils::datasets::ExampleDataset;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -230,12 +230,9 @@ async fn create_context() -> Result<SessionContext> {
     // declare a new context. In spark API, this corresponds to a new spark SQL session
     let ctx = SessionContext::new();
 
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
+    let dataset = ExampleDataset::Cars;
 
-    ctx.register_csv("cars", csv_path.to_str().unwrap(), CsvReadOptions::new())
+    ctx.register_csv("cars", dataset.path_str()?, CsvReadOptions::new())
         .await?;
 
     Ok(ctx)

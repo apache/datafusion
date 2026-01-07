@@ -37,7 +37,6 @@
 //!
 //! [Architecture section]: https://docs.rs/datafusion/latest/datafusion/index.html#thread-scheduling-cpu--io-thread-pools-and-tokio-runtimes
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::util::pretty::pretty_format_batches;
@@ -45,7 +44,7 @@ use datafusion::common::runtime::JoinSet;
 use datafusion::error::Result;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::prelude::*;
-use datafusion_examples::utils::write_csv_to_parquet;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::stream::StreamExt;
 use object_store::client::SpawnedReqwestConnector;
 use object_store::http::HttpBuilder;
@@ -75,11 +74,8 @@ pub async fn thread_pools() -> Result<()> {
     let ctx = SessionContext::new().enable_url_table();
 
     // Convert the CSV input into a temporary Parquet directory for querying
-    let csv_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("data")
-        .join("csv")
-        .join("cars.csv");
-    let parquet_temp = write_csv_to_parquet(&ctx, &csv_path).await?;
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     let sql = format!("SELECT * FROM '{}'", parquet_temp.path_str()?);
 
