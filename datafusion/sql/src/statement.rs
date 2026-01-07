@@ -115,8 +115,8 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::ForeignKey(constraint) => {
                     constraints.push(TableConstraint::ForeignKey(constraint.clone()))
                 }
-                ast::ColumnOption::Check(expr) => {
-                    constraints.push(TableConstraint::Check(expr.clone()))
+                ast::ColumnOption::Check(constraint) => {
+                    constraints.push(TableConstraint::Check(constraint.clone()))
                 }
                 ast::ColumnOption::Default(_)
                 | ast::ColumnOption::Null
@@ -286,15 +286,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Hive distribution not supported: {hive_distribution:?}"
                     )?;
                 }
-                if !matches!(
-                    hive_formats,
-                    Some(ast::HiveFormat {
-                        row_format: None,
-                        serde_properties: None,
-                        storage: None,
-                        location: None,
-                    })
-                ) {
+                if hive_formats.is_some()
+                    && !matches!(
+                        hive_formats,
+                        Some(ast::HiveFormat {
+                            row_format: None,
+                            serde_properties: None,
+                            storage: None,
+                            location: None,
+                        })
+                    )
+                {
                     return not_impl_err!(
                         "Hive formats not supported: {hive_formats:?}"
                     )?;
