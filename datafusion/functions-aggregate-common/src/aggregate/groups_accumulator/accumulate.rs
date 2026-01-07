@@ -20,7 +20,7 @@
 //! [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 
 use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
@@ -166,12 +166,13 @@ impl NullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
-        if let SeenValues::All { num_values } = &mut self.seen_values {
-            if opt_filter.is_none() && values.null_count() == 0 {
-                accumulate(group_indices, values, None, value_fn);
-                *num_values = total_num_groups;
-                return;
-            }
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && opt_filter.is_none()
+            && values.null_count() == 0
+        {
+            accumulate(group_indices, values, None, value_fn);
+            *num_values = total_num_groups;
+            return;
         }
 
         let seen_values = self.seen_values.get_builder(total_num_groups);
@@ -204,15 +205,17 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
-        if let SeenValues::All { num_values } = &mut self.seen_values {
-            if opt_filter.is_none() && values.null_count() == 0 {
-                group_indices.iter().zip(data.iter()).for_each(
-                    |(&group_index, new_value)| value_fn(group_index, new_value),
-                );
-                *num_values = total_num_groups;
+        if let SeenValues::All { num_values } = &mut self.seen_values
+            && opt_filter.is_none()
+            && values.null_count() == 0
+        {
+            group_indices
+                .iter()
+                .zip(data.iter())
+                .for_each(|(&group_index, new_value)| value_fn(group_index, new_value));
+            *num_values = total_num_groups;
 
-                return;
-            }
+            return;
         }
 
         let seen_values = self.seen_values.get_builder(total_num_groups);
@@ -673,7 +676,10 @@ pub fn accumulate_indices<F>(
 mod test {
     use super::*;
 
-    use arrow::array::{Int32Array, UInt32Array};
+    use arrow::{
+        array::{Int32Array, UInt32Array},
+        buffer::BooleanBuffer,
+    };
     use rand::{Rng, rngs::ThreadRng};
     use std::collections::HashSet;
 
