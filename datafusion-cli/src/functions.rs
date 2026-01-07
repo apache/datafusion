@@ -703,6 +703,23 @@ impl TableFunctionImpl for StatisticsCacheFunc {
     }
 }
 
+// Implementation of the `list_files_cache` table function in datafusion-cli.
+///
+/// This function returns the cached results of running a LIST command on a particular object store path for a table. The object metadata is returned as a List of Structs, with one Struct for each object.
+/// DataFusion uses these cached results to plan queries against external tables.
+/// # Schema
+/// ```sql
+/// > describe select * from list_files_cache();
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | column_name         | data_type                                                                                                                                                                | is_nullable |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | table               | Utf8                                                                                                                                                                     | NO          |
+/// | path                | Utf8                                                                                                                                                                     | NO          |
+/// | metadata_size_bytes | UInt64                                                                                                                                                                   | NO          |
+/// | expires_in          | Duration(ms)                                                                                                                                                             | YES         |
+/// | metadata_list       | List(Struct("file_path": non-null Utf8, "file_modified": non-null Timestamp(ms), "file_size_bytes": non-null UInt64, "e_tag": Utf8, "version": Utf8), field: 'metadata') | YES         |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// ```
 #[derive(Debug)]
 struct ListFilesCacheTable {
     schema: SchemaRef,
