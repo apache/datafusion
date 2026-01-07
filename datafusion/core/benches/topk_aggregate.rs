@@ -28,6 +28,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+const LIMIT: usize = 10;
+
 async fn create_context(
     partition_cnt: i32,
     sample_cnt: i32,
@@ -77,7 +79,7 @@ async fn aggregate(
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), 10);
+    assert_eq!(batch.num_rows(), LIMIT);
 
     let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
     let expected_asc = r#"
@@ -126,14 +128,14 @@ async fn aggregate_string(
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), 10);
+    assert_eq!(batch.num_rows(), LIMIT);
 
     Ok(())
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let limit = 10;
+    let limit = LIMIT;
     let partitions = 10;
     let samples = 1_000_000;
 
