@@ -1865,7 +1865,7 @@ async fn run_projection_dyn_filter_case(case: ProjectionDynFilterTestCase) {
         .unwrap();
 
     pretty_assertions::assert_eq!(
-        format!("{}", format_plan_for_test(&optimized_plan)).trim(),
+        format_plan_for_test(&optimized_plan).trim(),
         expected_plans[0].trim()
     );
 
