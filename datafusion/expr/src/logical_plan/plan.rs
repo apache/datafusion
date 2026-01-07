@@ -903,6 +903,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 null_equality,
+                null_aware,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -944,7 +945,7 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
-                    null_aware: false,
+                    null_aware: *null_aware,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
