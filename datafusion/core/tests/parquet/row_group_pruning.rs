@@ -1957,6 +1957,5 @@ async fn test_limit_pruning_exceeds_fully_matched() -> datafusion_common::error:
         .with_limit_pruned_row_groups(Some(0)) // No limit pruning since we need all RGs
         .test_row_group_prune_with_custom_data(schema, batches, 4)
         .await;
-
     Ok(())
 }
