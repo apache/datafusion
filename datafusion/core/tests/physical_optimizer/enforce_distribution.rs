@@ -56,7 +56,7 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
+
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
@@ -1741,9 +1741,6 @@ fn merge_does_not_need_sort() -> Result<()> {
     // Scan some sorted parquet files
     let exec = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
 
-    // CoalesceBatchesExec to mimic behavior after a filter
-    let exec = Arc::new(CoalesceBatchesExec::new(exec, 4096));
-
     // Merge from multiple parquet files and keep the data sorted
     let exec: Arc<dyn ExecutionPlan> =
         Arc::new(SortPreservingMergeExec::new(sort_key, exec));
@@ -1757,8 +1754,7 @@ fn merge_does_not_need_sort() -> Result<()> {
     assert_plan!(plan_distrib,
                                                                                     @r"
     SortPreservingMergeExec: [a@0 ASC]
-      CoalesceBatchesExec: target_batch_size=4096
-        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
     // Test: result IS DIFFERENT, if EnforceSorting is run first:
@@ -1772,8 +1768,7 @@ fn merge_does_not_need_sort() -> Result<()> {
                                                                                     @r"
     SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
       CoalescePartitionsExec
-        CoalesceBatchesExec: target_batch_size=4096
-          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
+        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet
     ");
 
     Ok(())
