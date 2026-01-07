@@ -46,7 +46,6 @@ jobs:
         with:
           tool: cargo-audit
       - name: Run audit check
-        # RUSTSEC-2026-0001: https://rustsec.org/advisories/RUSTSEC-2026-0001.html
-        # underlying rkyv is patched, but rustsec database not yet updated
-        # Can remove when this is merged: https://github.com/rustsec/advisory-db/pull/2565
-        run: cargo audit --ignore RUSTSEC-2026-0001
+        # Note: you can ignore specific RUSTSEC issues using the `--ignore` flag ,for example:
+        # run: cargo audit --ignore RUSTSEC-2026-0001
+        run: cargo audit
