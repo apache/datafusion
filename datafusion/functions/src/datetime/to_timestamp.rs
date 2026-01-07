@@ -19,8 +19,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datetime::common::*;
-use arrow::array::Float64Array;
 use arrow::array::timezone::Tz;
+use arrow::array::{
+    Array, Decimal128Array, Decimal256Array, Float64Array, TimestampNanosecondArray,
+};
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -325,6 +327,74 @@ impl_to_timestamp_constructors!(ToTimestampMillisFunc);
 impl_to_timestamp_constructors!(ToTimestampMicrosFunc);
 impl_to_timestamp_constructors!(ToTimestampNanosFunc);
 
+fn decimal_to_nanoseconds(value: i128, scale: i8) -> i64 {
+    let scale_factor = 10_i128.pow(scale as u32);
+    let seconds = value / scale_factor;
+    let fraction = value % scale_factor;
+    let nanos = (fraction * 1_000_000_000) / scale_factor;
+    let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+    timestamp_nanos as i64
+}
+
+fn decimal128_to_timestamp_nanos(
+    arg: &ColumnarValue,
+    tz: Option<Arc<str>>,
+) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(ScalarValue::Decimal128(Some(value), _, scale)) => {
+            let timestamp_nanos = decimal_to_nanoseconds(*value, *scale);
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(timestamp_nanos),
+                tz,
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::Decimal128(None, _, _)) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, tz)),
+        ),
+        ColumnarValue::Array(arr) => {
+            let decimal_arr = downcast_arg!(arr, Decimal128Array);
+            let scale = decimal_arr.scale();
+            let result: TimestampNanosecondArray = decimal_arr
+                .iter()
+                .map(|v| v.map(|val| decimal_to_nanoseconds(val, scale)))
+                .collect();
+            let result = result.with_timezone_opt(tz);
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        _ => exec_err!("Invalid Decimal128 value for to_timestamp"),
+    }
+}
+
+fn decimal256_to_timestamp_nanos(
+    arg: &ColumnarValue,
+    tz: Option<Arc<str>>,
+) -> Result<ColumnarValue> {
+    match arg {
+        ColumnarValue::Scalar(ScalarValue::Decimal256(Some(value), _, scale)) => {
+            let value_i128 = value.as_i128();
+            let timestamp_nanos = decimal_to_nanoseconds(value_i128, *scale);
+            Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                Some(timestamp_nanos),
+                tz,
+            )))
+        }
+        ColumnarValue::Scalar(ScalarValue::Decimal256(None, _, _)) => Ok(
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(None, tz)),
+        ),
+        ColumnarValue::Array(arr) => {
+            let decimal_arr = downcast_arg!(arr, Decimal256Array);
+            let scale = decimal_arr.scale();
+            let result: TimestampNanosecondArray = decimal_arr
+                .iter()
+                .map(|v| v.map(|val| decimal_to_nanoseconds(val.as_i128(), scale)))
+                .collect();
+            let result = result.with_timezone_opt(tz);
+            Ok(ColumnarValue::Array(Arc::new(result)))
+        }
+        _ => exec_err!("Invalid Decimal256 value for to_timestamp"),
+    }
+}
+
 /// to_timestamp SQL function
 ///
 /// Note: `to_timestamp` returns `Timestamp(Nanosecond)` though its arguments are interpreted as **seconds**.
@@ -398,30 +468,14 @@ impl ScalarUDFImpl for ToTimestampFunc {
                     &DEFAULT_CAST_OPTIONS,
                 )?))
             }
+            Decimal32(_, _) | Decimal64(_, _) => {
+                let arg = args[0].cast_to(&Decimal128(38, 9), None)?;
+                decimal128_to_timestamp_nanos(&arg, tz)
+            }
+            Decimal128(_, _) => decimal128_to_timestamp_nanos(&args[0], tz),
+            Decimal256(_, _) => decimal256_to_timestamp_nanos(&args[0], tz),
             Utf8View | LargeUtf8 | Utf8 => {
                 to_timestamp_impl::<TimestampNanosecondType>(&args, "to_timestamp", &tz)
-            }
-            Decimal128(_, _) => {
-                match &args[0] {
-                    ColumnarValue::Scalar(ScalarValue::Decimal128(
-                        Some(value),
-                        _,
-                        scale,
-                    )) => {
-                        // Convert decimal to seconds and nanoseconds
-                        let scale_factor = 10_i128.pow(*scale as u32);
-                        let seconds = value / scale_factor;
-                        let fraction = value % scale_factor;
-                        let nanos = (fraction * 1_000_000_000) / scale_factor;
-                        let timestamp_nanos = seconds * 1_000_000_000 + nanos;
-
-                        Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                            Some(timestamp_nanos as i64),
-                            tz,
-                        )))
-                    }
-                    _ => exec_err!("Invalid decimal value"),
-                }
             }
             other => {
                 exec_err!("Unsupported data type {other} for function to_timestamp")
@@ -484,7 +538,10 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             | UInt32
             | UInt64
             | Timestamp(_, _)
-            | Decimal128(_, _) => args[0].cast_to(&Timestamp(Second, tz), None),
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => args[0].cast_to(&Timestamp(Second, tz), None),
             Float16 | Float32 | Float64 => args[0]
                 .cast_to(&Int64, None)?
                 .cast_to(&Timestamp(Second, tz), None),
@@ -555,7 +612,10 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             | UInt32
             | UInt64
             | Timestamp(_, _)
-            | Decimal128(_, _) => {
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 args[0].cast_to(&Timestamp(Millisecond, self.timezone.clone()), None)
             }
             Float16 | Float32 | Float64 => args[0]
@@ -628,7 +688,10 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             | UInt32
             | UInt64
             | Timestamp(_, _)
-            | Decimal128(_, _) => {
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 args[0].cast_to(&Timestamp(Microsecond, self.timezone.clone()), None)
             }
             Float16 | Float32 | Float64 => args[0]
@@ -701,7 +764,10 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             | UInt32
             | UInt64
             | Timestamp(_, _)
-            | Decimal128(_, _) => {
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
                 args[0].cast_to(&Timestamp(Nanosecond, self.timezone.clone()), None)
             }
             Float16 | Float32 | Float64 => args[0]
