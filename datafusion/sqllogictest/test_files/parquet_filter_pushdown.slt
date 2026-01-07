@@ -563,3 +563,114 @@ ORDER BY start_timestamp, trace_id
 LIMIT 1;
 ----
 2024-10-01T00:00:00
+
+###
+# Array function predicate pushdown tests
+# These tests verify that array_has, array_has_all, and array_has_any predicates
+# are correctly pushed down to the DataSourceExec node
+###
+
+# Create test data with array columns
+statement ok
+COPY (
+    SELECT 1 as id, ['rust', 'performance'] as tags
+    UNION ALL
+    SELECT 2 as id, ['python', 'javascript'] as tags
+    UNION ALL
+    SELECT 3 as id, ['rust', 'webassembly'] as tags
+)
+TO 'test_files/scratch/parquet_filter_pushdown/array_data/data.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE array_test STORED AS PARQUET LOCATION 'test_files/scratch/parquet_filter_pushdown/array_data/';
+
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+# Test array_has predicate pushdown
+query I?
+SELECT id, tags FROM array_test WHERE array_has(tags, 'rust') ORDER BY id;
+----
+1 [rust, performance]
+3 [rust, webassembly]
+
+query TT
+EXPLAIN SELECT id, tags FROM array_test WHERE array_has(tags, 'rust') ORDER BY id;
+----
+logical_plan
+01)Sort: array_test.id ASC NULLS LAST
+02)--Filter: array_has(array_test.tags, Utf8("rust"))
+03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has(array_test.tags, Utf8("rust"))]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has(tags@1, rust)
+
+# Test array_has_all predicate pushdown
+query I?
+SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust', 'performance']) ORDER BY id;
+----
+1 [rust, performance]
+
+query TT
+EXPLAIN SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust', 'performance']) ORDER BY id;
+----
+logical_plan
+01)Sort: array_test.id ASC NULLS LAST
+02)--Filter: array_has_all(array_test.tags, List([rust, performance]))
+03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust, performance]))]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_all(tags@1, [rust, performance])
+
+# Test array_has_any predicate pushdown
+query I?
+SELECT id, tags FROM array_test WHERE array_has_any(tags, ['python', 'go']) ORDER BY id;
+----
+2 [python, javascript]
+
+query TT
+EXPLAIN SELECT id, tags FROM array_test WHERE array_has_any(tags, ['python', 'go']) ORDER BY id;
+----
+logical_plan
+01)Sort: array_test.id ASC NULLS LAST
+02)--Filter: array_has_any(array_test.tags, List([python, go]))
+03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_any(array_test.tags, List([python, go]))]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_any(tags@1, [python, go])
+
+# Test complex predicate with OR
+query I?
+SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust']) OR array_has_any(tags, ['python', 'go']) ORDER BY id;
+----
+1 [rust, performance]
+2 [python, javascript]
+3 [rust, webassembly]
+
+query TT
+EXPLAIN SELECT id, tags FROM array_test WHERE array_has_all(tags, ['rust']) OR array_has_any(tags, ['python', 'go']) ORDER BY id;
+----
+logical_plan
+01)Sort: array_test.id ASC NULLS LAST
+02)--Filter: array_has_all(array_test.tags, List([rust])) OR array_has_any(array_test.tags, List([python, go]))
+03)----TableScan: array_test projection=[id, tags], partial_filters=[array_has_all(array_test.tags, List([rust])) OR array_has_any(array_test.tags, List([python, go]))]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=array_has_all(tags@1, [rust]) OR array_has_any(tags@1, [python, go])
+
+# Test array function with other predicates
+query I?
+SELECT id, tags FROM array_test WHERE id > 1 AND array_has(tags, 'rust') ORDER BY id;
+----
+3 [rust, webassembly]
+
+query TT
+EXPLAIN SELECT id, tags FROM array_test WHERE id > 1 AND array_has(tags, 'rust') ORDER BY id;
+----
+logical_plan
+01)Sort: array_test.id ASC NULLS LAST
+02)--Filter: array_test.id > Int64(1) AND array_has(array_test.tags, Utf8("rust"))
+03)----TableScan: array_test projection=[id, tags], partial_filters=[array_test.id > Int64(1), array_has(array_test.tags, Utf8("rust"))]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/array_data/data.parquet]]}, projection=[id, tags], file_type=parquet, predicate=id@0 > 1 AND array_has(tags@1, rust), pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
