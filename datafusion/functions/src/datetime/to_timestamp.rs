@@ -328,11 +328,12 @@ impl_to_timestamp_constructors!(ToTimestampMicrosFunc);
 impl_to_timestamp_constructors!(ToTimestampNanosFunc);
 
 fn decimal_to_nanoseconds(value: i128, scale: i8) -> i64 {
-    let scale_factor = 10_i128.pow(scale as u32);
-    let seconds = value / scale_factor;
-    let fraction = value % scale_factor;
-    let nanos = (fraction * 1_000_000_000) / scale_factor;
-    let timestamp_nanos = seconds * 1_000_000_000 + nanos;
+    let nanos_exponent = 9_i16 - scale as i16;
+    let timestamp_nanos = if nanos_exponent >= 0 {
+        value * 10_i128.pow(nanos_exponent as u32)
+    } else {
+        value / 10_i128.pow(nanos_exponent.unsigned_abs() as u32)
+    };
     timestamp_nanos as i64
 }
 
@@ -1851,5 +1852,24 @@ mod tests {
             let actual = func(&string_array).unwrap_err().to_string();
             assert_contains!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_decimal_to_nanoseconds_negative_scale() {
+        // scale -2: internal value 5 represents 5 * 10^2 = 500 seconds
+        let nanos = decimal_to_nanoseconds(5, -2);
+        assert_eq!(nanos, 500_000_000_000); // 500 seconds in nanoseconds
+
+        // scale -1: internal value 10 represents 10 * 10^1 = 100 seconds
+        let nanos = decimal_to_nanoseconds(10, -1);
+        assert_eq!(nanos, 100_000_000_000);
+
+        // scale 0: internal value 5 represents 5 seconds
+        let nanos = decimal_to_nanoseconds(5, 0);
+        assert_eq!(nanos, 5_000_000_000);
+
+        // scale 3: internal value 1500 represents 1.5 seconds
+        let nanos = decimal_to_nanoseconds(1500, 3);
+        assert_eq!(nanos, 1_500_000_000);
     }
 }
