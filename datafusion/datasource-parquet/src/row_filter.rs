@@ -195,7 +195,11 @@ pub(crate) struct FilterCandidate {
     filter_schema: SchemaRef,
 }
 
-/// Tracks the projection of an expression in both root and leaf coordinates.
+/// Projection specification for nested columns using Parquet leaf column indices.
+/// 
+/// For nested types like List and Struct, Parquet stores data in leaf columns
+/// (the primitive fields). This struct tracks which leaf columns are needed
+/// to evaluate a filter expression.
 #[derive(Debug, Clone)]
 struct LeafProjection {
     /// Leaf column indices in the Parquet schema descriptor.
