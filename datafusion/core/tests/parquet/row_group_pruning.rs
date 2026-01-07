@@ -1949,7 +1949,7 @@ async fn test_limit_pruning_exceeds_fully_matched() -> datafusion_common::error:
         .with_scenario(Scenario::Int)
         .with_query(query)
         .with_expected_errors(Some(0))
-        .with_expected_rows(10) // Total: 1 + 3 + 4 + 1 = 9 (less than limit)
+        .with_expected_rows(10) // Total: 1 + 4 + 4 + 1 = 10
         .with_pruned_files(Some(0))
         .with_matched_by_stats(Some(4)) // RG0,1,2,3 matched
         .with_fully_matched_by_stats(Some(2))

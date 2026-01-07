@@ -30,6 +30,7 @@ use arrow::{
     record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
+use arrow_schema::SchemaRef;
 use chrono::{Datelike, Duration, TimeDelta};
 use datafusion::{
     datasource::{TableProvider, provider_as_source},
@@ -294,7 +295,7 @@ impl ContextWithParquet {
         scenario: Scenario,
         unit: Unit,
         mut config: SessionConfig,
-        custom_schema: Option<Arc<Schema>>,
+        custom_schema: Option<SchemaRef>,
         custom_batches: Option<Vec<RecordBatch>>,
     ) -> Self {
         // Use a single partition for deterministic results no matter how many CPUs the host has
@@ -1137,7 +1138,7 @@ fn create_data_batch(scenario: Scenario) -> Vec<RecordBatch> {
 async fn make_test_file_rg(
     scenario: Scenario,
     row_per_group: usize,
-    custom_schema: Option<Arc<Schema>>,
+    custom_schema: Option<SchemaRef>,
     custom_batches: Option<Vec<RecordBatch>>,
 ) -> NamedTempFile {
     let mut output_file = tempfile::Builder::new()
