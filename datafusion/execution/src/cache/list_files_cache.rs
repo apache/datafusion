@@ -150,7 +150,10 @@ pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
 pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
 
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct TableScopedPath(pub Option<TableReference>, pub Path);
+pub struct TableScopedPath {
+    pub table: Option<TableReference>,
+    pub path: Path,
+}
 
 /// Handles the inner state of the [`DefaultListFilesCache`] struct.
 pub struct DefaultListFilesCacheState {
@@ -222,7 +225,7 @@ impl DefaultListFilesCacheState {
         };
 
         // Build the full prefix path: table_base/prefix
-        let table_base = &table_scoped_base_path.1;
+        let table_base = &table_scoped_base_path.path;
         let mut parts: Vec<_> = table_base.parts().collect();
         parts.extend(prefix.parts());
         let full_prefix = Path::from_iter(parts);
@@ -362,6 +365,23 @@ impl ListFilesCache for DefaultListFilesCache {
             entries.insert(path.clone(), entry.clone());
         }
         entries
+    }
+
+    fn drop_table_entries(
+        &self,
+        table_ref: &Option<TableReference>,
+    ) -> datafusion_common::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let mut table_paths = vec![];
+        for (path, _) in state.lru_queue.list_entries() {
+            if path.table == *table_ref {
+                table_paths.push(path.clone());
+            }
+        }
+        for path in table_paths {
+            state.remove(&path);
+        }
+        Ok(())
     }
 }
 
@@ -516,7 +536,10 @@ mod tests {
         let cache = DefaultListFilesCache::default();
         let table_ref = Some(TableReference::from("table"));
         let path = Path::from("test_path");
-        let key = TableScopedPath(table_ref.clone(), path);
+        let key = TableScopedPath {
+            table: table_ref.clone(),
+            path,
+        };
 
         // Initially cache is empty
         assert!(cache.get(&key).is_none());
@@ -544,8 +567,14 @@ mod tests {
         // Put multiple entries
         let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
         let (path2, value2, size2) = create_test_list_files_entry("path2", 3, 50);
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref, path2);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref,
+            path: path2,
+        };
         cache.put(&key1, Arc::clone(&value1));
         cache.put(&key2, Arc::clone(&value2));
         assert_eq!(cache.len(), 2);
@@ -590,9 +619,18 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref.clone(), path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
 
         // All three entries should fit
         cache.put(&key1, value1);
@@ -605,7 +643,10 @@ mod tests {
 
         // Adding a new entry should evict path1 (LRU)
         let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        let key4 = TableScopedPath(table_ref, path4);
+        let key4 = TableScopedPath {
+            table: table_ref,
+            path: path4,
+        };
         cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
@@ -625,9 +666,18 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref.clone(), path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
 
         cache.put(&key1, value1);
         cache.put(&key2, value2);
@@ -640,7 +690,10 @@ mod tests {
 
         // Adding a new entry should evict path2 (the LRU)
         let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        let key4 = TableScopedPath(table_ref, path4);
+        let key4 = TableScopedPath {
+            table: table_ref,
+            path: path4,
+        };
         cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
@@ -659,15 +712,24 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 2, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
         cache.put(&key1, value1);
         cache.put(&key2, value2);
         assert_eq!(cache.len(), 2);
 
         // Try to add an entry that's too large to fit in the cache
         let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 1000);
-        let key_large = TableScopedPath(table_ref, path_large);
+        let key_large = TableScopedPath {
+            table: table_ref,
+            path: path_large,
+        };
         cache.put(&key_large, value_large);
 
         // Large entry should not be added
@@ -687,9 +749,18 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref.clone(), path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
         cache.put(&key1, value1);
         cache.put(&key2, value2);
         cache.put(&key3, value3);
@@ -697,7 +768,10 @@ mod tests {
 
         // Add a large entry that requires evicting 2 entries
         let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 200);
-        let key_large = TableScopedPath(table_ref, path_large);
+        let key_large = TableScopedPath {
+            table: table_ref,
+            path: path_large,
+        };
         cache.put(&key_large, value_large);
 
         // path1 and path2 should be evicted (both LRU), path3 and path_large remain
@@ -717,9 +791,18 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref, path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
         // Add three entries
         cache.put(&key1, value1);
         cache.put(&key2, value2);
@@ -746,9 +829,18 @@ mod tests {
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref, path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
         // Add three entries
         cache.put(&key1, value1);
         cache.put(&key2, Arc::clone(&value2));
@@ -809,8 +901,14 @@ mod tests {
         let (path2, value2, size2) = create_test_list_files_entry("path2", 2, 50);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref, path2);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref,
+            path: path2,
+        };
         cache.put(&key1, Arc::clone(&value1));
         cache.put(&key2, Arc::clone(&value2));
 
@@ -862,9 +960,18 @@ mod tests {
         let (path3, value3, _) = create_test_list_files_entry("path3", 1, 400);
 
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
-        let key3 = TableScopedPath(table_ref, path3);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
         cache.put(&key1, value1);
         mock_time.inc(Duration::from_millis(50));
         cache.put(&key2, value2);
@@ -966,7 +1073,10 @@ mod tests {
         // Add entry and verify memory tracking
         let (path1, value1, size1) = create_test_list_files_entry("path1", 1, 100);
         let table_ref = Some(TableReference::from("table"));
-        let key1 = TableScopedPath(table_ref.clone(), path1);
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
         cache.put(&key1, value1);
         {
             let state = cache.state.lock().unwrap();
@@ -975,7 +1085,10 @@ mod tests {
 
         // Add another entry
         let (path2, value2, size2) = create_test_list_files_entry("path2", 1, 200);
-        let key2 = TableScopedPath(table_ref.clone(), path2);
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
         cache.put(&key2, value2);
         {
             let state = cache.state.lock().unwrap();
@@ -1028,7 +1141,10 @@ mod tests {
 
         // Cache the full table listing
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath(table_ref, table_base);
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
         cache.put(&key, files);
 
         // Query for partition a=1 using get_with_extra
@@ -1075,7 +1191,10 @@ mod tests {
             create_object_meta_with_path("my_table/a=2/file4.parquet"),
         ]);
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath(table_ref, table_base);
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
         cache.put(&key, full_files);
 
         // Query with no prefix filter (None) should return all 4 files
@@ -1097,7 +1216,10 @@ mod tests {
 
         let table_base = Path::from("my_table");
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath(table_ref, table_base);
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
 
         // Query for full table should miss (nothing cached)
         let result = cache.get_with_extra(&key, &None);
@@ -1120,7 +1242,10 @@ mod tests {
             create_object_meta_with_path("my_table/a=2/file2.parquet"),
         ]);
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath(table_ref, table_base);
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
         cache.put(&key, files);
 
         // Query for partition a=3 which doesn't exist
@@ -1152,7 +1277,10 @@ mod tests {
             ),
         ]);
         let table_ref = Some(TableReference::from("table"));
-        let key = TableScopedPath(table_ref, table_base);
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
         cache.put(&key, files);
 
         // Query for year=2024/month=01 (should get 2 files)
@@ -1192,8 +1320,14 @@ mod tests {
 
         let table_ref_a = Some(TableReference::from("table_a"));
         let table_ref_b = Some(TableReference::from("table_b"));
-        let key_a = TableScopedPath(table_ref_a, table_a);
-        let key_b = TableScopedPath(table_ref_b, table_b);
+        let key_a = TableScopedPath {
+            table: table_ref_a,
+            path: table_a,
+        };
+        let key_b = TableScopedPath {
+            table: table_ref_b,
+            path: table_b,
+        };
         cache.put(&key_a, files_a);
         cache.put(&key_b, files_b);
 
@@ -1207,5 +1341,40 @@ mod tests {
         let result_b = cache.get_with_extra(&key_b, &prefix);
         assert!(result_b.is_some());
         assert_eq!(result_b.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_drop_table_entries() {
+        let cache = DefaultListFilesCache::default();
+
+        let (path1, value1, _) = create_test_list_files_entry("path1", 1, 100);
+        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
+        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
+
+        let table_ref1 = Some(TableReference::from("table1"));
+        let key1 = TableScopedPath {
+            table: table_ref1.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref1.clone(),
+            path: path2,
+        };
+
+        let table_ref2 = Some(TableReference::from("table2"));
+        let key3 = TableScopedPath {
+            table: table_ref2.clone(),
+            path: path3,
+        };
+
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
+
+        cache.drop_table_entries(&table_ref1).unwrap();
+
+        assert!(!cache.contains_key(&key1));
+        assert!(!cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
     }
 }

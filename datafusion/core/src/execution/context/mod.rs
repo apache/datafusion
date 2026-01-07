@@ -74,7 +74,6 @@ use datafusion_common::{
     tree_node::{TreeNodeRecursion, TreeNodeVisitor},
 };
 pub use datafusion_execution::TaskContext;
-use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::{
     DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT, DEFAULT_LIST_FILES_CACHE_TTL,
     DEFAULT_METADATA_CACHE_LIMIT,
@@ -102,7 +101,6 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use log::warn;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -1329,32 +1327,15 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
-            if table_type == TableType::Base {
-                self.drop_list_files_cache_entries(&table_ref, &table_provider);
+            if table_type == TableType::Base
+                && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
+            {
+                lfc.drop_table_entries(&Some(table_ref))?;
             }
             return Ok(true);
         }
 
         Ok(false)
-    }
-
-    fn drop_list_files_cache_entries(
-        &self,
-        table_ref: &TableReference,
-        table_provider: &Arc<dyn TableProvider>,
-    ) {
-        if let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
-            && let Some(listing_table) =
-                table_provider.as_any().downcast_ref::<ListingTable>()
-        {
-            for table_path in listing_table.table_paths() {
-                let key =
-                    TableScopedPath(Some(table_ref.clone()), table_path.prefix().clone());
-                if lfc.remove(&key).is_none() {
-                    warn!("list files cache for key {key:?} not found");
-                }
-            }
-        }
     }
 
     async fn create_function(&self, stmt: CreateFunction) -> Result<DataFrame> {

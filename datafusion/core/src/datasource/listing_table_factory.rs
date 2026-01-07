@@ -161,7 +161,9 @@ impl TableProviderFactory for ListingTableFactory {
                         }
                         None => format!("*.{}", cmd.file_type.to_lowercase()),
                     };
-                    table_path = table_path.with_glob(glob.as_ref())?;
+                    table_path = table_path
+                        .with_glob(glob.as_ref())?
+                        .with_table_ref(cmd.name.clone());
                 }
                 let schema = options.infer_schema(session_state, &table_path).await?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;

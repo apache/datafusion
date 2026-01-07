@@ -804,8 +804,8 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             let mut current_offset: i32 = 0;
 
             for (path, entry) in list_files_cache.list_entries() {
-                table_arr.push(path.0.map_or("NULL".to_string(), |t| t.to_string()));
-                path_arr.push(path.1.to_string());
+                table_arr.push(path.table.map_or("NULL".to_string(), |t| t.to_string()));
+                path_arr.push(path.path.to_string());
                 metadata_size_bytes_arr.push(entry.size_bytes as u64);
                 // calculates time left before entry expires
                 expires_arr.push(

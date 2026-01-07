@@ -399,8 +399,10 @@ async fn list_with_cache<'b>(
             // Convert prefix to Option<Path> for cache lookup
             let prefix_filter = prefix.cloned();
 
-            let table_scoped_base_path =
-                TableScopedPath(table_ref.cloned(), table_base_path.clone());
+            let table_scoped_base_path = TableScopedPath {
+                table: table_ref.cloned(),
+                path: table_base_path.clone(),
+            };
 
             // Try cache lookup with optional prefix filter
             let vec = if let Some(res) =

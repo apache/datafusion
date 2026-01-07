@@ -19,6 +19,7 @@ use crate::cache::cache_unit::DefaultFilesMetadataCache;
 use crate::cache::list_files_cache::ListFilesEntry;
 use crate::cache::list_files_cache::TableScopedPath;
 use crate::cache::{CacheAccessor, DefaultListFilesCache};
+use datafusion_common::TableReference;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use object_store::ObjectMeta;
@@ -98,6 +99,8 @@ pub trait ListFilesCache:
 
     /// Retrieves the information about the entries currently cached.
     fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry>;
+
+    fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> Result<()>;
 }
 
 /// Generic file-embedded metadata used with [`FileMetadataCache`].
