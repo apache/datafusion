@@ -91,13 +91,9 @@ impl RowGroupAccessPlanFilter {
     ///
     /// After initial filtering, row groups can be classified into three states:
     ///
-    /// ```
-    /// PRUNING CLASSIFICATION DIAGRAM
-    /// ------------------------------
-    /// Legend:
-    /// [ ] = Not Matching / Pruned
-    /// [X] = Partially Matching (Row Group/Page contains some matches)
-    /// [F] = Fully Matching (Entire range is within predicate)
+    /// 1. Not Matching / Pruned
+    /// 2. Partially Matching (Row Group/Page contains some matches)
+    /// 3. Fully Matching (Entire range is within predicate)
     ///
     /// +-----------------------------------------------------------------------+
     /// |                            NOT MATCHING                               |
