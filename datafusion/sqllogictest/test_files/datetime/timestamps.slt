@@ -4515,6 +4515,17 @@ SELECT to_timestamp(arrow_cast(86400, 'UInt64'));
 ----
 1970-01-02T00:00:00
 
+# Float16
+query P
+SELECT to_timestamp(arrow_cast(0.0, 'Float16'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Float16'));
+----
+1970-01-01T00:00:01.500
+
 # Float32
 query P
 SELECT to_timestamp(arrow_cast(0.0, 'Float32'));
@@ -4579,6 +4590,12 @@ SELECT to_timestamp_seconds(arrow_cast(86400, 'UInt64'));
 ----
 1970-01-02T00:00:00
 
+# Float16
+query P
+SELECT to_timestamp_seconds(arrow_cast(1.9, 'Float16'));
+----
+1970-01-01T00:00:01
+
 # Float32
 query P
 SELECT to_timestamp_seconds(arrow_cast(1.9, 'Float32'));
@@ -4632,6 +4649,12 @@ query P
 SELECT to_timestamp_millis(arrow_cast(86400000, 'UInt64'));
 ----
 1970-01-02T00:00:00
+
+# Float16
+query P
+SELECT to_timestamp_millis(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:01
 
 # Float32
 query P
@@ -4687,6 +4710,12 @@ SELECT to_timestamp_micros(arrow_cast(1000000, 'UInt64'));
 ----
 1970-01-01T00:00:01
 
+# Float16
+query P
+SELECT to_timestamp_micros(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:00.001
+
 # Float32
 query P
 SELECT to_timestamp_micros(arrow_cast(1000000.9, 'Float32'));
@@ -4740,6 +4769,12 @@ query P
 SELECT to_timestamp_nanos(arrow_cast(1000000000, 'UInt64'));
 ----
 1970-01-01T00:00:01
+
+# Float16
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:00.000001
 
 # Float32
 query P

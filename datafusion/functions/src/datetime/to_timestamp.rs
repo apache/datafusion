@@ -384,7 +384,7 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, tz), None),
             Null | Timestamp(_, _) => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
-            Float32 | Float64 => {
+            Float16 | Float32 | Float64 => {
                 let arg = args[0].cast_to(&Float64, None)?;
                 let rescaled = arrow::compute::kernels::numeric::mul(
                     &arg.to_array(1)?,
@@ -485,7 +485,7 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
             | UInt64
             | Timestamp(_, _)
             | Decimal128(_, _) => args[0].cast_to(&Timestamp(Second, tz), None),
-            Float32 | Float64 => args[0]
+            Float16 | Float32 | Float64 => args[0]
                 .cast_to(&Int64, None)?
                 .cast_to(&Timestamp(Second, tz), None),
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampSecondType>(
@@ -558,7 +558,7 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
             | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Millisecond, self.timezone.clone()), None)
             }
-            Float32 | Float64 => args[0]
+            Float16 | Float32 | Float64 => args[0]
                 .cast_to(&Int64, None)?
                 .cast_to(&Timestamp(Millisecond, self.timezone.clone()), None),
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMillisecondType>(
@@ -631,7 +631,7 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
             | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Microsecond, self.timezone.clone()), None)
             }
-            Float32 | Float64 => args[0]
+            Float16 | Float32 | Float64 => args[0]
                 .cast_to(&Int64, None)?
                 .cast_to(&Timestamp(Microsecond, self.timezone.clone()), None),
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampMicrosecondType>(
@@ -704,7 +704,7 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
             | Decimal128(_, _) => {
                 args[0].cast_to(&Timestamp(Nanosecond, self.timezone.clone()), None)
             }
-            Float32 | Float64 => args[0]
+            Float16 | Float32 | Float64 => args[0]
                 .cast_to(&Int64, None)?
                 .cast_to(&Timestamp(Nanosecond, self.timezone.clone()), None),
             Utf8View | LargeUtf8 | Utf8 => to_timestamp_impl::<TimestampNanosecondType>(
