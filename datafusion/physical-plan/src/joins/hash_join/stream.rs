@@ -830,7 +830,10 @@ impl HashJoinStream {
         // For null-aware anti join, filter out LEFT rows with NULL in join keys
         // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
         // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
-        if self.null_aware && self.join_type == JoinType::LeftAnti && self.probe_side_non_empty {
+        if self.null_aware
+            && self.join_type == JoinType::LeftAnti
+            && self.probe_side_non_empty
+        {
             // Since null_aware validation ensures single column join, we only check the first column
             let build_key_column = &build_side.left_data.values()[0];
 
