@@ -273,14 +273,14 @@ debug = true
 strip = false
 
 # [patch.crates-io]
-# parquet = { path = "../arrow-rs/parquet" }
-# arrow = { path = "../arrow-rs/arrow" }
-# arrow-array = { path = "../arrow-rs/arrow-array" }
-# arrow-buffer = { path = "../arrow-rs/arrow-buffer" }
-# arrow-cast = { path = "../arrow-rs/arrow-cast" }
-# arrow-data = { path = "../arrow-rs/arrow-data" }
-# arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
-# arrow-ord = { path = "../arrow-rs/arrow-ord" }
-# arrow-schema = { path = "../arrow-rs/arrow-schema" }
-# arrow-select = { path = "../arrow-rs/arrow-select" }
-# arrow-string = { path = "../arrow-rs/arrow-string" }
+# parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+# arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
