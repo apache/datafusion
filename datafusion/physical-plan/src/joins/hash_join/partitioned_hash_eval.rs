@@ -205,17 +205,17 @@ impl PhysicalExpr for HashExpr {
     }
 }
 
-/// Physical expression that checks membership in a [`Map`] (hash table or array map).
+/// Physical expression that checks join keys in a [`Map`] (hash table or array map).
 ///
-/// Returns a [`BooleanArray`] indicating if join keys (from `hash_expr`) exist in the map.
+/// Returns a [`BooleanArray`](arrow::array::BooleanArray) indicating if join keys (from `on_columns`) exist in the map.
 // TODO: rename to MapLookupExpr
 pub struct HashTableLookupExpr {
-    /// Columns to hash
+    /// Columns in the ON clause used to compute the join key for lookups
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
     /// Map to check against (hash table or array map)
-    hash_map: Arc<Map>,
+    map: Arc<Map>,
     /// Description for display
     description: String,
 }
@@ -224,9 +224,9 @@ impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
     ///
     /// # Arguments
-    /// * `on_columns` - Columns to hash
+    /// * `on_columns` - Columns in the ON clause used to compute the join key
     /// * `random_state` - SeededRandomState for hashing
-    /// * `hash_map` - Map to check membership (hash table or array map)
+    /// * `map` - Map to check membership (hash table or array map)
     /// * `description` - Description for debugging
     /// # Note
     /// This is public for internal testing purposes only and is not
@@ -234,13 +234,13 @@ impl HashTableLookupExpr {
     pub fn new(
         on_columns: Vec<PhysicalExprRef>,
         random_state: SeededRandomState,
-        hash_map: Arc<Map>,
+        map: Arc<Map>,
         description: String,
     ) -> Self {
         Self {
             on_columns,
             random_state,
-            hash_map,
+            map,
             description,
         }
     }
@@ -271,7 +271,7 @@ impl Hash for HashTableLookupExpr {
         // hash maps to have the same content in practice.
         // Theoretically this is a public API and users could create identical hash maps,
         // but that seems unlikely and not worth paying the cost of deep comparison all the time.
-        Arc::as_ptr(&self.hash_map).hash(state);
+        Arc::as_ptr(&self.map).hash(state);
     }
 }
 
@@ -287,7 +287,7 @@ impl PartialEq for HashTableLookupExpr {
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seeds() == other.random_state.seeds()
-            && Arc::ptr_eq(&self.hash_map, &other.hash_map)
+            && Arc::ptr_eq(&self.map, &other.map)
     }
 }
 
@@ -315,7 +315,7 @@ impl PhysicalExpr for HashTableLookupExpr {
         Ok(Arc::new(HashTableLookupExpr::new(
             children,
             self.random_state.clone(),
-            Arc::clone(&self.hash_map),
+            Arc::clone(&self.map),
             self.description.clone(),
         )))
     }
@@ -332,7 +332,7 @@ impl PhysicalExpr for HashTableLookupExpr {
         // Evaluate columns
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
-        match self.hash_map.as_ref() {
+        match self.map.as_ref() {
             Map::HashMap(map) => {
                 with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
                     let array = map.contain_hashes(hashes);
