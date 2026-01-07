@@ -112,6 +112,8 @@ pub struct NullState {
     ///
     /// If `seen_values` is `SeenValues::Some(buffer)` and buffer[i] is false, have not seen any values that
     /// pass the filter yet for group `i`
+    /// 
+    /// If `seen_values` is `SeenValues::All`, all groups have seen at least one non null value
     seen_values: SeenValues,
 }
 
