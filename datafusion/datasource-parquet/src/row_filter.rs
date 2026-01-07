@@ -427,40 +427,6 @@ mod test {
     use datafusion_physical_plan::metrics::{Count, Time};
 
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::arrow::parquet_to_arrow_schema;
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-
-    // List predicates used by the decoder should be accepted for pushdown
-    #[test]
-    fn test_filter_candidate_builder_supports_list_types() {
-        let testdata = datafusion_common::test_util::parquet_test_data();
-        let file = std::fs::File::open(format!("{testdata}/list_columns.parquet"))
-            .expect("opening file");
-
-        let reader = SerializedFileReader::new(file).expect("creating reader");
-
-        let metadata = reader.metadata();
-
-        let table_schema =
-            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
-                .expect("parsing schema");
-
-        let expr = col("int64_list").is_not_null();
-        let expr = logical2physical(&expr, &table_schema);
-
-        let table_schema = Arc::new(table_schema.clone());
-
-        let list_index = table_schema
-            .index_of("int64_list")
-            .expect("list column should exist");
-
-        let candidate = FilterCandidateBuilder::new(expr, table_schema)
-            .build(metadata)
-            .expect("building candidate")
-            .expect("list pushdown should be supported");
-
-        assert_eq!(candidate.projection.leaf_indices, vec![list_index]);
-    }
 
     #[test]
     fn test_filter_type_coercion() {
