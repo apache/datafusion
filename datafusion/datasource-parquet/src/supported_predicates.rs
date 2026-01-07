@@ -26,10 +26,6 @@ use std::sync::Arc;
 use datafusion_physical_expr::expressions::{IsNotNullExpr, IsNullExpr};
 use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 
-// `ScalarUDFExpr` is currently an alias of `ScalarFunctionExpr` in this crate,
-// but keep a separate type to support potential future divergence.
-type ScalarUDFExpr = ScalarFunctionExpr;
-
 /// Trait for physical expressions that support list column pushdown during
 /// Parquet decoding.
 ///
