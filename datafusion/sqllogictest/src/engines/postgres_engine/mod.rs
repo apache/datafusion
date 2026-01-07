@@ -296,6 +296,7 @@ impl sqllogictest::AsyncDB for Postgres {
             self.pb.inc(1);
             return Ok(DBOutput::StatementComplete(0));
         }
+        // Use a prepared statement to get the output column types
         let statement = self.get_client().prepare(sql).await?;
         let types: Vec<Type> = statement
             .columns()
@@ -303,6 +304,10 @@ impl sqllogictest::AsyncDB for Postgres {
             .map(|c| c.type_().clone())
             .collect();
 
+        // Run the actual query using the "simple query" protocol that returns all
+        // rows as text. Doing this avoids having to convert values from the binary
+        // format to strings, which is somewhat tricky for numeric types.
+        // See https://github.com/apache/datafusion/pull/19666#discussion_r2668090587
         let start = Instant::now();
         let messages = self.get_client().simple_query(sql).await?;
         let duration = start.elapsed();
