@@ -25,7 +25,6 @@ use arrow::datatypes::ArrowPrimitiveType;
 
 use datafusion_expr_common::groups_accumulator::EmitTo;
 
-///
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
 /// corresponding sum as null)
@@ -35,8 +34,6 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 /// out). Without a filter, the accumulator is only passed groups that
 /// had at least one value to accumulate so they do not need to track
 /// if they have seen values for a particular group.
-///
-/// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
 #[derive(Debug)]
 pub enum SeenValues {
     /// All groups seen so far have seen at least one non-null value
