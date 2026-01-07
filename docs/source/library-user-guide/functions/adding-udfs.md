@@ -1350,6 +1350,12 @@ async fn main() -> Result<()> {
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 
+### Nullability of Aggregate Functions
+
+By default, aggregate functions return nullable output if any of their input fields are nullable. This behavior is automatically computed by DataFusion and works correctly for most functions like `MIN`, `MAX`, `SUM`, and `AVG`.
+
+For more advanced control over nullability or to understand how it works, see the [Aggregate UDF Nullability Guide](udf-nullability.md).
+
 ## Adding a Table UDF
 
 A User-Defined Table Function (UDTF) is a function that takes parameters and returns a `TableProvider`.

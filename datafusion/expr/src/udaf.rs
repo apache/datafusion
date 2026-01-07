@@ -208,6 +208,7 @@ impl AggregateUDF {
         self.inner.window_function_display_name(params)
     }
 
+    #[allow(deprecated)]
     pub fn is_nullable(&self) -> bool {
         self.inner.is_nullable()
     }
@@ -528,10 +529,32 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
 
     /// Whether the aggregate function is nullable.
     ///
+    /// **DEPRECATED**: This method is deprecated and will be removed in a future version.
+    /// Nullability should instead be specified in [`Self::return_field`] which can provide
+    /// more context-aware nullability based on input field properties.
+    ///
     /// Nullable means that the function could return `null` for any inputs.
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
+    ///
+    /// # Migration Guide
+    ///
+    /// If you need to override nullability, implement [`Self::return_field`] instead:
+    ///
+    /// ```ignore
+    /// fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+    ///     let arg_types: Vec<_> = arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+    ///     let data_type = self.return_type(&arg_types)?;
+    ///     // Specify nullability based on your function's logic
+    ///     let nullable = arg_fields.iter().any(|f| f.is_nullable());
+    ///     Ok(Arc::new(Field::new(self.name(), data_type, nullable)))
+    /// }
+    /// ```
+    #[deprecated(
+        since = "42.0.0",
+        note = "Use `return_field` to specify nullability instead of `is_nullable`"
+    )]
     fn is_nullable(&self) -> bool {
         true
     }
@@ -1091,6 +1114,13 @@ pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
 }
 
 /// Encapsulates default implementation of [`AggregateUDFImpl::return_field`].
+///
+/// This function computes nullability based on input field nullability:
+/// - The result is nullable if ANY input field is nullable
+/// - The result is non-nullable only if ALL input fields are non-nullable
+///
+/// This replaces the previous behavior of always deferring to `is_nullable()`,
+/// providing more accurate nullability inference for aggregate functions.
 pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     func: &F,
     arg_fields: &[FieldRef],
@@ -1098,10 +1128,13 @@ pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     let arg_types: Vec<_> = arg_fields.iter().map(|f| f.data_type()).cloned().collect();
     let data_type = func.return_type(&arg_types)?;
 
+    // Determine nullability: result is nullable if any input is nullable
+    let is_nullable = arg_fields.iter().any(|f| f.is_nullable());
+
     Ok(Arc::new(Field::new(
         func.name(),
         data_type,
-        func.is_nullable(),
+        is_nullable,
     )))
 }
 
@@ -1247,6 +1280,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.return_field(arg_fields)
     }
 
+    #[allow(deprecated)]
     fn is_nullable(&self) -> bool {
         self.inner.is_nullable()
     }
@@ -1343,7 +1377,7 @@ mod test {
             &self.signature
         }
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            unimplemented!()
+            Ok(DataType::Float64)
         }
         fn accumulator(
             &self,
@@ -1383,7 +1417,7 @@ mod test {
             &self.signature
         }
         fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-            unimplemented!()
+            Ok(DataType::Float64)
         }
         fn accumulator(
             &self,
@@ -1423,5 +1457,72 @@ mod test {
         let hasher = &mut DefaultHasher::new();
         value.hash(hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn test_return_field_nullability_from_nullable_input() {
+        // Test that return_field derives nullability from input field nullability
+        use arrow::datatypes::Field;
+        use std::sync::Arc;
+
+        let a = AggregateUDF::from(AMeanUdf::new());
+
+        // Create a nullable input field
+        let nullable_field = Arc::new(Field::new("col", DataType::Float64, true));
+        let return_field = a.return_field(&[nullable_field]).unwrap();
+
+        // When input is nullable, output should be nullable
+        assert!(return_field.is_nullable());
+    }
+
+    #[test]
+    fn test_return_field_nullability_from_non_nullable_input() {
+        // Test that return_field respects non-nullable input fields
+        use arrow::datatypes::Field;
+        use std::sync::Arc;
+
+        let a = AggregateUDF::from(AMeanUdf::new());
+
+        // Create a non-nullable input field
+        let non_nullable_field = Arc::new(Field::new("col", DataType::Float64, false));
+        let return_field = a.return_field(&[non_nullable_field]).unwrap();
+
+        // When input is non-nullable, output should also be non-nullable
+        assert!(!return_field.is_nullable());
+    }
+
+    #[test]
+    fn test_return_field_nullability_with_mixed_inputs() {
+        // Test that return_field is nullable if ANY input is nullable
+        use arrow::datatypes::Field;
+        use std::sync::Arc;
+
+        let a = AggregateUDF::from(AMeanUdf::new());
+
+        // With multiple inputs (typical for aggregates in more complex scenarios)
+        let nullable_field = Arc::new(Field::new("col1", DataType::Float64, true));
+        let non_nullable_field = Arc::new(Field::new("col2", DataType::Float64, false));
+
+        let return_field = a.return_field(&[non_nullable_field, nullable_field]).unwrap();
+
+        // If ANY input is nullable, result should be nullable
+        assert!(return_field.is_nullable());
+    }
+
+    #[test]
+    fn test_return_field_preserves_return_type() {
+        // Test that return_field correctly preserves the return type
+        use arrow::datatypes::Field;
+        use std::sync::Arc;
+
+        let a = AggregateUDF::from(AMeanUdf::new());
+
+        let nullable_field = Arc::new(Field::new("col", DataType::Float64, true));
+        let return_field = a.return_field(&[nullable_field]).unwrap();
+
+        // Verify data type is preserved
+        assert_eq!(*return_field.data_type(), DataType::Float64);
+        // Verify name matches function name
+        assert_eq!(return_field.name(), "a");
     }
 }
