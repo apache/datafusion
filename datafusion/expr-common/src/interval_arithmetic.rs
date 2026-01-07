@@ -1317,7 +1317,7 @@ fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 /// Example usage:
 /// ```
 /// use datafusion_common::DataFusionError;
-/// use datafusion_expr_common::interval_arithmetic::{satisfy_greater, Interval};
+/// use datafusion_expr_common::interval_arithmetic::{Interval, satisfy_greater};
 ///
 /// let left = Interval::make(Some(-1000.0_f32), Some(1000.0_f32))?;
 /// let right = Interval::make(Some(500.0_f32), Some(2000.0_f32))?;

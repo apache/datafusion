@@ -491,7 +491,7 @@
 //! consumes it immediately as well.
 //!
 //! ```text
-//!
+//! 
 //! Step 3: FilterExec calls next()       Step 2: ProjectionExec calls
 //!         on input Stream                  next() on input Stream
 //!         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐

@@ -100,15 +100,24 @@ impl<T> SortOrderPushdownResult<T> {
     /// # use datafusion_physical_plan::SortOrderPushdownResult;
     /// let exact = SortOrderPushdownResult::Exact { inner: 42 };
     /// let inexact = exact.into_inexact();
-    /// assert!(matches!(inexact, SortOrderPushdownResult::Inexact { inner: 42 }));
+    /// assert!(matches!(
+    ///     inexact,
+    ///     SortOrderPushdownResult::Inexact { inner: 42 }
+    /// ));
     ///
     /// let already_inexact = SortOrderPushdownResult::Inexact { inner: 42 };
     /// let still_inexact = already_inexact.into_inexact();
-    /// assert!(matches!(still_inexact, SortOrderPushdownResult::Inexact { inner: 42 }));
+    /// assert!(matches!(
+    ///     still_inexact,
+    ///     SortOrderPushdownResult::Inexact { inner: 42 }
+    /// ));
     ///
     /// let unsupported = SortOrderPushdownResult::<i32>::Unsupported;
     /// let still_unsupported = unsupported.into_inexact();
-    /// assert!(matches!(still_unsupported, SortOrderPushdownResult::Unsupported));
+    /// assert!(matches!(
+    ///     still_unsupported,
+    ///     SortOrderPushdownResult::Unsupported
+    /// ));
     /// ```
     pub fn into_inexact(self) -> Self {
         match self {

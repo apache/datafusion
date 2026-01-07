@@ -1906,7 +1906,6 @@ fn get_physical_expr_pair(
 /// splitting AND conjunctions into individual expressions.
 /// Column qualifiers are stripped so expressions can be evaluated against
 /// the TableProvider's schema.
-///
 fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
@@ -1944,7 +1943,6 @@ fn strip_column_qualifiers(expr: Expr) -> Result<Expr> {
 /// For UPDATE statements, the SQL planner encodes assignments as a projection
 /// over the source table. This function extracts column name and expression pairs
 /// from the projection. Column qualifiers are stripped from the expressions.
-///
 fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, Expr)>> {
     // The UPDATE input plan structure is:
     // Projection(updated columns as expressions with aliases)

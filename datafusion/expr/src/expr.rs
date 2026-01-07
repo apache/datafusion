@@ -1851,7 +1851,7 @@ impl Expr {
     /// Example
     /// ```
     /// # use datafusion_common::Column;
-    /// use datafusion_expr::{col, Expr};
+    /// use datafusion_expr::{Expr, col};
     /// let expr = col("foo");
     /// assert_eq!(expr.try_as_col(), Some(&Column::from("foo")));
     ///

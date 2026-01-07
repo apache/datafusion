@@ -2735,8 +2735,8 @@ impl ScalarValue {
     /// ```
     /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::cast::as_list_array;
     /// use datafusion_common::ScalarValue;
+    /// use datafusion_common::cast::as_list_array;
     ///
     /// let scalars = vec![
     ///     ScalarValue::Int32(Some(1)),
@@ -2796,8 +2796,8 @@ impl ScalarValue {
     /// ```
     /// use arrow::array::{Int32Array, ListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::cast::as_list_array;
     /// use datafusion_common::ScalarValue;
+    /// use datafusion_common::cast::as_list_array;
     ///
     /// let scalars = vec![
     ///     ScalarValue::Int32(Some(1)),
@@ -2840,8 +2840,8 @@ impl ScalarValue {
     /// ```
     /// use arrow::array::{Int32Array, LargeListArray};
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::cast::as_large_list_array;
     /// use datafusion_common::ScalarValue;
+    /// use datafusion_common::cast::as_large_list_array;
     ///
     /// let scalars = vec![
     ///     ScalarValue::Int32(Some(1)),
@@ -3318,8 +3318,8 @@ impl ScalarValue {
     /// ```
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::utils::SingleRowListArrayBuilder;
     /// use datafusion_common::ScalarValue;
+    /// use datafusion_common::utils::SingleRowListArrayBuilder;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![

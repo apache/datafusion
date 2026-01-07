@@ -443,7 +443,7 @@ impl SessionContext {
     /// # use datafusion::execution::SessionStateBuilder;
     /// # use datafusion_optimizer::push_down_filter::PushDownFilter;
     /// let my_rule = PushDownFilter {}; // pretend it is a new rule
-    ///                                  // Create a new builder with a custom optimizer rule
+    /// // Create a new builder with a custom optimizer rule
     /// let context: SessionContext = SessionStateBuilder::new()
     ///     .with_optimizer_rule(Arc::new(my_rule))
     ///     .build()
@@ -635,9 +635,10 @@ impl SessionContext {
     ///     .sql_with_options("CREATE TABLE foo (x INTEGER)", options)
     ///     .await
     ///     .unwrap_err();
-    /// assert!(err
-    ///     .to_string()
-    ///     .starts_with("Error during planning: DDL not supported: CreateMemoryTable"));
+    /// assert!(
+    ///     err.to_string()
+    ///         .starts_with("Error during planning: DDL not supported: CreateMemoryTable")
+    /// );
     /// # Ok(())
     /// # }
     /// ```
