@@ -21,6 +21,7 @@
 //! [`super::HashJoinExec`]. See comments in [`HashJoinStream`] for more details.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::task::Poll;
 
 use crate::joins::Map;
@@ -226,14 +227,6 @@ pub(super) struct HashJoinStream {
     output_buffer: Box<BatchCoalescer>,
     /// Whether this is a null-aware anti join
     null_aware: bool,
-    /// Whether the probe side (RIGHT) contains any NULL values in join keys
-    /// Only relevant when null_aware is true.
-    /// For LeftAnti with null-aware semantics, if probe side has NULL, no rows should be output.
-    probe_side_has_null: bool,
-    /// Whether any probe batches were processed (i.e., probe side was non-empty)
-    /// Only relevant when null_aware is true.
-    /// Used to distinguish between empty probe side (should return NULL rows) vs non-empty (should filter NULL rows).
-    probe_side_non_empty: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -414,8 +407,6 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
-            probe_side_has_null: false,
-            probe_side_non_empty: false,
         }
     }
 
@@ -620,20 +611,21 @@ impl HashJoinStream {
         if self.null_aware {
             // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
             // Only set this if batch has rows - empty batches don't count
+            // Use shared atomic state so all partitions can see this global information
             if state.batch.num_rows() > 0 {
-                self.probe_side_non_empty = true;
+                build_side.left_data.probe_side_non_empty.store(true, Ordering::Relaxed);
             }
 
             // Check if probe side (RIGHT) contains NULL
             // Since null_aware validation ensures single column join, we only check the first column
             let probe_key_column = &state.values[0];
-            if !self.probe_side_has_null && probe_key_column.null_count() > 0 {
-                // Found NULL in probe side - set flag to prevent any output
-                self.probe_side_has_null = true;
+            if probe_key_column.null_count() > 0 {
+                // Found NULL in probe side - set shared flag to prevent any output
+                build_side.left_data.probe_side_has_null.store(true, Ordering::Relaxed);
             }
 
-            // If probe side has NULL (detected in this or previous batch), return empty result
-            if self.probe_side_has_null {
+            // If probe side has NULL (detected in this or any other partition), return empty result
+            if build_side.left_data.probe_side_has_null.load(Ordering::Relaxed) {
                 timer.done();
                 self.state = HashJoinStreamState::FetchProbeBatch;
                 return Ok(StatefulStreamResult::Continue);
@@ -810,14 +802,15 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
+        let build_side = self.build_side.try_as_ready()?;
+
         // For null-aware anti join, if probe side had NULL, no rows should be output
-        if self.null_aware && self.probe_side_has_null {
+        // Check shared atomic state to get global knowledge across all partitions
+        if self.null_aware && build_side.left_data.probe_side_has_null.load(Ordering::Relaxed) {
             timer.done();
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }
-
-        let build_side = self.build_side.try_as_ready()?;
         if !build_side.left_data.report_probe_completed() {
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
@@ -833,9 +826,10 @@ impl HashJoinStream {
         // For null-aware anti join, filter out LEFT rows with NULL in join keys
         // BUT only if the probe side (RIGHT) was non-empty. If probe side is empty,
         // NULL NOT IN (empty) = TRUE, so NULL rows should be returned.
+        // Use shared atomic state to get global knowledge across all partitions
         if self.null_aware
             && self.join_type == JoinType::LeftAnti
-            && self.probe_side_non_empty
+            && build_side.left_data.probe_side_non_empty.load(Ordering::Relaxed)
         {
             // Since null_aware validation ensures single column join, we only check the first column
             let build_key_column = &build_side.left_data.values()[0];

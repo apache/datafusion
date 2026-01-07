@@ -17,7 +17,7 @@
 
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
@@ -206,6 +206,11 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
+    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti joins)
+    /// This is shared across all probe partitions to provide global knowledge
+    pub(super) probe_side_non_empty: AtomicBool,
+    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
+    pub(super) probe_side_has_null: AtomicBool,
 }
 
 impl JoinLeftData {
@@ -1734,6 +1739,8 @@ async fn collect_left_input(
         _reservation: reservation,
         bounds,
         membership,
+        probe_side_non_empty: AtomicBool::new(false),
+        probe_side_has_null: AtomicBool::new(false),
     };
 
     Ok(data)
