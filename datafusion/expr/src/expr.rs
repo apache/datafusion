@@ -42,7 +42,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
     ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement, display_comma_separated,
+    ReplaceSelectElement,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -1403,7 +1403,9 @@ pub struct PlannedReplaceSelectItem {
 impl Display for PlannedReplaceSelectItem {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "REPLACE")?;
-        write!(f, " ({})", display_comma_separated(&self.items))?;
+        for item in &self.items {
+            write!(f, " ({item})")?;
+        }
         Ok(())
     }
 }

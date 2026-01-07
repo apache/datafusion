@@ -31,6 +31,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let SQLValues {
             explicit_row: _,
             rows,
+            value_keyword: _,
         } = values;
 
         let empty_schema = Arc::new(DFSchema::empty());
