@@ -93,11 +93,6 @@ fn scalar_function_name(expr: &dyn PhysicalExpr) -> Option<&str> {
     expr.as_any()
         .downcast_ref::<ScalarFunctionExpr>()
         .map(ScalarFunctionExpr::name)
-        .or_else(|| {
-            expr.as_any()
-                .downcast_ref::<ScalarUDFExpr>()
-                .map(ScalarUDFExpr::name)
-        })
 }
 
 /// Checks whether the given physical expression contains a supported nested
