@@ -1488,7 +1488,8 @@ impl DefaultPhysicalPlanner {
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
-                    && !*null_aware  // Null-aware joins must use CollectLeft
+                    && !*null_aware
+                // Null-aware joins must use CollectLeft
                 {
                     Arc::new(HashJoinExec::try_new(
                         physical_left,

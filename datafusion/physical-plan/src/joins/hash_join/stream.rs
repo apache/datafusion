@@ -613,7 +613,10 @@ impl HashJoinStream {
             // Only set this if batch has rows - empty batches don't count
             // Use shared atomic state so all partitions can see this global information
             if state.batch.num_rows() > 0 {
-                build_side.left_data.probe_side_non_empty.store(true, Ordering::Relaxed);
+                build_side
+                    .left_data
+                    .probe_side_non_empty
+                    .store(true, Ordering::Relaxed);
             }
 
             // Check if probe side (RIGHT) contains NULL
@@ -621,11 +624,18 @@ impl HashJoinStream {
             let probe_key_column = &state.values[0];
             if probe_key_column.null_count() > 0 {
                 // Found NULL in probe side - set shared flag to prevent any output
-                build_side.left_data.probe_side_has_null.store(true, Ordering::Relaxed);
+                build_side
+                    .left_data
+                    .probe_side_has_null
+                    .store(true, Ordering::Relaxed);
             }
 
             // If probe side has NULL (detected in this or any other partition), return empty result
-            if build_side.left_data.probe_side_has_null.load(Ordering::Relaxed) {
+            if build_side
+                .left_data
+                .probe_side_has_null
+                .load(Ordering::Relaxed)
+            {
                 timer.done();
                 self.state = HashJoinStreamState::FetchProbeBatch;
                 return Ok(StatefulStreamResult::Continue);
@@ -806,7 +816,12 @@ impl HashJoinStream {
 
         // For null-aware anti join, if probe side had NULL, no rows should be output
         // Check shared atomic state to get global knowledge across all partitions
-        if self.null_aware && build_side.left_data.probe_side_has_null.load(Ordering::Relaxed) {
+        if self.null_aware
+            && build_side
+                .left_data
+                .probe_side_has_null
+                .load(Ordering::Relaxed)
+        {
             timer.done();
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
@@ -829,7 +844,10 @@ impl HashJoinStream {
         // Use shared atomic state to get global knowledge across all partitions
         if self.null_aware
             && self.join_type == JoinType::LeftAnti
-            && build_side.left_data.probe_side_non_empty.load(Ordering::Relaxed)
+            && build_side
+                .left_data
+                .probe_side_non_empty
+                .load(Ordering::Relaxed)
         {
             // Since null_aware validation ensures single column join, we only check the first column
             let build_key_column = &build_side.left_data.values()[0];
