@@ -423,7 +423,8 @@ fn leaf_indices_for_roots(
         return root_indices.to_vec();
     }
 
-    // For nested columns (lists or structs), we need to expand to all leaf columns
+    // For List columns, expand to the single leaf column (item field)
+    // For Struct columns (unsupported), this would expand to multiple leaves
     let root_set: BTreeSet<_> = root_indices.iter().copied().collect();
 
     (0..schema_descr.num_columns())
