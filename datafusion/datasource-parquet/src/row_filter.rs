@@ -196,7 +196,7 @@ pub(crate) struct FilterCandidate {
 }
 
 /// Projection specification for nested columns using Parquet leaf column indices.
-/// 
+///
 /// For nested types like List and Struct, Parquet stores data in leaf columns
 /// (the primitive fields). This struct tracks which leaf columns are needed
 /// to evaluate a filter expression.
