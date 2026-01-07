@@ -618,8 +618,11 @@ impl HashJoinStream {
         // 1. If RIGHT (probe) contains NULL in any batch, no LEFT rows should be output
         // 2. LEFT rows with NULL keys should not be output (handled in final stage)
         if self.null_aware {
-            // Mark that we've seen a probe batch (probe side is non-empty)
-            self.probe_side_non_empty = true;
+            // Mark that we've seen a probe batch with actual rows (probe side is non-empty)
+            // Only set this if batch has rows - empty batches don't count
+            if state.batch.num_rows() > 0 {
+                self.probe_side_non_empty = true;
+            }
 
             // Check if probe side (RIGHT) contains NULL
             // Since null_aware validation ensures single column join, we only check the first column
