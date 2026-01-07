@@ -82,7 +82,7 @@ pub async fn dataframe_example() -> Result<()> {
 async fn read_parquet(ctx: &SessionContext) -> Result<()> {
     // Convert the CSV input into a temporary Parquet directory for querying
     let dataset = ExampleDataset::Cars;
-    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
+    let parquet_temp = write_csv_to_parquet(ctx, &dataset.path()).await?;
 
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
