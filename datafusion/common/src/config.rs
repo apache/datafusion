@@ -486,7 +486,7 @@ config_namespace! {
         ///
         /// Currently only supports cases where build_side.num_rows() < u32::MAX.
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
-        pub perfect_hash_join_min_key_density: f64, default = 0.99
+        pub perfect_hash_join_min_key_density: f64, default = 0.2
 
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
