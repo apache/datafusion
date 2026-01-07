@@ -906,7 +906,7 @@ select log(2.0, 100000000000000000000000000000000000::decimal(38,0));
 ----
 116
 
-# log with non-integer base now works (fallback to f64)
+# log with non-integer base (fallback to f64)
 query R
 select log(2.5, 100::decimal(38,0));
 ----
