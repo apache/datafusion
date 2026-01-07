@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use bytes::Bytes;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -284,19 +284,17 @@ fn bench_json_boundary(c: &mut Criterion) {
     let exec_bytes = measure_datasource_exec_bytes(&rt, &fixture);
 
     let mut exec_group = c.benchmark_group("json_boundary_datasource_exec");
-    // The read_bytes tag is the primary signal; time reflects simulated CPU cost.
-    exec_group.bench_function(
-        BenchmarkId::new("execute", format!("read_bytes={exec_bytes}")),
-        |b| {
-            b.iter(|| {
-                fixture.store.reset();
-                rt.block_on(run_datasource_exec(
-                    Arc::clone(&fixture.exec),
-                    Arc::clone(&fixture.task_ctx),
-                ));
-            });
-        },
-    );
+    exec_group.throughput(Throughput::Bytes(exec_bytes));
+    // Fixed benchmark id for baseline comparisons; read_bytes is reported as throughput.
+    exec_group.bench_function("execute", |b| {
+        b.iter(|| {
+            fixture.store.reset();
+            rt.block_on(run_datasource_exec(
+                Arc::clone(&fixture.exec),
+                Arc::clone(&fixture.task_ctx),
+            ));
+        });
+    });
     exec_group.finish();
 }
 
