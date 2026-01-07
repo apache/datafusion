@@ -40,9 +40,13 @@ use datafusion_expr_common::groups_accumulator::EmitTo;
 #[derive(Debug)]
 pub enum SeenValues {
     /// All groups seen so far have seen at least one non-null value
-    All { num_values: usize },
+    All {
+        num_values: usize,
+    },
     // some groups have not yet seen a non-null value
-    Some { values: BooleanBufferBuilder },
+    Some {
+        values: BooleanBufferBuilder,
+    },
 }
 
 impl SeenValues {
@@ -202,10 +206,9 @@ impl NullState {
 
         if let SeenValues::All { num_values } = &mut self.seen_values {
             if opt_filter.is_none() && values.null_count() == 0 {
-                group_indices
-                    .iter()
-                    .zip(data.iter())
-                    .for_each(|(&group_index, new_value)| value_fn(group_index, new_value));
+                group_indices.iter().zip(data.iter()).for_each(
+                    |(&group_index, new_value)| value_fn(group_index, new_value),
+                );
                 *num_values = total_num_groups;
 
                 return;
@@ -312,7 +315,9 @@ impl NullState {
                     let remainder = nulls.slice(n, nulls.len() - n);
                     let mut new_builder = BooleanBufferBuilder::new(remainder.len());
                     new_builder.append_buffer(&remainder);
-                    self.seen_values = SeenValues::Some { values: new_builder };
+                    self.seen_values = SeenValues::Some {
+                        values: new_builder,
+                    };
                     Some(NullBuffer::new(first_n_null))
                 }
             },
