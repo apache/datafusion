@@ -31,9 +31,7 @@ use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::{
-    ListingTableUrl, PartitionedFile, RangeCalculation, as_file_source, calculate_range,
-};
+use datafusion_datasource::{ListingTableUrl, PartitionedFile, as_file_source};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 

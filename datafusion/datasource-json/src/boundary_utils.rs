@@ -110,7 +110,16 @@ pub async fn get_aligned_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use datafusion_datasource::{FileRange, PartitionedFile, calculate_range};
+    use futures::stream::BoxStream;
     use object_store::memory::InMemory;
+    use object_store::{
+        GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    };
+    use std::fmt;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[tokio::test]
     async fn test_get_aligned_bytes_start_at_beginning() {
@@ -211,5 +220,166 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.unwrap().as_ref(), b"line1");
+    }
+
+    #[derive(Debug)]
+    struct CountingObjectStore {
+        inner: Arc<dyn ObjectStore>,
+        requested_bytes: AtomicU64,
+        requested_calls: AtomicU64,
+    }
+
+    impl CountingObjectStore {
+        fn new(inner: Arc<dyn ObjectStore>) -> Self {
+            Self {
+                inner,
+                requested_bytes: AtomicU64::new(0),
+                requested_calls: AtomicU64::new(0),
+            }
+        }
+
+        fn reset(&self) {
+            self.requested_bytes.store(0, Ordering::Relaxed);
+            self.requested_calls.store(0, Ordering::Relaxed);
+        }
+
+        fn requested_bytes(&self) -> u64 {
+            self.requested_bytes.load(Ordering::Relaxed)
+        }
+    }
+
+    impl fmt::Display for CountingObjectStore {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "CountingObjectStore({})", self.inner)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for CountingObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            if let Some(range) = options.range.as_ref() {
+                let requested = match range {
+                    GetRange::Bounded(r) => r.end.saturating_sub(r.start),
+                    GetRange::Offset(_) | GetRange::Suffix(_) => 0,
+                };
+                self.requested_bytes.fetch_add(requested, Ordering::Relaxed);
+            }
+            self.requested_calls.fetch_add(1, Ordering::Relaxed);
+            self.inner.get_opts(location, options).await
+        }
+
+        async fn delete(&self, location: &Path) -> object_store::Result<()> {
+            self.inner.delete(location).await
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.inner.copy(from, to).await
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            from: &Path,
+            to: &Path,
+        ) -> object_store::Result<()> {
+            self.inner.copy_if_not_exists(from, to).await
+        }
+    }
+
+    fn build_fixed_lines(line_len: usize, lines: usize) -> Bytes {
+        let body_len = line_len.saturating_sub(1);
+        let mut data = Vec::with_capacity(line_len * lines);
+        for _ in 0..lines {
+            data.extend(std::iter::repeat(b'a').take(body_len));
+            data.push(b'\n');
+        }
+        Bytes::from(data)
+    }
+
+    #[tokio::test]
+    async fn test_get_aligned_bytes_reduces_requested_bytes() {
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let store = Arc::new(CountingObjectStore::new(Arc::clone(&inner)));
+        let store_dyn: Arc<dyn ObjectStore> = store.clone();
+        let path = Path::from("amplification.json");
+
+        let data = build_fixed_lines(128, 16_384);
+        let file_size = data.len();
+        inner.put(&path, data.into()).await.unwrap();
+
+        let start = 1_000_003usize;
+        let raw_end = start + 64_000;
+        let end = (raw_end / 128).max(1) * 128;
+
+        let object_meta = inner.head(&path).await.unwrap();
+        let file = PartitionedFile {
+            object_meta,
+            partition_values: vec![],
+            range: Some(FileRange {
+                start: start as i64,
+                end: end as i64,
+            }),
+            statistics: None,
+            ordering: None,
+            extensions: None,
+            metadata_size_hint: None,
+        };
+
+        store.reset();
+        let _ = calculate_range(&file, &store_dyn, None).await.unwrap();
+        let old_bytes = store.requested_bytes();
+
+        store.reset();
+        let _ = get_aligned_bytes(
+            &store_dyn,
+            &path,
+            start,
+            end,
+            file_size,
+            b'\n',
+            DEFAULT_BOUNDARY_WINDOW,
+        )
+        .await
+        .unwrap();
+        let new_bytes = store.requested_bytes();
+
+        assert!(
+            old_bytes >= new_bytes * 10,
+            "expected old path to request significantly more bytes, old={old_bytes}, new={new_bytes}"
+        );
     }
 }
