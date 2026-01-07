@@ -52,8 +52,8 @@ pub struct GlobalLimitExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
-    /// If the child plan is a sort node, after the sort node is removed during
-    /// physical optimization, we should add the required ordering to the limit node
+    /// Does the limit have to preserve the order of its input, and if so what is it?
+    /// Some optimizations may reorder the input if no particular sort is required
     required_ordering: Option<LexOrdering>,
 }
 

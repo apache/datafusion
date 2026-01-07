@@ -49,6 +49,7 @@ pub struct RowGroupAccessPlanFilter {
     /// which row groups should be accessed
     access_plan: ParquetAccessPlan,
     /// Row groups where ALL rows are known to match the pruning predicate
+    /// (the predicate does not filter any rows)
     is_fully_matched: Vec<bool>,
 }
 
@@ -84,8 +85,66 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Prunes the access plan based on the limit and fully contained row groups.
-    /// See the [description](https://github.com/apache/datafusion/issues/18860#issuecomment-3563442093)
-    /// for how the pruning works and improves performance.
+    ///
+    /// The pruning works by leveraging the concept of fully matched row groups. Consider a query like:
+    /// `WHERE species LIKE 'Alpine%' AND s >= 50 LIMIT N`
+    ///
+    /// After initial filtering, row groups can be classified into three states:
+    ///
+    /// ```
+    /// PRUNING CLASSIFICATION DIAGRAM
+    /// ------------------------------
+    /// Legend:
+    /// [ ] = Not Matching / Pruned
+    /// [X] = Partially Matching (Row Group/Page contains some matches)
+    /// [F] = Fully Matching (Entire range is within predicate)
+    ///
+    /// +-----------------------------------------------------------------------+
+    /// |                            NOT MATCHING                               |
+    /// |  Partition 1                                                          |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// |  | SPECIES (min: 'B...',max: 'S...') | S (min: 7, max: 133)        |  |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// |  | Snow Vole                         | 7                           |  |
+    /// |  | Brown Bear                        | 133                         |  |
+    /// |  | Gray Wolf                         | 82                          |  |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// +-----------------------------------------------------------------------+
+    ///
+    /// +-----------------------------------------------------------------------+
+    /// |                          PARTIALLY MATCHING                           |
+    /// |  Partition 2                             Partition 4                  |
+    /// |  +------------------+--------------+     +------------------+-------+ |
+    /// |  | SPECIES          | S            |     | SPECIES          | S     | |
+    /// |  | (min:A, max:R)   |(min:6,max:70)|     | (min:A, max:P)   |[4-51] | |
+    /// |  +------------------+--------------+     +------------------+-------+ |
+    /// |  | Lynx             | 71           |     | Europ. Mole      | 4     | |
+    /// |  | Red Fox          | 40           |     | Polecat          | 16    | |
+    /// |  | Alpine Bat       | 6            |     | Alpine Ibex      | 97    | |
+    /// |  +------------------+--------------+     +------------------+-------+ |
+    /// +-----------------------------------------------------------------------+
+    ///
+    /// +-----------------------------------------------------------------------+
+    /// |                           FULLY MATCHING                              |
+    /// |  Partition 3                                                          |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// |  | SPECIES (min: 'A...',max: 'A...') | S (min: 76, max: 101)       |  |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// |  | Alpine Ibex                       | 101                         |  |
+    /// |  | Alpine Goat                       | 76                          |  |
+    /// |  | Alpine Sheep                      | 83                          |  |
+    /// |  +-----------------------------------+-----------------------------+  |
+    /// +-----------------------------------------------------------------------+
+
+    /// Without limit pruning: Scan Partition 2 → Partition 3 → Partition 4 (until limit reached)
+    /// With limit pruning: If Partition 3 contains enough rows to satisfy the limit,
+    /// skip Partitions 2 and 4 entirely and go directly to Partition 3.
+    ///
+    /// This optimization is particularly effective when:
+    /// - The limit is small relative to the total dataset size
+    /// - There are row groups that are fully matched by the filter predicates
+    /// - The fully matched row groups contain sufficient rows to satisfy the limit
+    ///
     /// For more information, see the [paper](https://arxiv.org/pdf/2504.11540)'s "Pruning for LIMIT Queries" part
     pub fn prune_by_limit(
         &mut self,
@@ -96,7 +155,8 @@ impl RowGroupAccessPlanFilter {
         let mut fully_matched_row_group_indexes: Vec<usize> = Vec::new();
         let mut fully_matched_rows_count: usize = 0;
 
-        // Iterate through the currently accessible row groups
+        // Iterate through the currently accessible row groups and try to
+        // find a set of matching row groups that can satisfy the limit
         for &idx in self.access_plan.row_group_indexes().iter() {
             if self.is_fully_matched[idx] {
                 let row_group_row_count = rg_metadata[idx].num_rows() as usize;
@@ -108,6 +168,8 @@ impl RowGroupAccessPlanFilter {
             }
         }
 
+        // If we can satisfy the limit with fully matching row groups,
+        // rewrite the plan to do so
         if fully_matched_rows_count >= limit {
             let original_num_accessible_row_groups =
                 self.access_plan.row_group_indexes().len();
