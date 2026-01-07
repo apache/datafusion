@@ -135,7 +135,7 @@ impl RowGroupAccessPlanFilter {
     /// |  | Alpine Sheep                      | 83                          |  |
     /// |  +-----------------------------------+-----------------------------+  |
     /// +-----------------------------------------------------------------------+
-
+    ///
     /// Without limit pruning: Scan Partition 2 → Partition 3 → Partition 4 (until limit reached)
     /// With limit pruning: If Partition 3 contains enough rows to satisfy the limit,
     /// skip Partitions 2 and 4 entirely and go directly to Partition 3.
