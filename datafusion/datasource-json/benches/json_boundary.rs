@@ -41,25 +41,31 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::{Builder, Runtime};
 
+// Add CPU cost per requested KB to make read amplification visible in timings.
+const CPU_COST_PER_KB_ROUNDS: u32 = 64;
+const BYTES_PER_KB: u64 = 1024;
+
 #[derive(Debug)]
 struct CountingObjectStore {
     inner: Arc<dyn ObjectStore>,
     requested_bytes: AtomicU64,
-    requested_calls: AtomicU64,
+    cpu_cost_per_kb_rounds: u32,
 }
 
 impl CountingObjectStore {
-    fn new(inner: Arc<dyn ObjectStore>) -> Self {
+    fn new_with_cpu_cost(
+        inner: Arc<dyn ObjectStore>,
+        cpu_cost_per_kb_rounds: u32,
+    ) -> Self {
         Self {
             inner,
             requested_bytes: AtomicU64::new(0),
-            requested_calls: AtomicU64::new(0),
+            cpu_cost_per_kb_rounds,
         }
     }
 
     fn reset(&self) {
         self.requested_bytes.store(0, Ordering::Relaxed);
-        self.requested_calls.store(0, Ordering::Relaxed);
     }
 
     fn requested_bytes(&self) -> u64 {
@@ -97,15 +103,21 @@ impl ObjectStore for CountingObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        let should_burn_cpu = self.cpu_cost_per_kb_rounds > 0;
+        let mut requested_len = 0u64;
         if let Some(range) = options.range.as_ref() {
             let requested = match range {
                 GetRange::Bounded(r) => r.end.saturating_sub(r.start),
                 GetRange::Offset(_) | GetRange::Suffix(_) => 0,
             };
+            requested_len = requested;
             self.requested_bytes.fetch_add(requested, Ordering::Relaxed);
         }
-        self.requested_calls.fetch_add(1, Ordering::Relaxed);
-        self.inner.get_opts(location, options).await
+        let result = self.inner.get_opts(location, options).await;
+        if should_burn_cpu {
+            burn_cpu_kb(requested_len, self.cpu_cost_per_kb_rounds);
+        }
+        result
     }
 
     async fn delete(&self, location: &Path) -> object_store::Result<()> {
@@ -158,6 +170,21 @@ fn build_fixed_json_lines(line_len: usize, lines: usize) -> Bytes {
     Bytes::from(data)
 }
 
+fn burn_cpu_kb(bytes: u64, rounds: u32) {
+    if bytes == 0 || rounds == 0 {
+        return;
+    }
+    let kb = (bytes + BYTES_PER_KB - 1) / BYTES_PER_KB;
+    let mut checksum = 0u64;
+    let mut remaining = kb.saturating_mul(rounds as u64);
+    while remaining > 0 {
+        checksum = checksum.wrapping_add(remaining);
+        checksum = checksum.rotate_left(5) ^ 0x9e3779b97f4a7c15;
+        remaining -= 1;
+    }
+    std::hint::black_box(checksum);
+}
+
 struct Fixture {
     store: Arc<CountingObjectStore>,
     task_ctx: Arc<TaskContext>,
@@ -166,7 +193,10 @@ struct Fixture {
 
 fn build_fixture(rt: &Runtime) -> Fixture {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-    let store = Arc::new(CountingObjectStore::new(Arc::clone(&inner)));
+    let store = Arc::new(CountingObjectStore::new_with_cpu_cost(
+        Arc::clone(&inner),
+        CPU_COST_PER_KB_ROUNDS,
+    ));
     let store_dyn: Arc<dyn ObjectStore> = store.clone();
     let path = Path::from("bench.json");
 
@@ -183,6 +213,7 @@ fn build_fixture(rt: &Runtime) -> Fixture {
     let task_ctx = Arc::new(TaskContext::default());
     let runtime_env = task_ctx.runtime_env();
     let object_store_url = ObjectStoreUrl::parse("test://bucket").unwrap();
+    // Register a CPU-costed store to approximate non-streaming remote reads.
     runtime_env.register_object_store(object_store_url.as_ref(), Arc::clone(&store_dyn));
     let schema = Arc::new(Schema::new(vec![Field::new(
         "value",
@@ -253,6 +284,7 @@ fn bench_json_boundary(c: &mut Criterion) {
     let exec_bytes = measure_datasource_exec_bytes(&rt, &fixture);
 
     let mut exec_group = c.benchmark_group("json_boundary_datasource_exec");
+    // The read_bytes tag is the primary signal; time reflects simulated CPU cost.
     exec_group.bench_function(
         BenchmarkId::new("execute", format!("read_bytes={exec_bytes}")),
         |b| {
