@@ -626,7 +626,7 @@ impl DistinctVarianceAccumulator {
     pub fn new(stat_type: StatsType) -> Self {
         Self {
             distinct_values: GenericDistinctBuffer::<Float64Type>::new(DataType::Float64),
-            stat_type: stat_type,
+            stat_type,
         }
     }
 }
