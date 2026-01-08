@@ -32,7 +32,7 @@ use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::function::{
     PartitionEvaluatorArgs, WindowFunctionSimplification, WindowUDFFieldArgs,
 };
-use datafusion::logical_expr::simplify::SimplifyInfo;
+use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
     Expr, LimitEffect, PartitionEvaluator, Signature, WindowFrame,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
@@ -198,7 +198,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     /// this function will simplify `SimplifySmoothItUdf` to `AggregateUDF` for `Avg`
     /// default implementation will not be called (left as `todo!()`)
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
-        let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
+        let simplify = |window_function: WindowFunction, _: &SimplifyContext| {
             Ok(Expr::from(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 params: WindowFunctionParams {

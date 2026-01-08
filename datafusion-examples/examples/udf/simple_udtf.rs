@@ -32,7 +32,6 @@ use datafusion::common::{ScalarValue, plan_err};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::error::Result;
-use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{Expr, TableType};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
@@ -145,8 +144,7 @@ impl TableFunctionImpl for LocalCsvTableFunc {
             .get(1)
             .map(|expr| {
                 // try to simplify the expression, so 1+2 becomes 3, for example
-                let execution_props = ExecutionProps::new();
-                let info = SimplifyContext::new(&execution_props);
+                let info = SimplifyContext::default();
                 let expr = ExprSimplifier::new(info).simplify(expr.clone())?;
 
                 if let Expr::Literal(ScalarValue::Int64(Some(limit)), _) = expr {
