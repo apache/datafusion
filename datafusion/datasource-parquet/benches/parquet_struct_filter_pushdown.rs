@@ -65,7 +65,7 @@ use rand::Rng;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-const ROW_GROUP_SIZE: usize = 1;
+const ROW_GROUP_SIZE: usize = 25_000;
 const TOTAL_ROW_GROUPS: usize = 3;
 const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
 const TARGET_ID: i32 = ROW_GROUP_SIZE as i32 + 1; // Match a single row in the second row group
