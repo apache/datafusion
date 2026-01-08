@@ -646,7 +646,7 @@ impl Accumulator for DistinctVarianceAccumulator {
 
         let count = match self.stat_type {
             StatsType::Sample => {
-                if values.len() > 0 {
+                if !values.is_empty() {
                     values.len() - 1
                 } else {
                     values.len()
