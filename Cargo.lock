@@ -2568,6 +2568,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "log",
  "percent-encoding",
