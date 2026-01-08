@@ -404,6 +404,87 @@
 -->
 <section id="upgrade-guides">
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
+<section id="datafusion-53-0-0">
+<h2>DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code><a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
+<section id="simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api">
+<h3><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API<a class="headerlink" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait has been removed and replaced with the concrete <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> struct. This simplifies the expression simplification API and removes the need for trait objects.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who implemented custom <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> implementations</p></li>
+<li><p>Users who implemented <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code> for custom scalar functions</p></li>
+<li><p>Users who directly use <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> or <code class="docutils literal notranslate"><span class="pre">ExprSimplifier</span></code></p></li>
+</ul>
+<p><strong>Breaking changes:</strong></p>
+<ol class="arabic simple">
+<li><p>The <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait has been removed entirely</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> no longer takes <code class="docutils literal notranslate"><span class="pre">&amp;ExecutionProps</span></code> - it now uses a builder-style API with direct fields</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code> now takes <code class="docutils literal notranslate"><span class="pre">&amp;SimplifyContext</span></code> instead of <code class="docutils literal notranslate"><span class="pre">&amp;dyn</span> <span class="pre">SimplifyInfo</span></code></p></li>
+<li><p>Time-dependent function simplification (e.g., <code class="docutils literal notranslate"><span class="pre">now()</span></code>) is now optional - if <code class="docutils literal notranslate"><span class="pre">query_execution_start_time</span></code> is <code class="docutils literal notranslate"><span class="pre">None</span></code>, these functions won’t be simplified</p></li>
+</ol>
+<p><strong>Migration guide:</strong></p>
+<p>If you implemented a custom <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">SimplifyInfo</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MySimplifyInfo</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">is_boolean_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">nullable</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">execution_props</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">ExecutionProps</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">get_data_type</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="p">.</span><span class="w"> </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> directly with the builder-style API:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_config_options</span><span class="p">(</span><span class="n">config_options</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_query_execution_start_time</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="n">Utc</span><span class="p">::</span><span class="n">now</span><span class="p">()));</span><span class="w"> </span><span class="c1">// or use .with_current_time()</span>
+</pre></div>
+</div>
+<p>If you implemented <code class="docutils literal notranslate"><span class="pre">ScalarUDFImpl::simplify()</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">simplify</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">SimplifyInfo</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ExprSimplifyResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">now_ts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">info</span><span class="p">.</span><span class="n">execution_props</span><span class="p">().</span><span class="n">query_execution_start_time</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">simplify</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">    </span><span class="n">args</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
+<span class="w">    </span><span class="n">info</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">SimplifyContext</span><span class="p">,</span>
+<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">ExprSimplifyResult</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// query_execution_start_time is now Option&lt;DateTime&lt;Utc&gt;&gt;</span>
+<span class="w">    </span><span class="c1">// Return Original if time is not set (simplification skipped)</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">now_ts</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">info</span><span class="p">.</span><span class="n">query_execution_start_time</span><span class="p">()</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">ExprSimplifyResult</span><span class="p">::</span><span class="n">Original</span><span class="p">(</span><span class="n">args</span><span class="p">));</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If you created <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> from <code class="docutils literal notranslate"><span class="pre">ExecutionProps</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExecutionProps</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">props</span><span class="p">).</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SimplifyContext</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_schema</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_config_options</span><span class="p">(</span><span class="n">config_options</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_current_time</span><span class="p">();</span><span class="w"> </span><span class="c1">// Sets query_execution_start_time to Utc::now()</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html"><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> documentation</a> for more details.</p>
+</section>
+</section>
 <section id="datafusion-52-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
@@ -2115,6 +2196,10 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   </div>
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#changes-to-dfschema-api">Changes to DFSchema API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#listingtableprovider-now-caches-list-commands">ListingTableProvider now caches <code class="docutils literal notranslate"><span class="pre">LIST</span></code> commands</a></li>
