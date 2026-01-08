@@ -106,8 +106,7 @@ fn parquet_struct_filter_pushdown(c: &mut Criterion) {
         b.iter(|| {
             let row_count =
                 RUNTIME.block_on(execute_and_count(&exec, &ctx));
-            // Without pushdown: reads all data (struct + payload), then filters
-            assert_eq!(row_count, TOTAL_ROWS);
+            assert_eq!(row_count, 1);
         });
     });
 
@@ -118,12 +117,7 @@ fn parquet_struct_filter_pushdown(c: &mut Criterion) {
         b.iter(|| {
             let row_count =
                 RUNTIME.block_on(execute_and_count(&exec, &ctx));
-            // With pushdown (late materialization): reads struct column first,
-            // creates row selection mask, then only reads matching payload pages.
-            // NOTE: Until expressions referencing struct columns are allowed
-            // in filter pushdown this will read all rows in the matched row groups,
-            // results are expected to be identical to no pushdown case.
-            assert!(row_count > 0);
+            assert_eq!(row_count, 1);
         });
     });
 
