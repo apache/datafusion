@@ -633,26 +633,39 @@ impl DistinctVarianceAccumulator {
 
 impl Accumulator for DistinctVarianceAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.update_batch(values)
+        let cast_values = cast(&values[0], &DataType::Float64)?;
+        self.distinct_values
+            .update_batch(vec![cast_values].as_ref())
     }
 
-    // TODO: use the primitive_arrow_type to perform calculation.
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // sum ((x_i - mean)^2) / (n or n - 1)
         let values = std::mem::take(&mut self.distinct_values.values)
             .iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
 
         let count = match self.stat_type {
-            StatsType::Sample => values.len() as f64 - 1_f64,
-            StatsType::Population => values.len() as f64,
+            StatsType::Sample => {
+                if values.len() > 0 {
+                    values.len() - 1
+                } else {
+                    values.len()
+                }
+            }
+            StatsType::Population => values.len(),
         };
 
-        let mean = values.iter().sum::<f64>() / count;
-        let variance =
-            values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / count;
-        Ok(ScalarValue::Float64(Some(variance)))
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let m2 = values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>();
+
+        Ok(ScalarValue::Float64(match count {
+            0 => None,
+            1 => match self.stat_type {
+                StatsType::Population => Some(0.0),
+                StatsType::Sample => None,
+            },
+            _ => Some(m2 / count as f64),
+        }))
     }
 
     fn size(&self) -> usize {
