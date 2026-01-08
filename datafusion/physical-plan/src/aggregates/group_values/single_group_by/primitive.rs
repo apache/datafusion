@@ -73,44 +73,50 @@ macro_rules! hash_float {
 
 hash_float!(f16, f32, f64);
 
-pub(crate) trait SmallValue {
-    fn to_index(&self) -> usize;
-    const MAX_INDEX: usize;
+pub(crate) trait SmallValue: arrow::datatypes::ArrowNativeType {
+    fn to_index(&self, min: Self) -> usize;
 }
 
-impl SmallValue for u8 {
-    fn to_index(&self) -> usize {
-        *self as usize
-    }
-    const MAX_INDEX: usize = 255;
+macro_rules! impl_small_value {
+    ($($t:ty),+) => {
+        $(impl SmallValue for $t {
+            fn to_index(&self, min: Self) -> usize {
+                self.wrapping_sub(min) as usize
+            }
+        })+
+    };
 }
+
+impl_small_value!(u8, u16, u32, u64);
 
 impl SmallValue for i8 {
-    fn to_index(&self) -> usize {
-        (*self as i16 + 128) as usize
+    fn to_index(&self, min: Self) -> usize {
+        (*self as i16 - min as i16) as usize
     }
-    const MAX_INDEX: usize = 255;
-}
-
-impl SmallValue for u16 {
-    fn to_index(&self) -> usize {
-        *self as usize
-    }
-    const MAX_INDEX: usize = 65535;
 }
 
 impl SmallValue for i16 {
-    fn to_index(&self) -> usize {
-        (*self as i32 + 32768) as usize
+    fn to_index(&self, min: Self) -> usize {
+        (*self as i32 - min as i32) as usize
     }
-    const MAX_INDEX: usize = 65535;
+}
+
+impl SmallValue for i32 {
+    fn to_index(&self, min: Self) -> usize {
+        (*self as i64 - min as i64) as usize
+    }
+}
+
+impl SmallValue for i64 {
+    fn to_index(&self, min: Self) -> usize {
+        (*self as i128 - min as i128) as usize
+    }
 }
 
 impl SmallValue for f16 {
-    fn to_index(&self) -> usize {
+    fn to_index(&self, _min: Self) -> usize {
         self.to_bits() as usize
     }
-    const MAX_INDEX: usize = 65535;
 }
 
 /// A [`GroupValues`] storing a single column of primitive values
@@ -261,19 +267,22 @@ pub struct GroupValuesSmallPrimitive<T: ArrowPrimitiveType> {
     null_group: Option<usize>,
     /// The values for each group index
     values: Vec<T::Native>,
+    /// The minimum value (offset)
+    min_value: T::Native,
 }
 
 impl<T: ArrowPrimitiveType> GroupValuesSmallPrimitive<T>
 where
     T::Native: SmallValue,
 {
-    pub fn new(data_type: DataType) -> Self {
-        assert!(PrimitiveArray::<T>::is_compatible(&data_type));
+    pub fn new(data_type: DataType, min: T::Native, max: T::Native) -> Self {
+        let range = max.to_index(min);
         Self {
             data_type,
-            map: vec![0; T::Native::MAX_INDEX + 1],
+            map: vec![0; range + 1],
             values: Vec::with_capacity(128),
             null_group: None,
+            min_value: min,
         }
     }
 }
@@ -294,7 +303,7 @@ where
                     group_id
                 }),
                 Some(key) => {
-                    let index = key.to_index();
+                    let index = key.to_index(self.min_value);
                     let entry = unsafe { self.map.get_unchecked_mut(index) };
                     if *entry == 0 {
                         let g = self.values.len();
@@ -395,7 +404,7 @@ mod tests {
     #[test]
     fn test_intern_int16() {
         let mut group_values =
-            GroupValuesSmallPrimitive::<Int16Type>::new(DataType::Int16);
+            GroupValuesSmallPrimitive::<Int16Type>::new(DataType::Int16, -32768, 32767);
         let array = Arc::new(Int16Array::from(vec![
             Some(1000),
             Some(2000),
@@ -422,7 +431,8 @@ mod tests {
 
     #[test]
     fn test_intern_int8() {
-        let mut group_values = GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8);
+        let mut group_values =
+            GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8, -128, 127);
         let array = Arc::new(Int8Array::from(vec![
             Some(1),
             Some(2),
@@ -449,9 +459,11 @@ mod tests {
 
     #[test]
     fn test_emit_first_int8() {
-        let mut group_values = GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8);
-        let array = Arc::new(Int8Array::from(vec![Some(10), Some(20), Some(10), None]))
-            as ArrayRef;
+        let mut group_values =
+            GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8, -128, 127);
+        let array =
+            Arc::new(Int8Array::from(vec![Some(10), Some(20), Some(10), None]))
+                as ArrayRef;
         let mut groups = vec![];
         group_values.intern(&[array], &mut groups).unwrap();
         assert_eq!(groups, vec![0, 1, 0, 2]);

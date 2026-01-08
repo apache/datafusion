@@ -18,15 +18,19 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Float16Type, Int8Type, Int16Type,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt8Type, UInt16Type,
+    Date32Type, Date64Type, Decimal128Type, Float16Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::Result;
+use datafusion_common::stats::Precision;
+use datafusion_common::{Result, ScalarValue};
+use half::f16;
 
+use crate::Statistics;
 use datafusion_expr::EmitTo;
 
 pub mod multi_group_by;
@@ -136,6 +140,7 @@ pub trait GroupValues: Send {
 pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
+    statistics: Option<&Statistics>,
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
@@ -144,29 +149,101 @@ pub fn new_group_values(
             DataType::Int8 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<Int8Type>::new(
                     d.clone(),
+                    i8::MIN,
+                    i8::MAX,
                 )));
             }
             DataType::UInt8 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<UInt8Type>::new(
                     d.clone(),
+                    u8::MIN,
+                    u8::MAX,
                 )));
             }
             DataType::Int16 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<Int16Type>::new(
                     d.clone(),
+                    i16::MIN,
+                    i16::MAX,
                 )));
             }
             DataType::UInt16 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<UInt16Type>::new(
                     d.clone(),
+                    u16::MIN,
+                    u16::MAX,
                 )));
             }
             DataType::Float16 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<Float16Type>::new(
                     d.clone(),
+                    f16::from_bits(0),
+                    f16::from_bits(65535),
                 )));
             }
             _ => {}
+        }
+
+        if let Some(stats) = statistics
+            && stats.column_statistics.len() == 1
+            && let Precision::Exact(min) = &stats.column_statistics[0].min_value
+            && let Precision::Exact(max) = &stats.column_statistics[0].max_value
+        {
+            match (d, min, max) {
+                (
+                    DataType::Int32,
+                    ScalarValue::Int32(Some(min)),
+                    ScalarValue::Int32(Some(max)),
+                ) => {
+                    if (max - min) < 65536 {
+                        return Ok(Box::new(GroupValuesSmallPrimitive::<Int32Type>::new(
+                            d.clone(),
+                            *min,
+                            *max,
+                        )));
+                    }
+                }
+                (
+                    DataType::UInt32,
+                    ScalarValue::UInt32(Some(min)),
+                    ScalarValue::UInt32(Some(max)),
+                ) => {
+                    if (max - min) < 65536 {
+                        return Ok(Box::new(GroupValuesSmallPrimitive::<UInt32Type>::new(
+                            d.clone(),
+                            *min,
+                            *max,
+                        )));
+                    }
+                }
+                (
+                    DataType::Int64,
+                    ScalarValue::Int64(Some(min)),
+                    ScalarValue::Int64(Some(max)),
+                ) => {
+                    if (max - min) < 65536 {
+                        return Ok(Box::new(GroupValuesSmallPrimitive::<Int64Type>::new(
+                            d.clone(),
+                            *min,
+                            *max,
+                        )));
+                    }
+                }
+                (
+                    DataType::UInt64,
+                    ScalarValue::UInt64(Some(min)),
+                    ScalarValue::UInt64(Some(max)),
+                ) => {
+                    if (max.wrapping_sub(*min)) < 65536 {
+                        return Ok(Box::new(GroupValuesSmallPrimitive::<UInt64Type>::new(
+                            d.clone(),
+                            *min,
+                            *max,
+                        )));
+                    }
+                }
+                _ => {}
+            }
         }
 
         macro_rules! downcast_helper {
