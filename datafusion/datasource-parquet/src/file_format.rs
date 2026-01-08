@@ -488,12 +488,16 @@ impl FileFormat for ParquetFormat {
             .with_file_metadata_cache(Some(file_metadata_cache))
             .fetch_metadata()
             .await?;
-        let statistics =
-            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &table_schema)?;
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            &table_schema,
+        )?;
         let ordering =
             crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
-        Ok(datafusion_datasource::file_format::FileMeta::new(statistics)
-            .with_ordering(ordering))
+        Ok(
+            datafusion_datasource::file_format::FileMeta::new(statistics)
+                .with_ordering(ordering),
+        )
     }
 
     async fn create_physical_plan(
