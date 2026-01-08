@@ -28,7 +28,10 @@ use datafusion_functions_aggregate::array_agg::{
 use std::{any::Any, sync::Arc};
 
 // Spark implementation of collect_list/collect_set aggregate function.
-// Differs from DataFusion ArrayAgg in that it returns an empty list when all inputs are NULL and it doesn't respect/allow ordering.
+// Differs from DataFusion ArrayAgg in the following ways:
+// - ignores NULL inputs
+// - returns an empty list when all inputs are NULL
+// - does not support ordering
 
 // <https://spark.apache.org/docs/latest/api/sql/index.html#collect_list>
 #[derive(Debug, PartialEq, Eq, Hash)]
