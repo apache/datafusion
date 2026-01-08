@@ -1402,10 +1402,14 @@ pub struct PlannedReplaceSelectItem {
 
 impl Display for PlannedReplaceSelectItem {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "REPLACE")?;
-        for item in &self.items {
-            write!(f, " ({item})")?;
+        write!(f, "REPLACE (")?;
+        for (i, item) in self.items.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{item}")?;
         }
+        write!(f, ")")?;
         Ok(())
     }
 }
