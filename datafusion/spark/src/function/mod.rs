@@ -33,6 +33,7 @@ pub mod lambda;
 pub mod map;
 pub mod math;
 pub mod misc;
+pub mod null_utils;
 pub mod predicate;
 pub mod string;
 pub mod r#struct;
