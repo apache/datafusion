@@ -354,8 +354,9 @@ impl ExprSchemable for Expr {
                 let nullable = field.is_nullable();
                 Ok(nullable)
             }
-            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
-                Ok(func.is_nullable())
+            Expr::AggregateFunction(_) => {
+                let (_, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok(nullable)
             }
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(
