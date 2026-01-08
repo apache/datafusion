@@ -144,7 +144,6 @@ async fn explain_analyze_baseline_metrics() {
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::coalesce_partitions::CoalescePartitionsExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::union::UnionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::windows::WindowAggExec>().is_some()

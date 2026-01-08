@@ -24,6 +24,7 @@ mod list_files_cache;
 
 pub use file_metadata_cache::DefaultFilesMetadataCache;
 pub use list_files_cache::DefaultListFilesCache;
+pub use list_files_cache::TableScopedPath;
 
 /// A trait that can be implemented to provide custom cache behavior for the caches managed by
 /// [`cache_manager::CacheManager`].

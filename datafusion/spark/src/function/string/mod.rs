@@ -24,6 +24,7 @@ pub mod ilike;
 pub mod length;
 pub mod like;
 pub mod luhn_check;
+pub mod space;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -38,6 +39,7 @@ make_udf_function!(elt::SparkElt, elt);
 make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
+make_udf_function!(space::SparkSpace, space);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -87,6 +89,7 @@ pub mod expr_fn {
         "Returns a formatted string from printf-style format strings.",
         strfmt args
     ));
+    export_functions!((space, "Returns a string consisting of n spaces.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -100,5 +103,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         like(),
         luhn_check(),
         format_string(),
+        space(),
     ]
 }
