@@ -204,7 +204,10 @@ where
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.clear();
-                build_primitive::<T>(std::mem::take(&mut self.values), self.null_group.take())
+                build_primitive::<T>(
+                    std::mem::take(&mut self.values),
+                    self.null_group.take(),
+                )
             }
             EmitTo::First(n) => {
                 self.map.retain(|entry| {
@@ -324,7 +327,10 @@ where
         let array: PrimitiveArray<T> = match emit_to {
             EmitTo::All => {
                 self.map.fill(0);
-                build_primitive::<T>(std::mem::take(&mut self.values), self.null_group.take())
+                build_primitive::<T>(
+                    std::mem::take(&mut self.values),
+                    self.null_group.take(),
+                )
             }
             EmitTo::First(n) => {
                 for entry in self.map.iter_mut() {
@@ -383,13 +389,20 @@ fn build_primitive<T: ArrowPrimitiveType>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::types::{Int16Type, Int8Type};
-    use arrow::array::{Array, Int16Array, Int8Array};
+    use arrow::array::types::{Int8Type, Int16Type};
+    use arrow::array::{Array, Int8Array, Int16Array};
 
     #[test]
     fn test_intern_int16() {
-        let mut group_values = GroupValuesSmallPrimitive::<Int16Type>::new(DataType::Int16);
-        let array = Arc::new(Int16Array::from(vec![Some(1000), Some(2000), Some(1000), None, Some(3000)])) as ArrayRef;
+        let mut group_values =
+            GroupValuesSmallPrimitive::<Int16Type>::new(DataType::Int16);
+        let array = Arc::new(Int16Array::from(vec![
+            Some(1000),
+            Some(2000),
+            Some(1000),
+            None,
+            Some(3000),
+        ])) as ArrayRef;
         let mut groups = vec![];
         group_values.intern(&[array], &mut groups).unwrap();
 
@@ -398,7 +411,7 @@ mod tests {
 
         let emitted = group_values.emit(EmitTo::All).unwrap();
         let emitted_array = emitted[0].as_primitive::<Int16Type>();
-        
+
         // Group 0: 1000, Group 1: 2000, Group 2: None, Group 3: 3000
         assert_eq!(emitted_array.len(), 4);
         assert_eq!(emitted_array.value(0), 1000);
@@ -410,7 +423,13 @@ mod tests {
     #[test]
     fn test_intern_int8() {
         let mut group_values = GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8);
-        let array = Arc::new(Int8Array::from(vec![Some(1), Some(2), Some(1), None, Some(3)])) as ArrayRef;
+        let array = Arc::new(Int8Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+            Some(3),
+        ])) as ArrayRef;
         let mut groups = vec![];
         group_values.intern(&[array], &mut groups).unwrap();
 
@@ -419,7 +438,7 @@ mod tests {
 
         let emitted = group_values.emit(EmitTo::All).unwrap();
         let emitted_array = emitted[0].as_primitive::<Int8Type>();
-        
+
         // Group 0: 1, Group 1: 2, Group 2: None, Group 3: 3
         assert_eq!(emitted_array.len(), 4);
         assert_eq!(emitted_array.value(0), 1);
@@ -427,11 +446,12 @@ mod tests {
         assert!(emitted_array.is_null(2));
         assert_eq!(emitted_array.value(3), 3);
     }
-    
+
     #[test]
     fn test_emit_first_int8() {
         let mut group_values = GroupValuesSmallPrimitive::<Int8Type>::new(DataType::Int8);
-        let array = Arc::new(Int8Array::from(vec![Some(10), Some(20), Some(10), None])) as ArrayRef;
+        let array = Arc::new(Int8Array::from(vec![Some(10), Some(20), Some(10), None]))
+            as ArrayRef;
         let mut groups = vec![];
         group_values.intern(&[array], &mut groups).unwrap();
         assert_eq!(groups, vec![0, 1, 0, 2]);
@@ -445,9 +465,10 @@ mod tests {
 
         // Remaining should be just the null group at index 0
         assert_eq!(group_values.len(), 1);
-        let array2 = Arc::new(Int8Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
+        let array2 =
+            Arc::new(Int8Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
         group_values.intern(&[array2], &mut groups).unwrap();
-        
+
         // 10 is new (index 1), None is old (index 0), 30 is new (index 2)
         assert_eq!(groups, vec![1, 0, 2]);
         assert_eq!(group_values.len(), 3);

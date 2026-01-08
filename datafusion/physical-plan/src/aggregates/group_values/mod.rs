@@ -18,10 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Float16Type, Int16Type, Int8Type,
+    Date32Type, Date64Type, Decimal128Type, Float16Type, Int8Type, Int16Type,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt8Type,
+    TimestampSecondType, UInt8Type, UInt16Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -142,7 +142,9 @@ pub fn new_group_values(
 
         match d {
             DataType::Int8 => {
-                return Ok(Box::new(GroupValuesSmallPrimitive::<Int8Type>::new(d.clone())));
+                return Ok(Box::new(GroupValuesSmallPrimitive::<Int8Type>::new(
+                    d.clone(),
+                )));
             }
             DataType::UInt8 => {
                 return Ok(Box::new(GroupValuesSmallPrimitive::<UInt8Type>::new(
