@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
-use datafusion_datasource_parquet::{ParquetFileMetrics, build_row_filter};
+use datafusion_datasource_parquet::{ParquetFileMetrics, build_row_filter, SelectivityTracker};
 use datafusion_expr::{Expr, col};
 use datafusion_functions_nested::expr_fn::array_has;
 use datafusion_physical_expr::planner::logical2physical;
@@ -116,7 +116,7 @@ fn scan_with_predicate(
 
     let builder = if pushdown {
         if let Some(row_filter) =
-            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics)?
+            build_row_filter(predicate, file_schema, &metadata, false, &file_metrics, &SelectivityTracker::default())?
         {
             builder.with_row_filter(row_filter)
         } else {

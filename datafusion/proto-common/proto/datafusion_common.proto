@@ -603,6 +603,10 @@ message ParquetOptions {
   oneof max_predicate_cache_size_opt {
     uint64 max_predicate_cache_size = 33;
   }
+
+  oneof filter_effectiveness_threshold_opt {
+    double filter_effectiveness_threshold = 35;
+  }
 }
 
 enum JoinSide {
