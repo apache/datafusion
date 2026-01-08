@@ -3048,15 +3048,16 @@ Can be a constant, column, or function.</p></li>
 </section>
 <section id="date-trunc">
 <h3><code class="docutils literal notranslate"><span class="pre">date_trunc</span></code><a class="headerlink" href="#date-trunc" title="Link to this heading">#</a></h3>
-<p>Truncates a timestamp value to a specified precision.</p>
+<p>Truncates a timestamp or time value to a specified precision.</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">date_trunc</span><span class="p">(</span><span class="k">precision</span><span class="p">,</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id176">
 <h4>Arguments<a class="headerlink" href="#id176" title="Link to this heading">#</a></h4>
-<ul class="simple">
-<li><p><strong>precision</strong>: Time precision to truncate to. The following precisions are supported:</p>
 <ul>
+<li><p><strong>precision</strong>: Time precision to truncate to. The following precisions are supported:</p>
+<p>For Timestamp types:</p>
+<ul class="simple">
 <li><p>year / YEAR</p></li>
 <li><p>quarter / QUARTER</p></li>
 <li><p>month / MONTH</p></li>
@@ -3068,8 +3069,16 @@ Can be a constant, column, or function.</p></li>
 <li><p>millisecond / MILLISECOND</p></li>
 <li><p>microsecond / MICROSECOND</p></li>
 </ul>
+<p>For Time types (hour, minute, second, millisecond, microsecond only):</p>
+<ul class="simple">
+<li><p>hour / HOUR</p></li>
+<li><p>minute / MINUTE</p></li>
+<li><p>second / SECOND</p></li>
+<li><p>millisecond / MILLISECOND</p></li>
+<li><p>microsecond / MICROSECOND</p></li>
+</ul>
 </li>
-<li><p><strong>expression</strong>: Time expression to operate on. Can be a constant, column, or function.</p></li>
+<li><p><strong>expression</strong>: Timestamp or time expression to operate on. Can be a constant, column, or function.</p></li>
 </ul>
 </section>
 <section id="id177">
