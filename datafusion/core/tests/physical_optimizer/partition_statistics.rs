@@ -41,7 +41,6 @@ mod test {
     use datafusion_physical_plan::aggregates::{
         AggregateExec, AggregateMode, PhysicalGroupBy,
     };
-    use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::common::compute_record_batch_statistics;
     use datafusion_physical_plan::empty::EmptyExec;
@@ -710,43 +709,6 @@ mod test {
         ];
         validate_statistics_with_data(nested_loop_join, expected_stats, 0).await?;
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_statistic_by_partition_of_coalesce_batches() -> Result<()> {
-        let scan = create_scan_exec_with_statistics(None, Some(2)).await;
-        let coalesce_batches: Arc<dyn ExecutionPlan> =
-            Arc::new(CoalesceBatchesExec::new(scan, 2));
-        // Partition 1: ids [3,4], dates [2025-03-01, 2025-03-02]
-        let expected_statistic_partition_1 = create_partition_statistics(
-            2,
-            16,
-            3,
-            4,
-            Some((DATE_2025_03_01, DATE_2025_03_02)),
-        );
-        // Partition 2: ids [1,2], dates [2025-03-03, 2025-03-04]
-        let expected_statistic_partition_2 = create_partition_statistics(
-            2,
-            16,
-            1,
-            2,
-            Some((DATE_2025_03_03, DATE_2025_03_04)),
-        );
-        let statistics = (0..coalesce_batches.output_partitioning().partition_count())
-            .map(|idx| coalesce_batches.partition_statistics(Some(idx)))
-            .collect::<Result<Vec<_>>>()?;
-        assert_eq!(statistics.len(), 2);
-        assert_eq!(statistics[0], expected_statistic_partition_1);
-        assert_eq!(statistics[1], expected_statistic_partition_2);
-
-        // Check the statistics_by_partition with real results
-        let expected_stats = vec![
-            ExpectedStatistics::NonEmpty(3, 4, 2),
-            ExpectedStatistics::NonEmpty(1, 2, 2),
-        ];
-        validate_statistics_with_data(coalesce_batches, expected_stats, 0).await?;
         Ok(())
     }
 

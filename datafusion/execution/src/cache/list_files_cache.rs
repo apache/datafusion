@@ -17,6 +17,7 @@
 
 use std::mem::size_of;
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -103,10 +104,11 @@ impl DefaultListFilesCache {
     }
 }
 
-struct ListFilesEntry {
-    metas: Arc<Vec<ObjectMeta>>,
-    size_bytes: usize,
-    expires: Option<Instant>,
+#[derive(Clone, PartialEq, Debug)]
+pub struct ListFilesEntry {
+    pub metas: Arc<Vec<ObjectMeta>>,
+    pub size_bytes: usize,
+    pub expires: Option<Instant>,
 }
 
 impl ListFilesEntry {
@@ -347,6 +349,15 @@ impl ListFilesCache for DefaultListFilesCache {
         state.ttl = ttl;
         state.evict_entries();
     }
+
+    fn list_entries(&self) -> HashMap<Path, ListFilesEntry> {
+        let state = self.state.lock().unwrap();
+        let mut entries = HashMap::<Path, ListFilesEntry>::new();
+        for (path, entry) in state.lru_queue.list_entries() {
+            entries.insert(path.clone(), entry.clone());
+        }
+        entries
+    }
 }
 
 impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
@@ -431,7 +442,6 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 mod tests {
     use super::*;
     use chrono::DateTime;
-    use std::thread;
 
     struct MockTimeProvider {
         base: Instant,
@@ -525,11 +535,34 @@ mod tests {
         assert_eq!(cache.len(), 0);
 
         // Put multiple entries
-        let (path1, value1, _) = create_test_list_files_entry("path1", 2, 50);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 3, 50);
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
+        let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
+        let (path2, value2, size2) = create_test_list_files_entry("path2", 3, 50);
+        cache.put(&path1, Arc::clone(&value1));
+        cache.put(&path2, Arc::clone(&value2));
         assert_eq!(cache.len(), 2);
+
+        // List cache entries
+        assert_eq!(
+            cache.list_entries(),
+            HashMap::from([
+                (
+                    path1.clone(),
+                    ListFilesEntry {
+                        metas: value1,
+                        size_bytes: size1,
+                        expires: None,
+                    }
+                ),
+                (
+                    path2.clone(),
+                    ListFilesEntry {
+                        metas: value2,
+                        size_bytes: size2,
+                        expires: None,
+                    }
+                )
+            ])
+        );
 
         // Clear all entries
         cache.clear();
@@ -673,14 +706,14 @@ mod tests {
     #[test]
     fn test_entry_update_with_size_change() {
         let (path1, value1, size) = create_test_list_files_entry("path1", 1, 100);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
+        let (path2, value2, size2) = create_test_list_files_entry("path2", 1, 100);
         let (path3, value3_v1, _) = create_test_list_files_entry("path3", 1, 100);
 
         let cache = DefaultListFilesCache::new(size * 3, None);
 
         // Add three entries
         cache.put(&path1, value1);
-        cache.put(&path2, value2);
+        cache.put(&path2, Arc::clone(&value2));
         cache.put(&path3, value3_v1);
         assert_eq!(cache.len(), 3);
 
@@ -694,35 +727,77 @@ mod tests {
         assert!(cache.contains_key(&path3));
 
         // Update path3 with larger size that requires evicting path1 (LRU)
-        let (_, value3_v3, _) = create_test_list_files_entry("path3", 1, 200);
-        cache.put(&path3, value3_v3);
+        let (_, value3_v3, size3_v3) = create_test_list_files_entry("path3", 1, 200);
+        cache.put(&path3, Arc::clone(&value3_v3));
 
         assert_eq!(cache.len(), 2);
-        assert!(!cache.contains_key(&path1)); // Evicted (was LRU)
-        assert!(cache.contains_key(&path2));
-        assert!(cache.contains_key(&path3));
+        assert!(!cache.contains_key(&path1));
+
+        // List cache entries
+        assert_eq!(
+            cache.list_entries(),
+            HashMap::from([
+                (
+                    path2,
+                    ListFilesEntry {
+                        metas: value2,
+                        size_bytes: size2,
+                        expires: None,
+                    }
+                ),
+                (
+                    path3,
+                    ListFilesEntry {
+                        metas: value3_v3,
+                        size_bytes: size3_v3,
+                        expires: None,
+                    }
+                )
+            ])
+        );
     }
 
     #[test]
     fn test_cache_with_ttl() {
         let ttl = Duration::from_millis(100);
-        let cache = DefaultListFilesCache::new(10000, Some(ttl));
 
-        let (path1, value1, _) = create_test_list_files_entry("path1", 2, 50);
-        let (path2, value2, _) = create_test_list_files_entry("path2", 2, 50);
+        let mock_time = Arc::new(MockTimeProvider::new());
+        let cache = DefaultListFilesCache::new(10000, Some(ttl))
+            .with_time_provider(Arc::clone(&mock_time) as Arc<dyn TimeProvider>);
 
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
+        let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
+        let (path2, value2, size2) = create_test_list_files_entry("path2", 2, 50);
+
+        cache.put(&path1, Arc::clone(&value1));
+        cache.put(&path2, Arc::clone(&value2));
 
         // Entries should be accessible immediately
         assert!(cache.get(&path1).is_some());
         assert!(cache.get(&path2).is_some());
-        assert!(cache.contains_key(&path1));
-        assert!(cache.contains_key(&path2));
-        assert_eq!(cache.len(), 2);
-
+        // List cache entries
+        assert_eq!(
+            cache.list_entries(),
+            HashMap::from([
+                (
+                    path1.clone(),
+                    ListFilesEntry {
+                        metas: value1,
+                        size_bytes: size1,
+                        expires: mock_time.now().checked_add(ttl),
+                    }
+                ),
+                (
+                    path2.clone(),
+                    ListFilesEntry {
+                        metas: value2,
+                        size_bytes: size2,
+                        expires: mock_time.now().checked_add(ttl),
+                    }
+                )
+            ])
+        );
         // Wait for TTL to expire
-        thread::sleep(Duration::from_millis(150));
+        mock_time.inc(Duration::from_millis(150));
 
         // Entries should now return None and be removed when observed through get or contains_key
         assert!(cache.get(&path1).is_none());

@@ -366,7 +366,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// two arguments:
     /// * `window_function`: The [`WindowFunction`] for which simplification is
     ///   being invoked for
-    /// * `info`: [`SimplifyInfo`]
+    /// * `info`: [`SimplifyContext`]
     ///
     /// The closure will perform the simplification and return an [`Expr`].
     ///
@@ -379,7 +379,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// later in query planning.
     ///
     /// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
-    /// [`SimplifyInfo`]: crate::simplify::SimplifyInfo
+    /// [`SimplifyContext`]: crate::simplify::SimplifyContext
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }

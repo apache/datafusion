@@ -160,22 +160,13 @@ impl TestParquetFile {
                 .with_table_parquet_options(parquet_options.clone()),
         );
         let scan_config_builder =
-            FileScanConfigBuilder::new(self.object_store_url.clone(), source).with_file(
-                PartitionedFile {
-                    object_meta: self.object_meta.clone(),
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                },
-            );
+            FileScanConfigBuilder::new(self.object_store_url.clone(), source)
+                .with_file(PartitionedFile::new_from_meta(self.object_meta.clone()));
 
         let df_schema = Arc::clone(&self.schema).to_dfschema_ref()?;
 
         // run coercion on the filters to coerce types etc.
-        let props = ExecutionProps::new();
-        let context = SimplifyContext::new(&props).with_schema(Arc::clone(&df_schema));
+        let context = SimplifyContext::default().with_schema(Arc::clone(&df_schema));
         if let Some(filter) = maybe_filter {
             let simplifier = ExprSimplifier::new(context);
             let filter = simplifier.coerce(filter, &df_schema).unwrap();
