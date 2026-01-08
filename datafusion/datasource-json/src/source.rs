@@ -187,7 +187,7 @@ impl FileOpener for JsonOpener {
         let file_compression_type = self.file_compression_type.to_owned();
 
         Ok(Box::pin(async move {
-            let file_size = partitioned_file.object_meta.size as usize;
+            let file_size = partitioned_file.object_meta.size;
             let location = &partitioned_file.object_meta.location;
 
             let file_range = if file_compression_type.is_compressed() {
@@ -197,8 +197,16 @@ impl FileOpener for JsonOpener {
             };
 
             if let Some(file_range) = file_range.as_ref() {
-                let raw_start = file_range.start as usize;
-                let raw_end = file_range.end as usize;
+                let raw_start = u64::try_from(file_range.start).map_err(|_| {
+                    DataFusionError::Internal(
+                        "file range start must be non-negative".to_string(),
+                    )
+                })?;
+                let raw_end = u64::try_from(file_range.end).map_err(|_| {
+                    DataFusionError::Internal(
+                        "file range end must be non-negative".to_string(),
+                    )
+                })?;
                 let aligned_bytes = get_aligned_bytes(
                     &store,
                     location,
@@ -245,7 +253,7 @@ impl FileOpener for JsonOpener {
                         Some(_) => {
                             file.seek(SeekFrom::Start(result.range.start as _))?;
                             let limit = result.range.end - result.range.start;
-                            file_compression_type.convert_read(file.take(limit as u64))?
+                            file_compression_type.convert_read(file.take(limit))?
                         }
                     };
 

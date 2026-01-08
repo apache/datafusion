@@ -20,7 +20,7 @@ use datafusion_common::{DataFusionError, Result};
 use object_store::{ObjectStore, path::Path};
 use std::sync::Arc;
 
-pub const DEFAULT_BOUNDARY_WINDOW: usize = 4096; // 4KB
+pub const DEFAULT_BOUNDARY_WINDOW: u64 = 4096; // 4KB
 
 /// Fetch bytes for [start, end) and align boundaries in memory.
 ///
@@ -36,12 +36,18 @@ pub const DEFAULT_BOUNDARY_WINDOW: usize = 4096; // 4KB
 pub async fn get_aligned_bytes(
     store: &Arc<dyn ObjectStore>,
     location: &Path,
-    start: usize,
-    end: usize,
-    file_size: usize,
+    start: u64,
+    end: u64,
+    file_size: u64,
     terminator: u8,
-    scan_window: usize,
+    scan_window: u64,
 ) -> Result<Option<Bytes>> {
+    if scan_window == 0 {
+        return Err(DataFusionError::Internal(
+            "scan_window must be greater than 0".to_string(),
+        ));
+    }
+
     if start >= end || start >= file_size {
         return Ok(None);
     }
@@ -49,7 +55,7 @@ pub async fn get_aligned_bytes(
     let fetch_start = start.saturating_sub(1);
     let fetch_end = std::cmp::min(end, file_size);
     let bytes = store
-        .get_range(location, (fetch_start as u64)..(fetch_end as u64))
+        .get_range(location, fetch_start..fetch_end)
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -80,12 +86,15 @@ pub async fn get_aligned_bytes(
     }
 
     // Slow path: need to extend, preallocate capacity
-    let mut buffer = Vec::with_capacity(data.len() + scan_window);
+    let scan_window_usize = usize::try_from(scan_window).map_err(|_| {
+        DataFusionError::Internal("scan_window must fit in usize".to_string())
+    })?;
+    let mut buffer = Vec::with_capacity(data.len().saturating_add(scan_window_usize));
     buffer.extend_from_slice(&data);
-    let mut cursor = fetch_end as u64;
+    let mut cursor = fetch_end;
 
-    while cursor < file_size as u64 {
-        let chunk_end = std::cmp::min(cursor + scan_window as u64, file_size as u64);
+    while cursor < file_size {
+        let chunk_end = std::cmp::min(cursor.saturating_add(scan_window), file_size);
         let chunk = store
             .get_range(location, cursor..chunk_end)
             .await
@@ -222,6 +231,23 @@ mod tests {
         assert_eq!(result.unwrap().as_ref(), b"line1");
     }
 
+    #[tokio::test]
+    async fn test_get_aligned_bytes_rejects_zero_scan_window() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+
+        store.put(&path, "line1\n".into()).await.unwrap();
+
+        let err = get_aligned_bytes(&store, &path, 0, 6, 6, b'\n', 0)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, DataFusionError::Internal(ref msg) if msg.contains("scan_window")),
+            "unexpected error: {err}"
+        );
+    }
+
     #[derive(Debug)]
     struct CountingObjectStore {
         inner: Arc<dyn ObjectStore>,
@@ -338,10 +364,10 @@ mod tests {
         let path = Path::from("amplification.json");
 
         let data = build_fixed_lines(128, 16_384);
-        let file_size = data.len();
+        let file_size = data.len() as u64;
         inner.put(&path, data.into()).await.unwrap();
 
-        let start = 1_000_003usize;
+        let start = 1_000_003u64;
         let raw_end = start + 64_000;
         let end = (raw_end / 128).max(1) * 128;
 
@@ -350,8 +376,8 @@ mod tests {
             object_meta,
             partition_values: vec![],
             range: Some(FileRange {
-                start: start as i64,
-                end: end as i64,
+                start: i64::try_from(start).unwrap(),
+                end: i64::try_from(end).unwrap(),
             }),
             statistics: None,
             ordering: None,
