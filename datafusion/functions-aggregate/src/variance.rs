@@ -658,7 +658,7 @@ impl Accumulator for DistinctVarianceAccumulator {
         let mean = values.iter().sum::<f64>() / values.len() as f64;
         let m2 = values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>();
 
-        Ok(ScalarValue::Float64(match count {
+        Ok(ScalarValue::Float64(match values.len() {
             0 => None,
             1 => match self.stat_type {
                 StatsType::Population => Some(0.0),
