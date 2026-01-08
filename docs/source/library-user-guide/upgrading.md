@@ -19,6 +19,105 @@
 
 # Upgrade Guides
 
+## DataFusion `53.0.0`
+
+**Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
+
+The `SimplifyInfo` trait has been removed and replaced with the concrete `SimplifyContext` struct. This simplifies the expression simplification API and removes the need for trait objects.
+
+**Who is affected:**
+
+- Users who implemented custom `SimplifyInfo` implementations
+- Users who implemented `ScalarUDFImpl::simplify()` for custom scalar functions
+- Users who directly use `SimplifyContext` or `ExprSimplifier`
+
+**Breaking changes:**
+
+1. The `SimplifyInfo` trait has been removed entirely
+2. `SimplifyContext` no longer takes `&ExecutionProps` - it now uses a builder-style API with direct fields
+3. `ScalarUDFImpl::simplify()` now takes `&SimplifyContext` instead of `&dyn SimplifyInfo`
+4. Time-dependent function simplification (e.g., `now()`) is now optional - if `query_execution_start_time` is `None`, these functions won't be simplified
+
+**Migration guide:**
+
+If you implemented a custom `SimplifyInfo`:
+
+**Before:**
+
+```rust,ignore
+impl SimplifyInfo for MySimplifyInfo {
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> { ... }
+    fn nullable(&self, expr: &Expr) -> Result<bool> { ... }
+    fn execution_props(&self) -> &ExecutionProps { ... }
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> { ... }
+}
+```
+
+**After:**
+
+Use `SimplifyContext` directly with the builder-style API:
+
+```rust,ignore
+let context = SimplifyContext::default()
+    .with_schema(schema)
+    .with_config_options(config_options)
+    .with_query_execution_start_time(Some(Utc::now())); // or use .with_current_time()
+```
+
+If you implemented `ScalarUDFImpl::simplify()`:
+
+**Before:**
+
+```rust,ignore
+fn simplify(
+    &self,
+    args: Vec<Expr>,
+    info: &dyn SimplifyInfo,
+) -> Result<ExprSimplifyResult> {
+    let now_ts = info.execution_props().query_execution_start_time;
+    // ...
+}
+```
+
+**After:**
+
+```rust,ignore
+fn simplify(
+    &self,
+    args: Vec<Expr>,
+    info: &SimplifyContext,
+) -> Result<ExprSimplifyResult> {
+    // query_execution_start_time is now Option<DateTime<Utc>>
+    // Return Original if time is not set (simplification skipped)
+    let Some(now_ts) = info.query_execution_start_time() else {
+        return Ok(ExprSimplifyResult::Original(args));
+    };
+    // ...
+}
+```
+
+If you created `SimplifyContext` from `ExecutionProps`:
+
+**Before:**
+
+```rust,ignore
+let props = ExecutionProps::new();
+let context = SimplifyContext::new(&props).with_schema(schema);
+```
+
+**After:**
+
+```rust,ignore
+let context = SimplifyContext::default()
+    .with_schema(schema)
+    .with_config_options(config_options)
+    .with_current_time(); // Sets query_execution_start_time to Utc::now()
+```
+
+See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
+
 ## DataFusion `52.0.0`
 
 **Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
