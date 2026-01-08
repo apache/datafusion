@@ -129,14 +129,9 @@ fn create_membership_predicate(
         }
         // Use hash table lookup for large build sides
         PushdownStrategy::HashTable(hash_map) => {
-            let lookup_hash_expr = Arc::new(HashExpr::new(
+            Ok(Some(Arc::new(HashTableLookupExpr::new(
                 on_right.to_vec(),
                 random_state.clone(),
-                "hash_join".to_string(),
-            )) as Arc<dyn PhysicalExpr>;
-
-            Ok(Some(Arc::new(HashTableLookupExpr::new(
-                lookup_hash_expr,
                 hash_map,
                 "hash_lookup".to_string(),
             )) as Arc<dyn PhysicalExpr>))
