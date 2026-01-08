@@ -22,6 +22,7 @@ use std::{
     time::Duration,
 };
 
+use datafusion_common::TableReference;
 use datafusion_common::instant::Instant;
 use object_store::{ObjectMeta, path::Path};
 
@@ -148,9 +149,15 @@ pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
 /// The default cache TTL for the [`DefaultListFilesCache`]
 pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
 
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct TableScopedPath {
+    pub table: Option<TableReference>,
+    pub path: Path,
+}
+
 /// Handles the inner state of the [`DefaultListFilesCache`] struct.
 pub struct DefaultListFilesCacheState {
-    lru_queue: LruQueue<Path, ListFilesEntry>,
+    lru_queue: LruQueue<TableScopedPath, ListFilesEntry>,
     memory_limit: usize,
     memory_used: usize,
     ttl: Option<Duration>,
@@ -198,17 +205,17 @@ impl DefaultListFilesCacheState {
     /// ```
     fn get_with_prefix(
         &mut self,
-        table_base: &Path,
+        table_scoped_base_path: &TableScopedPath,
         prefix: Option<&Path>,
         now: Instant,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
-        let entry = self.lru_queue.get(table_base)?;
+        let entry = self.lru_queue.get(table_scoped_base_path)?;
 
         // Check expiration
         if let Some(exp) = entry.expires
             && now > exp
         {
-            self.remove(table_base);
+            self.remove(table_scoped_base_path);
             return None;
         }
 
@@ -218,6 +225,7 @@ impl DefaultListFilesCacheState {
         };
 
         // Build the full prefix path: table_base/prefix
+        let table_base = &table_scoped_base_path.path;
         let mut parts: Vec<_> = table_base.parts().collect();
         parts.extend(prefix.parts());
         let full_prefix = Path::from_iter(parts);
@@ -243,7 +251,7 @@ impl DefaultListFilesCacheState {
     /// If the entry has expired by `now` it is removed from the cache.
     ///
     /// The LRU queue is not updated.
-    fn contains_key(&mut self, k: &Path, now: Instant) -> bool {
+    fn contains_key(&mut self, k: &TableScopedPath, now: Instant) -> bool {
         let Some(entry) = self.lru_queue.peek(k) else {
             return false;
         };
@@ -264,7 +272,7 @@ impl DefaultListFilesCacheState {
     /// If the size of the entry is greater than the `memory_limit`, the value is not inserted.
     fn put(
         &mut self,
-        key: &Path,
+        key: &TableScopedPath,
         value: Arc<Vec<ObjectMeta>>,
         now: Instant,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
@@ -306,7 +314,7 @@ impl DefaultListFilesCacheState {
     }
 
     /// Removes an entry from the cache and returns it, if it exists.
-    fn remove(&mut self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&mut self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
         if let Some(entry) = self.lru_queue.remove(k) {
             self.memory_used -= entry.size_bytes;
             Some(entry.metas)
@@ -350,23 +358,40 @@ impl ListFilesCache for DefaultListFilesCache {
         state.evict_entries();
     }
 
-    fn list_entries(&self) -> HashMap<Path, ListFilesEntry> {
+    fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry> {
         let state = self.state.lock().unwrap();
-        let mut entries = HashMap::<Path, ListFilesEntry>::new();
+        let mut entries = HashMap::<TableScopedPath, ListFilesEntry>::new();
         for (path, entry) in state.lru_queue.list_entries() {
             entries.insert(path.clone(), entry.clone());
         }
         entries
     }
+
+    fn drop_table_entries(
+        &self,
+        table_ref: &Option<TableReference>,
+    ) -> datafusion_common::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        let mut table_paths = vec![];
+        for (path, _) in state.lru_queue.list_entries() {
+            if path.table == *table_ref {
+                table_paths.push(path.clone());
+            }
+        }
+        for path in table_paths {
+            state.remove(&path);
+        }
+        Ok(())
+    }
 }
 
-impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
+impl CacheAccessor<TableScopedPath, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     type Extra = Option<Path>;
 
     /// Gets all files for the given table base path.
     ///
     /// This is equivalent to calling `get_with_extra(k, &None)`.
-    fn get(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn get(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
         self.get_with_extra(k, &None)
     }
 
@@ -385,17 +410,17 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
     /// can serve queries for any partition subset without additional storage calls.
     fn get_with_extra(
         &self,
-        table_base: &Path,
+        table_scoped_path: &TableScopedPath,
         prefix: &Self::Extra,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
         let mut state = self.state.lock().unwrap();
         let now = self.time_provider.now();
-        state.get_with_prefix(table_base, prefix.as_ref(), now)
+        state.get_with_prefix(table_scoped_path, prefix.as_ref(), now)
     }
 
     fn put(
         &self,
-        key: &Path,
+        key: &TableScopedPath,
         value: Arc<Vec<ObjectMeta>>,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
         let mut state = self.state.lock().unwrap();
@@ -405,19 +430,19 @@ impl CacheAccessor<Path, Arc<Vec<ObjectMeta>>> for DefaultListFilesCache {
 
     fn put_with_extra(
         &self,
-        key: &Path,
+        key: &TableScopedPath,
         value: Arc<Vec<ObjectMeta>>,
         _e: &Self::Extra,
     ) -> Option<Arc<Vec<ObjectMeta>>> {
         self.put(key, value)
     }
 
-    fn remove(&self, k: &Path) -> Option<Arc<Vec<ObjectMeta>>> {
+    fn remove(&self, k: &TableScopedPath) -> Option<Arc<Vec<ObjectMeta>>> {
         let mut state = self.state.lock().unwrap();
         state.remove(k)
     }
 
-    fn contains_key(&self, k: &Path) -> bool {
+    fn contains_key(&self, k: &TableScopedPath) -> bool {
         let mut state = self.state.lock().unwrap();
         let now = self.time_provider.now();
         state.contains_key(k, now)
@@ -509,36 +534,49 @@ mod tests {
     #[test]
     fn test_basic_operations() {
         let cache = DefaultListFilesCache::default();
+        let table_ref = Some(TableReference::from("table"));
         let path = Path::from("test_path");
+        let key = TableScopedPath {
+            table: table_ref.clone(),
+            path,
+        };
 
         // Initially cache is empty
-        assert!(cache.get(&path).is_none());
-        assert!(!cache.contains_key(&path));
+        assert!(cache.get(&key).is_none());
+        assert!(!cache.contains_key(&key));
         assert_eq!(cache.len(), 0);
 
         // Put an entry
         let meta = create_test_object_meta("file1", 50);
         let value = Arc::new(vec![meta.clone()]);
-        cache.put(&path, Arc::clone(&value));
+        cache.put(&key, Arc::clone(&value));
 
         // Entry should be retrievable
-        assert!(cache.contains_key(&path));
+        assert!(cache.contains_key(&key));
         assert_eq!(cache.len(), 1);
-        let retrieved = cache.get(&path).unwrap();
+        let retrieved = cache.get(&key).unwrap();
         assert_eq!(retrieved.len(), 1);
         assert_eq!(retrieved[0].location, meta.location);
 
         // Remove the entry
-        let removed = cache.remove(&path).unwrap();
+        let removed = cache.remove(&key).unwrap();
         assert_eq!(removed.len(), 1);
-        assert!(!cache.contains_key(&path));
+        assert!(!cache.contains_key(&key));
         assert_eq!(cache.len(), 0);
 
         // Put multiple entries
         let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
         let (path2, value2, size2) = create_test_list_files_entry("path2", 3, 50);
-        cache.put(&path1, Arc::clone(&value1));
-        cache.put(&path2, Arc::clone(&value2));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref,
+            path: path2,
+        };
+        cache.put(&key1, Arc::clone(&value1));
+        cache.put(&key2, Arc::clone(&value2));
         assert_eq!(cache.len(), 2);
 
         // List cache entries
@@ -546,7 +584,7 @@ mod tests {
             cache.list_entries(),
             HashMap::from([
                 (
-                    path1.clone(),
+                    key1.clone(),
                     ListFilesEntry {
                         metas: value1,
                         size_bytes: size1,
@@ -554,7 +592,7 @@ mod tests {
                     }
                 ),
                 (
-                    path2.clone(),
+                    key2.clone(),
                     ListFilesEntry {
                         metas: value2,
                         size_bytes: size2,
@@ -567,8 +605,8 @@ mod tests {
         // Clear all entries
         cache.clear();
         assert_eq!(cache.len(), 0);
-        assert!(!cache.contains_key(&path1));
-        assert!(!cache.contains_key(&path2));
+        assert!(!cache.contains_key(&key1));
+        assert!(!cache.contains_key(&key2));
     }
 
     #[test]
@@ -580,24 +618,42 @@ mod tests {
         // Set cache limit to exactly fit all three entries
         let cache = DefaultListFilesCache::new(size * 3, None);
 
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
+
         // All three entries should fit
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
-        cache.put(&path3, value3);
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
         assert_eq!(cache.len(), 3);
-        assert!(cache.contains_key(&path1));
-        assert!(cache.contains_key(&path2));
-        assert!(cache.contains_key(&path3));
+        assert!(cache.contains_key(&key1));
+        assert!(cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
 
         // Adding a new entry should evict path1 (LRU)
         let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        cache.put(&path4, value4);
+        let key4 = TableScopedPath {
+            table: table_ref,
+            path: path4,
+        };
+        cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
-        assert!(!cache.contains_key(&path1)); // Evicted
-        assert!(cache.contains_key(&path2));
-        assert!(cache.contains_key(&path3));
-        assert!(cache.contains_key(&path4));
+        assert!(!cache.contains_key(&key1)); // Evicted
+        assert!(cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
+        assert!(cache.contains_key(&key4));
     }
 
     #[test]
@@ -609,24 +665,42 @@ mod tests {
         // Set cache limit to fit exactly three entries
         let cache = DefaultListFilesCache::new(size * 3, None);
 
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
-        cache.put(&path3, value3);
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
+
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
         assert_eq!(cache.len(), 3);
 
         // Access path1 to move it to front (MRU)
         // Order is now: path2 (LRU), path3, path1 (MRU)
-        cache.get(&path1);
+        cache.get(&key1);
 
         // Adding a new entry should evict path2 (the LRU)
         let (path4, value4, _) = create_test_list_files_entry("path4", 1, 100);
-        cache.put(&path4, value4);
+        let key4 = TableScopedPath {
+            table: table_ref,
+            path: path4,
+        };
+        cache.put(&key4, value4);
 
         assert_eq!(cache.len(), 3);
-        assert!(cache.contains_key(&path1)); // Still present (recently accessed)
-        assert!(!cache.contains_key(&path2)); // Evicted (was LRU)
-        assert!(cache.contains_key(&path3));
-        assert!(cache.contains_key(&path4));
+        assert!(cache.contains_key(&key1)); // Still present (recently accessed)
+        assert!(!cache.contains_key(&key2)); // Evicted (was LRU)
+        assert!(cache.contains_key(&key3));
+        assert!(cache.contains_key(&key4));
     }
 
     #[test]
@@ -637,19 +711,32 @@ mod tests {
         // Set cache limit to fit both entries
         let cache = DefaultListFilesCache::new(size * 2, None);
 
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
         assert_eq!(cache.len(), 2);
 
         // Try to add an entry that's too large to fit in the cache
         let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 1000);
-        cache.put(&path_large, value_large);
+        let key_large = TableScopedPath {
+            table: table_ref,
+            path: path_large,
+        };
+        cache.put(&key_large, value_large);
 
         // Large entry should not be added
-        assert!(!cache.contains_key(&path_large));
+        assert!(!cache.contains_key(&key_large));
         assert_eq!(cache.len(), 2);
-        assert!(cache.contains_key(&path1));
-        assert!(cache.contains_key(&path2));
+        assert!(cache.contains_key(&key1));
+        assert!(cache.contains_key(&key2));
     }
 
     #[test]
@@ -661,21 +748,38 @@ mod tests {
         // Set cache limit for exactly 3 entries
         let cache = DefaultListFilesCache::new(size * 3, None);
 
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
-        cache.put(&path3, value3);
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path3,
+        };
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
         assert_eq!(cache.len(), 3);
 
         // Add a large entry that requires evicting 2 entries
         let (path_large, value_large, _) = create_test_list_files_entry("large", 1, 200);
-        cache.put(&path_large, value_large);
+        let key_large = TableScopedPath {
+            table: table_ref,
+            path: path_large,
+        };
+        cache.put(&key_large, value_large);
 
         // path1 and path2 should be evicted (both LRU), path3 and path_large remain
         assert_eq!(cache.len(), 2);
-        assert!(!cache.contains_key(&path1)); // Evicted
-        assert!(!cache.contains_key(&path2)); // Evicted
-        assert!(cache.contains_key(&path3));
-        assert!(cache.contains_key(&path_large));
+        assert!(!cache.contains_key(&key1)); // Evicted
+        assert!(!cache.contains_key(&key2)); // Evicted
+        assert!(cache.contains_key(&key3));
+        assert!(cache.contains_key(&key_large));
     }
 
     #[test]
@@ -686,10 +790,23 @@ mod tests {
 
         let cache = DefaultListFilesCache::new(size * 3, None);
 
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
         // Add three entries
-        cache.put(&path1, value1);
-        cache.put(&path2, value2);
-        cache.put(&path3, value3);
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
         assert_eq!(cache.len(), 3);
 
         // Resize cache to only fit one entry
@@ -697,10 +814,10 @@ mod tests {
 
         // Should keep only the most recent entry (path3, the MRU)
         assert_eq!(cache.len(), 1);
-        assert!(cache.contains_key(&path3));
+        assert!(cache.contains_key(&key3));
         // Earlier entries (LRU) should be evicted
-        assert!(!cache.contains_key(&path1));
-        assert!(!cache.contains_key(&path2));
+        assert!(!cache.contains_key(&key1));
+        assert!(!cache.contains_key(&key2));
     }
 
     #[test]
@@ -711,34 +828,49 @@ mod tests {
 
         let cache = DefaultListFilesCache::new(size * 3, None);
 
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
         // Add three entries
-        cache.put(&path1, value1);
-        cache.put(&path2, Arc::clone(&value2));
-        cache.put(&path3, value3_v1);
+        cache.put(&key1, value1);
+        cache.put(&key2, Arc::clone(&value2));
+        cache.put(&key3, value3_v1);
         assert_eq!(cache.len(), 3);
 
         // Update path3 with same size - should not cause eviction
         let (_, value3_v2, _) = create_test_list_files_entry("path3", 1, 100);
-        cache.put(&path3, value3_v2);
+        cache.put(&key3, value3_v2);
 
         assert_eq!(cache.len(), 3);
-        assert!(cache.contains_key(&path1));
-        assert!(cache.contains_key(&path2));
-        assert!(cache.contains_key(&path3));
+        assert!(cache.contains_key(&key1));
+        assert!(cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
 
         // Update path3 with larger size that requires evicting path1 (LRU)
         let (_, value3_v3, size3_v3) = create_test_list_files_entry("path3", 1, 200);
-        cache.put(&path3, Arc::clone(&value3_v3));
+        cache.put(&key3, Arc::clone(&value3_v3));
 
         assert_eq!(cache.len(), 2);
-        assert!(!cache.contains_key(&path1));
+        assert!(!cache.contains_key(&key1)); // Evicted (was LRU)
+        assert!(cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
 
         // List cache entries
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    path2,
+                    key2,
                     ListFilesEntry {
                         metas: value2,
                         size_bytes: size2,
@@ -746,7 +878,7 @@ mod tests {
                     }
                 ),
                 (
-                    path3,
+                    key3,
                     ListFilesEntry {
                         metas: value3_v3,
                         size_bytes: size3_v3,
@@ -768,18 +900,27 @@ mod tests {
         let (path1, value1, size1) = create_test_list_files_entry("path1", 2, 50);
         let (path2, value2, size2) = create_test_list_files_entry("path2", 2, 50);
 
-        cache.put(&path1, Arc::clone(&value1));
-        cache.put(&path2, Arc::clone(&value2));
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref,
+            path: path2,
+        };
+        cache.put(&key1, Arc::clone(&value1));
+        cache.put(&key2, Arc::clone(&value2));
 
         // Entries should be accessible immediately
-        assert!(cache.get(&path1).is_some());
-        assert!(cache.get(&path2).is_some());
+        assert!(cache.get(&key1).is_some());
+        assert!(cache.get(&key2).is_some());
         // List cache entries
         assert_eq!(
             cache.list_entries(),
             HashMap::from([
                 (
-                    path1.clone(),
+                    key1.clone(),
                     ListFilesEntry {
                         metas: value1,
                         size_bytes: size1,
@@ -787,7 +928,7 @@ mod tests {
                     }
                 ),
                 (
-                    path2.clone(),
+                    key2.clone(),
                     ListFilesEntry {
                         metas: value2,
                         size_bytes: size2,
@@ -800,9 +941,9 @@ mod tests {
         mock_time.inc(Duration::from_millis(150));
 
         // Entries should now return None and be removed when observed through get or contains_key
-        assert!(cache.get(&path1).is_none());
+        assert!(cache.get(&key1).is_none());
         assert_eq!(cache.len(), 1); // path1 was removed by get()
-        assert!(!cache.contains_key(&path2));
+        assert!(!cache.contains_key(&key2));
         assert_eq!(cache.len(), 0); // path2 was removed by contains_key()
     }
 
@@ -818,21 +959,34 @@ mod tests {
         let (path2, value2, _) = create_test_list_files_entry("path2", 1, 400);
         let (path3, value3, _) = create_test_list_files_entry("path3", 1, 400);
 
-        cache.put(&path1, value1);
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        let key3 = TableScopedPath {
+            table: table_ref,
+            path: path3,
+        };
+        cache.put(&key1, value1);
         mock_time.inc(Duration::from_millis(50));
-        cache.put(&path2, value2);
+        cache.put(&key2, value2);
         mock_time.inc(Duration::from_millis(50));
 
         // path3 should evict path1 due to size limit
-        cache.put(&path3, value3);
-        assert!(!cache.contains_key(&path1)); // Evicted by LRU
-        assert!(cache.contains_key(&path2));
-        assert!(cache.contains_key(&path3));
+        cache.put(&key3, value3);
+        assert!(!cache.contains_key(&key1)); // Evicted by LRU
+        assert!(cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
 
         mock_time.inc(Duration::from_millis(151));
 
-        assert!(!cache.contains_key(&path2)); // Expired
-        assert!(cache.contains_key(&path3)); // Still valid 
+        assert!(!cache.contains_key(&key2)); // Expired
+        assert!(cache.contains_key(&key3)); // Still valid 
     }
 
     #[test]
@@ -918,7 +1072,12 @@ mod tests {
 
         // Add entry and verify memory tracking
         let (path1, value1, size1) = create_test_list_files_entry("path1", 1, 100);
-        cache.put(&path1, value1);
+        let table_ref = Some(TableReference::from("table"));
+        let key1 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path1,
+        };
+        cache.put(&key1, value1);
         {
             let state = cache.state.lock().unwrap();
             assert_eq!(state.memory_used, size1);
@@ -926,14 +1085,18 @@ mod tests {
 
         // Add another entry
         let (path2, value2, size2) = create_test_list_files_entry("path2", 1, 200);
-        cache.put(&path2, value2);
+        let key2 = TableScopedPath {
+            table: table_ref.clone(),
+            path: path2,
+        };
+        cache.put(&key2, value2);
         {
             let state = cache.state.lock().unwrap();
             assert_eq!(state.memory_used, size1 + size2);
         }
 
         // Remove first entry and verify memory decreases
-        cache.remove(&path1);
+        cache.remove(&key1);
         {
             let state = cache.state.lock().unwrap();
             assert_eq!(state.memory_used, size2);
@@ -977,12 +1140,17 @@ mod tests {
         ]);
 
         // Cache the full table listing
-        cache.put(&table_base, files);
+        let table_ref = Some(TableReference::from("table"));
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
+        cache.put(&key, files);
 
         // Query for partition a=1 using get_with_extra
         // New API: get_with_extra(table_base, Some(relative_prefix))
         let prefix_a1 = Some(Path::from("a=1"));
-        let result = cache.get_with_extra(&table_base, &prefix_a1);
+        let result = cache.get_with_extra(&key, &prefix_a1);
 
         // Should return filtered results (only files from a=1)
         assert!(result.is_some());
@@ -996,7 +1164,7 @@ mod tests {
 
         // Query for partition a=2
         let prefix_a2 = Some(Path::from("a=2"));
-        let result_2 = cache.get_with_extra(&table_base, &prefix_a2);
+        let result_2 = cache.get_with_extra(&key, &prefix_a2);
 
         assert!(result_2.is_some());
         let filtered_2 = result_2.unwrap();
@@ -1022,16 +1190,21 @@ mod tests {
             create_object_meta_with_path("my_table/a=2/file3.parquet"),
             create_object_meta_with_path("my_table/a=2/file4.parquet"),
         ]);
-        cache.put(&table_base, full_files);
+        let table_ref = Some(TableReference::from("table"));
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
+        cache.put(&key, full_files);
 
         // Query with no prefix filter (None) should return all 4 files
-        let result = cache.get_with_extra(&table_base, &None);
+        let result = cache.get_with_extra(&key, &None);
         assert!(result.is_some());
         let files = result.unwrap();
         assert_eq!(files.len(), 4);
 
         // Also test using get() which delegates to get_with_extra(&None)
-        let result_get = cache.get(&table_base);
+        let result_get = cache.get(&key);
         assert!(result_get.is_some());
         assert_eq!(result_get.unwrap().len(), 4);
     }
@@ -1042,14 +1215,19 @@ mod tests {
         let cache = DefaultListFilesCache::new(100000, None);
 
         let table_base = Path::from("my_table");
+        let table_ref = Some(TableReference::from("table"));
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
 
         // Query for full table should miss (nothing cached)
-        let result = cache.get_with_extra(&table_base, &None);
+        let result = cache.get_with_extra(&key, &None);
         assert!(result.is_none());
 
         // Query with prefix should also miss
         let prefix = Some(Path::from("a=1"));
-        let result_2 = cache.get_with_extra(&table_base, &prefix);
+        let result_2 = cache.get_with_extra(&key, &prefix);
         assert!(result_2.is_none());
     }
 
@@ -1063,11 +1241,16 @@ mod tests {
             create_object_meta_with_path("my_table/a=1/file1.parquet"),
             create_object_meta_with_path("my_table/a=2/file2.parquet"),
         ]);
-        cache.put(&table_base, files);
+        let table_ref = Some(TableReference::from("table"));
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
+        cache.put(&key, files);
 
         // Query for partition a=3 which doesn't exist
         let prefix_a3 = Some(Path::from("a=3"));
-        let result = cache.get_with_extra(&table_base, &prefix_a3);
+        let result = cache.get_with_extra(&key, &prefix_a3);
 
         // Should return None since no files match
         assert!(result.is_none());
@@ -1093,23 +1276,28 @@ mod tests {
                 "events/year=2025/month=01/day=01/file4.parquet",
             ),
         ]);
-        cache.put(&table_base, files);
+        let table_ref = Some(TableReference::from("table"));
+        let key = TableScopedPath {
+            table: table_ref,
+            path: table_base,
+        };
+        cache.put(&key, files);
 
         // Query for year=2024/month=01 (should get 2 files)
         let prefix_month = Some(Path::from("year=2024/month=01"));
-        let result = cache.get_with_extra(&table_base, &prefix_month);
+        let result = cache.get_with_extra(&key, &prefix_month);
         assert!(result.is_some());
         assert_eq!(result.unwrap().len(), 2);
 
         // Query for year=2024 (should get 3 files)
         let prefix_year = Some(Path::from("year=2024"));
-        let result_year = cache.get_with_extra(&table_base, &prefix_year);
+        let result_year = cache.get_with_extra(&key, &prefix_year);
         assert!(result_year.is_some());
         assert_eq!(result_year.unwrap().len(), 3);
 
         // Query for specific day (should get 1 file)
         let prefix_day = Some(Path::from("year=2024/month=01/day=01"));
-        let result_day = cache.get_with_extra(&table_base, &prefix_day);
+        let result_day = cache.get_with_extra(&key, &prefix_day);
         assert!(result_day.is_some());
         assert_eq!(result_day.unwrap().len(), 1);
     }
@@ -1130,18 +1318,63 @@ mod tests {
             create_object_meta_with_path("table_b/part=2/file2.parquet"),
         ]);
 
-        cache.put(&table_a, files_a);
-        cache.put(&table_b, files_b);
+        let table_ref_a = Some(TableReference::from("table_a"));
+        let table_ref_b = Some(TableReference::from("table_b"));
+        let key_a = TableScopedPath {
+            table: table_ref_a,
+            path: table_a,
+        };
+        let key_b = TableScopedPath {
+            table: table_ref_b,
+            path: table_b,
+        };
+        cache.put(&key_a, files_a);
+        cache.put(&key_b, files_b);
 
         // Query table_a should only return table_a files
-        let result_a = cache.get(&table_a);
+        let result_a = cache.get(&key_a);
         assert!(result_a.is_some());
         assert_eq!(result_a.unwrap().len(), 1);
 
         // Query table_b with prefix should only return matching table_b files
         let prefix = Some(Path::from("part=1"));
-        let result_b = cache.get_with_extra(&table_b, &prefix);
+        let result_b = cache.get_with_extra(&key_b, &prefix);
         assert!(result_b.is_some());
         assert_eq!(result_b.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_drop_table_entries() {
+        let cache = DefaultListFilesCache::default();
+
+        let (path1, value1, _) = create_test_list_files_entry("path1", 1, 100);
+        let (path2, value2, _) = create_test_list_files_entry("path2", 1, 100);
+        let (path3, value3, _) = create_test_list_files_entry("path3", 1, 100);
+
+        let table_ref1 = Some(TableReference::from("table1"));
+        let key1 = TableScopedPath {
+            table: table_ref1.clone(),
+            path: path1,
+        };
+        let key2 = TableScopedPath {
+            table: table_ref1.clone(),
+            path: path2,
+        };
+
+        let table_ref2 = Some(TableReference::from("table2"));
+        let key3 = TableScopedPath {
+            table: table_ref2.clone(),
+            path: path3,
+        };
+
+        cache.put(&key1, value1);
+        cache.put(&key2, value2);
+        cache.put(&key3, value3);
+
+        cache.drop_table_entries(&table_ref1).unwrap();
+
+        assert!(!cache.contains_key(&key1));
+        assert!(!cache.contains_key(&key2));
+        assert!(cache.contains_key(&key3));
     }
 }
