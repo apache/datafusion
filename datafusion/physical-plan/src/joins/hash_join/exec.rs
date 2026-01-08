@@ -162,6 +162,13 @@ fn try_create_array_map(
         return Ok(None);
     }
 
+    // If range equals usize::MAX, then range + 1 would overflow to 0, which would cause
+    // ArrayMap to allocate an invalid zero-sized array or cause indexing issues.
+    // This check prevents such overflow and ensures valid array allocation.
+    if range == usize::MAX as u64 {
+        return Ok(None);
+    }
+
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
@@ -255,10 +262,12 @@ impl JoinLeftData {
 /// (also known as a "perfect hash join") instead of a general-purpose hash map.
 /// This optimization is used when:
 /// 1. There is exactly one join key.
-/// 2. The join key can be any integer type convertible to u64 (excluding i128 and u128).
+/// 2. The join key is an integer type up to 64 bits wide that can be losslessly converted
+///    to `u64` (128-bit integer types such as `i128` and `u128` are not supported).
 /// 3. The range of keys is small enough (controlled by `perfect_hash_join_small_build_threshold`)
 ///    OR the keys are sufficiently dense (controlled by `perfect_hash_join_min_key_density`).
 /// 4. build_side.num_rows() < u32::MAX
+/// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
 /// See [`try_create_array_map`] for more details.
 ///
@@ -1807,7 +1816,7 @@ mod tests {
             session_config
                 .options_mut()
                 .execution
-                .perfect_hash_join_min_key_density = 1.0 / 0.0;
+                .perfect_hash_join_min_key_density = f64::INFINITY;
         }
         Arc::new(TaskContext::default().with_session_config(session_config))
     }

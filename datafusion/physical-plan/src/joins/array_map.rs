@@ -145,8 +145,12 @@ impl ArrayMap {
     ///
     pub fn estimate_memory_size(min_val: u64, max_val: u64, num_rows: usize) -> usize {
         let range = Self::calculate_range(min_val, max_val);
+        if range >= usize::MAX as u64 {
+            return usize::MAX;
+        }
         let size = (range + 1) as usize;
-        size * size_of::<u32>() + num_rows * size_of::<u32>()
+        size.saturating_mul(size_of::<u32>())
+            .saturating_add(num_rows.saturating_mul(size_of::<u32>()))
     }
 
     pub fn calculate_range(min_val: u64, max_val: u64) -> u64 {
@@ -160,6 +164,9 @@ impl ArrayMap {
     ///
     pub(crate) fn try_new(array: &ArrayRef, min_val: u64, max_val: u64) -> Result<Self> {
         let range = max_val.wrapping_sub(min_val);
+        if range >= usize::MAX as u64 {
+            return internal_err!("ArrayMap key range is too large to be allocated.");
+        }
         let size = (range + 1) as usize;
 
         let mut data: Vec<u32> = vec![0; size];
