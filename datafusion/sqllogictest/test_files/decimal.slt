@@ -1095,8 +1095,17 @@ SELECT power(2, 100000000000)
 ----
 Infinity
 
-query error Arrow error: Arithmetic overflow: Unsupported exp value
-SELECT power(2::decimal(38, 0), -5)
+# Negative exponent now works (fallback to f64)
+query RT
+SELECT power(2::decimal(38, 0), -5), arrow_typeof(power(2::decimal(38, 0), -5));
+----
+0 Decimal128(38, 0)
+
+# Negative exponent with scale preserves decimal places
+query RT
+SELECT power(4::decimal(38, 5), -1), arrow_typeof(power(4::decimal(38, 5), -1));
+----
+0.25 Decimal128(38, 5)
 
 # Expected to have `16 Decimal128(38, 0)`
 # Due to type coericion, it becomes Float -> Float -> Float
@@ -1116,20 +1125,23 @@ SELECT power(2.5, 4.0), arrow_typeof(power(2.5, 4.0));
 ----
 39 Decimal128(2, 1)
 
-query error Compute error: Cannot use non-integer exp
+# Non-integer exponent now works (fallback to f64)
+query RT
 SELECT power(2.5, 4.2), arrow_typeof(power(2.5, 4.2));
+----
+46.9 Decimal128(2, 1)
 
-query error Compute error: Cannot use non-integer exp: NaN
+query error Compute error: Cannot use non-finite exp: NaN
 SELECT power(2::decimal(38, 0), arrow_cast('NaN','Float64'))
 
-query error Compute error: Cannot use non-integer exp: inf
+query error Compute error: Cannot use non-finite exp: inf
 SELECT power(2::decimal(38, 0), arrow_cast('INF','Float64'))
 
-# Floating above u32::max
-query error Compute error: Cannot use non-integer exp
+# Floating above u32::max now works (fallback to f64, returns infinity which is an error)
+query error Arrow error: Arithmetic overflow: Result of 2\^5000000000.1 is not finite
 SELECT power(2::decimal(38, 0), 5000000000.1)
 
-# Integer Above u32::max
+# Integer Above u32::max - still goes through integer path which fails
 query error Arrow error: Arithmetic overflow: Unsupported exp value
 SELECT power(2::decimal(38, 0), 5000000000)
 
