@@ -5075,55 +5075,131 @@ DROP TABLE test_decimal_timestamps;
 
 # Test negative values
 # to_timestamp with negative seconds
+# Int8
+query P
+SELECT to_timestamp(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59
+
+# Int16
+query P
+SELECT to_timestamp(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59
+
+# Int32
 query P
 SELECT to_timestamp(arrow_cast(-86400, 'Int32'));
 ----
 1969-12-31T00:00:00
 
+# Int64
 query P
 SELECT to_timestamp(arrow_cast(-1, 'Int64'));
 ----
 1969-12-31T23:59:59
 
+# Float64
 query P
 SELECT to_timestamp(arrow_cast(-0.5, 'Float64'));
 ----
 1969-12-31T23:59:59.500
 
 # to_timestamp_seconds with negative values
+# Int8
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59
+
+# Int16
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59
+
+# Int32
 query P
 SELECT to_timestamp_seconds(arrow_cast(-86400, 'Int32'));
 ----
 1969-12-31T00:00:00
 
+# Int64
 query P
 SELECT to_timestamp_seconds(arrow_cast(-1, 'Int64'));
 ----
 1969-12-31T23:59:59
 
 # to_timestamp_millis with negative values
+# Int8
+query P
+SELECT to_timestamp_millis(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999
+
+# Int16
+query P
+SELECT to_timestamp_millis(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999
+
+# Int32
 query P
 SELECT to_timestamp_millis(arrow_cast(-1000, 'Int32'));
 ----
 1969-12-31T23:59:59
 
+# Int64
 query P
 SELECT to_timestamp_millis(arrow_cast(-1, 'Int64'));
 ----
 1969-12-31T23:59:59.999
 
 # to_timestamp_micros with negative values
+# Int8
+query P
+SELECT to_timestamp_micros(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999999
+
+# Int16
+query P
+SELECT to_timestamp_micros(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999999
+
+# Int32
 query P
 SELECT to_timestamp_micros(arrow_cast(-1000000, 'Int32'));
 ----
 1969-12-31T23:59:59
 
+# Int64
 query P
 SELECT to_timestamp_micros(arrow_cast(-1, 'Int64'));
 ----
 1969-12-31T23:59:59.999999
 
 # to_timestamp_nanos with negative values
+# Int8
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999999999
+
+# Int16
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999999999
+
+# Int32
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1000000000, 'Int32'));
+----
+1969-12-31T23:59:59
+
+# Int64
 query P
 SELECT to_timestamp_nanos(arrow_cast(-1000000000, 'Int64'));
 ----
