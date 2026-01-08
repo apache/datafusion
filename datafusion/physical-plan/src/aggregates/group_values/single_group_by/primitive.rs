@@ -245,7 +245,7 @@ where
     }
 }
 
-/// A [`GroupValues`] storing a single column of small primitive values (<16 bits recommended)
+/// A [`GroupValues`] storing a single column of small primitive values (i.e. <=16 bits)
 ///
 /// This specialization uses a flat `Vec` as a lookup table instead of a `HashTable`
 pub struct GroupValuesSmallPrimitive<T: ArrowPrimitiveType> {
@@ -383,8 +383,29 @@ fn build_primitive<T: ArrowPrimitiveType>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::types::Int8Type;
-    use arrow::array::{Array, Int8Array};
+    use arrow::array::types::{Int16Type, Int8Type};
+    use arrow::array::{Array, Int16Array, Int8Array};
+
+    #[test]
+    fn test_intern_int16() {
+        let mut group_values = GroupValuesSmallPrimitive::<Int16Type>::new(DataType::Int16);
+        let array = Arc::new(Int16Array::from(vec![Some(1000), Some(2000), Some(1000), None, Some(3000)])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[array], &mut groups).unwrap();
+
+        assert_eq!(groups, vec![0, 1, 0, 2, 3]);
+        assert_eq!(group_values.len(), 4);
+
+        let emitted = group_values.emit(EmitTo::All).unwrap();
+        let emitted_array = emitted[0].as_primitive::<Int16Type>();
+        
+        // Group 0: 1000, Group 1: 2000, Group 2: None, Group 3: 3000
+        assert_eq!(emitted_array.len(), 4);
+        assert_eq!(emitted_array.value(0), 1000);
+        assert_eq!(emitted_array.value(1), 2000);
+        assert!(emitted_array.is_null(2));
+        assert_eq!(emitted_array.value(3), 3000);
+    }
 
     #[test]
     fn test_intern_int8() {
