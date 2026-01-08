@@ -48,7 +48,7 @@ use datafusion_expr::{EmitTo, GroupsAccumulator};
 use datafusion_expr::{
     expr::{AggregateFunction, Sort},
     function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
-    simplify::SimplifyInfo,
+    simplify::SimplifyContext,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::accumulate;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filtered_null_mask;
@@ -309,7 +309,7 @@ fn get_percentile(args: &AccumulatorArgs) -> Result<f64> {
 
 fn simplify_percentile_cont_aggregate(
     aggregate_function: AggregateFunction,
-    info: &dyn SimplifyInfo,
+    info: &SimplifyContext,
 ) -> Result<Expr> {
     enum PercentileRewriteTarget {
         Min,

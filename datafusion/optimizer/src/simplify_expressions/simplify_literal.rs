@@ -28,7 +28,6 @@ use datafusion_common::{
     plan_err,
 };
 use datafusion_expr::Expr;
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::simplify::SimplifyContext;
 use std::sync::Arc;
 
@@ -52,10 +51,8 @@ where
 
     log::debug!("Parsing expr {:?} to type {}", expr, T::DATA_TYPE);
 
-    let execution_props = ExecutionProps::new();
-    let simplifier = ExprSimplifier::new(
-        SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
-    );
+    let simplifier =
+        ExprSimplifier::new(SimplifyContext::default().with_schema(Arc::clone(&schema)));
 
     // Simplify and coerce expression in case of constant arithmetic operations (e.g., 10 + 5)
     let simplified_expr: Expr = simplifier

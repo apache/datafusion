@@ -15,24 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`SimplifyExpressions`] simplifies expressions in the logical plan,
-//! [`ExprSimplifier`] simplifies individual `Expr`s.
+use std::sync::Arc;
 
-pub mod expr_simplifier;
-mod inlist_simplifier;
-mod regex;
-pub mod simplify_exprs;
-pub mod simplify_literal;
-mod simplify_predicates;
-mod unwrap_cast;
-mod utils;
+use arrow::datatypes::{DataType, Field, Schema};
 
-// backwards compatibility
-pub use datafusion_expr::simplify::SimplifyContext;
-
-pub use expr_simplifier::*;
-pub use simplify_exprs::*;
-pub use simplify_predicates::simplify_predicates;
-
-// Export for test in datafusion/core/tests/optimizer_integration.rs
-pub use datafusion_expr::expr_rewriter::GuaranteeRewriter;
+/// Schema for the `data/csv/regex.csv` example dataset.
+pub fn schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("values", DataType::Utf8, false),
+        Field::new("patterns", DataType::Utf8, false),
+        Field::new("replacement", DataType::Utf8, false),
+        Field::new("flags", DataType::Utf8, true),
+    ]))
+}
