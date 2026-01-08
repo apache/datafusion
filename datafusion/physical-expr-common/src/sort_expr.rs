@@ -427,6 +427,21 @@ impl LexOrdering {
         true
     }
 
+    /// Checks if `other` is a prefix of this `LexOrdering`.
+    pub fn is_prefix(&self, other: &LexOrdering) -> bool {
+        let self_exprs = self.as_ref();
+        let other_exprs = other.as_ref();
+
+        if other_exprs.len() > self_exprs.len() {
+            return false;
+        }
+
+        other_exprs
+            .iter()
+            .zip(self_exprs.iter())
+            .all(|(req, cur)| req.expr.eq(&cur.expr) && req.options == cur.options)
+    }
+
     /// Check if reversing this ordering would satisfy another ordering requirement.
     ///
     /// This supports **prefix matching**: if this ordering is `[A DESC, B ASC]`
