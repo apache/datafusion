@@ -311,8 +311,13 @@ impl ExternalSorter {
         })
     }
 
-    /// Sorts a single oversized batch and spills it incrementally in
-    /// `batch_size`-sized chunks to avoid large in-memory allocations.
+    /// Sorts a single oversized `RecordBatch` and spills it incrementally in
+    /// `batch_size`-sized chunks.
+    ///
+    /// This is used as a fallback under severe memory pressure when a single
+    /// input batch cannot be safely sorted in memory and there are no buffered
+    /// batches available to spill first.
+
     async fn sort_and_spill_large_batch(&mut self, batch: RecordBatch) -> Result<()> {
         debug!("Sorting and spilling large batch chunk-by-chunk");
 
@@ -356,9 +361,9 @@ impl ExternalSorter {
         self.reserve_memory_for_merge()?;
         self.reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
-
+        
+        // Safe to buffer after successful memory reservation or spill handling
         self.in_mem_batches.push(input);
-        // Safe to buffer after memory reservation or spill handling
         Ok(())
     }
 
@@ -851,14 +856,10 @@ impl ExternalSorter {
                 // CASE 2: single oversized batch under memory pressure
                 //
                 // If we cannot reserve enough memory and there are no buffered batches
-                // to spill first, this batch must be handled specially.
+                // to spill first, fall back to chunked sorting and spilling.
                 //
-                // Instead of failing with OOM, we:
-                // - Reserve only the minimal memory required to hold the batch
-                // - Immediately sort and spill it in smaller chunks
-                //
-                // This avoids creating a single large sorted batch in memory and
-                // preserves correct output batch sizing.
+                // This avoids creating a single large sorted batch in memory while
+                // preserving correct ordering and output batch sizing.
                 if self.is_large_batch(input) {
                     debug!("Chunked spilling oversized batch");
 
