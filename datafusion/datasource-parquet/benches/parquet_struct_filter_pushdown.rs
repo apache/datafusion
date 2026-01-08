@@ -31,7 +31,7 @@
 //!
 //! The dataset contains:
 //! - A struct column with a small int32 `id` field (used for filtering)
-//! - A separate large utf8view payload column (~1MB per row)
+//! - A separate large binary payload column (~512KB per row)
 //!
 //! When the predicate matches only 10% of rows (1 row group out of 10),
 //! late materialization should avoid reading 90% of the payload data.
@@ -42,7 +42,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringViewBuilder, StructArray};
+use arrow::array::{ArrayRef, BinaryBuilder, Int32Array, RecordBatch, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use datafusion_common::config::TableParquetOptions;
@@ -65,10 +65,10 @@ use rand::Rng;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-const ROW_GROUP_SIZE: usize = 25_000;
+const ROW_GROUP_SIZE: usize = 1;
 const TOTAL_ROW_GROUPS: usize = 3;
 const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
-const TARGET_ID: i32 = 1; // Match the seccond / middle row group (ids 0-2, one per row group)
+const TARGET_ID: i32 = ROW_GROUP_SIZE as i32 + 1; // Match a single row in the second row group
 const STRUCT_COLUMN_NAME: &str = "struct_col";  
 const INT_FIELD_NAME: &str = "id";
 const PAYLOAD_COLUMN_NAME: &str = "payload";
@@ -217,11 +217,11 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
 
     // Create schema:
     // - struct_col: Struct { id: Int32 }
-    // - payload: Utf8View (large, separate column)
+    // - payload: Binary (large, separate column)
     let struct_fields = Fields::from(vec![Field::new(INT_FIELD_NAME, DataType::Int32, false)]);
     let schema = Arc::new(Schema::new(vec![
         Field::new(STRUCT_COLUMN_NAME, DataType::Struct(struct_fields), false),
-        Field::new(PAYLOAD_COLUMN_NAME, DataType::Utf8View, false),
+        Field::new(PAYLOAD_COLUMN_NAME, DataType::Binary, false),
     ]));
 
     let writer_props = WriterProperties::builder()
@@ -238,7 +238,8 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     // The predicate `struct_col['id'] = 9` will match only the last row group,
     // so with late materialization, only 10% of the payload data needs to be read.
     for group_id in 0..TOTAL_ROW_GROUPS {
-        let batch = build_batch(&schema, group_id as i32, ROW_GROUP_SIZE)?;
+        let first_id_value = group_id as i32 * ROW_GROUP_SIZE as i32;
+        let batch = build_batch(&schema, first_id_value, ROW_GROUP_SIZE)?;
         writer.write(&batch)?;
     }
 
@@ -253,25 +254,25 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
 
 fn build_batch(
     schema: &SchemaRef,
-    id_value: i32,
+    first_id_value: i32,
     len: usize,
 ) -> datafusion_common::Result<RecordBatch> {
     let mut rng = rand::rng();
 
     // Build the struct column with just the id field
-    let ids: Vec<i32> = vec![id_value; len];
+    let ids: Vec<i32> = (first_id_value..first_id_value + len as i32).collect();
     let id_array = Int32Array::from(ids);
     let struct_array = StructArray::from(vec![(
         Arc::new(Field::new(INT_FIELD_NAME, DataType::Int32, false)),
         Arc::new(id_array) as ArrayRef,
     )]);
 
+    let mut payload = vec![0u8; PAYLOAD_BYTES];
+
     // Build the payload column (separate from struct) with random large strings
-    let mut payload_builder = StringViewBuilder::new();
+    let mut payload_builder = BinaryBuilder::new();
     for _ in 0..len {
-        let payload: String = (0..PAYLOAD_BYTES)
-            .map(|_| rng.random_range(b'a'..=b'z') as char)
-            .collect();
+        rng.fill(&mut payload[..]);
         payload_builder.append_value(&payload);
     }
     let payload_array = payload_builder.finish();
