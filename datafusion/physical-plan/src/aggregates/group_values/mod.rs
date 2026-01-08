@@ -195,7 +195,7 @@ pub fn new_group_values(
                     ScalarValue::Int32(Some(min)),
                     ScalarValue::Int32(Some(max)),
                 ) => {
-                    if (max - min) < 65536 {
+                    if *max >= *min && (*max as i64 - *min as i64) < 65536 {
                         return Ok(Box::new(GroupValuesSmallPrimitive::<Int32Type>::new(
                             d.clone(),
                             *min,
@@ -208,7 +208,7 @@ pub fn new_group_values(
                     ScalarValue::UInt32(Some(min)),
                     ScalarValue::UInt32(Some(max)),
                 ) => {
-                    if (max - min) < 65536 {
+                    if *max >= *min && (*max as u64 - *min as u64) < 65536 {
                         return Ok(Box::new(GroupValuesSmallPrimitive::<UInt32Type>::new(
                             d.clone(),
                             *min,
@@ -221,7 +221,7 @@ pub fn new_group_values(
                     ScalarValue::Int64(Some(min)),
                     ScalarValue::Int64(Some(max)),
                 ) => {
-                    if (max - min) < 65536 {
+                    if *max >= *min && (*max as i128 - *min as i128) < 65536 {
                         return Ok(Box::new(GroupValuesSmallPrimitive::<Int64Type>::new(
                             d.clone(),
                             *min,
@@ -234,7 +234,7 @@ pub fn new_group_values(
                     ScalarValue::UInt64(Some(min)),
                     ScalarValue::UInt64(Some(max)),
                 ) => {
-                    if (max.wrapping_sub(*min)) < 65536 {
+                    if *max >= *min && (*max - *min) < 65536 {
                         return Ok(Box::new(GroupValuesSmallPrimitive::<UInt64Type>::new(
                             d.clone(),
                             *min,

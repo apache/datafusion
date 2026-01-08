@@ -77,39 +77,59 @@ pub(crate) trait SmallValue: arrow::datatypes::ArrowNativeType {
     fn to_index(&self, min: Self) -> usize;
 }
 
-macro_rules! impl_small_value {
+macro_rules! impl_small_value_uint {
     ($($t:ty),+) => {
         $(impl SmallValue for $t {
             fn to_index(&self, min: Self) -> usize {
-                self.wrapping_sub(min) as usize
+                if *self < min {
+                    usize::MAX
+                } else {
+                    (*self - min) as usize
+                }
             }
         })+
     };
 }
 
-impl_small_value!(u8, u16, u32, u64);
+impl_small_value_uint!(u8, u16, u32, u64);
 
 impl SmallValue for i8 {
     fn to_index(&self, min: Self) -> usize {
-        (*self as i16 - min as i16) as usize
+        if *self < min {
+            usize::MAX
+        } else {
+            (*self as i16 - min as i16) as usize
+        }
     }
 }
 
 impl SmallValue for i16 {
     fn to_index(&self, min: Self) -> usize {
-        (*self as i32 - min as i32) as usize
+        if *self < min {
+            usize::MAX
+        } else {
+            (*self as i32 - min as i32) as usize
+        }
     }
 }
 
 impl SmallValue for i32 {
     fn to_index(&self, min: Self) -> usize {
-        (*self as i64 - min as i64) as usize
+        if *self < min {
+            usize::MAX
+        } else {
+            (*self as i64 - min as i64) as usize
+        }
     }
 }
 
 impl SmallValue for i64 {
     fn to_index(&self, min: Self) -> usize {
-        (*self as i128 - min as i128) as usize
+        if *self < min {
+            usize::MAX
+        } else {
+            (*self as i128 - min as i128) as usize
+        }
     }
 }
 
@@ -276,7 +296,13 @@ where
     T::Native: SmallValue,
 {
     pub fn new(data_type: DataType, min: T::Native, max: T::Native) -> Self {
+        assert!(max >= min, "GroupValuesSmallPrimitive: max < min");
         let range = max.to_index(min);
+        assert!(
+            range < 1_000_000,
+            "GroupValuesSmallPrimitive: range too large ({})",
+            range
+        );
         Self {
             data_type,
             map: vec![0; range + 1],
@@ -304,7 +330,7 @@ where
                 }),
                 Some(key) => {
                     let index = key.to_index(self.min_value);
-                    let entry = unsafe { self.map.get_unchecked_mut(index) };
+                    let entry = self.map.get_mut(index).expect("GroupValuesSmallPrimitive: value out of range");
                     if *entry == 0 {
                         let g = self.values.len();
                         self.values.push(key);
