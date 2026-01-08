@@ -73,7 +73,7 @@ select decode('', null) from test;
 query error DataFusion error: This feature is not implemented: Encoding must be a scalar; array specified encoding is not yet supported
 select decode('', hex_field) from test;
 
-query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'to_hex' function
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Integer but received NativeType::String, DataType: Utf8View
 select to_hex(hex_field) from test;
 
 query error DataFusion error: Execution error: Failed to decode value using base64

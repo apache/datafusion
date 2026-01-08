@@ -72,7 +72,6 @@ pub trait ArrowHeap {
     fn set_batch(&mut self, vals: ArrayRef);
     fn is_worse(&self, idx: usize) -> bool;
     fn worst_map_idx(&self) -> usize;
-    fn renumber(&mut self, heap_to_map: &[(usize, usize)]);
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>);
     fn replace_if_better(
         &mut self,
@@ -129,10 +128,6 @@ where
 
     fn worst_map_idx(&self) -> usize {
         self.heap.worst_map_idx()
-    }
-
-    fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
-        self.heap.renumber(heap_to_map);
     }
 
     fn insert(&mut self, row_idx: usize, map_idx: usize, map: &mut Vec<(usize, usize)>) {
@@ -266,14 +261,6 @@ impl<VAL: ValueType> TopKHeap<VAL> {
         }
         existing.val = new_val;
         self.heapify_down(heap_idx, mapper);
-    }
-
-    pub fn renumber(&mut self, heap_to_map: &[(usize, usize)]) {
-        for (heap_idx, map_idx) in heap_to_map.iter() {
-            if let Some(Some(hi)) = self.heap.get_mut(*heap_idx) {
-                hi.map_idx = *map_idx;
-            }
-        }
     }
 
     fn heapify_up(&mut self, mut idx: usize, mapper: &mut Vec<(usize, usize)>) {
@@ -605,31 +592,6 @@ mod tests {
         assert_eq!(vals, vec![1, 2]);
         assert_eq!(map_idxs, vec![1, 2]);
         assert_eq!(heap.len(), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn should_renumber() -> Result<()> {
-        let mut map = vec![];
-        let mut heap = TopKHeap::new(10, false);
-
-        heap.append_or_replace(1, 1, &mut map);
-        heap.append_or_replace(2, 2, &mut map);
-
-        let actual = heap.to_string();
-        assert_snapshot!(actual, @r"
-        val=2 idx=0, bucket=2
-        └── val=1 idx=1, bucket=1
-        ");
-
-        let numbers = vec![(0, 1), (1, 2)];
-        heap.renumber(numbers.as_slice());
-        let actual = heap.to_string();
-        assert_snapshot!(actual, @r"
-        val=2 idx=0, bucket=1
-        └── val=1 idx=1, bucket=2
-        ");
 
         Ok(())
     }

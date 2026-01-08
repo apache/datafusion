@@ -31,6 +31,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+#[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
 use datafusion_datasource::TableSchema;
@@ -845,11 +846,13 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(CoalesceBatchesExec::new(
         Arc::new(EmptyExec::new(schema.clone())),
         8096,
     )))?;
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
@@ -2340,9 +2343,10 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
     let hash_map = Arc::new(JoinHashMapU32::with_capacity(0));
-    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("col", 0));
+    let on_columns = vec![Arc::new(Column::new("col", 0)) as Arc<dyn PhysicalExpr>];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
-        hash_expr,
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
         hash_map,
         "test_lookup".to_string(),
     ));

@@ -20,6 +20,7 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use clap::Args;
 use datafusion::logical_expr::{ExplainFormat, ExplainOption};
 use datafusion::{
     error::{DataFusionError, Result},
@@ -27,7 +28,6 @@ use datafusion::{
 };
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
-use structopt::StructOpt;
 
 /// Driver program to run the ClickBench benchmark
 ///
@@ -37,11 +37,11 @@ use structopt::StructOpt;
 ///
 /// [1]: https://github.com/ClickHouse/ClickBench
 /// [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number (between 0 and 42). If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub query: Option<usize>,
 
     /// If specified, enables Parquet Filter Pushdown.
@@ -49,34 +49,32 @@ pub struct RunOpt {
     /// Specifically, it enables:
     /// * `pushdown_filters = true`
     /// * `reorder_filters = true`
-    #[structopt(long = "pushdown")]
+    #[arg(long = "pushdown")]
     pushdown: bool,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to hits.parquet (single file) or `hits_partitioned`
     /// (partitioned, 100 files)
-    #[structopt(
-        parse(from_os_str),
-        short = "p",
+    #[arg(
+        short = 'p',
         long = "path",
         default_value = "benchmarks/data/hits.parquet"
     )]
     path: PathBuf,
 
     /// Path to queries directory
-    #[structopt(
-        parse(from_os_str),
-        short = "r",
+    #[arg(
+        short = 'r',
         long = "queries-path",
         default_value = "benchmarks/queries/clickbench/queries"
     )]
     pub queries_path: PathBuf,
 
     /// If present, write results json here
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Column name that the data is sorted by (e.g., "EventTime")
@@ -86,18 +84,18 @@ pub struct RunOpt {
     /// Recommended to use with: -c datafusion.optimizer.prefer_existing_sort=true
     /// This allows DataFusion to optimize away redundant sorts while maintaining
     /// multi-core parallelism for other operations.
-    #[structopt(long = "sorted-by")]
+    #[arg(long = "sorted-by")]
     sorted_by: Option<String>,
 
     /// Sort order: ASC or DESC (default: ASC)
-    #[structopt(long = "sort-order", default_value = "ASC")]
+    #[arg(long = "sort-order", default_value = "ASC")]
     sort_order: String,
 
     /// Configuration options in the format key=value
     /// Can be specified multiple times.
     ///
     /// Example: -c datafusion.optimizer.prefer_existing_sort=true
-    #[structopt(short = "c", long = "config")]
+    #[arg(short = 'c', long = "config")]
     config_options: Vec<String>,
 }
 

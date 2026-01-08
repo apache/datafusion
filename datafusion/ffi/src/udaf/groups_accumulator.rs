@@ -37,7 +37,6 @@ use crate::{df_result, rresult, rresult_return};
 /// defined in [`GroupsAccumulator`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_GroupsAccumulator {
     pub update_batch: unsafe extern "C" fn(
         accumulator: &mut Self,
@@ -438,7 +437,6 @@ impl GroupsAccumulator for ForeignGroupsAccumulator {
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_EmitTo {
     All,
     First(usize),

@@ -33,7 +33,9 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8View) AS b, Float64(3) AS c, CAST(NULL AS Int32) AS d
 03)----TableScan: t1
-physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Update)
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 query TT
 explain update t1 set a=c+1, b=a, c=c+1.0, d=b;
@@ -42,7 +44,9 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: CAST(t1.c + CAST(Int64(1) AS Float64) AS Int32) AS a, CAST(t1.a AS Utf8View) AS b, t1.c + Float64(1) AS c, CAST(t1.b AS Int32) AS d
 03)----TableScan: t1
-physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Update)
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 statement ok
 create table t2(a int, b varchar, c double, d int);
@@ -70,10 +74,12 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: t1.a AS a, t2.b AS b, CAST(t2.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
 03)----Filter: t1.a = t2.a AND t1.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
-04)------Cross Join: 
+04)------Cross Join:
 05)--------TableScan: t1
 06)--------TableScan: t2
-physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Update)
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
 
 statement ok
 create table t3(a int, b varchar, c double, d int);
@@ -90,8 +96,10 @@ logical_plan
 01)Dml: op=[Update] table=[t1]
 02)--Projection: t.a AS a, t2.b AS b, CAST(t.a AS Float64) AS c, CAST(Int64(1) AS Int32) AS d
 03)----Filter: t.a = t2.a AND t.b > CAST(Utf8("foo") AS Utf8View) AND t2.c > Float64(1)
-04)------Cross Join: 
+04)------Cross Join:
 05)--------SubqueryAlias: t
 06)----------TableScan: t1
 07)--------TableScan: t2
-physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Update)
+physical_plan
+01)CooperativeExec
+02)--DmlResultExec: rows_affected=0
