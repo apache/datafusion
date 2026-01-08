@@ -2120,6 +2120,7 @@ dependencies = [
  "dashmap",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-physical-expr-common",
  "futures",
  "insta",
  "log",
