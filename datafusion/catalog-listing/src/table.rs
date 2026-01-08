@@ -814,7 +814,7 @@ impl ListingTable {
             && cached.is_valid_for(meta)
         {
             // Return cached statistics and ordering
-            return Ok((cached.statistics.clone(), cached.ordering.clone()));
+            return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
 
         // Cache miss or invalid: fetch both statistics and ordering in a single metadata read
