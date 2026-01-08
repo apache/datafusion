@@ -25,7 +25,6 @@ use std::sync::Arc;
 use datafusion_common::assert_eq_or_internal_err;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::{
     ExecutionPlan, async_func::AsyncFuncExec, coalesce_batches::CoalesceBatchesExec,
 };
@@ -56,14 +55,6 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         let target_batch_size = config.execution.batch_size;
         plan.transform_up(|plan| {
             let plan_any = plan.as_any();
-            if let Some(_coalesce_exec) = plan_any.downcast_ref::<DataSourceExec>() {
-                //Always coalesce at data source level
-                let new_coalesce_exec = Arc::new(CoalesceBatchesExec::new(
-                    Arc::clone(&plan),
-                    target_batch_size,
-                ));
-                Ok(Transformed::yes(new_coalesce_exec))
-            } else
             if let Some(async_exec) = plan_any.downcast_ref::<AsyncFuncExec>() {
                 // Coalesce inputs to async functions to reduce number of async function invocations
                 let children = async_exec.children();
