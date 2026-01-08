@@ -918,7 +918,7 @@ config_namespace! {
 
         /// When set to true, the optimizer will attempt to push down Join dynamic filters
         /// into the file scan phase.
-        pub enable_join_dynamic_filter_pushdown: bool, default = true
+        pub enable_join_dynamic_filter_pushdown: bool, default = false
 
         /// When set to true, the optimizer will attempt to push down Aggregate dynamic filters
         /// into the file scan phase.
