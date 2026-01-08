@@ -350,7 +350,7 @@ mod tests {
         let body_len = line_len.saturating_sub(1);
         let mut data = Vec::with_capacity(line_len * lines);
         for _ in 0..lines {
-            data.extend(std::iter::repeat(b'a').take(body_len));
+            data.extend(std::iter::repeat_n(b'a', body_len));
             data.push(b'\n');
         }
         Bytes::from(data)

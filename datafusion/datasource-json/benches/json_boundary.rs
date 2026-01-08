@@ -160,7 +160,7 @@ fn build_fixed_json_lines(line_len: usize, lines: usize) -> Bytes {
     let padding_len = line_len - prefix.len() - suffix.len();
     let mut line = Vec::with_capacity(line_len);
     line.extend_from_slice(prefix.as_bytes());
-    line.extend(std::iter::repeat(b'a').take(padding_len));
+    line.extend(std::iter::repeat_n(b'a', padding_len));
     line.extend_from_slice(suffix.as_bytes());
 
     let mut data = Vec::with_capacity(line_len * lines);
@@ -174,7 +174,7 @@ fn burn_cpu_kb(bytes: u64, rounds: u32) {
     if bytes == 0 || rounds == 0 {
         return;
     }
-    let kb = (bytes + BYTES_PER_KB - 1) / BYTES_PER_KB;
+    let kb = bytes.div_ceil(BYTES_PER_KB);
     let mut checksum = 0u64;
     let mut remaining = kb.saturating_mul(rounds as u64);
     while remaining > 0 {
