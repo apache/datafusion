@@ -23,15 +23,16 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::join_hash_map::{
-    JoinHashMapOffset, get_matched_indices, get_matched_indices_with_limit_offset,
-    update_from_iter,
+    JoinHashMapOffset, contain_hashes, get_matched_indices,
+    get_matched_indices_with_limit_offset, update_from_iter,
 };
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{ExecutionPlan, metrics};
 
 use arrow::array::{
-    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+    ArrowPrimitiveType, BooleanArray, BooleanBufferBuilder, NativeAdapter,
+    PrimitiveArray, RecordBatch,
 };
 use arrow::compute::concat_batches;
 use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
@@ -92,6 +93,10 @@ impl JoinHashMapType for PruningJoinHashMap {
             input_indices,
             match_indices,
         )
+    }
+
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
     }
 
     fn is_empty(&self) -> bool {

@@ -1,0 +1,37 @@
+# postgresql behavior
+#
+# date + interval → timestamp
+# Add an interval to a date
+# date '2001-09-28' + interval '1 hour' → 2001-09-28 01:00:00
+#
+# note that while the above reflects what postgresql does
+# in the case of datafusion/arrow that is not the case. The
+# result will be date32/date64
+#
+# Tracking issue: https://github.com/apache/datafusion/issues/19527
+
+query D
+SELECT '2001-09-28'::date + interval '1 hour'
+----
+2001-09-28
+
+query T
+SELECT arrow_typeof('2001-09-28'::date + interval '1 hour')
+----
+Date32
+
+# postgresql behavior
+#
+# date - interval → timestamp
+# Subtract an interval from a date
+# date '2001-09-28' - interval '1 hour' → 2001-09-27 23:00:00
+
+query D
+SELECT '2001-09-28'::date - interval '25 hour'
+----
+2001-09-27
+
+query T
+SELECT arrow_typeof('2001-09-28'::date - interval '25 hour')
+----
+Date32
