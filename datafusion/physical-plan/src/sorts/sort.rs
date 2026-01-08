@@ -321,7 +321,7 @@ impl ExternalSorter {
     async fn sort_and_spill_large_batch(&mut self, batch: RecordBatch) -> Result<()> {
         debug!("Sorting and spilling large batch chunk-by-chunk");
 
-        // Lazily create spill file 
+        // Lazily create spill file
         if self.in_progress_spill_file.is_none() {
             self.in_progress_spill_file =
                 Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
@@ -361,7 +361,7 @@ impl ExternalSorter {
         self.reserve_memory_for_merge()?;
         self.reserve_memory_for_batch_and_maybe_spill(&input)
             .await?;
-        
+
         // Safe to buffer after successful memory reservation or spill handling
         self.in_mem_batches.push(input);
         Ok(())
