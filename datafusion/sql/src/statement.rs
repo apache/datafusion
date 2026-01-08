@@ -963,7 +963,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 has_table_keyword,
                 settings,
                 format_clause,
-                ..
+                insert_token: _insert_token, // record the location the `INSERT` token
             }) => {
                 let table_name = match table {
                     TableObject::TableName(table_name) => table_name,
