@@ -57,19 +57,19 @@ use datafusion_functions::expr_fn::get_field;
 use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::ExecutionPlan;
 use futures::StreamExt;
-use object_store::local::LocalFileSystem;
 use object_store::ObjectStore;
+use object_store::local::LocalFileSystem;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use rand::Rng;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
-const ROW_GROUP_SIZE: usize = 25_000;
+const ROW_GROUP_SIZE: usize = 1024;
 const TOTAL_ROW_GROUPS: usize = 3;
 const TOTAL_ROWS: usize = ROW_GROUP_SIZE * TOTAL_ROW_GROUPS;
 const TARGET_ID: i32 = ROW_GROUP_SIZE as i32 + 1; // Match a single row in the second row group
-const STRUCT_COLUMN_NAME: &str = "struct_col";  
+const STRUCT_COLUMN_NAME: &str = "struct_col";
 const INT_FIELD_NAME: &str = "id";
 const PAYLOAD_COLUMN_NAME: &str = "payload";
 // Large payload (~512KB) to emphasize decoding overhead when pushdown is disabled.
@@ -104,8 +104,7 @@ fn parquet_struct_filter_pushdown(c: &mut Criterion) {
     group.bench_function("no_pushdown", |b| {
         let exec = Arc::clone(&exec).reset_state().unwrap();
         b.iter(|| {
-            let row_count =
-                RUNTIME.block_on(execute_and_count(&exec, &ctx));
+            let row_count = RUNTIME.block_on(execute_and_count(&exec, &ctx));
             assert_eq!(row_count, 1);
         });
     });
@@ -115,8 +114,7 @@ fn parquet_struct_filter_pushdown(c: &mut Criterion) {
     group.bench_function("with_pushdown", |b| {
         let exec = Arc::clone(&exec).reset_state().unwrap();
         b.iter(|| {
-            let row_count =
-                RUNTIME.block_on(execute_and_count(&exec, &ctx));
+            let row_count = RUNTIME.block_on(execute_and_count(&exec, &ctx));
             assert_eq!(row_count, 1);
         });
     });
@@ -146,7 +144,7 @@ fn setup_scan(pushdown: bool) -> (Arc<dyn ExecutionPlan>, Arc<TaskContext>) {
         ParquetSource::new(table_schema)
             .with_table_parquet_options(parquet_options)
             .with_predicate(Arc::clone(&predicate))
-            .with_pushdown_filters(pushdown)
+            .with_pushdown_filters(pushdown),
     );
 
     // Get file size
@@ -168,10 +166,10 @@ fn setup_scan(pushdown: bool) -> (Arc<dyn ExecutionPlan>, Arc<TaskContext>) {
 
     // Wrap in a FilterExec to apply the predicate
     if !pushdown {
-        exec = Arc::new(datafusion_physical_plan::filter::FilterExec::try_new(
-            predicate,
-            exec,
-        ).expect("failed to create FilterExec"));
+        exec = Arc::new(
+            datafusion_physical_plan::filter::FilterExec::try_new(predicate, exec)
+                .expect("failed to create FilterExec"),
+        );
     }
 
     // Create task context with the local filesystem object store
@@ -181,7 +179,10 @@ fn setup_scan(pushdown: bool) -> (Arc<dyn ExecutionPlan>, Arc<TaskContext>) {
 }
 
 /// Execute the scan and count rows - this is the measured part
-async fn execute_and_count(exec: &Arc<dyn ExecutionPlan>, task_ctx: &Arc<TaskContext>) -> usize {
+async fn execute_and_count(
+    exec: &Arc<dyn ExecutionPlan>,
+    task_ctx: &Arc<TaskContext>,
+) -> usize {
     let stream = exec
         .execute(0, Arc::clone(task_ctx))
         .expect("failed to execute parquet scan");
@@ -218,7 +219,8 @@ fn create_dataset() -> datafusion_common::Result<BenchmarkDataset> {
     // Create schema:
     // - struct_col: Struct { id: Int32 }
     // - payload: Binary (large, separate column)
-    let struct_fields = Fields::from(vec![Field::new(INT_FIELD_NAME, DataType::Int32, false)]);
+    let struct_fields =
+        Fields::from(vec![Field::new(INT_FIELD_NAME, DataType::Int32, false)]);
     let schema = Arc::new(Schema::new(vec![
         Field::new(STRUCT_COLUMN_NAME, DataType::Struct(struct_fields), false),
         Field::new(PAYLOAD_COLUMN_NAME, DataType::Binary, false),
