@@ -2376,6 +2376,59 @@ select arrow_typeof(date_trunc('microsecond', to_timestamp(61)))
 ----
 Timestamp(ns)
 
+##########
+## date_trunc with Time types
+##########
+
+# Truncate time to hour
+query D
+SELECT date_trunc('hour', TIME '14:30:45');
+----
+14:00:00
+
+# Truncate time to minute
+query D
+SELECT date_trunc('minute', TIME '14:30:45');
+----
+14:30:00
+
+# Truncate time to second (removes fractional seconds)
+query D
+SELECT date_trunc('second', TIME '14:30:45.123456789');
+----
+14:30:45
+
+# Truncate time to millisecond
+query D
+SELECT date_trunc('millisecond', TIME '14:30:45.123456789');
+----
+14:30:45.123
+
+# Truncate time to microsecond
+query D
+SELECT date_trunc('microsecond', TIME '14:30:45.123456789');
+----
+14:30:45.123456
+
+# Return type should be Time64(ns)
+query T
+SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
+----
+Time64(ns)
+
+# Error for granularities not valid for Time types
+query error date_trunc does not support 'day' granularity for Time types
+SELECT date_trunc('day', TIME '14:30:45');
+
+query error date_trunc does not support 'week' granularity for Time types
+SELECT date_trunc('week', TIME '14:30:45');
+
+query error date_trunc does not support 'month' granularity for Time types
+SELECT date_trunc('month', TIME '14:30:45');
+
+query error date_trunc does not support 'year' granularity for Time types
+SELECT date_trunc('year', TIME '14:30:45');
+
 # check date_bin
 query P
 SELECT date_bin(INTERVAL '1 day', time, '1970-01-01T00:00:00+05:00') FROM foo

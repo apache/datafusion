@@ -22,7 +22,7 @@ use arrow::datatypes::TimeUnit::Nanosecond;
 use chrono::TimeZone;
 use chrono::Timelike;
 use datafusion_common::{Result, ScalarValue, internal_err};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
@@ -95,23 +95,20 @@ impl ScalarUDFImpl for CurrentTimeFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         // Try to get timezone from config and convert to local time
         let nano = info
-            .execution_props()
             .config_options()
-            .and_then(|config| {
-                config
-                    .execution
-                    .time_zone
-                    .as_ref()
-                    .map(|tz| tz.parse::<Tz>().ok())
-            })
-            .flatten()
+            .execution
+            .time_zone
+            .as_ref()
+            .and_then(|tz| tz.parse::<Tz>().ok())
             .map_or_else(
                 || datetime_to_time_nanos(&now_ts),
                 |tz| {
@@ -143,46 +140,24 @@ fn datetime_to_time_nanos<Tz: TimeZone>(dt: &chrono::DateTime<Tz>) -> Option<i64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, TimeUnit::Nanosecond};
     use chrono::{DateTime, Utc};
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::execution_props::ExecutionProps;
-    use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{DFSchema, ScalarValue};
+    use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
     use std::sync::Arc;
 
-    struct MockSimplifyInfo {
-        execution_props: ExecutionProps,
-    }
-
-    impl SimplifyInfo for MockSimplifyInfo {
-        fn is_boolean_type(&self, _expr: &Expr) -> Result<bool> {
-            Ok(false)
-        }
-
-        fn nullable(&self, _expr: &Expr) -> Result<bool> {
-            Ok(true)
-        }
-
-        fn execution_props(&self) -> &ExecutionProps {
-            &self.execution_props
-        }
-
-        fn get_data_type(&self, _expr: &Expr) -> Result<DataType> {
-            Ok(Time64(Nanosecond))
-        }
-    }
-
-    fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> MockSimplifyInfo {
-        let mut config = datafusion_common::config::ConfigOptions::default();
+    fn set_session_timezone_env(tz: &str, start_time: DateTime<Utc>) -> SimplifyContext {
+        let mut config = ConfigOptions::default();
         config.execution.time_zone = if tz.is_empty() {
             None
         } else {
             Some(tz.to_string())
         };
-        let mut execution_props =
-            ExecutionProps::new().with_query_execution_start_time(start_time);
-        execution_props.config_options = Some(Arc::new(config));
-        MockSimplifyInfo { execution_props }
+        let schema = Arc::new(DFSchema::empty());
+        SimplifyContext::default()
+            .with_schema(schema)
+            .with_config_options(Arc::new(config))
+            .with_query_execution_start_time(Some(start_time))
     }
 
     #[test]
