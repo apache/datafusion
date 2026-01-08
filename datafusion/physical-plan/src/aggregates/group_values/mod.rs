@@ -18,9 +18,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::types::{
-    Date32Type, Date64Type, Decimal128Type, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, Decimal128Type, Float16Type, Int16Type, Int8Type,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt8Type,
 };
 use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
@@ -42,6 +43,7 @@ use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
         bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        primitive::GroupValuesSmallPrimitive,
     },
     order::GroupOrdering,
 };
@@ -137,6 +139,33 @@ pub fn new_group_values(
 ) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
+
+        match d {
+            DataType::Int8 => {
+                return Ok(Box::new(GroupValuesSmallPrimitive::<Int8Type>::new(d.clone())));
+            }
+            DataType::UInt8 => {
+                return Ok(Box::new(GroupValuesSmallPrimitive::<UInt8Type>::new(
+                    d.clone(),
+                )));
+            }
+            DataType::Int16 => {
+                return Ok(Box::new(GroupValuesSmallPrimitive::<Int16Type>::new(
+                    d.clone(),
+                )));
+            }
+            DataType::UInt16 => {
+                return Ok(Box::new(GroupValuesSmallPrimitive::<UInt16Type>::new(
+                    d.clone(),
+                )));
+            }
+            DataType::Float16 => {
+                return Ok(Box::new(GroupValuesSmallPrimitive::<Float16Type>::new(
+                    d.clone(),
+                )));
+            }
+            _ => {}
+        }
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
