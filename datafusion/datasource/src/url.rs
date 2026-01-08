@@ -412,10 +412,11 @@ async fn list_with_cache<'b>(
             } else {
                 // Cache miss - always list and cache the full table
                 // This ensures we have complete data for future prefix queries
-                let vec = store
+                let mut vec = store
                     .list(Some(table_base_path))
                     .try_collect::<Vec<ObjectMeta>>()
                     .await?;
+                vec.shrink_to_fit(); // Right-size before caching
                 let cached: CachedFileList = vec.into();
                 let result = cached.files_matching_prefix(&filter_prefix);
                 cache.put(&table_scoped_base_path, cached);
