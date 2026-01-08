@@ -58,6 +58,12 @@ select unnest(struct(1,2,3));
 ----
 1 2 3
 
+## Basic unnest expression in select struct with alias (alias is ignored for struct unnest)
+query III
+select unnest(struct(1,2,3)) as ignored_alias;
+----
+1 2 3
+
 ## Basic unnest list expression in from clause
 query I
 select * from unnest([1,2,3]);
@@ -798,9 +804,13 @@ NULL 1
 query error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "nested_unnest_table\.column1" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "UNNEST\(nested_unnest_table\.column1\)\[c0\]" appears in the SELECT clause satisfies this requirement
 select unnest(column1) c1 from nested_unnest_table group by c1.c0;
 
-# TODO: this query should work. see issue: https://github.com/apache/datafusion/issues/12794
-query error DataFusion error: Internal error: Assertion failed: struct_allowed: unnest on struct can only be applied at the root level of select expression
+## Unnest struct with alias - alias is ignored (same as DuckDB behavior)
+## See: https://github.com/apache/datafusion/issues/12794
+query TT?
 select unnest(column1) c1 from nested_unnest_table
+----
+a b {c0: c}
+d e {c0: f}
 
 query II??I??
 select unnest(column5), * from unnest_table;
