@@ -93,7 +93,7 @@ impl DefaultListFilesCache {
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct ListFilesEntry {
-    pub cached_file_list: CachedFileList,
+    pub metas: CachedFileList,
     pub size_bytes: usize,
     pub expires: Option<Instant>,
 }
@@ -112,7 +112,7 @@ impl ListFilesEntry {
                 .reduce(|acc, b| acc + b)?;
 
         Some(Self {
-            cached_file_list,
+            metas: cached_file_list,
             size_bytes,
             expires: ttl.map(|t| now + t),
         })
@@ -189,7 +189,7 @@ impl DefaultListFilesCacheState {
             return None;
         }
 
-        Some(entry.cached_file_list.clone())
+        Some(entry.metas.clone())
     }
 
     /// Checks if the respective entry is currently cached.
@@ -240,7 +240,7 @@ impl DefaultListFilesCacheState {
 
         self.evict_entries();
 
-        old_value.map(|v| v.cached_file_list)
+        old_value.map(|v| v.metas)
     }
 
     /// Evicts entries from the LRU cache until `memory_used` is lower than `memory_limit`.
@@ -263,7 +263,7 @@ impl DefaultListFilesCacheState {
     fn remove(&mut self, k: &TableScopedPath) -> Option<CachedFileList> {
         if let Some(entry) = self.lru_queue.remove(k) {
             self.memory_used -= entry.size_bytes;
-            Some(entry.cached_file_list)
+            Some(entry.metas)
         } else {
             None
         }
@@ -497,7 +497,7 @@ mod tests {
                 (
                     key1.clone(),
                     ListFilesEntry {
-                        cached_file_list: value1,
+                        metas: value1,
                         size_bytes: size1,
                         expires: None,
                     }
@@ -505,7 +505,7 @@ mod tests {
                 (
                     key2.clone(),
                     ListFilesEntry {
-                        cached_file_list: value2,
+                        metas: value2,
                         size_bytes: size2,
                         expires: None,
                     }
@@ -784,7 +784,7 @@ mod tests {
                 (
                     key2,
                     ListFilesEntry {
-                        cached_file_list: value2,
+                        metas: value2,
                         size_bytes: size2,
                         expires: None,
                     }
@@ -792,7 +792,7 @@ mod tests {
                 (
                     key3,
                     ListFilesEntry {
-                        cached_file_list: value3_v3,
+                        metas: value3_v3,
                         size_bytes: size3_v3,
                         expires: None,
                     }
@@ -834,7 +834,7 @@ mod tests {
                 (
                     key1.clone(),
                     ListFilesEntry {
-                        cached_file_list: value1,
+                        metas: value1,
                         size_bytes: size1,
                         expires: mock_time.now().checked_add(ttl),
                     }
@@ -842,7 +842,7 @@ mod tests {
                 (
                     key2.clone(),
                     ListFilesEntry {
-                        cached_file_list: value2,
+                        metas: value2,
                         size_bytes: size2,
                         expires: mock_time.now().checked_add(ttl),
                     }
@@ -986,11 +986,10 @@ mod tests {
             .collect();
         let cached_list = CachedFileList::new(metas);
         let entry = ListFilesEntry::try_new(cached_list, None, now).unwrap();
-        assert_eq!(entry.cached_file_list.files.len(), 5);
+        assert_eq!(entry.metas.files.len(), 5);
         // Size should be: capacity * sizeof(ObjectMeta) + (5 * 30) for heap bytes
-        let expected_size = (entry.cached_file_list.files.capacity()
-            * size_of::<ObjectMeta>())
-            + (entry.cached_file_list.files.len() * 30);
+        let expected_size = (entry.metas.files.capacity() * size_of::<ObjectMeta>())
+            + (entry.metas.files.len() * 30);
         assert_eq!(entry.size_bytes, expected_size);
 
         // Test with TTL

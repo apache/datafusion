@@ -831,14 +831,14 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                         .map(|t| t.duration_since(now).as_millis() as i64),
                 );
 
-                for meta in entry.cached_file_list.files.iter() {
+                for meta in entry.metas.files.iter() {
                     file_path_arr.push(meta.location.to_string());
                     file_modified_arr.push(meta.last_modified.timestamp_millis());
                     file_size_bytes_arr.push(meta.size);
                     etag_arr.push(meta.e_tag.clone());
                     version_arr.push(meta.version.clone());
                 }
-                current_offset += entry.cached_file_list.files.len() as i32;
+                current_offset += entry.metas.files.len() as i32;
                 offsets.push(current_offset);
             }
         }
