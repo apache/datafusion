@@ -57,8 +57,11 @@ tokio = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 criterion = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
+rand = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
@@ -79,4 +82,8 @@ parquet_encryption = [
 
 [[bench]]
 name = "parquet_nested_filter_pushdown"
+harness = false
+
+[[bench]]
+name = "parquet_struct_filter_pushdown"
 harness = false
