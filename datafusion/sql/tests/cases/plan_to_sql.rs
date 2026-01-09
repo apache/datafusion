@@ -994,7 +994,8 @@ fn test_aggregation_without_projection() -> Result<()> {
     ]);
 
     let plan = LogicalPlanBuilder::from(
-        table_scan(Some("users"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("users"), &schema, Some(vec![col("name"), col("age")]))?
+            .build()?,
     )
     .aggregate(vec![col("name")], vec![sum(col("age"))])?
     .build()?;
@@ -1315,7 +1316,7 @@ fn test_table_scan_with_empty_projection_and_filter_default_dialect() {
 fn table_scan_with_empty_projection_and_none_projection_helper(
     table_name: &str,
     table_schema: Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
 ) -> LogicalPlan {
     table_scan(Some(table_name), &table_schema, projection)
         .unwrap()
@@ -1497,7 +1498,7 @@ fn test_table_scan_alias() -> Result<()> {
     let table_scan_with_pushdown_all = table_scan_with_filter_and_fetch(
         Some("t1"),
         &schema,
-        Some(vec![0, 1]),
+        Some(vec![col("id"), col("age")]),
         vec![col("id").gt(lit(1))],
         Some(10),
     )?
@@ -1519,14 +1520,15 @@ fn test_table_scan_pushdown() -> Result<()> {
         Field::new("age", DataType::Utf8, false),
     ]);
     let scan_with_projection =
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
+        table_scan(Some("t1"), &schema, Some(vec![col("id"), col("age")]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
         @"SELECT t1.id, t1.age FROM t1"
     );
 
-    let scan_with_projection = table_scan(Some("t1"), &schema, Some(vec![1]))?.build()?;
+    let scan_with_projection =
+        table_scan(Some("t1"), &schema, Some(vec![col("age")]))?.build()?;
     let scan_with_projection = plan_to_sql(&scan_with_projection)?;
     assert_snapshot!(
         scan_with_projection,
@@ -1541,7 +1543,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let table_scan_with_projection_alias =
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?
+        table_scan(Some("t1"), &schema, Some(vec![col("id"), col("age")]))?
             .alias("ta")?
             .build()?;
     let table_scan_with_projection_alias =
@@ -1552,7 +1554,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let table_scan_with_projection_alias =
-        table_scan(Some("t1"), &schema, Some(vec![1]))?
+        table_scan(Some("t1"), &schema, Some(vec![col("age")]))?
             .alias("ta")?
             .build()?;
     let table_scan_with_projection_alias =
@@ -1573,7 +1575,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let query_from_table_scan_with_projection = LogicalPlanBuilder::from(
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("t1"), &schema, Some(vec![col("id"), col("age")]))?.build()?,
     )
     .project(vec![col("id"), col("age")])?
     .build()?;
@@ -1585,7 +1587,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     );
 
     let query_from_table_scan_with_two_projections = LogicalPlanBuilder::from(
-        table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?,
+        table_scan(Some("t1"), &schema, Some(vec![col("id"), col("age")]))?.build()?,
     )
     .project(vec![col("id"), col("age")])?
     .project(vec![wildcard()])?
@@ -1640,7 +1642,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_and_filter = table_scan_with_filters(
         Some("t1"),
         &schema,
-        Some(vec![0, 1]),
+        Some(vec![col("id"), col("age")]),
         vec![col("id").gt(col("age"))],
     )?
     .build()?;
@@ -1654,7 +1656,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_and_filter = table_scan_with_filters(
         Some("t1"),
         &schema,
-        Some(vec![1]),
+        Some(vec![col("age")]),
         vec![col("id").gt(col("age"))],
     )?
     .build()?;
@@ -1677,7 +1679,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_projection_and_inline_fetch = table_scan_with_filter_and_fetch(
         Some("t1"),
         &schema,
-        Some(vec![0, 1]),
+        Some(vec![col("id"), col("age")]),
         vec![],
         Some(10),
     )?
@@ -1692,7 +1694,7 @@ fn test_table_scan_pushdown() -> Result<()> {
     let table_scan_with_all = table_scan_with_filter_and_fetch(
         Some("t1"),
         &schema,
-        Some(vec![0, 1]),
+        Some(vec![col("id"), col("age")]),
         vec![col("id").gt(col("age"))],
         Some(10),
     )?
@@ -2306,7 +2308,12 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
         Field::new("c_name", DataType::Utf8, false),
     ]);
 
-    let table_scan = table_scan(Some("customer"), &schema, Some(vec![0, 1]))?.build()?;
+    let table_scan = table_scan(
+        Some("customer"),
+        &schema,
+        Some(vec![col("c_custkey"), col("c_name")]),
+    )?
+    .build()?;
 
     let plan = LogicalPlanBuilder::from(table_scan)
         .alias("customer")?
@@ -2348,8 +2355,9 @@ fn test_unparse_left_anti_join() -> Result<()> {
     //   SubqueryAlias: __correlated_sq_1
     //     TableScan: t2 projection=[c]
 
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![col("c")]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .project(vec![col("t1.d")])?
@@ -2382,8 +2390,9 @@ fn test_unparse_left_semi_join() -> Result<()> {
     //   SubqueryAlias: __correlated_sq_1
     //     TableScan: t2 projection=[c]
 
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![col("c")]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .project(vec![col("t1.d")])?
@@ -2416,8 +2425,9 @@ fn test_unparse_left_mark_join() -> Result<()> {
     //       TableScan: t1 projection=[c, d]
     //       SubqueryAlias: __correlated_sq_1
     //         TableScan: t2 projection=[c]
-    let table_scan1 = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![0]))?.build()?;
+    let table_scan1 =
+        table_scan(Some("t1"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
+    let table_scan2 = table_scan(Some("t2"), &schema, Some(vec![col("c")]))?.build()?;
     let subquery = subquery_alias(table_scan2, "__correlated_sq_1")?;
     let plan = LogicalPlanBuilder::from(table_scan1)
         .join_on(
@@ -2450,8 +2460,10 @@ fn test_unparse_right_semi_join() -> Result<()> {
     //     TableScan: t1 projection=[c, d]
     //     Projection: t2.c, t2.d
     //       TableScan: t2 projection=[c, d]
-    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let left =
+        table_scan(Some("t1"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
+    let right_table_scan =
+        table_scan(Some("t2"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
         .project(vec![col("c"), col("d")])?
         .build()?;
@@ -2488,8 +2500,10 @@ fn test_unparse_right_anti_join() -> Result<()> {
     //     TableScan: t1 projection=[c, d]
     //     Projection: t2.c, t2.d
     //       TableScan: t2 projection=[c, d]
-    let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
-    let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
+    let left =
+        table_scan(Some("t1"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
+    let right_table_scan =
+        table_scan(Some("t2"), &schema, Some(vec![col("c"), col("d")]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
         .project(vec![col("c"), col("d")])?
         .build()?;
@@ -2525,8 +2539,8 @@ fn test_unparse_cross_join_with_table_scan_projection() -> Result<()> {
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .cross_join(subquery_alias(table_scan2, "t2")?)?
         .build()?;
@@ -2550,8 +2564,8 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .join_on(
             subquery_alias(table_scan2, "t2")?,
@@ -2579,8 +2593,8 @@ fn test_unparse_left_semi_join_with_table_scan_projection() -> Result<()> {
     //     TableScan: test projection=[v]
     //   SubqueryAlias: t2
     //     TableScan: test projection=[v]
-    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
-    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![1]))?.build()?;
+    let table_scan1 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
+    let table_scan2 = table_scan(Some("test"), &schema, Some(vec![col("v")]))?.build()?;
     let plan = LogicalPlanBuilder::from(subquery_alias(table_scan1, "t1")?)
         .join_on(
             subquery_alias(table_scan2, "t2")?,
@@ -2621,7 +2635,8 @@ fn test_unparse_window() -> Result<()> {
             filter: None,
         },
     }));
-    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let table =
+        table_scan(Some("test"), &schema, Some(vec![col("k"), col("v")]))?.build()?;
     let plan = LogicalPlanBuilder::window_plan(table, vec![window_expr.clone()])?;
 
     let name = plan.schema().fields().last().unwrap().name().clone();
@@ -2659,7 +2674,8 @@ fn test_unparse_window() -> Result<()> {
     );
 
     // without table qualifier
-    let table = table_scan(Some("test"), &schema, Some(vec![0, 1]))?.build()?;
+    let table =
+        table_scan(Some("test"), &schema, Some(vec![col("k"), col("v")]))?.build()?;
     let table = LogicalPlanBuilder::from(table)
         .project(vec![col("k").alias("k"), col("v").alias("v")])?
         .build()?;

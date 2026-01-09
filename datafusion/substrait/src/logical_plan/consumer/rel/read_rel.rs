@@ -27,6 +27,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     EmptyRelation, Expr, LogicalPlan, LogicalPlanBuilder, Values,
+    projection_exprs_from_schema_and_indices,
 };
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -329,7 +330,12 @@ fn apply_projection(
                 fields,
                 df_schema.metadata().clone(),
             )?);
-            scan.projection = Some(column_indices);
+            // Convert column indices to projection expressions
+            let projection_exprs = projection_exprs_from_schema_and_indices(
+                scan.source.schema().as_ref(),
+                &column_indices,
+            )?;
+            scan.projection = Some(projection_exprs);
 
             Ok(LogicalPlan::TableScan(scan))
         }

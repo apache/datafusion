@@ -21,7 +21,7 @@ use crate::{OptimizerContext, OptimizerRule};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, assert_contains};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
+use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, logical_plan::table_scan};
 use std::sync::Arc;
 
 pub mod user_defined;
@@ -49,7 +49,7 @@ pub fn test_table_scan() -> Result<LogicalPlan> {
 pub fn scan_empty(
     name: Option<&str>,
     table_schema: &Schema,
-    projection: Option<Vec<usize>>,
+    projection: Option<Vec<Expr>>,
 ) -> Result<LogicalPlanBuilder> {
     table_scan(name, table_schema, projection)
 }
