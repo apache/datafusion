@@ -19,6 +19,7 @@
 
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
+use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
     evaluate_many,
@@ -73,6 +74,19 @@ impl GroupedTopKAggregateStream {
         let kt = expr.data_type(&aggr.input().schema())?;
         let vt = val_field.data_type().clone();
 
+        // Type validation is performed by the optimizer and can_use_topk() check.
+        // This debug assertion documents the contract without runtime overhead in release builds.
+        #[cfg(debug_assertions)]
+        {
+            debug_assert!(
+                topk_types_supported(&kt, &vt),
+                "TopK type validation should have been performed by optimizer and can_use_topk(). \
+                 Found unsupported types: key={kt:?}, value={vt:?}"
+            );
+        }
+
+        // Note: Null values in aggregate columns are filtered by the aggregation layer
+        // before reaching the heap, so the heap implementations don't need explicit null handling.
         let priority_map = PriorityMap::new(kt, vt, limit, desc)?;
 
         Ok(GroupedTopKAggregateStream {
