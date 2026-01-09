@@ -27,7 +27,10 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
+    plan_err,
+};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
