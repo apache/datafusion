@@ -21,8 +21,6 @@
 //! from IN list membership tests, handling null propagation correctly
 //! according to SQL three-valued logic.
 
-#![expect(dead_code)]
-
 use arrow::array::BooleanArray;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 
