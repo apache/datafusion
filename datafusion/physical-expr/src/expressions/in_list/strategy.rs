@@ -25,6 +25,7 @@ use datafusion_common::Result;
 use super::array_static_filter::ArrayStaticFilter;
 use super::primitive_filter::*;
 use super::static_filter::StaticFilter;
+use super::transform::make_bitmap_filter;
 
 pub(super) fn instantiate_static_filter(
     in_array: ArrayRef,
@@ -37,13 +38,10 @@ pub(super) fn instantiate_static_filter(
         _ => in_array,
     };
     match in_array.data_type() {
-        // Integer primitive types
-        DataType::Int8 => Ok(Arc::new(Int8StaticFilter::try_new(&in_array)?)),
-        DataType::Int16 => Ok(Arc::new(Int16StaticFilter::try_new(&in_array)?)),
+        DataType::Int8 | DataType::UInt8 => make_bitmap_filter::<U8Config>(&in_array),
+        DataType::Int16 | DataType::UInt16 => make_bitmap_filter::<U16Config>(&in_array),
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-        DataType::UInt8 => Ok(Arc::new(BitmapFilter::<U8Config>::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(BitmapFilter::<U16Config>::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         // Float primitive types (use ordered wrappers for Hash/Eq)
