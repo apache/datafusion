@@ -45,7 +45,9 @@ pub(super) fn instantiate_static_filter(
         DataType::UInt8 => Ok(Arc::new(BitmapFilter::<UInt8BitmapConfig>::try_new(
             &in_array,
         )?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
+        DataType::UInt16 => Ok(Arc::new(BitmapFilter::<UInt16BitmapConfig>::try_new(
+            &in_array,
+        )?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         // Float primitive types (use ordered wrappers for Hash/Eq)

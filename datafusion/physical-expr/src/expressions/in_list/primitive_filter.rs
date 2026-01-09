@@ -49,6 +49,21 @@ impl BitmapStorage for [u64; 4] {
     }
 }
 
+impl BitmapStorage for Box<[u64; 1024]> {
+    #[inline]
+    fn new_zeroed() -> Self {
+        Box::new([0u64; 1024])
+    }
+    #[inline]
+    fn set_bit(&mut self, index: usize) {
+        self[index / 64] |= 1u64 << (index % 64);
+    }
+    #[inline(always)]
+    fn get_bit(&self, index: usize) -> bool {
+        (self[index / 64] >> (index % 64)) & 1 != 0
+    }
+}
+
 pub(super) trait BitmapFilterConfig: Send + Sync + 'static {
     const DATA_TYPE_NAME: &'static str;
 
@@ -73,10 +88,24 @@ impl BitmapFilterConfig for UInt8BitmapConfig {
     }
 }
 
+pub(super) enum UInt16BitmapConfig {}
+impl BitmapFilterConfig for UInt16BitmapConfig {
+    const DATA_TYPE_NAME: &'static str = "UInt16";
+
+    type Native = u16;
+    type ArrowType = UInt16Type;
+    type Storage = Box<[u64; 1024]>;
+
+    #[inline(always)]
+    fn to_index(v: u16) -> usize {
+        v as usize
+    }
+}
+
 /// Bitmap filter for O(1) set membership via single bit test.
 ///
-/// `UInt8` has only 256 possible values, so the filter stores membership in a
-/// 256-bit bitmap instead of using a hash table.
+/// Small integer domains can store membership in a fixed-size bitmap instead
+/// of using a hash table.
 pub(super) struct BitmapFilter<C: BitmapFilterConfig> {
     null_count: usize,
     bits: C::Storage,
@@ -321,7 +350,6 @@ primitive_static_filter!(Int8StaticFilter, Int8Type);
 primitive_static_filter!(Int16StaticFilter, Int16Type);
 primitive_static_filter!(Int32StaticFilter, Int32Type);
 primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt16StaticFilter, UInt16Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
 primitive_static_filter!(UInt64StaticFilter, UInt64Type);
 
@@ -342,10 +370,10 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::{DictionaryArray, Int8Array, UInt8Array};
+    use arrow::array::{DictionaryArray, Int8Array, UInt8Array, UInt16Array};
 
     fn assert_contains(
-        filter: &BitmapFilter<UInt8BitmapConfig>,
+        filter: &dyn StaticFilter,
         needles: &dyn Array,
         expected: Vec<Option<bool>>,
     ) -> Result<()> {
@@ -381,5 +409,30 @@ mod tests {
         let needles = DictionaryArray::try_new(keys, values)?;
 
         assert_contains(&filter, &needles, vec![Some(true), None, None, Some(true)])
+    }
+
+    #[test]
+    fn bitmap_filter_u16_handles_boundaries_and_nulls() -> Result<()> {
+        let haystack: ArrayRef = Arc::new(UInt16Array::from(vec![
+            Some(0),
+            None,
+            Some(1024),
+            Some(u16::MAX),
+        ]));
+        let filter = BitmapFilter::<UInt16BitmapConfig>::try_new(&haystack)?;
+        let needles =
+            UInt16Array::from(vec![Some(0), Some(1), Some(1024), Some(u16::MAX), None]);
+
+        assert_contains(
+            &filter,
+            &needles,
+            vec![Some(true), None, Some(true), Some(true), None],
+        )?;
+        assert_eq!(
+            filter.contains(&needles, true)?,
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(false), None])
+        );
+
+        Ok(())
     }
 }
