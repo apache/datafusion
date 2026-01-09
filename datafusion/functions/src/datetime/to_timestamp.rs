@@ -21,7 +21,8 @@ use std::sync::Arc;
 use crate::datetime::common::*;
 use arrow::array::timezone::Tz;
 use arrow::array::{
-    Array, Decimal128Array, Decimal256Array, Float64Array, TimestampNanosecondArray,
+    Array, Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array,
+    TimestampNanosecondArray,
 };
 use arrow::datatypes::DataType::*;
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
@@ -30,7 +31,6 @@ use arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{Result, ScalarType, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
@@ -455,19 +455,26 @@ impl ScalarUDFImpl for ToTimestampFunc {
                 .cast_to(&Timestamp(Second, None), None)?
                 .cast_to(&Timestamp(Nanosecond, tz), None),
             Null | Timestamp(_, _) => args[0].cast_to(&Timestamp(Nanosecond, tz), None),
-            Float16 | Float32 | Float64 => {
-                let arg = args[0].cast_to(&Float64, None)?;
-                let rescaled = arrow::compute::kernels::numeric::mul(
-                    &arg.to_array(1)?,
-                    &arrow::array::Scalar::new(Float64Array::from(vec![
-                        1_000_000_000f64,
-                    ])),
-                )?;
-                Ok(ColumnarValue::Array(arrow::compute::cast_with_options(
-                    &rescaled,
-                    &Timestamp(Nanosecond, tz),
-                    &DEFAULT_CAST_OPTIONS,
-                )?))
+            Float16 => {
+                let arr = args[0].to_array(1)?;
+                let f16_arr = downcast_arg!(&arr, Float16Array);
+                let result: TimestampNanosecondArray =
+                    f16_arr.unary(|x| (x.to_f64() * 1_000_000_000.0) as i64);
+                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
+            }
+            Float32 => {
+                let arr = args[0].to_array(1)?;
+                let f32_arr = downcast_arg!(&arr, Float32Array);
+                let result: TimestampNanosecondArray =
+                    f32_arr.unary(|x| (x as f64 * 1_000_000_000.0) as i64);
+                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
+            }
+            Float64 => {
+                let arr = args[0].to_array(1)?;
+                let f64_arr = downcast_arg!(&arr, Float64Array);
+                let result: TimestampNanosecondArray =
+                    f64_arr.unary(|x| (x * 1_000_000_000.0) as i64);
+                Ok(ColumnarValue::Array(Arc::new(result.with_timezone_opt(tz))))
             }
             Decimal32(_, _) | Decimal64(_, _) => {
                 let arg = args[0].cast_to(&Decimal128(38, 9), None)?;
