@@ -67,7 +67,7 @@ use crate::utils::validate_percentile_expr;
 /// The interpolation formula: `lower + (upper - lower) * fraction`
 /// is computed as: `lower + ((upper - lower) * (fraction * PRECISION)) / PRECISION`
 /// to avoid floating-point operations on integer types while maintaining precision.
-const INTERPOLATION_PRECISION: usize = 1_000_000;
+pub(crate) const INTERPOLATION_PRECISION: usize = 1_000_000;
 
 create_func!(PercentileCont, percentile_cont_udaf);
 
@@ -672,7 +672,9 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctPercentileContAccumula
 /// For percentile p and n values:
 /// - If p * (n-1) is an integer, return the value at that position
 /// - Otherwise, interpolate between the two closest values
-fn calculate_percentile<T: ArrowNumericType>(
+///
+/// This function is also used by median (which is percentile_cont at 0.5).
+pub(crate) fn calculate_percentile<T: ArrowNumericType>(
     mut values: Vec<T::Native>,
     percentile: f64,
 ) -> Option<T::Native> {

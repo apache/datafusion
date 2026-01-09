@@ -878,16 +878,16 @@ statement error
 SELECT approx_median(c1) FROM aggregate_test_100
 
 # csv_query_median_1
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
 
 # csv_query_median_2
-query I
+query R
 SELECT median(c6) FROM aggregate_test_100
 ----
-1125553990140691277
+1125553990140691200
 
 # csv_query_median_3
 query R
@@ -896,18 +896,18 @@ SELECT median(c12) FROM aggregate_test_100
 0.551390054439
 
 # median_i8
-query I
+query R
 SELECT median(col_i8) FROM median_table
 ----
 -14
 
 # distinct_median_i8
-query I
+query R
 SELECT median(distinct col_i8) FROM median_table
 ----
 100
 
-query II
+query RR
 SELECT median(col_i8), median(distinct col_i8) FROM median_table
 ----
 -14 100
@@ -929,43 +929,43 @@ query error DataFusion error: Error during planning: \[IGNORE \| RESPECT\] NULLS
 SELECT median(c2) RESPECT NULLS FROM aggregate_test_100
 
 # median_i16
-query I
+query R
 SELECT median(col_i16) FROM median_table
 ----
 -16334
 
 # median_i32
-query I
+query R
 SELECT median(col_i32) FROM median_table
 ----
 -1073741774
 
 # median_i64
-query I
+query R
 SELECT median(col_i64) FROM median_table
 ----
--4611686018427387854
+-4611686018427388000
 
 # median_u8
-query I
+query R
 SELECT median(col_u8) FROM median_table
 ----
 50
 
 # median_u16
-query I
+query R
 SELECT median(col_u16) FROM median_table
 ----
 50
 
 # median_u32
-query I
+query R
 SELECT median(col_u32) FROM median_table
 ----
 50
 
 # median_u64
-query I
+query R
 SELECT median(col_u64) FROM median_table
 ----
 50
@@ -996,56 +996,56 @@ NaN
 
 
 # median_i8_overflow_negative
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-85, 'Int8')), (arrow_cast(-56, 'Int8'))) AS t(v);
 ----
--70
+-70.5
 
 # median_i8_overflow_positive
 # Test overflow with positive values: 100 + 120 = 220 > 127 (max i8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(100, 'Int8')), (arrow_cast(120, 'Int8'))) AS t(v);
 ----
 110
 
 # median_u8_overflow
 # Test unsigned overflow: 200 + 250 = 450 > 255 (max u8)
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(200, 'UInt8')), (arrow_cast(250, 'UInt8'))) AS t(v);
 ----
 225
 
 # median_i8_no_overflow_normal_case
 # Normal case that doesn't overflow for comparison
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) AS t(v);
 ----
-4
+4.5
 
 # median_i8_max_values
 # Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
 127
 
 # median_i8_min_values
 # Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
 ----
 -128
 
 # median_i8_min_max_values
-# Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
-query I
+# Test with i8::MIN and i8::MAX: -128 + 127 = -1, median = -0.5
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
 ----
-0
+-0.5
 
 # median_u8_max_values
 # Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
-query I
+query R
 SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
 ----
 255
@@ -1188,7 +1188,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1200,10 +1200,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (2), (3), (4), (5), (6);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1212,10 +1212,10 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
-3
+3.5
 
 statement ok
 drop table t;
@@ -1224,7 +1224,7 @@ drop table t;
 statement ok
 create table t(c int) as values (null), (null), (null);
 
-query I
+query R
 select median(c) from t;
 ----
 NULL
@@ -1236,7 +1236,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (2), (3), (4), (5);
 
-query I
+query R
 select median(c) from t;
 ----
 3
@@ -1284,7 +1284,7 @@ drop table t;
 statement ok
 create table t(c int) as values (2), (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1296,7 +1296,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (3), (1), (1);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1308,7 +1308,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (null), (1), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1320,7 +1320,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (2), (1), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1332,7 +1332,7 @@ drop table t;
 statement ok
 create table t(c int unsigned) as values (1), (1), (1), (1), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -1392,7 +1392,7 @@ drop table t;
 statement ok
 create table t(c int) as values (1), (1), (1), (1), (2), (2), (3), (3);
 
-query I
+query R
 select median(distinct c) from t;
 ----
 2
@@ -3703,7 +3703,7 @@ SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c2) FROM aggregate_test_100
 4
 
 # Test that percentile_cont(0.5) equals median
-query I
+query R
 SELECT median(c2) FROM aggregate_test_100
 ----
 3
@@ -5723,7 +5723,7 @@ statement ok
 drop table t;
 
 
-query I
+query R
 select median(a) from (select 1 as a where 1=0);
 ----
 NULL
@@ -7831,56 +7831,56 @@ drop table t;
 #######
 
 # group median i8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 non-nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 non-nullable
-query TI
+query TR
 SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
 ----
 group0 50
@@ -7922,56 +7922,56 @@ group0 0.0002
 group1 0.0003
 
 # group median i8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -14
 group1 100
 
 # group median i16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -16334
 group1 100
 
 # group median i32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 -1073741774
 group1 100
 
 # group median i64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_i64) FROM group_median_table_nullable GROUP BY col_group
 ----
-group0 -4611686018427387854
+group0 -4611686018427388000
 group1 100
 
 # group median u8 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u8) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u16 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u16) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u32 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u32) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
 group1 100
 
 # group median u64 nullable
-query TI rowsort
+query TR rowsort
 SELECT col_group, median(col_u64) FROM group_median_table_nullable GROUP BY col_group
 ----
 group0 50
@@ -8025,11 +8025,11 @@ create table group_median_all_nulls(
 ( 'group1', NULL),
 ( 'group1', NULL)
 
-query TIT rowsort
+query TRT rowsort
 SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP BY a
 ----
-group0 NULL Int32
-group1 NULL Int32
+group0 NULL Float64
+group1 NULL Float64
 
 statement ok
 create table t_decimal (c decimal(10, 4)) as values (100.00), (125.00), (175.00), (200.00), (200.00), (300.00), (null), (null);

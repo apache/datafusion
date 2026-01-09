@@ -130,7 +130,7 @@ GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 -2117946883 d -2117946883 NULL NULL NULL
 -2098805236 c -2098805236 NULL NULL NULL
 
-query ITIIII
+query ITRRRR
 SELECT c5, c1,
        MEDIAN(c5),
        MEDIAN(CASE WHEN c1 = 'a' THEN c5 ELSE NULL END),
@@ -265,7 +265,7 @@ SELECT c2, sum(c5), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 6449337880 7.074412226677
 
 # Test median for int / float
-query IIR
+query IRR
 SELECT c2, median(c5), median(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 ----
 1 23971150 0.5922606
@@ -346,14 +346,14 @@ SELECT c2, sum(c3), sum(c11) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 -194 7.074412226677
 
 # Test median with nullable fields
-query IIR
+query IRR
 SELECT c2, median(c3), median(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
 1 12 0.6067944
 2 1 0.46076488
 3 14 0.40154034
-4 -17 0.48515016
-5 -35 0.5536642
+4 -17.5 0.48515016
+5 -35.5 0.5536642
 
 # Test approx_median with nullable fields
 query IIR
@@ -472,7 +472,7 @@ FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
 5 5 0
 
 # Test median with filter
-query III
+query IRR
 SELECT
   c2,
   median(c3) FILTER (WHERE c3 > 0),
@@ -607,7 +607,7 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 5 6
 
 # Test median with nullable fields and filter
-query IIR
+query IRR
 SELECT c2,
        median(c3) FILTER (WHERE c5 > 0),
        median(c11) FILTER (WHERE c5 < 0)
@@ -615,21 +615,21 @@ FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
 1 -5 0.6623719
 2 15 0.52930677
-3 13 0.32792538
+3 13.5 0.32792538
 4 -38 0.49774808
 5 -18 0.49842384
 
 # Test min / max with nullable fields and nullable filter
-query II
+query IR
 SELECT c2,
        median(c3) FILTER (WHERE c11 > 0.5)
 FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;
 ----
-1 33
+1 33.5
 2 -29
 3 22
 4 -90
-5 -22
+5 -22.5
 
 # Test approx_median with nullable fields and filter
 query IIR

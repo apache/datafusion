@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use arrow::array::{
     ArrowNumericType, BooleanArray, ListArray, PrimitiveArray, PrimitiveBuilder,
-    downcast_integer,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::{
@@ -34,10 +32,7 @@ use arrow::{
 };
 
 use arrow::array::Array;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, Decimal32Type, Decimal64Type, FieldRef,
-};
+use arrow::datatypes::{Decimal32Type, Decimal64Type, FieldRef};
 
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
@@ -54,6 +49,8 @@ use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls:
 use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_macros::user_doc;
 use std::collections::HashMap;
+
+use crate::percentile_cont::calculate_percentile;
 
 make_udaf_expr_and_func!(
     Median,
@@ -127,12 +124,47 @@ impl AggregateUDFImpl for Median {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        // MEDIAN performs linear interpolation for even-length arrays and should return a float type
+        // For integer inputs, return Float64 (matching PostgreSQL/DuckDB/Spark behavior)
+        // For float/decimal inputs, preserve the input type
+        match &arg_types[0] {
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Ok(arg_types[0].clone())
+            }
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => Ok(arg_types[0].clone()),
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok(DataType::Float64),
+            dt => Err(DataFusionError::NotImplemented(format!(
+                "median does not support input type {dt}"
+            ))),
+        }
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new_list_field(args.input_fields[0].data_type().clone(), true);
+        let input_type = args.input_fields[0].data_type().clone();
+        // For integer types, we store as Float64 internally
+        let storage_type = match &input_type {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => DataType::Float64,
+            _ => input_type,
+        };
+        let field = Field::new_list_field(storage_type.clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -166,20 +198,27 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        let dt = acc_args.expr_fields[0].data_type().clone();
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+        let input_dt = acc_args.expr_fields[0].data_type().clone();
+        match input_dt {
+            // For integer types, use Float64 internally since median returns Float64
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianAccumulator not supported for {} with {}",
-                acc_args.name,
-                dt,
+                acc_args.name, input_dt,
             ))),
         }
     }
@@ -200,7 +239,7 @@ impl AggregateUDFImpl for Median {
             num_args
         );
 
-        let dt = args.expr_fields[0].data_type().clone();
+        let input_dt = args.expr_fields[0].data_type().clone();
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
@@ -208,19 +247,26 @@ impl AggregateUDFImpl for Median {
             };
         }
 
-        downcast_integer! {
-            dt => (helper, dt),
-            DataType::Float16 => helper!(Float16Type, dt),
-            DataType::Float32 => helper!(Float32Type, dt),
-            DataType::Float64 => helper!(Float64Type, dt),
-            DataType::Decimal32(_, _) => helper!(Decimal32Type, dt),
-            DataType::Decimal64(_, _) => helper!(Decimal64Type, dt),
-            DataType::Decimal128(_, _) => helper!(Decimal128Type, dt),
-            DataType::Decimal256(_, _) => helper!(Decimal256Type, dt),
+        match input_dt {
+            // For integer types, use Float64 internally since median returns Float64
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => helper!(Float64Type, DataType::Float64),
+            DataType::Float16 => helper!(Float16Type, input_dt),
+            DataType::Float32 => helper!(Float32Type, input_dt),
+            DataType::Float64 => helper!(Float64Type, input_dt),
+            DataType::Decimal32(_, _) => helper!(Decimal32Type, input_dt),
+            DataType::Decimal64(_, _) => helper!(Decimal64Type, input_dt),
+            DataType::Decimal128(_, _) => helper!(Decimal128Type, input_dt),
+            DataType::Decimal256(_, _) => helper!(Decimal256Type, input_dt),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "MedianGroupsAccumulator not supported for {} with {}",
-                args.name,
-                dt,
+                args.name, input_dt,
             ))),
         }
     }
@@ -275,7 +321,14 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values.as_primitive::<T>();
         self.all_values.reserve(values.len() - values.null_count());
         self.all_values.extend(values.iter().flatten());
         Ok(())
@@ -290,7 +343,10 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let median = calculate_median::<T>(&mut self.all_values);
+        // Clone values since calculate_percentile modifies them in-place,
+        // and we need to preserve them for window functions that call evaluate() multiple times
+        let values = self.all_values.clone();
+        let median = calculate_percentile::<T>(values, 0.5);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
@@ -301,9 +357,14 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
 
-        let arr = &values[0];
+        // Cast to target type if needed (e.g., integer to Float64)
+        let arr = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
         for i in 0..arr.len() {
-            let v = ScalarValue::try_from_array(arr, i)?;
+            let v = ScalarValue::try_from_array(&arr, i)?;
             if !v.is_null() {
                 *to_remove.entry(v).or_default() += 1;
             }
@@ -367,7 +428,15 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         total_num_groups: usize,
     ) -> Result<()> {
         assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = values[0].as_primitive::<T>();
+
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let values = values.as_primitive::<T>();
 
         // Push the `not nulls + not filtered` row into its group
         self.group_values.resize(total_num_groups, Vec::new());
@@ -478,11 +547,11 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
         // Emit values
         let emit_group_values = emit_to.take_needed(&mut self.group_values);
 
-        // Calculate median for each group
+        // Calculate median for each group using percentile_cont at 0.5
         let mut evaluate_result_builder =
             PrimitiveBuilder::<T>::new().with_data_type(self.data_type.clone());
-        for mut values in emit_group_values {
-            let median = calculate_median::<T>(&mut values);
+        for values in emit_group_values {
+            let median = calculate_percentile::<T>(values, 0.5);
             evaluate_result_builder.append_option(median);
         }
 
@@ -496,7 +565,14 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for MedianGroupsAccumulator<T
     ) -> Result<Vec<ArrayRef>> {
         assert_eq!(values.len(), 1, "one argument to merge_batch");
 
-        let input_array = values[0].as_primitive::<T>();
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values_array = if values[0].data_type() != &self.data_type {
+            arrow::compute::cast(&values[0], &self.data_type)?
+        } else {
+            Arc::clone(&values[0])
+        };
+
+        let input_array = values_array.as_primitive::<T>();
 
         // Directly convert the input array to states, each row will be
         // seen as a respective group.
@@ -558,7 +634,13 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.distinct_values.update_batch(values)
+        // Cast to target type if needed (e.g., integer to Float64)
+        let values = if values[0].data_type() != &self.data_type {
+            vec![arrow::compute::cast(&values[0], &self.data_type)?]
+        } else {
+            values.to_vec()
+        };
+        self.distinct_values.update_batch(&values)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -566,66 +648,15 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut d = std::mem::take(&mut self.distinct_values.values)
+        let d = std::mem::take(&mut self.distinct_values.values)
             .into_iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
-        let median = calculate_median::<T>(&mut d);
+        let median = calculate_percentile::<T>(d, 0.5);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
 
     fn size(&self) -> usize {
         size_of_val(self) + self.distinct_values.size()
-    }
-}
-
-/// Get maximum entry in the slice,
-fn slice_max<T>(array: &[T::Native]) -> T::Native
-where
-    T: ArrowPrimitiveType,
-    T::Native: PartialOrd, // Ensure the type supports PartialOrd for comparison
-{
-    // Make sure that, array is not empty.
-    debug_assert!(!array.is_empty());
-    // `.unwrap()` is safe here as the array is supposed to be non-empty
-    *array
-        .iter()
-        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
-        .unwrap()
-}
-
-fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::Native> {
-    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
-
-    let len = values.len();
-    if len == 0 {
-        None
-    } else if len % 2 == 0 {
-        let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
-        // Get the maximum of the low (left side after bi-partitioning)
-        let left_max = slice_max::<T>(low);
-        // Calculate median as the average of the two middle values.
-        // Use checked arithmetic to detect overflow and fall back to safe formula.
-        let two = T::Native::usize_as(2);
-        let median = match left_max.add_checked(*high) {
-            Ok(sum) => sum.div_wrapping(two),
-            Err(_) => {
-                // Overflow detected - use safe midpoint formula:
-                // a/2 + b/2 + ((a%2 + b%2) / 2)
-                // This avoids overflow by dividing before adding.
-                let half_left = left_max.div_wrapping(two);
-                let half_right = (*high).div_wrapping(two);
-                let rem_left = left_max.mod_wrapping(two);
-                let rem_right = (*high).mod_wrapping(two);
-                // The sum of remainders (0, 1, or 2 for unsigned; -2 to 2 for signed)
-                // divided by 2 gives the correction factor (0 or 1 for unsigned; -1, 0, or 1 for signed)
-                let correction = rem_left.add_wrapping(rem_right).div_wrapping(two);
-                half_left.add_wrapping(half_right).add_wrapping(correction)
-            }
-        };
-        Some(median)
-    } else {
-        let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);
-        Some(*median)
     }
 }
