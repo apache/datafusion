@@ -5384,10 +5384,10 @@ mod tests {
 
     /// Test null-aware anti join when probe side (right) contains NULL
     /// Expected: no rows should be output (NULL in subquery means all results are unknown)
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_anti_join_probe_null(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+        let task_ctx = prepare_task_ctx(batch_size, false);
 
         // Build left table (rows to potentially output)
         let left = build_table_two_cols(
@@ -5434,10 +5434,10 @@ mod tests {
 
     /// Test null-aware anti join when build side (left) contains NULL keys
     /// Expected: rows with NULL keys should not be output
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_anti_join_build_null(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+        let task_ctx = prepare_task_ctx(batch_size, false);
 
         // Build left table with NULL key (this row should not be output)
         let left = build_table_two_cols(
@@ -5486,10 +5486,10 @@ mod tests {
     }
 
     /// Test null-aware anti join with no NULLs (should work like regular anti join)
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn test_null_aware_anti_join_no_nulls(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+        let task_ctx = prepare_task_ctx(batch_size, false);
 
         // Build left table (no NULLs)
         let left = build_table_two_cols(
