@@ -700,8 +700,10 @@ SELECT var(distinct c2) FROM aggregate_test_100
 ----
 2.5
 
-statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
+query RR
 SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+----
+1.886363636364 2.5
 
 # csv_query_distinct_variance_population
 query R
@@ -709,8 +711,10 @@ SELECT var_pop(distinct c2) FROM aggregate_test_100
 ----
 2
 
-statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+query RR
 SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
+----
+1.8675 2
 
 # csv_query_variance_5
 query R
