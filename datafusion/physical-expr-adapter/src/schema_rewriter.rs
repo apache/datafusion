@@ -525,7 +525,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
 /// ).unwrap();
 ///
 /// // Adapt the batch to match target schema
-/// let adapted = adapter.adapt_batch(source_batch).unwrap();
+/// let adapted = adapter.adapt_batch(&source_batch).unwrap();
 ///
 /// assert_eq!(adapted.num_columns(), 3);
 /// assert_eq!(adapted.column(0).data_type(), &DataType::Utf8);   // name
@@ -576,9 +576,7 @@ impl BatchAdapterFactory {
         let simplifier = PhysicalExprSimplifier::new(&self.target_schema);
 
         let projection = ProjectionExprs::from_indices(
-            &(0..self.target_schema.fields().len())
-                .map(|i| i as usize)
-                .collect_vec(),
+            &(0..self.target_schema.fields().len()).collect_vec(),
             &self.target_schema,
         );
 
