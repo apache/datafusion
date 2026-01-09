@@ -704,7 +704,7 @@ mod tests {
         let mut acc = VarianceGroupsAccumulator::new(StatsType::Sample);
         acc.merge_batch(&state_1, &[0], None, 1)?;
         acc.merge_batch(&state_2, &[0], None, 1)?;
-        let result = acc.evaluate(EmitTo::All)?;
+        let result = acc.evaluate(EmitTo::Next(usize::MAX))?;
         let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result.value(0), 1.0);

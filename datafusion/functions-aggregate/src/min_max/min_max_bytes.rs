@@ -485,22 +485,23 @@ impl MinMaxBytesState {
     /// - `data_capacity`: the total length of all strings and their contents,
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
-        match emit_to {
-            EmitTo::All => {
-                (
-                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
-                    std::mem::take(&mut self.min_max),
-                )
-            }
-            EmitTo::First(n) => {
-                let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
-                let first_data_capacity: usize = first_min_maxes
-                    .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum();
-                self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
-            }
+        let n = emit_to.batch_size().min(self.min_max.len());
+
+        if n == self.min_max.len() {
+            // Taking all
+            (
+                std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
+                std::mem::take(&mut self.min_max),
+            )
+        } else {
+            // Taking first n
+            let first_min_maxes: Vec<_> = self.min_max.drain(..n).collect();
+            let first_data_capacity: usize = first_min_maxes
+                .iter()
+                .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                .sum();
+            self.total_data_bytes -= first_data_capacity;
+            (first_data_capacity, first_min_maxes)
         }
     }
 
