@@ -46,9 +46,6 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 ///
 /// This struct is returned by [`FileFormat::infer_stats_and_ordering`] to
 /// provide all metadata in a single read, avoiding duplicate I/O operations.
-///
-/// Note: Individual components (statistics and ordering) are typically cached
-/// separately by [`FileStatisticsCache`] implementations to enable partial cache hits.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct FileMeta {
