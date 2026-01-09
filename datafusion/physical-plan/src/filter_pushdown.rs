@@ -38,9 +38,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::utils::{
-    collect_columns, reassign_expr_columns,
-};
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 
