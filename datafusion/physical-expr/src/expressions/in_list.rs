@@ -41,6 +41,7 @@ mod primitive_filter;
 mod result;
 mod static_filter;
 mod strategy;
+mod transform;
 
 use static_filter::StaticFilter;
 use strategy::instantiate_static_filter;
