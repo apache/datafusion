@@ -330,16 +330,16 @@ fn join_keys_may_be_null(
     // Check if any column is nullable
     for col in columns {
         // Check in left schema
-        if let Ok(field) = left_schema.field_from_column(&col) {
-            if field.as_ref().is_nullable() {
-                return Ok(true);
-            }
+        if let Ok(field) = left_schema.field_from_column(&col)
+            && field.as_ref().is_nullable()
+        {
+            return Ok(true);
         }
         // Check in right schema
-        if let Ok(field) = right_schema.field_from_column(&col) {
-            if field.as_ref().is_nullable() {
-                return Ok(true);
-            }
+        if let Ok(field) = right_schema.field_from_column(&col)
+            && field.as_ref().is_nullable()
+        {
+            return Ok(true);
         }
     }
 
