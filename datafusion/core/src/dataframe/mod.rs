@@ -31,10 +31,9 @@ use crate::datasource::{
 use crate::error::Result;
 use crate::execution::FunctionRegistry;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning, TableType, col, ident,
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderExt,
+    LogicalPlanBuilderOptions, Partitioning, TableType, col, ident,
 };
 use crate::physical_plan::{
     ExecutionPlan, SendableRecordBatchStream, collect, collect_partitioned,
@@ -43,7 +42,7 @@ use crate::physical_plan::{
 use crate::prelude::SessionContext;
 use std::any::Any;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
@@ -52,9 +51,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
-    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
-    plan_datafusion_err, plan_err, unqualified_field_not_found,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, TableReference,
+    UnnestOptions, exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err,
+    plan_err,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
@@ -310,28 +309,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn select_columns(self, columns: &[&str]) -> Result<DataFrame> {
-        let fields = columns
-            .iter()
-            .map(|name| {
-                let fields = self
-                    .plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name);
-                if fields.is_empty() {
-                    Err(unqualified_field_not_found(name, self.plan.schema()))
-                } else {
-                    Ok(fields)
-                }
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-        let expr: Vec<Expr> = fields
-            .into_iter()
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
-            .collect();
-        self.select(expr)
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .select_columns(columns)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: false,
+        })
     }
     /// Project arbitrary list of expression strings into a new `DataFrame`.
     /// Method will parse string expressions into logical plan expressions.
@@ -394,23 +379,9 @@ impl DataFrame {
         self,
         expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<DataFrame> {
-        let expr_list: Vec<SelectExpr> =
-            expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
-
-        let expressions = expr_list.iter().filter_map(|e| match e {
-            SelectExpr::Expression(expr) => Some(expr),
-            _ => None,
-        });
-
-        let window_func_exprs = find_window_exprs(expressions);
-        let plan = if window_func_exprs.is_empty() {
-            self.plan
-        } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
-        };
-
-        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
-
+        let project_plan = LogicalPlanBuilder::from(self.plan)
+            .select_exprs(expr_list)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
@@ -448,25 +419,14 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
-        let fields_to_drop = columns
-            .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
-            })
-            .collect::<Vec<_>>();
-        let expr: Vec<Expr> = self
-            .plan
-            .schema()
-            .fields()
-            .into_iter()
-            .enumerate()
-            .map(|(idx, _)| self.plan.schema().qualified_field(idx))
-            .filter(|(qualifier, f)| !fields_to_drop.contains(&(*qualifier, f)))
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
-            .collect();
-        self.select(expr)
+        let plan = LogicalPlanBuilder::from(self.plan)
+            .drop_columns(columns)?
+            .build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+            projection_requires_validation: false,
+        })
     }
 
     /// Expand multiple list/struct columns into a set of rows and new columns.
@@ -2135,50 +2095,8 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column(self, name: &str, expr: Expr) -> Result<DataFrame> {
-        let window_func_exprs = find_window_exprs([&expr]);
-
-        let original_names: HashSet<String> = self
-            .plan
-            .schema()
-            .iter()
-            .map(|(_, f)| f.name().clone())
-            .collect();
-
-        // Maybe build window plan
-        let plan = if window_func_exprs.is_empty() {
-            self.plan
-        } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
-        };
-
-        let new_column = expr.alias(name);
-        let mut col_exists = false;
-
-        let mut fields: Vec<(Expr, bool)> = plan
-            .schema()
-            .iter()
-            .filter_map(|(qualifier, field)| {
-                // Skip new fields introduced by window_plan
-                if !original_names.contains(field.name()) {
-                    return None;
-                }
-
-                if field.name() == name {
-                    col_exists = true;
-                    Some((new_column.clone(), true))
-                } else {
-                    let e = col(Column::from((qualifier, field)));
-                    Some((e, self.projection_requires_validation))
-                }
-            })
-            .collect();
-
-        if !col_exists {
-            fields.push((new_column, true));
-        }
-
-        let project_plan = LogicalPlanBuilder::from(plan)
-            .project_with_validation(fields)?
+        let project_plan = LogicalPlanBuilder::from(self.plan)
+            .with_column(name, expr, self.projection_requires_validation)?
             .build()?;
 
         Ok(DataFrame {
@@ -2226,36 +2144,8 @@ impl DataFrame {
         } else {
             Column::from_qualified_name_ignore_case(old_name)
         };
-
-        let (qualifier_rename, field_rename) =
-            match self.plan.schema().qualified_field_from_column(&old_column) {
-                Ok(qualifier_and_field) => qualifier_and_field,
-                // no-op if field not found
-                Err(DataFusionError::SchemaError(e, _))
-                    if matches!(*e, SchemaError::FieldNotFound { .. }) =>
-                {
-                    return Ok(self);
-                }
-                Err(err) => return Err(err),
-            };
-        let projection = self
-            .plan
-            .schema()
-            .iter()
-            .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field == field_rename {
-                    (
-                        col(Column::from((qualifier, field)))
-                            .alias_qualified(qualifier.cloned(), new_name),
-                        false,
-                    )
-                } else {
-                    (col(Column::from((qualifier, field))), false)
-                }
-            })
-            .collect::<Vec<_>>();
         let project_plan = LogicalPlanBuilder::from(self.plan)
-            .project_with_validation(projection)?
+            .with_column_renamed(old_column, new_name)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
