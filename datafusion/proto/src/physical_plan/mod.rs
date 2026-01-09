@@ -480,12 +480,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     .children()
                     .into_iter()
                     .cloned()
-                    .map(|i| {
-                        protobuf::PhysicalPlanNode::try_from_physical_plan(
-                            i,
-                            extension_codec,
-                        )
-                    })
+                    .map(|i| extension_codec.serialize_physical_plan(i))
                     .collect::<Result<_>>()?;
 
                 Ok(protobuf::PhysicalPlanNode {
@@ -1379,7 +1374,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &union.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+            inputs.push(extension_codec.deserialize_physical_plan(input, ctx)?);
         }
         UnionExec::try_new(inputs)
     }
@@ -1393,7 +1388,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &interleave.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+            inputs.push(extension_codec.deserialize_physical_plan(input, ctx)?);
         }
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
@@ -1549,7 +1544,7 @@ impl protobuf::PhysicalPlanNode {
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
-            .map(|i| i.try_into_physical_plan(ctx, extension_codec))
+            .map(|i| extension_codec.deserialize_physical_plan(i, ctx))
             .collect::<Result<_>>()?;
 
         let extension_node =
@@ -2050,10 +2045,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &ProjectionExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         let expr = exec
             .expr()
             .iter()
@@ -2079,10 +2071,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &AnalyzeExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Analyze(Box::new(
                 protobuf::AnalyzeExecNode {
@@ -2099,10 +2088,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &FilterExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Filter(Box::new(
                 protobuf::FilterExecNode {
@@ -2124,10 +2110,7 @@ impl protobuf::PhysicalPlanNode {
         limit: &GlobalLimitExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            limit.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(limit.input().to_owned())?;
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
@@ -2147,10 +2130,7 @@ impl protobuf::PhysicalPlanNode {
         limit: &LocalLimitExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            limit.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(limit.input().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
                 protobuf::LocalLimitExecNode {
@@ -2165,14 +2145,8 @@ impl protobuf::PhysicalPlanNode {
         exec: &HashJoinExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.left().to_owned(),
-            extension_codec,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.right().to_owned(),
-            extension_codec,
-        )?;
+        let left = extension_codec.serialize_physical_plan(exec.left().to_owned())?;
+        let right = extension_codec.serialize_physical_plan(exec.right().to_owned())?;
         let on: Vec<protobuf::JoinOn> = exec
             .on()
             .iter()
@@ -2241,14 +2215,8 @@ impl protobuf::PhysicalPlanNode {
         exec: &SymmetricHashJoinExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.left().to_owned(),
-            extension_codec,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.right().to_owned(),
-            extension_codec,
-        )?;
+        let left = extension_codec.serialize_physical_plan(exec.left().to_owned())?;
+        let right = extension_codec.serialize_physical_plan(exec.right().to_owned())?;
         let on = exec
             .on()
             .iter()
@@ -2359,14 +2327,8 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortMergeJoinExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.left().to_owned(),
-            extension_codec,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.right().to_owned(),
-            extension_codec,
-        )?;
+        let left = extension_codec.serialize_physical_plan(exec.left().to_owned())?;
+        let right = extension_codec.serialize_physical_plan(exec.right().to_owned())?;
         let on = exec
             .on()
             .iter()
@@ -2443,14 +2405,8 @@ impl protobuf::PhysicalPlanNode {
         exec: &CrossJoinExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.left().to_owned(),
-            extension_codec,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.right().to_owned(),
-            extension_codec,
-        )?;
+        let left = extension_codec.serialize_physical_plan(exec.left().to_owned())?;
+        let right = extension_codec.serialize_physical_plan(exec.right().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
                 protobuf::CrossJoinExecNode {
@@ -2508,10 +2464,7 @@ impl protobuf::PhysicalPlanNode {
             }
         };
         let input_schema = exec.input_schema();
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         let null_expr = exec
             .group_expr()
@@ -2582,10 +2535,8 @@ impl protobuf::PhysicalPlanNode {
         coalesce_batches: &CoalesceBatchesExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            coalesce_batches.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec
+            .serialize_physical_plan(coalesce_batches.input().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::CoalesceBatches(Box::new(
                 protobuf::CoalesceBatchesExecNode {
@@ -2752,10 +2703,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &CoalescePartitionsExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
                 protobuf::CoalescePartitionsExecNode {
@@ -2770,10 +2718,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &RepartitionExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         let pb_partitioning =
             serialize_partitioning(exec.partitioning(), extension_codec)?;
@@ -2792,10 +2737,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         let expr = exec
             .expr()
             .iter()
@@ -2834,10 +2776,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in union.inputs() {
-            inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
-                input.to_owned(),
-                extension_codec,
-            )?);
+            inputs.push(extension_codec.serialize_physical_plan(input.to_owned())?);
         }
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Union(protobuf::UnionExecNode {
@@ -2852,10 +2791,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in interleave.inputs() {
-            inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
-                input.to_owned(),
-                extension_codec,
-            )?);
+            inputs.push(extension_codec.serialize_physical_plan(input.to_owned())?);
         }
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Interleave(
@@ -2868,10 +2804,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &SortPreservingMergeExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         let expr = exec
             .expr()
             .iter()
@@ -2904,14 +2837,8 @@ impl protobuf::PhysicalPlanNode {
         exec: &NestedLoopJoinExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.left().to_owned(),
-            extension_codec,
-        )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.right().to_owned(),
-            extension_codec,
-        )?;
+        let left = extension_codec.serialize_physical_plan(exec.left().to_owned())?;
+        let right = extension_codec.serialize_physical_plan(exec.right().to_owned())?;
 
         let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
         let filter = exec
@@ -2959,10 +2886,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &WindowAggExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         let window_expr = exec
             .window_expr()
@@ -2992,10 +2916,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &BoundedWindowAggExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         let window_expr = exec
             .window_expr()
@@ -3042,10 +2963,7 @@ impl protobuf::PhysicalPlanNode {
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Option<Self>> {
         let input: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan(
-                exec.input().to_owned(),
-                extension_codec,
-            )?;
+            extension_codec.serialize_physical_plan(exec.input().to_owned())?;
         let sort_order = match exec.sort_order() {
             Some(requirements) => {
                 let expr = requirements
@@ -3118,10 +3036,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &UnnestExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Unnest(Box::new(
@@ -3151,10 +3066,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &CooperativeExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(exec.input().to_owned())?;
 
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Cooperative(Box::new(
@@ -3284,10 +3196,7 @@ impl protobuf::PhysicalPlanNode {
         exec: &AsyncFuncExec,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            Arc::clone(exec.input()),
-            extension_codec,
-        )?;
+        let input = extension_codec.serialize_physical_plan(Arc::clone(exec.input()))?;
 
         let mut async_exprs = vec![];
         let mut async_expr_names = vec![];
@@ -3334,7 +3243,110 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         Self: Sized;
 }
 
+/// Trait for custom serialization and deserialization of physical plans and expressions.
+///
+/// This trait provides methods for handling:
+/// 1. Extension/custom execution plans and expressions (via `try_decode`/`try_encode` methods)
+/// 2. User-defined functions (UDFs, UDAFs, UDWFs)
+/// 3. Interception of ALL plan/expression nodes during serialization/deserialization
+///
+/// The `deserialize_physical_plan`, `serialize_physical_plan`, `deserialize_physical_expr`,
+/// and `serialize_physical_expr` methods are called for **every** node in the plan/expression
+/// tree, allowing implementations to intercept, cache, transform, or otherwise customize
+/// the serialization process.
+///
+/// # Example: Fully Default Implementation
+///
+/// If you want standard behavior without custom logic, delegate to the provided helper functions:
+///
+/// ```ignore
+/// use datafusion_proto::physical_plan::{
+///     PhysicalExtensionCodec, default_deserialize_physical_plan,
+///     default_serialize_physical_plan, default_deserialize_physical_expr,
+///     default_serialize_physical_expr,
+/// };
+///
+/// #[derive(Debug)]
+/// struct MyCodec;
+///
+/// impl PhysicalExtensionCodec for MyCodec {
+///     // Required extension methods (for custom ExecutionPlan types)
+///     fn try_decode(
+///         &self,
+///         buf: &[u8],
+///         inputs: &[Arc<dyn ExecutionPlan>],
+///         ctx: &TaskContext,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         not_impl_err!("No custom ExecutionPlan types supported")
+///     }
+///
+///     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
+///         not_impl_err!("No custom ExecutionPlan types supported")
+///     }
+///
+///     // Interception methods - delegate to defaults for standard behavior
+///     fn deserialize_physical_plan(
+///         &self,
+///         proto: &protobuf::PhysicalPlanNode,
+///         ctx: &TaskContext,
+///     ) -> Result<Arc<dyn ExecutionPlan>> {
+///         default_deserialize_physical_plan(proto, ctx, self)
+///     }
+///
+///     fn serialize_physical_plan(
+///         &self,
+///         plan: Arc<dyn ExecutionPlan>,
+///     ) -> Result<protobuf::PhysicalPlanNode> {
+///         default_serialize_physical_plan(plan, self)
+///     }
+///
+///     fn deserialize_physical_expr(
+///         &self,
+///         proto: &protobuf::PhysicalExprNode,
+///         ctx: &TaskContext,
+///         input_schema: &arrow::datatypes::Schema,
+///     ) -> Result<Arc<dyn PhysicalExpr>> {
+///         default_deserialize_physical_expr(proto, ctx, input_schema, self)
+///     }
+///
+///     fn serialize_physical_expr(
+///         &self,
+///         expr: &Arc<dyn PhysicalExpr>,
+///     ) -> Result<protobuf::PhysicalExprNode> {
+///         default_serialize_physical_expr(expr, self)
+///     }
+/// }
+/// ```
+///
+/// # Example: Caching Deserializer
+///
+/// Custom implementations can intercept deserialization to add caching:
+///
+/// ```ignore
+/// impl PhysicalExtensionCodec for CachingCodec {
+///     fn deserialize_physical_expr(
+///         &self,
+///         proto: &protobuf::PhysicalExprNode,
+///         ctx: &TaskContext,
+///         input_schema: &arrow::datatypes::Schema,
+///     ) -> Result<Arc<dyn PhysicalExpr>> {
+///         // Check cache first
+///         if let Some(cached) = self.expr_cache.get(proto) {
+///             return Ok(Arc::clone(cached));
+///         }
+///         // Deserialize and cache
+///         let expr = default_deserialize_physical_expr(proto, ctx, input_schema, self)?;
+///         self.expr_cache.insert(proto.clone(), Arc::clone(&expr));
+///         Ok(expr)
+///     }
+///     // ... other methods
+/// }
+/// ```
 pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    /// Decode a custom/extension [`ExecutionPlan`] from bytes.
+    ///
+    /// This is called as a fallback when the standard deserialization
+    /// encounters an unknown plan type (marked as Extension in protobuf).
     fn try_decode(
         &self,
         buf: &[u8],
@@ -3342,7 +3354,58 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
+    /// Encode a custom/extension [`ExecutionPlan`] to bytes.
+    ///
+    /// This is called as a fallback when the standard serialization
+    /// encounters an unknown plan type.
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()>;
+
+    /// Deserialize a physical plan node from protobuf.
+    ///
+    /// This method is called for **every** plan node during deserialization,
+    /// allowing implementations to intercept, cache, or transform nodes.
+    ///
+    /// For standard behavior, delegate to [`default_deserialize_physical_plan`].
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Serialize an execution plan to protobuf.
+    ///
+    /// This method is called for **every** plan node during serialization,
+    /// allowing implementations to intercept, cache, or transform nodes.
+    ///
+    /// For standard behavior, delegate to [`default_serialize_physical_plan`].
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode>;
+
+    /// Deserialize a physical expression from protobuf.
+    ///
+    /// This method is called for **every** expression node during deserialization,
+    /// allowing implementations to intercept, cache, or transform expressions.
+    ///
+    /// For standard behavior, delegate to [`default_deserialize_physical_expr`].
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
+
+    /// Serialize a physical expression to protobuf.
+    ///
+    /// This method is called for **every** expression node during serialization,
+    /// allowing implementations to intercept, cache, or transform expressions.
+    ///
+    /// For standard behavior, delegate to [`default_serialize_physical_expr`].
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode>;
 
     fn try_decode_udf(&self, name: &str, _buf: &[u8]) -> Result<Arc<ScalarUDF>> {
         not_impl_err!("PhysicalExtensionCodec is not provided for scalar function {name}")
@@ -3387,6 +3450,69 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 }
 
+/// Default implementation for deserializing a physical plan from protobuf.
+///
+/// This function provides the standard deserialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The deserialization recursively calls `codec.deserialize_physical_plan`
+/// for child nodes, allowing the codec to intercept every node in the tree.
+pub fn default_deserialize_physical_plan(
+    proto: &protobuf::PhysicalPlanNode,
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    proto.try_into_physical_plan(ctx, codec)
+}
+
+/// Default implementation for serializing an execution plan to protobuf.
+///
+/// This function provides the standard serialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The serialization recursively calls `codec.serialize_physical_plan`
+/// for child nodes, allowing the codec to intercept every node in the tree.
+pub fn default_serialize_physical_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalPlanNode> {
+    protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec)
+}
+
+/// Default implementation for deserializing a physical expression from protobuf.
+///
+/// This function provides the standard deserialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The deserialization recursively calls `codec.deserialize_physical_expr`
+/// for child expressions, allowing the codec to intercept every expression in the tree.
+pub fn default_deserialize_physical_expr(
+    proto: &protobuf::PhysicalExprNode,
+    ctx: &TaskContext,
+    input_schema: &arrow::datatypes::Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    from_proto::parse_physical_expr(proto, ctx, input_schema, codec)
+}
+
+/// Default implementation for serializing a physical expression to protobuf.
+///
+/// This function provides the standard serialization logic. Custom
+/// [`PhysicalExtensionCodec`] implementations can call this to get default
+/// behavior while adding their own logic before or after.
+///
+/// The serialization recursively calls `codec.serialize_physical_expr`
+/// for child expressions, allowing the codec to intercept every expression in the tree.
+pub fn default_serialize_physical_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNode> {
+    to_proto::serialize_physical_expr(expr, codec)
+}
+
 #[derive(Debug)]
 pub struct DefaultPhysicalExtensionCodec {}
 
@@ -3406,6 +3532,37 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         _buf: &mut Vec<u8>,
     ) -> Result<()> {
         not_impl_err!("PhysicalExtensionCodec is not provided")
+    }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        default_deserialize_physical_plan(proto, ctx, self)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        default_deserialize_physical_expr(proto, ctx, input_schema, self)
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        default_serialize_physical_expr(expr, self)
     }
 }
 
@@ -3519,6 +3676,37 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
         self.encode_protobuf(buf, |codec, data| codec.try_encode_udaf(node, data))
     }
+
+    fn deserialize_physical_plan(
+        &self,
+        proto: &protobuf::PhysicalPlanNode,
+        ctx: &TaskContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        default_deserialize_physical_plan(proto, ctx, self)
+    }
+
+    fn serialize_physical_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<protobuf::PhysicalPlanNode> {
+        default_serialize_physical_plan(plan, self)
+    }
+
+    fn deserialize_physical_expr(
+        &self,
+        proto: &protobuf::PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &arrow::datatypes::Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        default_deserialize_physical_expr(proto, ctx, input_schema, self)
+    }
+
+    fn serialize_physical_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Result<protobuf::PhysicalExprNode> {
+        default_serialize_physical_expr(expr, self)
+    }
 }
 
 fn into_physical_plan(
@@ -3527,7 +3715,7 @@ fn into_physical_plan(
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {
-        field.try_into_physical_plan(ctx, extension_codec)
+        extension_codec.deserialize_physical_plan(field, ctx)
     } else {
         Err(proto_error("Missing required field in protobuf"))
     }

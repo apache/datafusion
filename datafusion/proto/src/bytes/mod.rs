@@ -20,9 +20,7 @@ use crate::logical_plan::to_proto::serialize_expr;
 use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
-};
+use crate::physical_plan::{DefaultPhysicalExtensionCodec, PhysicalExtensionCodec};
 use crate::protobuf;
 use datafusion_common::{Result, plan_datafusion_err};
 use datafusion_execution::TaskContext;
@@ -283,9 +281,10 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, &extension_codec)
-            .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
+    // Route through codec to enable interception
+    let protobuf = extension_codec
+        .serialize_physical_plan(plan)
+        .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     serde_json::to_string(&protobuf)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))
 }
@@ -295,8 +294,8 @@ pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Bytes> {
-    let protobuf =
-        protobuf::PhysicalPlanNode::try_from_physical_plan(plan, extension_codec)?;
+    // Route through codec to enable interception at the root level
+    let protobuf = extension_codec.serialize_physical_plan(plan)?;
     let mut buffer = BytesMut::new();
     protobuf
         .encode(&mut buffer)
@@ -313,7 +312,8 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    back.try_into_physical_plan(ctx, &extension_codec)
+    // Route through codec to enable interception
+    extension_codec.deserialize_physical_plan(&back, ctx)
 }
 
 /// Deserialize a PhysicalPlan from bytes
@@ -333,5 +333,6 @@ pub fn physical_plan_from_bytes_with_extension_codec(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let protobuf = protobuf::PhysicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_physical_plan(ctx, extension_codec)
+    // Route through codec to enable interception at the root level
+    extension_codec.deserialize_physical_plan(&protobuf, ctx)
 }
