@@ -1481,7 +1481,7 @@ mod test {
         use arrow::datatypes::Field;
         use std::sync::Arc;
 
-        let a = AggregateUDF::from(AMeanUdf::new());
+        let udf = AggregateUDF::from(AMeanUdf::new());
 
         // Create a non-nullable input field
         let non_nullable_field = Arc::new(Field::new("col", DataType::Float64, false));
