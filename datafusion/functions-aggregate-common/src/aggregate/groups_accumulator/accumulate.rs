@@ -294,9 +294,7 @@ impl NullState {
     pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
         match emit_to {
             EmitTo::All => {
-                let old_seen = std::mem::take(
-                    &mut self.seen_values,
-                );
+                let old_seen = std::mem::take(&mut self.seen_values);
                 match old_seen {
                     SeenValues::All { .. } => None,
                     SeenValues::Some { mut values } => {
@@ -310,9 +308,7 @@ impl NullState {
                     None
                 }
                 SeenValues::Some { .. } => {
-                    let mut old_values = match std::mem::take(
-                        &mut self.seen_values,
-                    ) {
+                    let mut old_values = match std::mem::take(&mut self.seen_values) {
                         SeenValues::Some { values } => values,
                         _ => unreachable!(),
                     };
