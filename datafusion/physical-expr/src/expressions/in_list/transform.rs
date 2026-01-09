@@ -523,3 +523,257 @@ where
 {
     Ok(Arc::new(ByteViewMaskedFilter::<T>::try_new(in_array)?))
 }
+
+// =============================================================================
+// UTF8 TWO-STAGE FILTER (length+prefix pre-check + full verification)
+// =============================================================================
+//
+// Similar to ByteViewMaskedFilter but for regular Utf8/LargeUtf8 arrays.
+// Encodes strings as i128 with length + prefix for quick rejection.
+//
+// Encoding (Little Endian):
+// - Bytes 0-3: length (u32)
+// - Bytes 4-15: data (12 bytes)
+//
+// This naturally distinguishes short from long strings via the length field.
+// For short strings (≤12 bytes), the i128 contains all data → match is definitive.
+// For long strings (>12 bytes), a match requires full string comparison.
+
+/// Encodes a string as i128 with length + prefix.
+/// Format: [len:u32][data:12 bytes] (Little Endian)
+#[inline(always)]
+fn encode_string_as_i128(s: &[u8]) -> i128 {
+    let len = s.len();
+
+    // Optimization: Construct the i128 directly using arithmetic and pointer copy
+    // to avoid Store-to-Load Forwarding (STLF) stalls on x64 and minimize LSU pressure on ARM.
+    //
+    // The layout in memory must match Utf8View: [4 bytes len][12 bytes data]
+    let mut val: u128 = len as u128; // Length in bytes 0-3
+
+    // Safety: writing to the remaining bytes of an initialized u128.
+    // We use a pointer copy for the string data as it is variable length (0-12 bytes).
+    unsafe {
+        let dst = (&mut val as *mut u128 as *mut u8).add(4);
+        std::ptr::copy_nonoverlapping(s.as_ptr(), dst, len.min(INLINE_STRING_LEN));
+    }
+
+    val as i128
+}
+
+/// Two-stage filter for Utf8/LargeUtf8 arrays.
+///
+/// Stage 1: Quick rejection using length+prefix as i128
+/// - Non-matches rejected via O(1) DirectProbeFilter lookup
+/// - Short string matches (≤12 bytes) accepted immediately
+///
+/// Stage 2: Full verification for long string matches
+/// - Only reached when encoded i128 matches AND string length >12 bytes
+/// - Uses HashTable with full string comparison
+pub(crate) struct Utf8TwoStageFilter<O: arrow::array::OffsetSizeTrait> {
+    /// The haystack array containing values to match against
+    in_array: ArrayRef,
+    /// DirectProbeFilter for O(1) encoded i128 quick rejection
+    encoded_filter: DirectProbeFilter<Decimal128Type>,
+    /// HashTable storing indices of long strings (>12 bytes) for Stage 2
+    long_string_table: HashTable<usize>,
+    /// Random state for consistent hashing
+    state: RandomState,
+    /// Whether all haystack strings are short (≤12 bytes) - enables fast path
+    all_short: bool,
+    _phantom: PhantomData<O>,
+}
+
+impl<O: arrow::array::OffsetSizeTrait + 'static> Utf8TwoStageFilter<O> {
+    pub(crate) fn try_new(in_array: ArrayRef) -> Result<Self> {
+        use arrow::array::GenericStringArray;
+
+        let arr = in_array
+            .as_any()
+            .downcast_ref::<GenericStringArray<O>>()
+            .expect("Utf8TwoStageFilter requires GenericStringArray");
+
+        let len = arr.len();
+        let mut encoded_values = Vec::with_capacity(len);
+        let state = RandomState::new();
+        let mut long_string_table = HashTable::new();
+        let mut all_short = true;
+
+        // Build encoded values and long string table
+        for i in 0..len {
+            if arr.is_null(i) {
+                encoded_values.push(0);
+                continue;
+            }
+
+            let s = arr.value(i);
+            let bytes = s.as_bytes();
+            encoded_values.push(encode_string_as_i128(bytes));
+
+            if bytes.len() > INLINE_STRING_LEN {
+                all_short = false;
+                // Add to long string table for Stage 2 verification (with deduplication)
+                let hash = state.hash_one(bytes);
+                if long_string_table
+                    .find(hash, |&stored_idx| {
+                        arr.value(stored_idx).as_bytes() == bytes
+                    })
+                    .is_none()
+                {
+                    long_string_table.insert_unique(hash, i, |&idx| {
+                        state.hash_one(arr.value(idx).as_bytes())
+                    });
+                }
+            }
+        }
+
+        // Build DirectProbeFilter from encoded values
+        let nulls = arr
+            .nulls()
+            .map(|n| arrow::buffer::NullBuffer::new(n.inner().clone()));
+        let encoded_array: ArrayRef = Arc::new(PrimitiveArray::<Decimal128Type>::new(
+            ScalarBuffer::from(encoded_values),
+            nulls,
+        ));
+        let encoded_filter =
+            DirectProbeFilter::<Decimal128Type>::try_new(&encoded_array)?;
+
+        Ok(Self {
+            in_array,
+            encoded_filter,
+            long_string_table,
+            state,
+            all_short,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl<O: arrow::array::OffsetSizeTrait + 'static> StaticFilter for Utf8TwoStageFilter<O> {
+    fn null_count(&self) -> usize {
+        self.in_array.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        use arrow::array::GenericStringArray;
+
+        handle_dictionary!(self, v, negated);
+
+        let needle_arr = v
+            .as_any()
+            .downcast_ref::<GenericStringArray<O>>()
+            .expect("needle array type mismatch in Utf8TwoStageFilter");
+        let haystack_arr = self
+            .in_array
+            .as_any()
+            .downcast_ref::<GenericStringArray<O>>()
+            .expect("haystack array type mismatch in Utf8TwoStageFilter");
+
+        let haystack_has_nulls = self.in_array.null_count() > 0;
+
+        if self.all_short {
+            // Fast path: all haystack strings are short
+            // Batch-encode all needles and do bulk lookup
+            let needle_encoded: Vec<i128> = (0..needle_arr.len())
+                .map(|i| {
+                    if needle_arr.is_null(i) {
+                        0
+                    } else {
+                        encode_string_as_i128(needle_arr.value(i).as_bytes())
+                    }
+                })
+                .collect();
+
+            // For short haystack, encoded match is definitive for short needles.
+            // Long needles (>12 bytes) can never match, but their encoded form
+            // won't match any short haystack encoding (different length field).
+            return Ok(self.encoded_filter.contains_slice(
+                &needle_encoded,
+                needle_arr.nulls(),
+                negated,
+            ));
+        }
+
+        // Two-stage path: haystack has long strings
+        Ok(super::result::build_in_list_result(
+            v.len(),
+            needle_arr.nulls(),
+            haystack_has_nulls,
+            negated,
+            |i| {
+                // SAFETY: i is in bounds [0, v.len()), guaranteed by build_in_list_result
+                let needle_bytes = unsafe { needle_arr.value_unchecked(i) }.as_bytes();
+                let encoded = encode_string_as_i128(needle_bytes);
+
+                // Stage 1: Quick rejection via encoded i128
+                if !self.encoded_filter.contains_single(encoded) {
+                    return false;
+                }
+
+                // Encoded match found
+                let needle_len = needle_bytes.len();
+                if needle_len <= INLINE_STRING_LEN {
+                    // Short needle: encoded contains all data, match is definitive
+                    // (If haystack had a long string with same prefix, its length
+                    // field would differ, so encoded wouldn't match)
+                    return true;
+                }
+
+                // Stage 2: Long needle - verify with full string comparison
+                let hash = self.state.hash_one(needle_bytes);
+                self.long_string_table
+                    .find(hash, |&idx| {
+                        // SAFETY: idx was stored in try_new from valid indices into in_array
+                        unsafe { haystack_arr.value_unchecked(idx) }.as_bytes()
+                            == needle_bytes
+                    })
+                    .is_some()
+            },
+        ))
+    }
+}
+
+/// Creates a two-stage filter for Utf8/LargeUtf8 arrays.
+/// Returns true if all non-null strings in a Utf8/LargeUtf8 array are ≤12 bytes.
+/// When false, the two-stage filter's Stage 1 cannot definitively match and the
+/// encoding overhead regresses performance vs the generic fallback.
+pub(crate) fn utf8_all_short_strings(array: &dyn Array) -> bool {
+    use arrow::array::GenericStringArray;
+    use arrow::datatypes::DataType;
+    match array.data_type() {
+        DataType::Utf8 => utf8_all_short_strings_impl::<i32>(
+            array
+                .as_any()
+                .downcast_ref::<GenericStringArray<i32>>()
+                .unwrap(),
+        ),
+        DataType::LargeUtf8 => utf8_all_short_strings_impl::<i64>(
+            array
+                .as_any()
+                .downcast_ref::<GenericStringArray<i64>>()
+                .unwrap(),
+        ),
+        _ => false,
+    }
+}
+
+fn utf8_all_short_strings_impl<O: arrow::array::OffsetSizeTrait>(
+    arr: &arrow::array::GenericStringArray<O>,
+) -> bool {
+    (0..arr.len()).all(|i| arr.is_null(i) || arr.value(i).len() <= INLINE_STRING_LEN)
+}
+
+pub(crate) fn make_utf8_two_stage_filter(
+    in_array: ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    use arrow::datatypes::DataType;
+    match in_array.data_type() {
+        DataType::Utf8 => Ok(Arc::new(Utf8TwoStageFilter::<i32>::try_new(in_array)?)),
+        DataType::LargeUtf8 => {
+            Ok(Arc::new(Utf8TwoStageFilter::<i64>::try_new(in_array)?))
+        }
+        dt => datafusion_common::exec_err!(
+            "Unsupported data type for Utf8 two-stage filter: {dt}"
+        ),
+    }
+}
