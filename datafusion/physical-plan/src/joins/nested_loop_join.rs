@@ -29,6 +29,7 @@ use super::utils::{
     reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
+use crate::coop::cooperative;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
@@ -529,7 +530,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             None => self.column_indices.clone(),
         };
 
-        Ok(Box::pin(NestedLoopJoinStream::new(
+        Ok(Box::pin(cooperative(NestedLoopJoinStream::new(
             self.schema(),
             self.filter.clone(),
             self.join_type,
@@ -538,7 +539,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             column_indices_after_projection,
             metrics,
             batch_size,
-        )))
+        ))))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
