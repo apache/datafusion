@@ -1518,7 +1518,7 @@ mod test {
         let udf = AggregateUDF::from(AMeanUdf::new());
 
         let nullable_field = Arc::new(Field::new("col", DataType::Float64, true));
-        let return_field = a.return_field(&[nullable_field]).unwrap();
+        let return_field = udf.return_field(&[nullable_field]).unwrap();
 
         // Verify data type is preserved
         assert_eq!(*return_field.data_type(), DataType::Float64);
