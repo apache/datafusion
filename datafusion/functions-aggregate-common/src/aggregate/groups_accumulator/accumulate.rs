@@ -46,6 +46,12 @@ pub enum SeenValues {
     },
 }
 
+impl Default for SeenValues {
+    fn default() -> Self {
+        SeenValues::All { num_values: 0 }
+    }
+}
+
 impl SeenValues {
     /// Return a mutable reference to the `BooleanBufferBuilder` in `SeenValues::Some`.
     ///
@@ -288,9 +294,8 @@ impl NullState {
     pub fn build(&mut self, emit_to: EmitTo) -> Option<NullBuffer> {
         match emit_to {
             EmitTo::All => {
-                let old_seen = std::mem::replace(
+                let old_seen = std::mem::take(
                     &mut self.seen_values,
-                    SeenValues::All { num_values: 0 },
                 );
                 match old_seen {
                     SeenValues::All { .. } => None,
@@ -305,9 +310,8 @@ impl NullState {
                     None
                 }
                 SeenValues::Some { .. } => {
-                    let mut old_values = match std::mem::replace(
+                    let mut old_values = match std::mem::take(
                         &mut self.seen_values,
-                        SeenValues::All { num_values: 0 },
                     ) {
                         SeenValues::Some { values } => values,
                         _ => unreachable!(),
