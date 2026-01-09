@@ -136,6 +136,19 @@ impl<C: BitmapFilterConfig> BitmapFilter<C> {
     fn check(&self, needle: C::Native) -> bool {
         self.bits.get_bit(C::to_index(needle))
     }
+
+    /// Check membership using a raw values slice (zero-copy path for type reinterpretation).
+    #[inline]
+    pub(crate) fn contains_slice(
+        &self,
+        values: &[C::Native],
+        nulls: Option<&NullBuffer>,
+        negated: bool,
+    ) -> BooleanArray {
+        build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
+            self.check(unsafe { *values.get_unchecked(i) })
+        })
+    }
 }
 
 impl<C: BitmapFilterConfig> StaticFilter for BitmapFilter<C> {
@@ -309,8 +322,6 @@ macro_rules! primitive_static_filter {
     };
 }
 
-primitive_static_filter!(Int8StaticFilter, Int8Type);
-primitive_static_filter!(Int16StaticFilter, Int16Type);
 primitive_static_filter!(Int32StaticFilter, Int32Type);
 primitive_static_filter!(Int64StaticFilter, Int64Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
