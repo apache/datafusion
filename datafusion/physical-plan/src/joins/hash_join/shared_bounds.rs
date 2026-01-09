@@ -23,13 +23,13 @@ use std::sync::Arc;
 
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
+use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
-use crate::joins::utils::JoinHashMapType;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
@@ -49,9 +49,9 @@ use tokio::sync::Barrier;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColumnBounds {
     /// The minimum value observed for this column
-    min: ScalarValue,
+    pub(crate) min: ScalarValue,
     /// The maximum value observed for this column  
-    max: ScalarValue,
+    pub(crate) max: ScalarValue,
 }
 
 impl ColumnBounds {
@@ -128,14 +128,12 @@ fn create_membership_predicate(
             )?)))
         }
         // Use hash table lookup for large build sides
-        PushdownStrategy::HashTable(hash_map) => {
-            Ok(Some(Arc::new(HashTableLookupExpr::new(
-                on_right.to_vec(),
-                random_state.clone(),
-                hash_map,
-                "hash_lookup".to_string(),
-            )) as Arc<dyn PhysicalExpr>))
-        }
+        PushdownStrategy::Map(hash_map) => Ok(Some(Arc::new(HashTableLookupExpr::new(
+            on_right.to_vec(),
+            random_state.clone(),
+            hash_map,
+            "hash_lookup".to_string(),
+        )) as Arc<dyn PhysicalExpr>)),
         // Empty partition - should not create a filter for this
         PushdownStrategy::Empty => Ok(None),
     }
@@ -235,8 +233,8 @@ pub(crate) struct SharedBuildAccumulator {
 pub(crate) enum PushdownStrategy {
     /// Use InList for small build sides (< 128MB)
     InList(ArrayRef),
-    /// Use hash table lookup for large build sides
-    HashTable(Arc<dyn JoinHashMapType>),
+    /// Use map lookup for large build sides
+    Map(Arc<Map>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
