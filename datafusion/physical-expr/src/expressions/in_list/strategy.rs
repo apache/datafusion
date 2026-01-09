@@ -15,6 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Filter selection strategy for InList expressions
+//!
+//! Selects the optimal lookup strategy based on data type and list size:
+//!
+//! - 1-byte types (Int8/UInt8): bitmap (32 bytes, O(1) bit test)
+//! - 2-byte types (Int16/UInt16): bitmap (8 KB, O(1) bit test)
+//! - 4-byte types (Int32/Float32): branchless (up to 32) or hash
+//! - 8-byte types (Int64/Float64): branchless (up to 16) or hash
+//! - 16-byte types (Decimal128): branchless (up to 4) or hash
+//! - Utf8/LargeUtf8: encoded direct-probe for all-short lists
+//! - Utf8View/BinaryView: short-string or masked-view filters
+//! - Other types: ArrayStaticFilter fallback
+
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -27,8 +40,9 @@ use super::primitive_filter::*;
 use super::static_filter::{StaticFilter, handle_dictionary};
 use super::transform::{
     make_bitmap_filter, make_branchless_filter, make_byte_view_masked_filter,
-    make_utf8view_branchless_filter, make_utf8view_hash_filter,
-    reinterpret_any_primitive_to, utf8view_all_short_strings,
+    make_utf8_two_stage_filter, make_utf8view_branchless_filter,
+    make_utf8view_hash_filter, reinterpret_any_primitive_to, utf8_all_short_strings,
+    utf8view_all_short_strings,
 };
 
 /// Maximum list size for branchless lookup on 4-byte primitives (Int32, UInt32, Float32).
@@ -85,6 +99,9 @@ fn select_strategy(dt: &DataType, len: usize) -> FilterStrategy {
 }
 
 /// Creates the optimal static filter for the given array.
+///
+/// This is the main entry point for filter creation. It analyzes the array's
+/// data type and size to select the best lookup strategy.
 pub(super) fn instantiate_static_filter(
     in_array: ArrayRef,
 ) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
@@ -129,7 +146,22 @@ pub(super) fn instantiate_static_filter(
             exec_datafusion_err!("Hashed strategy selected but no filter for {:?}", dt)
         })?,
 
+        // Utf8/LargeUtf8: use encoded direct-probe lookup for all-short lists.
+        // Lists containing long strings fall back to ArrayStaticFilter because
+        // encoding plus verification regressed benchmarks for that case.
+        (DataType::Utf8 | DataType::LargeUtf8, Generic)
+            if utf8_all_short_strings(in_array.as_ref()) =>
+        {
+            make_utf8_two_stage_filter(in_array)
+        }
+
+        // Binary variants: Use ArrayStaticFilter (make_comparator)
+        (DataType::Binary | DataType::LargeBinary, Generic) => {
+            Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?))
+        }
+
         // Byte view filters (Utf8View, BinaryView)
+        // Both use two-stage filter: masked view pre-check + full verification
         (DataType::Utf8View, Generic) => {
             make_byte_view_masked_filter::<StringViewType>(in_array)
         }
@@ -137,7 +169,7 @@ pub(super) fn instantiate_static_filter(
             make_byte_view_masked_filter::<BinaryViewType>(in_array)
         }
 
-        // Fallback for nested/complex types and strings.
+        // Fallback for nested/complex types (List, Struct, Map, Union, etc.)
         (_, Generic) => Ok(Arc::new(ArrayStaticFilter::try_new(in_array)?)),
     }
 }
@@ -145,7 +177,7 @@ pub(super) fn instantiate_static_filter(
 fn dispatch_branchless(
     arr: &ArrayRef,
 ) -> Option<Result<Arc<dyn StaticFilter + Send + Sync>>> {
-    // Dispatch to width-specific branchless filter.
+    // Dispatch to the width-specific branchless filter.
     match arr.data_type().primitive_width() {
         Some(4) => Some(make_branchless_filter::<UInt32Type>(arr)),
         Some(8) => Some(make_branchless_filter::<UInt64Type>(arr)),
@@ -180,6 +212,8 @@ fn dispatch_hashed(
         Some(16) => Some(make_direct_probe_filter_reinterpreted::<Decimal128Type>(
             arr,
         )),
+        // Other widths (1, 2) use Bitmap strategy and never reach here.
+        // Unknown widths fall through to Generic strategy.
         _ => None,
     }
 }
