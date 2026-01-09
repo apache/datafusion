@@ -232,6 +232,25 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+        /// Return a preimage
+    ///
+    /// See [`ScalarUDFImpl::preimage`] for more details.
+    pub fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<Option<Interval>> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
+    /// Return inner column from function args
+    ///
+    /// See [`ScalarUDFImpl::column_expr`]
+    pub fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        self.inner.column_expr(args)
+    }
+
     /// Invoke the function on `args`, returning the appropriate result.
     ///
     /// See [`ScalarUDFImpl::invoke_with_args`] for details.
@@ -696,6 +715,37 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    ///
+    /// A preimage is a single contiguous [`Interval`] of values where the function
+    /// will always return `lit_value`
+    ///
+    /// This rewrite is described in the [ClickHouse Paper] and is particularly
+    /// useful for simplifying expressions `date_part` or equivalent functions. The
+    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
+    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
+    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    ///
+    /// This should only return a preimage if the function takes a single argument
+    ///
+    /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+    fn preimage(
+        &self,
+        _args: &[Expr],
+        _lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<Option<Interval>> {
+        Ok(None)
+    }
+
+    // Return the inner column expression from this function
+    fn column_expr(&self, _args: &[Expr]) -> Option<Expr> {
+        None
+    }
+
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
     ///
@@ -924,6 +974,19 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<Option<Interval>> {
+        self.inner.preimage(args, lit_expr, info)
+    }
+
+    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
+        self.inner.column_expr(args)
     }
 
     fn conditional_arguments<'a>(

@@ -38,8 +38,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::{
-    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
-    binary::BinaryTypeCoercer, lit, or,
+    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and, binary::BinaryTypeCoercer, interval_arithmetic::Interval, lit, or
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -51,7 +50,7 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::{analyzer::type_coercion::TypeCoercionRewriter, simplify_expressions::udf_preimage::rewrite_with_preimage};
 use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
@@ -1952,10 +1951,69 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 }))
             }
 
+            // =======================================
+            // preimage_in_comparison
+            // =======================================
+            //
+            // For case:
+            // date_part(expr as 'YEAR') op literal
+            //
+            // Background:
+            // Datasources such as Parquet can prune partitions using simple predicates,
+            // but they cannot do so for complex expressions.
+            // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
+            // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if get_preimage(&left, &right, info)?.0.is_some()
+                    && get_preimage(&left, &right, info)?.1.is_some() =>
+            {
+                // todo use let binding (if let Some(interval) = ...) once stabilized to avoid computing this thrice😢
+                let (Some(interval), Some(col_expr)) =
+                    get_preimage(left.as_ref(), &right, info)?
+                else {
+                    unreachable!(
+                        "The above if statement insures interval and col_expr are Some"
+                    )
+                };
+                rewrite_with_preimage(info, interval, op, Box::new(col_expr))?
+            }
+            // literal op date_part(literal, expression)
+            // -->
+            // date_part(literal, expression) op_swap literal
+            Expr::BinaryExpr(BinaryExpr { left, op, right })
+                if get_preimage(&right, &left, info)?.0.is_some()
+                    && get_preimage(&right, &left, info)?.1.is_some()
+                    && op.swap().is_some() =>
+            {
+                let swapped = op.swap().unwrap();
+                let (Some(interval), Some(col_expr)) = get_preimage(&right, &left, info)?
+                else {
+                    unreachable!(
+                        "The above if statement insures interval and col_expr are Some"
+                    )
+                };
+                rewrite_with_preimage(info, interval, swapped, Box::new(col_expr))?
+            }
+
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
     }
+}
+
+fn get_preimage(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    info: &SimplifyContext,
+) -> Result<(Option<Interval>, Option<Expr>)> {
+    let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
+        return Ok((None, None));
+    };
+    Ok((
+        func.preimage(args, right_expr, info)?,
+        func.column_expr(args),
+    ))
 }
 
 fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
