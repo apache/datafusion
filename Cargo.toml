@@ -166,6 +166,7 @@ log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
+percent-encoding = "2.3"
 parquet = { version = "57.1.0", default-features = false, features = [
     "arrow",
     "async",
