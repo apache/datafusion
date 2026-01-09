@@ -58,6 +58,69 @@ where
     build_result_from_contains(needle_nulls, haystack_has_nulls, negated, contains_buf)
 }
 
+/// Builds a BooleanArray result while skipping contains checks for null needles.
+///
+/// This is useful when `contains` is expensive, for example when a string path
+/// may need hashing and full byte comparison. If there are no actual nulls, it
+/// falls back to the same branch-free contains collection as
+/// `build_in_list_result`.
+#[inline]
+pub(crate) fn build_in_list_result_with_null_shortcircuit<C>(
+    len: usize,
+    needle_nulls: Option<&NullBuffer>,
+    needle_null_count: usize,
+    haystack_has_nulls: bool,
+    negated: bool,
+    mut contains: C,
+) -> BooleanArray
+where
+    C: FnMut(usize) -> bool,
+{
+    let effective_nulls = needle_nulls.filter(|_| needle_null_count > 0);
+
+    let contains_buf = match effective_nulls {
+        Some(nulls) => {
+            BooleanBuffer::collect_bool(len, |i| nulls.is_valid(i) && contains(i))
+        }
+        None => BooleanBuffer::collect_bool(len, contains),
+    };
+
+    build_result_from_premasked_contains(
+        effective_nulls,
+        haystack_has_nulls,
+        negated,
+        contains_buf,
+    )
+}
+
+/// Builds a result from a contains buffer that is already false at null needles.
+#[inline]
+fn build_result_from_premasked_contains(
+    needle_nulls: Option<&NullBuffer>,
+    haystack_has_nulls: bool,
+    negated: bool,
+    contains_buf: BooleanBuffer,
+) -> BooleanArray {
+    match (needle_nulls, haystack_has_nulls, negated) {
+        (_, true, false) => {
+            BooleanArray::new(contains_buf.clone(), Some(NullBuffer::new(contains_buf)))
+        }
+        (Some(v), true, true) => BooleanArray::new(
+            v.inner() ^ &contains_buf,
+            Some(NullBuffer::new(contains_buf)),
+        ),
+        (None, true, true) => {
+            BooleanArray::new(!&contains_buf, Some(NullBuffer::new(contains_buf)))
+        }
+        (Some(v), false, false) => BooleanArray::new(contains_buf, Some(v.clone())),
+        (Some(v), false, true) => {
+            BooleanArray::new(v.inner() & &(!&contains_buf), Some(v.clone()))
+        }
+        (None, false, false) => BooleanArray::new(contains_buf, None),
+        (None, false, true) => BooleanArray::new(!&contains_buf, None),
+    }
+}
+
 /// Builds a BooleanArray result from a pre-computed contains buffer.
 ///
 /// This version does not assume contains_buf is pre-masked at null positions.
