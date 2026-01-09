@@ -749,9 +749,15 @@ fn build_batch(
 ///
 /// whereas if `preserve_nulls` is true, the longest length array will be:
 ///
-///
 /// ```ignore
 /// longest_length: [3, 1, 1, 2]
+/// ```
+///
+/// If `preserve_empty_as_null` is true (Spark's explode_outer behavior),
+/// empty arrays are treated like NULL arrays:
+///
+/// ```ignore
+/// longest_length: [3, 1, 1, 2]  // empty array [] at index 1 gets length 1
 /// ```
 fn find_longest_length(
     list_arrays: &[ArrayRef],
@@ -763,14 +769,36 @@ fn find_longest_length(
     } else {
         Scalar::new(Int64Array::from_value(0, 1))
     };
+
+    // The length to use for empty arrays when preserve_empty_as_null is true
+    let empty_length = Scalar::new(Int64Array::from_value(1, 1));
+    let zero_length = Scalar::new(Int64Array::from_value(0, 1));
+
     let list_lengths: Vec<ArrayRef> = list_arrays
         .iter()
         .map(|list_array| {
             let mut length_array = length(list_array)?;
             // Make sure length arrays have the same type. Int64 is the most general one.
             length_array = cast(&length_array, &DataType::Int64)?;
+
+            // Handle empty arrays when preserve_empty_as_null is true
+            // This must be done BEFORE handling NULLs, because we need to distinguish
+            // between actual empty arrays (length 0, not null) and NULL arrays.
+            // Empty arrays have length 0 but are not null, so we need to
+            // replace 0 lengths with 1 to produce a NULL output row (Spark's explode_outer behavior)
+            if options.preserve_empty_as_null {
+                // Only replace 0 with 1 for non-null entries (actual empty arrays)
+                let is_not_null_mask = is_not_null(&length_array)?;
+                let is_zero = kernels::cmp::eq(&length_array, &zero_length)?;
+                // is_empty_array = not null AND length == 0
+                let is_empty_array = kernels::boolean::and(&is_not_null_mask, &is_zero)?;
+                length_array = zip(&is_empty_array, &empty_length, &length_array)?;
+            }
+
+            // Handle NULL arrays: replace null lengths with null_length
             length_array =
                 zip(&is_not_null(&length_array)?, &length_array, &null_length)?;
+
             Ok(length_array)
         })
         .collect::<Result<_>>()?;
@@ -1193,6 +1221,7 @@ mod tests {
             &HashSet::default(),
             &UnnestOptions {
                 preserve_nulls: true,
+                preserve_empty_as_null: false,
                 recursions: vec![],
             },
         )?
@@ -1278,8 +1307,18 @@ mod tests {
         preserve_nulls: bool,
         expected: Vec<i64>,
     ) -> Result<()> {
+        verify_longest_length_with_options(list_arrays, preserve_nulls, false, expected)
+    }
+
+    fn verify_longest_length_with_options(
+        list_arrays: &[ArrayRef],
+        preserve_nulls: bool,
+        preserve_empty_as_null: bool,
+        expected: Vec<i64>,
+    ) -> Result<()> {
         let options = UnnestOptions {
             preserve_nulls,
+            preserve_empty_as_null,
             recursions: vec![],
         };
         let longest_length = find_longest_length(list_arrays, &options)?;
@@ -1322,6 +1361,43 @@ mod tests {
         let list_arrays = vec![Arc::clone(&list1), Arc::clone(&list2)];
         verify_longest_length(&list_arrays, false, vec![3, 0, 2, 1, 2, 2])?;
         verify_longest_length(&list_arrays, true, vec![3, 1, 2, 1, 2, 2])?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_longest_list_length_preserve_empty_as_null() -> Result<()> {
+        // Test with single ListArray
+        //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
+        // With preserve_empty_as_null=true, empty arrays [] get length 1
+        let list_array = Arc::new(make_generic_array::<i32>()) as ArrayRef;
+
+        // preserve_nulls=false, preserve_empty_as_null=true
+        // NULL arrays still get length 0, but empty arrays get length 1
+        verify_longest_length_with_options(
+            &[Arc::clone(&list_array)],
+            false,                  // preserve_nulls
+            true,                   // preserve_empty_as_null
+            vec![3, 1, 0, 1, 0, 2], // index 1 (empty []) now gets length 1
+        )?;
+
+        // preserve_nulls=true, preserve_empty_as_null=true (Spark's explode_outer behavior)
+        // Both NULL arrays and empty arrays get length 1
+        verify_longest_length_with_options(
+            &[Arc::clone(&list_array)],
+            true,                   // preserve_nulls
+            true,                   // preserve_empty_as_null
+            vec![3, 1, 1, 1, 1, 2], // index 1 (empty []) gets length 1, NULLs also get 1
+        )?;
+
+        // Test with single LargeListArray
+        let list_array = Arc::new(make_generic_array::<i64>()) as ArrayRef;
+        verify_longest_length_with_options(
+            &[Arc::clone(&list_array)],
+            true,
+            true,
+            vec![3, 1, 1, 1, 1, 2],
+        )?;
 
         Ok(())
     }
