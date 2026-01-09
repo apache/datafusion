@@ -23,12 +23,11 @@ use arrow::array::{
 };
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::DataType::{Int64, Utf8};
-use arrow::datatypes::{DataType, Field, FieldRef, Int64Type};
+use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::cast::as_string_array;
-use datafusion_common::{DataFusionError, Result, internal_err, plan_datafusion_err};
+use datafusion_common::{DataFusionError, Result, plan_datafusion_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::utils::make_scalar_function;
 
@@ -65,12 +64,7 @@ impl ScalarUDFImpl for SparkElt {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_field_from_args should be used instead")
-    }
-
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-        Ok(Arc::new(Field::new(self.name(), Utf8, nullable)))
+        Ok(Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -252,59 +246,6 @@ mod tests {
 
         let out = run_elt_arrays(vec![idx, v1, v2])?;
         assert_eq!(out.data_type(), &Utf8);
-        Ok(())
-    }
-
-    #[test]
-    fn test_elt_nullability() -> Result<()> {
-        use datafusion_expr::ReturnFieldArgs;
-
-        let elt_func = SparkElt::new();
-
-        // Test with all non-nullable args - result should be non-nullable
-        let non_nullable_idx: FieldRef = Arc::new(Field::new("idx", Int64, false));
-        let non_nullable_v1: FieldRef = Arc::new(Field::new("v1", Utf8, false));
-        let non_nullable_v2: FieldRef = Arc::new(Field::new("v2", Utf8, false));
-
-        let result = elt_func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[
-                Arc::clone(&non_nullable_idx),
-                Arc::clone(&non_nullable_v1),
-                Arc::clone(&non_nullable_v2),
-            ],
-            scalar_arguments: &[None, None, None],
-        })?;
-        assert!(
-            !result.is_nullable(),
-            "elt should NOT be nullable when all args are non-nullable"
-        );
-
-        // Test with nullable index - result should be nullable
-        let nullable_idx: FieldRef = Arc::new(Field::new("idx", Int64, true));
-        let result = elt_func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[
-                nullable_idx,
-                Arc::clone(&non_nullable_v1),
-                Arc::clone(&non_nullable_v2),
-            ],
-            scalar_arguments: &[None, None, None],
-        })?;
-        assert!(
-            result.is_nullable(),
-            "elt should be nullable when index is nullable"
-        );
-
-        // Test with nullable value - result should be nullable
-        let nullable_v1: FieldRef = Arc::new(Field::new("v1", Utf8, true));
-        let result = elt_func.return_field_from_args(ReturnFieldArgs {
-            arg_fields: &[non_nullable_idx, nullable_v1, non_nullable_v2],
-            scalar_arguments: &[None, None, None],
-        })?;
-        assert!(
-            result.is_nullable(),
-            "elt should be nullable when any value is nullable"
-        );
-
         Ok(())
     }
 }

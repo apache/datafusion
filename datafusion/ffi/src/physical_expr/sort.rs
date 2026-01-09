@@ -29,7 +29,6 @@ use crate::physical_expr::FFI_PhysicalExpr;
 /// See [`PhysicalSortExpr`] for the meaning of each field.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_PhysicalSortExpr {
     expr: FFI_PhysicalExpr,
     options: FFI_SortOptions,

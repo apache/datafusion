@@ -121,6 +121,13 @@ pub mod expr_fn {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
 
+    #[doc = "Returns the value of nested fields by traversing multiple field names"]
+    pub fn get_field_path(base: Expr, field_names: Vec<Expr>) -> Expr {
+        let mut args = vec![base];
+        args.extend(field_names);
+        super::get_field().call(args)
+    }
+
     #[doc = "Returns the value of the field with the given name from the union when it's selected, or NULL otherwise"]
     #[expect(clippy::needless_pass_by_value)]
     pub fn union_extract(arg1: Expr, arg2: impl Literal) -> Expr {

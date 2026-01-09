@@ -21,7 +21,7 @@
 //!
 //! ## Usage
 //! ```bash
-//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct]
+//! cargo run --example dataframe -- [all|dataframe|deserialize_to_struct|cache_factory]
 //! ```
 //!
 //! Each subcommand runs a corresponding example:
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
 
     let example: ExampleKind = std::env::args()
         .nth(1)
-        .ok_or_else(|| DataFusionError::Execution(format!("Missing argument. {usage}")))?
+        .unwrap_or_else(|| ExampleKind::All.to_string())
         .parse()
         .map_err(|_| DataFusionError::Execution(format!("Unknown example. {usage}")))?;
 

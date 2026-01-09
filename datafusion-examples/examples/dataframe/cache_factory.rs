@@ -19,31 +19,26 @@
 
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use arrow::array::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
 use datafusion::error::Result;
-use datafusion::execution::SessionState;
-use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
-use datafusion::logical_expr::Extension;
-use datafusion::logical_expr::LogicalPlan;
-use datafusion::logical_expr::UserDefinedLogicalNode;
-use datafusion::logical_expr::UserDefinedLogicalNodeCore;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::collect_partitioned;
-use datafusion::physical_planner::DefaultPhysicalPlanner;
-use datafusion::physical_planner::ExtensionPlanner;
-use datafusion::physical_planner::PhysicalPlanner;
-use datafusion::prelude::ParquetReadOptions;
-use datafusion::prelude::SessionContext;
+use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
+use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
+use datafusion::physical_planner::{
+    DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
+};
 use datafusion::prelude::*;
 use datafusion_common::HashMap;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
 /// By default, [DataFrame::cache] in Datafusion is eager and creates an in-memory table. This example shows a basic alternative implementation for lazy caching.
@@ -53,28 +48,29 @@ use datafusion_common::HashMap;
 /// - A [CacheNodeQueryPlanner] that installs [CacheNodePlanner].
 /// - A simple in-memory [CacheManager] that stores cached [RecordBatch]es. Note that the implementation for this example is very naive and only implements put, but for real production use cases cache eviction and drop should also be implemented.
 pub async fn cache_dataframe_with_custom_logic() -> Result<()> {
-    let testdata = datafusion::test_util::parquet_test_data();
-    let filename = &format!("{testdata}/alltypes_plain.parquet");
-
     let session_state = SessionStateBuilder::new()
         .with_cache_factory(Some(Arc::new(CustomCacheFactory {})))
         .with_query_planner(Arc::new(CacheNodeQueryPlanner::default()))
         .build();
     let ctx = SessionContext::new_with_state(session_state);
 
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
+
     // Read the parquet files and show its schema using 'describe'
     let parquet_df = ctx
-        .read_parquet(filename, ParquetReadOptions::default())
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     let df_cached = parquet_df
-        .select_columns(&["id", "bool_col", "timestamp_col"])?
-        .filter(col("id").gt(lit(1)))?
+        .select_columns(&["car", "speed", "time"])?
+        .filter(col("speed").gt(lit(1.0)))?
         .cache()
         .await?;
 
-    let df1 = df_cached.clone().filter(col("bool_col").is_true())?;
-    let df2 = df1.clone().sort(vec![col("id").sort(true, false)])?;
+    let df1 = df_cached.clone().filter(col("car").eq(lit("red")))?;
+    let df2 = df1.clone().sort(vec![col("car").sort(true, false)])?;
 
     // should see log for caching only once
     df_cached.show().await?;
