@@ -1376,6 +1376,8 @@ mod tests {
             format!("{}", pushed_filters[0].predicate),
             format!("{}", expected_filter)
         );
+        // Verify the predicate was actually pushed down
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
 
         Ok(())
     }
@@ -1453,6 +1455,9 @@ mod tests {
             format!("{}", pushed_filters[1].predicate),
             format!("{}", expected_filter2)
         );
+        // Verify the predicates were actually pushed down
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
 
         Ok(())
     }
@@ -1516,6 +1521,9 @@ mod tests {
 
         assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
         assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
+        // Verify the predicates were actually pushed down
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
 
         Ok(())
     }
@@ -1578,6 +1586,9 @@ mod tests {
 
         assert_eq!(format!("{}", pushed_filters[0].predicate), expected_filter1);
         assert_eq!(format!("{}", pushed_filters[1].predicate), expected_filter2);
+        // Verify the predicates were actually pushed down
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::Yes));
 
         Ok(())
     }
