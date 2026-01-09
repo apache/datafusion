@@ -552,7 +552,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// }
     /// ```
     #[deprecated(
-        since = "42.0.0",
+        since = "52.0.0",
         note = "Use `return_field` to specify nullability instead of `is_nullable`"
     )]
     fn is_nullable(&self) -> bool {
