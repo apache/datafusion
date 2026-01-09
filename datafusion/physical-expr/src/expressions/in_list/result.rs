@@ -114,3 +114,27 @@ pub(crate) fn build_result_from_contains(
         (None, false, true) => BooleanArray::new(!&contains_buf, None),
     }
 }
+
+// =============================================================================
+// DICTIONARY ARRAY HANDLING
+// =============================================================================
+
+/// Macro to handle dictionary arrays in StaticFilter::contains implementations.
+///
+/// This macro extracts the dictionary values, performs the contains check on
+/// the values array, and then uses `take` to map the results back to the
+/// dictionary keys.
+macro_rules! handle_dictionary {
+    ($self:ident, $v:ident, $negated:ident) => {
+        arrow::array::downcast_dictionary_array! {
+            $v => {
+                let values_contains = $self.contains($v.values().as_ref(), $negated)?;
+                let result = arrow::compute::take(&values_contains, $v.keys(), None)?;
+                return Ok(arrow::array::downcast_array(result.as_ref()))
+            }
+            _ => {}
+        }
+    };
+}
+
+pub(crate) use handle_dictionary;
