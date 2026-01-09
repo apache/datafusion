@@ -42,7 +42,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::compute::take;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -589,33 +589,44 @@ impl BatchPartitioner {
                     // Finished building index-arrays for output partitions
                     timer.done();
 
+                    let mut non_empty_indices = Vec::with_capacity(*partitions);
+                    for (partition, p_indices) in indices.into_iter().enumerate() {
+                        if !p_indices.is_empty() {
+                            non_empty_indices.push((
+                                partition,
+                                PrimitiveArray::<UInt32Type>::from(p_indices),
+                            ));
+                        }
+                    }
+
+                    let mut columns_per_partition =
+                        vec![Vec::with_capacity(batch.columns().len()); non_empty_indices.len()];
+                    for column in batch.columns() {
+                        for (i, (_, indices)) in non_empty_indices.iter().enumerate() {
+                            columns_per_partition[i].push(take(column, indices, None)?);
+                        }
+                    }
+
                     // Borrowing partitioner timer to prevent moving `self` to closure
                     let partitioner_timer = &self.timer;
-                    let it = indices
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
-                        .map(move |(partition, indices)| {
+                    let batch_schema = batch.schema();
+                    let it = non_empty_indices.into_iter().zip(columns_per_partition).map(
+                        move |((partition, indices), columns)| {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
-
-                            // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
 
                             let mut options = RecordBatchOptions::new();
                             options = options.with_row_count(Some(indices.len()));
                             let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
+                                batch_schema.clone(),
                                 columns,
                                 &options,
                             )
                             .unwrap();
 
                             Ok((partition, batch))
-                        });
+                        },
+                    );
 
                     Box::new(it)
                 }
