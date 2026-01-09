@@ -28,8 +28,8 @@ use super::{
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription,
-    FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::util::PhysicalColumnRewriter;
