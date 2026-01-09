@@ -32,6 +32,7 @@ use crate::file_scan_config::FileScanConfig;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
 use datafusion_execution::RecordBatchStream;
+use datafusion_macros::metric_doc;
 use datafusion_physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
@@ -360,6 +361,7 @@ impl StartableTime {
 /// as other operators.
 ///
 /// [`FileStream`]: <https://github.com/apache/datafusion/blob/main/datafusion/datasource/src/file_stream.rs>
+#[metric_doc]
 pub struct FileStreamMetrics {
     /// Wall clock time elapsed for file opening.
     ///

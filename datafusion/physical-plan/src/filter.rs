@@ -64,6 +64,7 @@ use datafusion_physical_expr::{
     conjunction, split_conjunction,
 };
 
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
@@ -73,6 +74,7 @@ const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
 /// include in its output batches.
+#[metric_doc(FilterExecMetrics)]
 #[derive(Debug, Clone)]
 pub struct FilterExec {
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -691,13 +693,12 @@ struct FilterExecStream {
 }
 
 /// The metrics for `FilterExec`
+#[metric_doc]
 struct FilterExecMetrics {
     /// Common metrics for most operators
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
-    // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
-    // or modifying metrics comments
 }
 
 impl FilterExecMetrics {

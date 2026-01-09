@@ -21,6 +21,7 @@ use std::task::Poll;
 
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, utils::memory::get_record_batch_memory_size};
+use datafusion_macros::metric_doc;
 
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 
@@ -45,6 +46,7 @@ use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
 /// // when operator is finished:
 /// baseline_metrics.done();
 /// ```
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct BaselineMetrics {
     /// end_time is set when `BaselineMetrics::done()` is called
@@ -66,8 +68,6 @@ pub struct BaselineMetrics {
 
     /// output batches: the total output batch count
     output_batches: Count,
-    // Remember to update `docs/source/user-guide/metrics.md` when updating comments
-    // or adding new metrics
 }
 
 impl BaselineMetrics {
@@ -180,6 +180,7 @@ impl Drop for BaselineMetrics {
 
 /// Helper for creating and tracking spill-related metrics for
 /// each operator
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct SpillMetrics {
     /// count of spills during the execution of the operator
@@ -204,6 +205,7 @@ impl SpillMetrics {
 }
 
 /// Metrics for tracking batch splitting activity
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct SplitMetrics {
     /// Number of times an input [`RecordBatch`] was split
