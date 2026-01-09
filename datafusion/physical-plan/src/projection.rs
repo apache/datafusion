@@ -373,12 +373,11 @@ impl ExecutionPlan for ProjectionExec {
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
-        let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
 
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
-            rewriter.reset();
+            let mut rewriter = PhysicalColumnRewriter::new(&invert_alias_map);
             let rewritten = Arc::clone(&filter).rewrite(&mut rewriter)?.data;
 
             if rewriter.has_unmapped_columns() {
