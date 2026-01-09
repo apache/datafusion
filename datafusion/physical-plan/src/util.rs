@@ -31,16 +31,16 @@ use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
 /// If a column is found in the map, it is replaced by the mapped expression.
 /// If a column is NOT found in the map, the column is left unchanged and
 /// `has_unmapped_columns` is set to true.
-pub struct PhysicalColumnRewriter {
+pub struct PhysicalColumnRewriter<'a> {
     /// Mapping from original column to new column.
-    pub column_map: HashMap<Column, Arc<dyn PhysicalExpr>>,
+    pub column_map: &'a HashMap<Column, Arc<dyn PhysicalExpr>>,
     /// Whether any columns were not found in the mapping.
     has_unmapped_columns: bool,
 }
 
-impl PhysicalColumnRewriter {
+impl<'a> PhysicalColumnRewriter<'a> {
     /// Create a new PhysicalColumnRewriter with the given column mapping.
-    pub fn new(column_map: HashMap<Column, Arc<dyn PhysicalExpr>>) -> Self {
+    pub fn new(column_map: &'a HashMap<Column, Arc<dyn PhysicalExpr>>) -> Self {
         Self {
             column_map,
             has_unmapped_columns: false,
@@ -51,15 +51,9 @@ impl PhysicalColumnRewriter {
     pub fn has_unmapped_columns(&self) -> bool {
         self.has_unmapped_columns
     }
-
-    /// Reset the `has_unmapped_columns` flag to false.
-    /// Call this before rewriting a new expression.
-    pub fn reset(&mut self) {
-        self.has_unmapped_columns = false;
-    }
 }
 
-impl TreeNodeRewriter for PhysicalColumnRewriter {
+impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(
@@ -162,7 +156,7 @@ mod tests {
             lit("replaced_b"),
         );
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
         let expr = create_complex_expression(&schema);
 
         let result = expr.rewrite(&mut rewriter)?;
@@ -200,7 +194,7 @@ mod tests {
             replacement_expr,
         );
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
         let expr = create_deeply_nested_expression(&schema);
 
         let result = expr.rewrite(&mut rewriter)?;
@@ -236,7 +230,7 @@ mod tests {
             col("a", &schema).unwrap(),
         );
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
 
         // Start with an expression containing col_a
         let expr = binary(
@@ -271,7 +265,7 @@ mod tests {
         column_map.insert(Column::new_with_schema("c", &schema).unwrap(), lit(20i32));
         column_map.insert(Column::new_with_schema("e", &schema).unwrap(), lit(30i32));
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
         let expr = create_complex_expression(&schema); // (col_a + col_b) * (col_c - col_d) + col_e
 
         let result = expr.rewrite(&mut rewriter)?;
@@ -321,7 +315,7 @@ mod tests {
             complex_replacement,
         );
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
 
         // Create expression: col_a + col_b
         let expr = binary(
@@ -357,7 +351,7 @@ mod tests {
         // Only map col_a, leave col_b unmapped
         column_map.insert(Column::new_with_schema("a", &schema).unwrap(), lit(42i32));
 
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
 
         // Create expression: col_a + col_b
         let expr = binary(
@@ -380,13 +374,11 @@ mod tests {
     }
 
     #[test]
-    fn test_reset_unmapped_flag() -> Result<()> {
+    fn test_multiple_rewrites_with_fresh_rewriter() -> Result<()> {
         let schema = create_test_schema();
         let mut column_map = HashMap::new();
 
         column_map.insert(Column::new_with_schema("a", &schema).unwrap(), lit(42i32));
-
-        let mut rewriter = PhysicalColumnRewriter::new(column_map);
 
         // First expression with unmapped column
         let expr1 = binary(
@@ -397,16 +389,17 @@ mod tests {
         )
         .unwrap();
 
+        let mut rewriter = PhysicalColumnRewriter::new(&column_map);
         let _result1 = expr1.rewrite(&mut rewriter)?;
         assert!(rewriter.has_unmapped_columns());
 
-        // Reset and rewrite expression with only mapped columns
-        rewriter.reset();
+        // Create a fresh rewriter for the next expression (no reset needed)
         let expr2 = col("a", &schema).unwrap();
-        let _result2 = expr2.rewrite(&mut rewriter)?;
+        let mut rewriter2 = PhysicalColumnRewriter::new(&column_map);
+        let _result2 = expr2.rewrite(&mut rewriter2)?;
 
-        // Should not detect unmapped columns after reset
-        assert!(!rewriter.has_unmapped_columns());
+        // Should not detect unmapped columns with fresh rewriter
+        assert!(!rewriter2.has_unmapped_columns());
 
         Ok(())
     }
