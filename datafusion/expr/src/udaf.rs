@@ -1485,7 +1485,7 @@ mod test {
 
         // Create a non-nullable input field
         let non_nullable_field = Arc::new(Field::new("col", DataType::Float64, false));
-        let return_field = a.return_field(&[non_nullable_field]).unwrap();
+        let return_field = udf.return_field(&[non_nullable_field]).unwrap();
 
         // When input is non-nullable, output should also be non-nullable
         assert!(!return_field.is_nullable());
