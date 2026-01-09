@@ -639,7 +639,9 @@ impl Accumulator for DistinctVarianceAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let values = std::mem::take(&mut self.distinct_values.values)
+        let values = self
+            .distinct_values
+            .values
             .iter()
             .map(|v| v.0)
             .collect::<Vec<_>>();
@@ -649,7 +651,7 @@ impl Accumulator for DistinctVarianceAccumulator {
                 if !values.is_empty() {
                     values.len() - 1
                 } else {
-                    values.len()
+                    0
                 }
             }
             StatsType::Population => values.len(),
