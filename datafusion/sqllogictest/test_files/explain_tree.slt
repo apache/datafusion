@@ -819,32 +819,20 @@ explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table1;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│       ProjectionExec      │
+02)│      RepartitionExec      │
 03)│    --------------------   │
-04)│        bigint_col:        │
-05)│         bigint_col        │
+04)│ partition_count(in->out): │
+05)│           1 -> 4          │
 06)│                           │
-07)│      int_col: int_col     │
-08)│                           │
-09)│          sum_col:         │
-10)│  CAST(int_col AS Int64) + │
-11)│         bigint_col        │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│ partition_count(in->out): │
-17)│           1 -> 4          │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
-21)└─────────────┬─────────────┘
-22)┌─────────────┴─────────────┐
-23)│       DataSourceExec      │
-24)│    --------------------   │
-25)│          files: 1         │
-26)│        format: csv        │
-27)└───────────────────────────┘
+07)│    partitioning_scheme:   │
+08)│     RoundRobinBatch(4)    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│          files: 1         │
+14)│        format: csv        │
+15)└───────────────────────────┘
 
 query TT
 explain select 
@@ -965,31 +953,20 @@ explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table4;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│       ProjectionExec      │
+02)│      RepartitionExec      │
 03)│    --------------------   │
-04)│        bigint_col:        │
-05)│         bigint_col        │
+04)│ partition_count(in->out): │
+05)│           1 -> 4          │
 06)│                           │
-07)│      int_col: int_col     │
-08)│                           │
-09)│          sum_col:         │
-10)│    int_col + bigint_col   │
-11)└─────────────┬─────────────┘
-12)┌─────────────┴─────────────┐
-13)│      RepartitionExec      │
-14)│    --------------------   │
-15)│ partition_count(in->out): │
-16)│           1 -> 4          │
-17)│                           │
-18)│    partitioning_scheme:   │
-19)│     RoundRobinBatch(4)    │
-20)└─────────────┬─────────────┘
-21)┌─────────────┴─────────────┐
-22)│       DataSourceExec      │
-23)│    --------------------   │
-24)│          files: 1         │
-25)│        format: json       │
-26)└───────────────────────────┘
+07)│    partitioning_scheme:   │
+08)│     RoundRobinBatch(4)    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│          files: 1         │
+14)│        format: json       │
+15)└───────────────────────────┘
 
 
 # Query with projection on arrow
@@ -998,32 +975,20 @@ explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table5;
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│       ProjectionExec      │
+02)│      RepartitionExec      │
 03)│    --------------------   │
-04)│        bigint_col:        │
-05)│         bigint_col        │
+04)│ partition_count(in->out): │
+05)│           1 -> 4          │
 06)│                           │
-07)│      int_col: int_col     │
-08)│                           │
-09)│          sum_col:         │
-10)│  CAST(int_col AS Int64) + │
-11)│         bigint_col        │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│      RepartitionExec      │
-15)│    --------------------   │
-16)│ partition_count(in->out): │
-17)│           1 -> 4          │
-18)│                           │
-19)│    partitioning_scheme:   │
-20)│     RoundRobinBatch(4)    │
-21)└─────────────┬─────────────┘
-22)┌─────────────┴─────────────┐
-23)│       DataSourceExec      │
-24)│    --------------------   │
-25)│          files: 1         │
-26)│       format: arrow       │
-27)└───────────────────────────┘
+07)│    partitioning_scheme:   │
+08)│     RoundRobinBatch(4)    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│          files: 1         │
+14)│       format: arrow       │
+15)└───────────────────────────┘
 
 # Query with PartialSortExec.
 query TT
