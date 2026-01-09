@@ -23,9 +23,10 @@ use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    FLOAT_16_TYPE_NAME, LARGE_CONTAINER_TYPE_VARIATION_REF, NULL_TYPE_NAME,
-    TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    FIXED_SIZE_LIST_TYPE_VARIATION_REF, FLOAT_16_TYPE_NAME,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, NULL_TYPE_NAME, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
 use datafusion::arrow::datatypes::{DataType, IntervalUnit};
 use datafusion::common::{DFSchemaRef, not_impl_err, plan_err};
@@ -286,6 +287,18 @@ pub(crate) fn to_substrait_type(
                 }))),
             })
         }
+        DataType::FixedSizeList(inner, size) => {
+            let inner_type =
+                to_substrait_type(producer, inner.data_type(), inner.is_nullable())?;
+            Ok(substrait::proto::Type {
+                kind: Some(r#type::Kind::List(Box::new(r#type::List {
+                    r#type: Some(Box::new(inner_type)),
+                    type_variation_reference: FIXED_SIZE_LIST_TYPE_VARIATION_REF
+                        + (*size as u32),
+                    nullability,
+                }))),
+            })
+        }
         DataType::Map(inner, _) => match inner.data_type() {
             DataType::Struct(key_and_value) if key_and_value.len() == 2 => {
                 let key_type = to_substrait_type(
@@ -438,6 +451,10 @@ mod tests {
         ))?;
         round_trip_type(DataType::LargeList(
             Field::new_list_field(DataType::Int32, true).into(),
+        ))?;
+        round_trip_type(DataType::FixedSizeList(
+            Field::new_list_field(DataType::Int64, true).into(),
+            10,
         ))?;
 
         round_trip_type(DataType::Map(
