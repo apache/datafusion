@@ -35,7 +35,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = values;
         if value_keyword {
             return not_impl_err!(
-                "`VALUE` keyword does not support inserting multiple values."
+                "`VALUE` keyword not supported. Did you mean `VALUES`?"
             )?;
         }
 
