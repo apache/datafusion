@@ -28,7 +28,7 @@ conduct](https://www.apache.org/foundation/policies/conduct.html).
 ## GitHub
 
 The primary means of communication is the
-[GitHub repository](https://github.com/apache/datafusion) in the form of tickets, issues, discussions, and Pull Requests.
+[GitHub repository](https://github.com/apache/datafusion) in the form of issues, discussions, and Pull Requests.
 Our repository is open to everyone. We encourage you to
 participate by reporting issues, asking questions, and contributing code.
 
