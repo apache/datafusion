@@ -1752,15 +1752,17 @@ STORED AS PARQUET;
     .unwrap();
 
     // Create a TopK query that will use dynamic filter pushdown
+    // Note that we use t * t as the order by expression to avoid
+    // the order pushdown optimizer from optimizing away the TopK.
     let df = ctx
-        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t LIMIT 10;")
+        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t * t LIMIT 10;")
         .await
         .unwrap();
     let batches = df.collect().await.unwrap();
     let explain = format!("{}", pretty_format_batches(&batches).unwrap());
 
     assert!(explain.contains("output_rows=128")); // Read 1 row group
-    assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
+    assert!(explain.contains("t@0 < 1884329474306198481")); // Dynamic filter was applied
     assert!(
         explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99.87 K"),
         "{explain}"
