@@ -111,12 +111,14 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
+/// Hex encoding lookup tables for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
 #[inline]
 fn hex_int64(num: i64, buffer: &mut Vec<u8>) {
-    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-
     if num == 0 {
-        buffer.push(HEX_CHARS[0]);
+        buffer.push(HEX_CHARS_UPPER[0]);
         return;
     }
 
@@ -126,29 +128,11 @@ fn hex_int64(num: i64, buffer: &mut Vec<u8>) {
     while n != 0 && i > 0 {
         i -= 1;
         let digest = (n & 0xF) as u8;
-        temp[i] = HEX_CHARS[digest as usize];
+        temp[i] = HEX_CHARS_UPPER[digest as usize];
         n >>= 4;
     }
 
     buffer.extend_from_slice(&temp[i..]);
-}
-
-/// Hex encoding lookup tables for fast byte-to-hex conversion
-const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
-const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
-#[inline]
-fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool, buffer: &mut Vec<u8>) {
-    let bytes = data.as_ref();
-    let hex_chars = if lower_case {
-        HEX_CHARS_LOWER
-    } else {
-        HEX_CHARS_UPPER
-    };
-    for &b in bytes {
-        buffer.push(hex_chars[(b >> 4) as usize]);
-        buffer.push(hex_chars[(b & 0x0f) as usize]);
-    }
 }
 
 /// Generic hex encoding for byte array types
@@ -189,7 +173,7 @@ where
 }
 
 /// Generic hex encoding for int64 type
-fn hex_encode_int64<'a, I>(iter: I, len: usize) -> Result<ColumnarValue, DataFusionError>
+fn hex_encode_int64<I>(iter: I, len: usize) -> Result<ColumnarValue, DataFusionError>
 where
     I: Iterator<Item = Option<i64>>,
 {
@@ -270,7 +254,8 @@ pub fn compute_hex(
                     DataType::Int64 => {
                         let int_values = as_int64_array(values)?;
                         hex_encode_int64(
-                            keys.iter().map(|k| k.map(|idx| int_values.value(idx as usize))),
+                            keys.iter()
+                                .map(|k| k.map(|idx| int_values.value(idx as usize))),
                             dict.len(),
                         )
                     }
