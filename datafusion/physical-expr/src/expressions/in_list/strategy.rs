@@ -28,7 +28,9 @@ use super::primitive_filter::*;
 use super::result::handle_dictionary;
 use super::static_filter::StaticFilter;
 use super::transform::{
-    make_bitmap_filter, make_branchless_filter, reinterpret_any_primitive_to,
+    make_bitmap_filter, make_branchless_filter, make_byte_view_masked_filter,
+    make_utf8view_branchless_filter, make_utf8view_hash_filter,
+    reinterpret_any_primitive_to, utf8view_all_short_strings,
 };
 
 // =============================================================================
@@ -104,6 +106,16 @@ pub(crate) fn instantiate_static_filter(
 
     let len = in_array.len();
     let dt = in_array.data_type();
+
+    // Special case: Utf8View with short strings can be reinterpreted as i128
+    if matches!(dt, DataType::Utf8View) && utf8view_all_short_strings(in_array.as_ref()) {
+        return if len <= BRANCHLESS_MAX_16B {
+            make_utf8view_branchless_filter(&in_array)
+        } else {
+            make_utf8view_hash_filter(&in_array)
+        };
+    }
+
     let strategy = select_strategy(dt, len);
 
     match (dt, strategy) {
@@ -123,6 +135,14 @@ pub(crate) fn instantiate_static_filter(
         (_, Hashed) => dispatch_hashed(&in_array).ok_or_else(|| {
             exec_datafusion_err!("Hashed strategy selected but no filter for {:?}", dt)
         })?,
+
+        // Byte view filters (Utf8View, BinaryView)
+        (DataType::Utf8View, Generic) => {
+            make_byte_view_masked_filter::<StringViewType>(in_array)
+        }
+        (DataType::BinaryView, Generic) => {
+            make_byte_view_masked_filter::<BinaryViewType>(in_array)
+        }
 
         // Fallback for nested/complex types and strings (Phase 4: Strings use fallback)
         (_, Generic) => Ok(Arc::new(NestedTypeFilter::try_new(in_array)?)),
