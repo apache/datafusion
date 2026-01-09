@@ -1761,7 +1761,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Get unique constraint indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
-                        &columns,
+                        columns,
                         constraint_name,
                     )?;
                     Ok(Constraint::Unique(indices))
@@ -1777,7 +1777,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Get primary key indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
-                        &columns,
+                        columns,
                         "primary key",
                     )?;
                     Ok(Constraint::PrimaryKey(indices))
