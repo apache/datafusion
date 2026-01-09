@@ -120,7 +120,7 @@ impl PhysicalExpr for Literal {
         ctx: Arc<PruningContext>,
     ) -> Result<Option<PruningIntermediate>> {
         let length = ctx.statistics().num_containers();
-        let range = RangeStats::new_scalar(self.value.clone(), length)?;
+        let range = RangeStats::new_constant(self.value.clone(), length)?;
 
         let null = match self.value().is_null() {
             true => NullStats::from_uniform_presence(NullPresence::AllNull, length),

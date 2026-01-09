@@ -25,6 +25,7 @@ mod test {
     use datafusion_common::ScalarValue;
 
     use datafusion_expr::Operator;
+    use datafusion_expr_common::columnar_value::ColumnarValue;
 
     use datafusion_physical_expr::PhysicalExpr;
 
@@ -34,7 +35,6 @@ mod test {
     };
     use datafusion_physical_expr_common::physical_expr::{
         ColumnStats, NullPresence, PruningContext, PruningIntermediate, PruningOutcome,
-        RangeStats,
     };
 
     use crate::pruning_utils::{
@@ -71,14 +71,9 @@ mod test {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), 3);
 
-                let (mins, maxs) = match range_stats {
-                    RangeStats::Array {
-                        mins: Some(mins),
-                        maxs: Some(maxs),
-                        ..
-                    } => (mins, maxs),
-                    other => panic!("unexpected range stats: {other:?}"),
-                };
+                let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
+                let mins = mins.expect("mins");
+                let maxs = maxs.expect("maxs");
 
                 let mins = mins.as_any().downcast_ref::<Int32Array>().unwrap();
                 let maxs = maxs.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -168,14 +163,9 @@ mod test {
             PruningIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
-                let (mins, maxs) = match range_stats {
-                    RangeStats::Array {
-                        mins: Some(mins),
-                        maxs: Some(maxs),
-                        ..
-                    } => (mins, maxs),
-                    other => panic!("unexpected range stats: {other:?}"),
-                };
+                let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
+                let mins = mins.expect("mins");
+                let maxs = maxs.expect("maxs");
                 let mins = mins.as_any().downcast_ref::<Int32Array>().unwrap();
                 let maxs = maxs.as_any().downcast_ref::<Int32Array>().unwrap();
                 assert_eq!(mins, &Int32Array::from(vec![None, Some(5), Some(7)]));
@@ -198,14 +188,9 @@ mod test {
             PruningIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
-                let (mins, maxs) = match range_stats {
-                    RangeStats::Array {
-                        mins: Some(mins),
-                        maxs: Some(maxs),
-                        ..
-                    } => (mins, maxs),
-                    other => panic!("unexpected range stats: {other:?}"),
-                };
+                let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
+                let mins = mins.expect("mins");
+                let maxs = maxs.expect("maxs");
                 let mins = mins.as_any().downcast_ref::<Int32Array>().unwrap();
                 let maxs = maxs.as_any().downcast_ref::<Int32Array>().unwrap();
                 assert_eq!(mins, &Int32Array::from(vec![Some(-5), None, Some(0)]));
@@ -225,14 +210,9 @@ mod test {
             PruningIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
-                let (mins, maxs) = match range_stats {
-                    RangeStats::Array {
-                        mins: Some(mins),
-                        maxs: Some(maxs),
-                        ..
-                    } => (mins, maxs),
-                    other => panic!("unexpected range stats: {other:?}"),
-                };
+                let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
+                let mins = mins.expect("mins");
+                let maxs = maxs.expect("maxs");
                 let mins = mins.as_any().downcast_ref::<Int32Array>().unwrap();
                 let maxs = maxs.as_any().downcast_ref::<Int32Array>().unwrap();
                 assert_eq!(mins, &Int32Array::from(vec![None, Some(1), None]));
@@ -254,15 +234,9 @@ mod test {
             PruningIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
-                let (mins, maxs) = match range_stats {
-                    RangeStats::Array {
-                        mins,
-                        maxs: Some(maxs),
-                        ..
-                    } => (mins, maxs),
-                    other => panic!("unexpected range stats: {other:?}"),
-                };
+                let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
                 assert!(mins.is_none(), "mins should be entirely missing");
+                let maxs = maxs.expect("maxs");
                 let maxs = maxs.as_any().downcast_ref::<Int32Array>().unwrap();
                 assert_eq!(maxs, &Int32Array::from(vec![Some(3), Some(6), Some(9)]));
                 assert!(stats.null_stats().is_none());
@@ -307,13 +281,21 @@ mod test {
 
             match stat {
                 PruningIntermediate::IntermediateStats(ColumnStats {
-                    range_stats: Some(RangeStats::Scalar { value, length }),
+                    range_stats: Some(range_stats),
                     null_stats,
                     num_containers: stats_num_containers,
                 }) => {
-                    assert_eq!(value, expected_value);
-                    assert_eq!(length, num_containers);
+                    assert_eq!(range_stats.len(), num_containers);
                     assert_eq!(stats_num_containers, num_containers);
+                    let mins = range_stats.mins.as_ref().expect("mins");
+                    let maxs = range_stats.maxs.as_ref().expect("maxs");
+                    match (mins, maxs) {
+                        (ColumnarValue::Scalar(min), ColumnarValue::Scalar(max)) => {
+                            assert_eq!(min, &expected_value);
+                            assert_eq!(max, &expected_value);
+                        }
+                        other => panic!("unexpected range stats: {other:?}"),
+                    }
 
                     let presence: Vec<NullPresence> = null_stats
                         .expect("null stats")
@@ -353,13 +335,21 @@ mod test {
 
             match stat {
                 PruningIntermediate::IntermediateStats(ColumnStats {
-                    range_stats: Some(RangeStats::Scalar { value, length }),
+                    range_stats: Some(range_stats),
                     null_stats,
                     num_containers: stats_num_containers,
                 }) => {
-                    assert_eq!(value, expected_value);
-                    assert_eq!(length, num_containers);
+                    assert_eq!(range_stats.len(), num_containers);
                     assert_eq!(stats_num_containers, num_containers);
+                    let mins = range_stats.mins.as_ref().expect("mins");
+                    let maxs = range_stats.maxs.as_ref().expect("maxs");
+                    match (mins, maxs) {
+                        (ColumnarValue::Scalar(min), ColumnarValue::Scalar(max)) => {
+                            assert_eq!(min, &expected_value);
+                            assert_eq!(max, &expected_value);
+                        }
+                        other => panic!("unexpected range stats: {other:?}"),
+                    }
 
                     let presence: Vec<NullPresence> = null_stats
                         .expect("null stats")

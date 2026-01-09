@@ -66,6 +66,7 @@ use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBuilder, UInt64Array};
 use arrow::compute::kernels::boolean::and_kleene;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err};
+use datafusion_expr_common::columnar_value::ColumnarValue;
 
 /// Physical representation of pruning outcomes for each container:
 /// `true` = KeepAll, `false` = SkipAll, `null` = Unknown.
@@ -179,21 +180,17 @@ impl From<BooleanArray> for PruningResults {
 }
 
 #[derive(Debug, Clone)]
-pub enum RangeStats {
-    /// Ranges for all containers in array form.
+pub struct RangeStats {
+    /// Ranges for all containers in columnar form.
     /// - If `mins`/`maxs` are `None`, all containers have unknown statistics.
     /// - Each entry (per-container) may be a bound or null. Null means missing or
     ///   unbounded (null in `mins` = -inf; treating missing/unbounded the same
     ///   does not change pruning results).
-    Array {
-        mins: Option<ArrayRef>,
-        maxs: Option<ArrayRef>,
-        length: usize,
-    },
-    /// Represents a uniform literal value across all containers.
-    /// This variant make it easy to compare between literals and normal ranges representing
-    /// each containers' value range.
-    Scalar { value: ScalarValue, length: usize },
+    /// - Use `ColumnarValue::Scalar` to represent a uniform literal value across
+    ///   all containers.
+    pub mins: Option<ColumnarValue>,
+    pub maxs: Option<ColumnarValue>,
+    pub length: usize,
 }
 
 /// Null-related statistics for each container stored as a BooleanArray:
@@ -274,20 +271,25 @@ impl RangeStats {
                 "Range maxs length mismatch for pruning statistics"
             );
         }
-        Ok(Self::Array { mins, maxs, length })
+        Ok(Self {
+            mins: mins.map(ColumnarValue::Array),
+            maxs: maxs.map(ColumnarValue::Array),
+            length,
+        })
     }
 
     /// Create range stats for a constant literal across all containers.
-    pub fn new_scalar(value: ScalarValue, length: usize) -> Result<Self> {
-        Ok(Self::Scalar { value, length })
+    pub fn new_constant(value: ScalarValue, length: usize) -> Result<Self> {
+        let value = ColumnarValue::Scalar(value);
+        Ok(Self {
+            mins: Some(value.clone()),
+            maxs: Some(value),
+            length,
+        })
     }
 
     pub fn len(&self) -> usize {
-        match self {
-            RangeStats::Array { length, .. } | RangeStats::Scalar { length, .. } => {
-                *length
-            }
-        }
+        self.length
     }
 
     pub fn is_empty(&self) -> bool {
@@ -296,17 +298,18 @@ impl RangeStats {
 
     /// Normalize into concrete min/max arrays.
     ///
-    /// For `Array`, returns cloned mins/maxs (which may be `None`).
-    /// For `Scalar`, expands the scalar to arrays of length `length`.
+    /// For `ColumnarValue::Array`, returns cloned mins/maxs (which may be `None`).
+    /// For `ColumnarValue::Scalar`, expands the scalar to arrays of length `length`.
     pub fn normalize_to_arrays(&self) -> Result<(Option<ArrayRef>, Option<ArrayRef>)> {
-        match self {
-            RangeStats::Array { mins, maxs, .. } => Ok((mins.clone(), maxs.clone())),
-            RangeStats::Scalar { value, length } => {
-                let mins = value.to_array_of_size(*length)?;
-                let maxs = value.to_array_of_size(*length)?;
-                Ok((Some(mins), Some(maxs)))
-            }
-        }
+        let mins = match self.mins.as_ref() {
+            Some(mins) => Some(mins.to_array_of_size(self.length)?),
+            None => None,
+        };
+        let maxs = match self.maxs.as_ref() {
+            Some(maxs) => Some(maxs.to_array_of_size(self.length)?),
+            None => None,
+        };
+        Ok((mins, maxs))
     }
 }
 
