@@ -20,6 +20,8 @@ use std::sync::Arc;
 
 pub mod avg;
 pub mod try_sum;
+mod sum;
+mod sum_decimal;
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
