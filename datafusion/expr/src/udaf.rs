@@ -1515,7 +1515,7 @@ mod test {
         use arrow::datatypes::Field;
         use std::sync::Arc;
 
-        let a = AggregateUDF::from(AMeanUdf::new());
+        let udf = AggregateUDF::from(AMeanUdf::new());
 
         let nullable_field = Arc::new(Field::new("col", DataType::Float64, true));
         let return_field = a.return_field(&[nullable_field]).unwrap();
