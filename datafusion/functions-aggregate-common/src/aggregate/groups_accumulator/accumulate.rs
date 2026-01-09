@@ -171,6 +171,7 @@ impl NullState {
         T: ArrowPrimitiveType + Send,
         F: FnMut(usize, T::Native) + Send,
     {
+        // skip null handling if no nulls in input or accumulator
         if let SeenValues::All { num_values } = &mut self.seen_values
             && opt_filter.is_none()
             && values.null_count() == 0
@@ -210,6 +211,7 @@ impl NullState {
         let data = values.values();
         assert_eq!(data.len(), group_indices.len());
 
+        // skip null handling if no nulls in input or accumulator
         if let SeenValues::All { num_values } = &mut self.seen_values
             && opt_filter.is_none()
             && values.null_count() == 0
