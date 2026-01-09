@@ -27,8 +27,6 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -52,7 +50,7 @@ pub struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     satisfied: bool,
-    order_sensitive: bool,
+    preserve_order: bool,
 }
 
 impl LimitPushdown {
@@ -72,7 +70,7 @@ impl PhysicalOptimizerRule for LimitPushdown {
             fetch: None,
             skip: 0,
             satisfied: false,
-            order_sensitive: false,
+            preserve_order: false,
         };
         pushdown_limits(plan, global_state)
     }
@@ -116,7 +114,7 @@ impl LimitExec {
         }
     }
 
-    fn order_sensitive(&self) -> bool {
+    fn preserve_order(&self) -> bool {
         match self {
             Self::Global(global) => global.required_ordering().is_some(),
             Self::Local(local) => local.required_ordering().is_some(),
@@ -156,7 +154,7 @@ pub fn pushdown_limit_helper(
         );
         global_state.skip = skip;
         global_state.fetch = fetch;
-        global_state.order_sensitive = limit_exec.order_sensitive();
+        global_state.preserve_order = limit_exec.preserve_order();
 
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
@@ -253,10 +251,9 @@ pub fn pushdown_limit_helper(
         let maybe_fetchable = pushdown_plan.with_fetch(skip_and_fetch);
         if global_state.satisfied {
             if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = ensure_preserve_order_if_needed(
-                    plan_with_fetch,
-                    global_state.order_sensitive,
-                );
+                let plan_with_preserve_order = plan_with_fetch
+                    .with_preserve_order(global_state.preserve_order)
+                    .unwrap_or(plan_with_fetch);
                 Ok((Transformed::yes(plan_with_preserve_order), global_state))
             } else {
                 Ok((Transformed::no(pushdown_plan), global_state))
@@ -264,10 +261,9 @@ pub fn pushdown_limit_helper(
         } else {
             global_state.satisfied = true;
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
-                let plan_with_preserve_order = ensure_preserve_order_if_needed(
-                    plan_with_fetch,
-                    global_state.order_sensitive,
-                );
+                let plan_with_preserve_order = plan_with_fetch
+                    .with_preserve_order(global_state.preserve_order)
+                    .unwrap_or(plan_with_fetch);
 
                 if global_skip > 0 {
                     add_global_limit(
@@ -360,39 +356,6 @@ fn add_global_limit(
     fetch: Option<usize>,
 ) -> Arc<dyn ExecutionPlan> {
     Arc::new(GlobalLimitExec::new(pushdown_plan, skip, fetch)) as _
-}
-
-/// Helper function to handle DataSourceExec preserve_order setting
-fn ensure_preserve_order_if_needed(
-    plan: Arc<dyn ExecutionPlan>,
-    order_sensitive: bool,
-) -> Arc<dyn ExecutionPlan> {
-    if !order_sensitive {
-        return plan;
-    }
-
-    let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-        return plan;
-    };
-
-    let Some(file_scan_config) = data_source_exec
-        .data_source()
-        .as_any()
-        .downcast_ref::<FileScanConfig>()
-    else {
-        return plan;
-    };
-
-    if file_scan_config.preserve_order {
-        return plan;
-    }
-
-    let new_config = FileScanConfigBuilder::from(file_scan_config.clone())
-        .with_preserve_order(true)
-        .build();
-
-    let new_data_source_exec = DataSourceExec::new(Arc::new(new_config));
-    Arc::new(new_data_source_exec) as Arc<dyn ExecutionPlan>
 }
 
 // See tests in datafusion/core/tests/physical_optimizer

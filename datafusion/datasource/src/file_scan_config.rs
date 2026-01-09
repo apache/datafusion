@@ -484,6 +484,9 @@ impl FileScanConfigBuilder {
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
+        // If there is an output ordering, we should preserve it.
+        let preserve_order = preserve_order || !output_ordering.is_empty();
+
         FileScanConfig {
             object_store_url,
             file_source,
@@ -868,6 +871,18 @@ impl DataSource for FileScanConfig {
                 Ok(SortOrderPushdownResult::Unsupported)
             }
         }
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        if self.preserve_order == preserve_order {
+            return Some(Arc::new(self.clone()));
+        }
+
+        let new_config = FileScanConfig {
+            preserve_order,
+            ..self.clone()
+        };
+        Some(Arc::new(new_config))
     }
 }
 

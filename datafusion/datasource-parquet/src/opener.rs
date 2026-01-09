@@ -69,13 +69,13 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMe
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
     /// Execution partition index
-    pub partition_index: usize,
+    pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
     pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
-    pub limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
     /// If should keep the output rows in order
     pub preserve_order: bool,
     /// Optional predicate to apply during the scan
