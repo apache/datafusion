@@ -273,6 +273,7 @@ FROM
 ----
 foo 1
 
+# Regression test: first_value should preserve metadata
 query IT
 select first_value(id order by id asc nulls last), arrow_metadata(first_value(id order by id asc nulls last), 'metadata_key')
 from table_with_metadata;
