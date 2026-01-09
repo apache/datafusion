@@ -377,14 +377,14 @@ impl ExecutionPlan for ProjectionExec {
 
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
-        for filter in &parent_filters {
+        for filter in parent_filters {
             rewriter.reset();
-            let rewritten = filter.clone().rewrite(&mut rewriter)?.data;
+            let rewritten = Arc::clone(&filter).rewrite(&mut rewriter)?.data;
 
             if rewriter.has_unmapped_columns() {
                 // Filter contains columns that cannot be mapped through projection
                 // Mark as unsupported - cannot push down
-                child_parent_filters.push(PushedDownPredicate::unsupported(Arc::clone(filter)));
+                child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             } else {
                 // All columns were successfully mapped through the projection
                 // The rewritten filter already has correct column indices for the child
