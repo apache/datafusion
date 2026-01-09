@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
-use crate::expressions::UnKnownColumn;
 use crate::expressions::{BinaryExpr, Column};
 use crate::tree_node::ExprContext;
 
