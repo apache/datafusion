@@ -370,6 +370,16 @@ where
         ))
     }
 
+    /// Creates a DirectProbeFilter from an iterator of values.
+    ///
+    /// This is useful when building the filter from pre-processed values
+    /// (e.g., masked views for Utf8View).
+    pub(crate) fn from_values(values: impl Iterator<Item = T::Native>) -> Self {
+        // Collect into HashSet for deduplication
+        let unique_values: HashSet<_> = values.collect();
+        Self::from_values_inner(unique_values.into_iter(), 0)
+    }
+
     /// Internal constructor from deduplicated values
     fn from_values_inner(
         unique_values: impl Iterator<Item = T::Native>,

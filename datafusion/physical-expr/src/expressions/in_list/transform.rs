@@ -26,16 +26,27 @@
 //! multiple types (Int64, Float64, Timestamp, Duration) that share the same
 //! byte width, reducing code duplication.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, PrimitiveArray};
+use ahash::RandomState;
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::{ArrowPrimitiveType, ByteViewType, Decimal128Type};
+use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
+use datafusion_common::hash_utils::with_hashes;
+use hashbrown::HashTable;
 
-use super::primitive_filter::{BitmapFilter, BitmapFilterConfig, BranchlessFilter};
-use super::result::handle_dictionary;
+use super::primitive_filter::{
+    BitmapFilter, BitmapFilterConfig, BranchlessFilter, DirectProbeFilter,
+};
+use super::result::{build_in_list_result_with_null_shortcircuit, handle_dictionary};
 use super::static_filter::StaticFilter;
+
+/// Maximum length for inline strings (≤12 bytes can be stored in 16-byte view/encoding).
+/// Used by both Utf8View short string optimization and Utf8 two-stage filter.
+pub(crate) const INLINE_STRING_LEN: usize = 12;
 
 // =============================================================================
 // REINTERPRETING FILTERS (zero-copy type conversion)
@@ -82,6 +93,29 @@ where
         let values: &[T::Native] = data.buffer::<T::Native>(0);
 
         Ok(self.inner.contains_slice(values, data.nulls(), negated))
+    }
+}
+
+/// Hash filter for Utf8View short strings (≤12 bytes).
+///
+/// Reinterprets the views buffer directly as i128 slice.
+struct Utf8ViewHashFilter {
+    inner: DirectProbeFilter<Decimal128Type>,
+}
+
+impl StaticFilter for Utf8ViewHashFilter {
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        // Zero-copy: reinterpret views buffer directly as i128 slice
+        let sv = v.as_string_view();
+        let values: &[i128] = sv.views().inner().typed_data();
+
+        Ok(self.inner.contains_slice(values, sv.nulls(), negated))
     }
 }
 
@@ -213,4 +247,279 @@ where
             "Branchless filter not supported for {w}-byte types"
         ),
     }
+}
+
+// =============================================================================
+// UTF8VIEW REINTERPRETATION (short strings ≤12 bytes → Decimal128)
+// =============================================================================
+
+// NOTE: Optimizations below assume Little Endian layout (DataFusion standard).
+
+/// Helper to extract the length from a Utf8View u128/i128 view.
+#[inline(always)]
+fn view_len(view: i128) -> u32 {
+    view as u32
+}
+
+/// Checks if all strings in a Utf8View array are short enough to be inline.
+///
+/// In Utf8View, strings ≤12 bytes are stored inline in the 16-byte view struct.
+/// These can be reinterpreted as i128 for fast equality comparison.
+#[inline]
+pub(crate) fn utf8view_all_short_strings(array: &dyn Array) -> bool {
+    let sv = array.as_string_view();
+    sv.views().iter().enumerate().all(|(i, &view)| {
+        !sv.is_valid(i) || view_len(view as i128) as usize <= INLINE_STRING_LEN
+    })
+}
+
+/// Reinterprets a Utf8View array as Decimal128 by treating the view bytes as i128.
+#[inline]
+fn reinterpret_utf8view_as_decimal128(array: &dyn Array) -> ArrayRef {
+    let sv = array.as_string_view();
+    let buffer: ScalarBuffer<i128> = sv.views().inner().clone().into();
+    Arc::new(PrimitiveArray::<Decimal128Type>::new(
+        buffer,
+        sv.nulls().cloned(),
+    ))
+}
+
+/// Creates a hash filter for Utf8View arrays with short strings.
+pub(crate) fn make_utf8view_hash_filter(
+    in_array: &ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    let reinterpreted = reinterpret_utf8view_as_decimal128(in_array.as_ref());
+    let inner = DirectProbeFilter::<Decimal128Type>::try_new(&reinterpreted)?;
+    Ok(Arc::new(Utf8ViewHashFilter { inner }))
+}
+
+/// Creates a branchless filter for Utf8View arrays with short strings.
+pub(crate) fn make_utf8view_branchless_filter(
+    in_array: &ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>> {
+    let reinterpreted = reinterpret_utf8view_as_decimal128(in_array.as_ref());
+
+    macro_rules! try_branchless {
+        ($($n:literal),*) => {
+            $(if let Some(Ok(inner)) = BranchlessFilter::<Decimal128Type, $n>::try_new(&reinterpreted) {
+                return Ok(Arc::new(Utf8ViewBranchless { inner }));
+            })*
+        };
+    }
+    try_branchless!(0, 1, 2, 3, 4);
+
+    datafusion_common::exec_err!(
+        "Utf8View branchless filter only supports 0-4 elements, got {}",
+        in_array.len() - in_array.null_count()
+    )
+}
+
+/// Branchless filter for Utf8View short strings (≤12 bytes).
+struct Utf8ViewBranchless<const N: usize> {
+    inner: BranchlessFilter<Decimal128Type, N>,
+}
+
+impl<const N: usize> StaticFilter for Utf8ViewBranchless<N> {
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let sv = v.as_string_view();
+        let values: &[i128] = sv.views().inner().typed_data();
+
+        Ok(self.inner.contains_slice(values, sv.nulls(), negated))
+    }
+}
+
+// =============================================================================
+// UTF8VIEW TWO-STAGE FILTER (masked view pre-check + full verification)
+// =============================================================================
+
+/// Mask to extract len + prefix from a Utf8View view (zeroes out buffer_index and offset).
+///
+/// View layout (16 bytes, Little Endian):
+/// - Bytes 0-3 (low): length (u32)
+/// - Bytes 4-7: prefix (long strings) or inline data bytes 0-3 (short strings)
+/// - Bytes 8-11: buffer_index (long) or inline data bytes 4-7 (short)
+/// - Bytes 12-15 (high): offset (long) or inline data bytes 8-11 (short)
+///
+/// For long strings (>12 bytes), buffer_index and offset are array-specific,
+/// so we mask them out, keeping only len + prefix for comparison.
+const VIEW_MASK_LONG: i128 = (1_i128 << 64) - 1; // Keep low 64 bits
+
+/// Computes the masked view for comparison.
+///
+/// - Short strings (≤12 bytes): returns full view (all data is inline)
+/// - Long strings (>12 bytes): returns only len + prefix (masks out buffer_index/offset)
+#[inline(always)]
+fn masked_view(view: i128) -> i128 {
+    let len = view_len(view) as usize;
+
+    if len <= INLINE_STRING_LEN {
+        view // Short string: all 16 bytes are meaningful data
+    } else {
+        view & VIEW_MASK_LONG // Long string: keep only len + prefix
+    }
+}
+
+/// Two-stage filter for ByteView arrays (Utf8View, BinaryView) with mixed lengths.
+///
+/// Stage 1: Quick rejection using masked views (len + prefix as i128)
+/// - Non-matches rejected without any hashing using DirectProbeFilter
+/// - Short value matches (≤12 bytes) accepted immediately
+///
+/// Stage 2: Full verification for long value matches
+/// - Only reached when masked view matches AND value is long (>12 bytes)
+/// - Uses HashTable lookup with indices into haystack array
+pub(crate) struct ByteViewMaskedFilter<T: ByteViewType> {
+    /// The haystack array containing values to match against.
+    in_array: ArrayRef,
+    /// DirectProbeFilter for O(1) masked view quick rejection (faster than HashSet)
+    masked_view_filter: DirectProbeFilter<Decimal128Type>,
+    /// HashTable storing indices of long strings for Stage 2 verification
+    long_value_table: HashTable<usize>,
+    /// Random state for consistent hashing between haystack and needles
+    state: RandomState,
+    _phantom: PhantomData<T>,
+}
+
+impl<T: ByteViewType> ByteViewMaskedFilter<T>
+where
+    T::Native: PartialEq,
+{
+    pub(crate) fn try_new(in_array: ArrayRef) -> Result<Self> {
+        let bv = in_array.as_byte_view::<T>();
+        let views: &[i128] = bv.views().inner().typed_data();
+
+        let mut masked_views = Vec::new();
+        let state = RandomState::new();
+        let mut long_value_table = HashTable::new();
+
+        // Build hash table for long strings using batch hashing
+        with_hashes([in_array.as_ref()], &state, |hashes| {
+            let mut process_idx = |idx: usize| {
+                let view = views[idx];
+                masked_views.push(masked_view(view));
+
+                // For long strings, store index in hash table
+                let len = view_len(view) as usize;
+                if len > INLINE_STRING_LEN {
+                    let hash = hashes[idx];
+                    // SAFETY: idx is valid from iterator
+                    let val = unsafe { bv.value_unchecked(idx) };
+                    let bytes: &[u8] = val.as_ref();
+
+                    // Only insert if not already present (deduplication)
+                    if long_value_table
+                        .find(hash, |&stored_idx| {
+                            let stored: &[u8] =
+                                unsafe { bv.value_unchecked(stored_idx) }.as_ref();
+                            stored == bytes
+                        })
+                        .is_none()
+                    {
+                        long_value_table.insert_unique(hash, idx, |&i| hashes[i]);
+                    }
+                }
+            };
+
+            match bv.nulls() {
+                Some(nulls) => {
+                    BitIndexIterator::new(nulls.validity(), nulls.offset(), nulls.len())
+                        .for_each(&mut process_idx);
+                }
+                None => {
+                    (0..in_array.len()).for_each(&mut process_idx);
+                }
+            }
+            Ok::<_, datafusion_common::DataFusionError>(())
+        })?;
+
+        // Build DirectProbeFilter from collected masked views
+        let masked_view_filter =
+            DirectProbeFilter::<Decimal128Type>::from_values(masked_views.into_iter());
+
+        Ok(Self {
+            in_array,
+            masked_view_filter,
+            long_value_table,
+            state,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+impl<T: ByteViewType + 'static> StaticFilter for ByteViewMaskedFilter<T>
+where
+    T::Native: PartialEq,
+{
+    fn null_count(&self) -> usize {
+        self.in_array.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let needle_bv = v.as_byte_view::<T>();
+        let needle_views: &[i128] = needle_bv.views().inner().typed_data();
+        let needle_null_count = needle_bv.null_count();
+        let haystack_has_nulls = self.in_array.null_count() > 0;
+        let haystack_bv = self.in_array.as_byte_view::<T>();
+
+        // Single pass with lazy hashing - only hash long values that pass Stage 1
+        // Use null shortcircuit: Stage 2 string comparison is expensive,
+        // so skipping lookups for null positions is worth the branch overhead
+        Ok(build_in_list_result_with_null_shortcircuit(
+            v.len(),
+            needle_bv.nulls(),
+            needle_null_count,
+            haystack_has_nulls,
+            negated,
+            #[inline(always)]
+            |i| {
+                let needle_view = needle_views[i];
+                let masked = masked_view(needle_view);
+
+                // Stage 1: Quick rejection via DirectProbeFilter (O(1) lookup)
+                if !self.masked_view_filter.contains_single(masked) {
+                    return false;
+                }
+
+                // Masked view found in set
+                let needle_len = view_len(needle_view) as usize;
+
+                if needle_len <= INLINE_STRING_LEN {
+                    // Short value: masked view = full view, true match
+                    return true;
+                }
+
+                // Stage 2: Long value - hash lazily and lookup in hash table
+                // SAFETY: i is in bounds, closure only called for valid positions
+                let needle_val = unsafe { needle_bv.value_unchecked(i) };
+                let needle_bytes: &[u8] = needle_val.as_ref();
+                let hash = self.state.hash_one(needle_bytes);
+
+                self.long_value_table
+                    .find(hash, |&idx| {
+                        let haystack_val: &[u8] =
+                            unsafe { haystack_bv.value_unchecked(idx) }.as_ref();
+                        haystack_val == needle_bytes
+                    })
+                    .is_some()
+            },
+        ))
+    }
+}
+
+/// Creates a two-stage filter for ByteView arrays (Utf8View, BinaryView).
+pub(crate) fn make_byte_view_masked_filter<T: ByteViewType + 'static>(
+    in_array: ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    T::Native: PartialEq,
+{
+    Ok(Arc::new(ByteViewMaskedFilter::<T>::try_new(in_array)?))
 }
