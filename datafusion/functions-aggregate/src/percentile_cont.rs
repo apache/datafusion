@@ -437,6 +437,9 @@ impl<T: ArrowNumericType + Debug> Accumulator for PercentileContAccumulator<T> {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
         let mut to_remove: HashMap<ScalarValue, usize> = HashMap::new();
         for i in 0..values[0].len() {
             let v = ScalarValue::try_from_array(&values[0], i)?;
