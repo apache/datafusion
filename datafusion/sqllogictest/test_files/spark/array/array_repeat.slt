@@ -55,3 +55,30 @@ query ?
 SELECT array_repeat('123', CAST(NULL AS INT));
 ----
 NULL
+
+query ?
+SELECT array_repeat(column1, column2)
+FROM VALUES
+('123', 2),
+('123', 0),
+('123', -1),
+(NULL, 1),
+('123', NULL);
+----
+[123, 123]
+[]
+[]
+NULL
+NULL
+
+
+query ?
+SELECT array_repeat(column1, column2)
+FROM VALUES
+(['123'], 2),
+([], 2),
+([NULL], 2);
+----
+[[123], [123]]
+[[], []]
+[[NULL], [NULL]]
