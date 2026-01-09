@@ -33,7 +33,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::Result;
 
-use super::primitive_filter::{BitmapFilter, BitmapFilterConfig};
+use super::primitive_filter::{BitmapFilter, BitmapFilterConfig, BranchlessFilter};
 use super::result::handle_dictionary;
 use super::static_filter::StaticFilter;
 
@@ -56,6 +56,30 @@ impl<C: BitmapFilterConfig> StaticFilter for ReinterpretedBitmap<C> {
 
         let data = v.to_data();
         let values: &[C::Native] = data.buffer::<C::Native>(0);
+
+        Ok(self.inner.contains_slice(values, data.nulls(), negated))
+    }
+}
+
+/// Reinterpreting filter for branchless lookups.
+struct ReinterpretedBranchless<T: ArrowPrimitiveType, const N: usize> {
+    inner: BranchlessFilter<T, N>,
+}
+
+impl<T, const N: usize> StaticFilter for ReinterpretedBranchless<T, N>
+where
+    T: ArrowPrimitiveType + 'static,
+    T::Native: Copy + PartialEq + Send + Sync + 'static,
+{
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+
+        let data = v.to_data();
+        let values: &[T::Native] = data.buffer::<T::Native>(0);
 
         Ok(self.inner.contains_slice(values, data.nulls(), negated))
     }
@@ -90,4 +114,103 @@ where
     let reinterpreted = reinterpret_any_primitive_to::<C::ArrowType>(in_array.as_ref());
     let inner = BitmapFilter::<C>::try_new(&reinterpreted)?;
     Ok(Arc::new(ReinterpretedBitmap { inner }))
+}
+
+// =============================================================================
+// BRANCHLESS FILTER CREATION (const generic dispatch)
+// =============================================================================
+
+/// Creates a branchless filter for primitive types.
+///
+/// Dispatches based on byte width and element count:
+/// - 4-byte types (Int32, Float32, etc.): supports 0-32 elements
+/// - 8-byte types (Int64, Float64, Timestamp, etc.): supports 0-16 elements
+/// - 16-byte types (Decimal128): supports 0-4 elements
+pub(crate) fn make_branchless_filter<D>(
+    in_array: &ArrayRef,
+    width: usize,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Copy + PartialEq + Send + Sync + 'static,
+{
+    let is_native = in_array.data_type() == &D::DATA_TYPE;
+    let arr = if is_native {
+        Arc::clone(in_array)
+    } else {
+        reinterpret_any_primitive_to::<D>(in_array.as_ref())
+    };
+    let n = arr.len() - arr.null_count();
+
+    // Helper to create the filter for a known size N
+    #[inline]
+    fn create<D: ArrowPrimitiveType + 'static, const N: usize>(
+        arr: &ArrayRef,
+        is_native: bool,
+    ) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+    where
+        D::Native: Copy + PartialEq + Send + Sync + 'static,
+    {
+        let inner = BranchlessFilter::<D, N>::try_new(arr)
+            .expect("size verified")
+            .expect("type verified");
+        if is_native {
+            Ok(Arc::new(inner))
+        } else {
+            Ok(Arc::new(ReinterpretedBranchless { inner }))
+        }
+    }
+
+    // Match on (width, count) - shared sizes use or-patterns to avoid duplication
+    match (width, n) {
+        // All widths: 0-4
+        (4 | 8 | 16, 0) => create::<D, 0>(&arr, is_native),
+        (4 | 8 | 16, 1) => create::<D, 1>(&arr, is_native),
+        (4 | 8 | 16, 2) => create::<D, 2>(&arr, is_native),
+        (4 | 8 | 16, 3) => create::<D, 3>(&arr, is_native),
+        (4 | 8 | 16, 4) => create::<D, 4>(&arr, is_native),
+        // 4-byte and 8-byte: 5-16
+        (4 | 8, 5) => create::<D, 5>(&arr, is_native),
+        (4 | 8, 6) => create::<D, 6>(&arr, is_native),
+        (4 | 8, 7) => create::<D, 7>(&arr, is_native),
+        (4 | 8, 8) => create::<D, 8>(&arr, is_native),
+        (4 | 8, 9) => create::<D, 9>(&arr, is_native),
+        (4 | 8, 10) => create::<D, 10>(&arr, is_native),
+        (4 | 8, 11) => create::<D, 11>(&arr, is_native),
+        (4 | 8, 12) => create::<D, 12>(&arr, is_native),
+        (4 | 8, 13) => create::<D, 13>(&arr, is_native),
+        (4 | 8, 14) => create::<D, 14>(&arr, is_native),
+        (4 | 8, 15) => create::<D, 15>(&arr, is_native),
+        (4 | 8, 16) => create::<D, 16>(&arr, is_native),
+        // 4-byte only: 17-32
+        (4, 17) => create::<D, 17>(&arr, is_native),
+        (4, 18) => create::<D, 18>(&arr, is_native),
+        (4, 19) => create::<D, 19>(&arr, is_native),
+        (4, 20) => create::<D, 20>(&arr, is_native),
+        (4, 21) => create::<D, 21>(&arr, is_native),
+        (4, 22) => create::<D, 22>(&arr, is_native),
+        (4, 23) => create::<D, 23>(&arr, is_native),
+        (4, 24) => create::<D, 24>(&arr, is_native),
+        (4, 25) => create::<D, 25>(&arr, is_native),
+        (4, 26) => create::<D, 26>(&arr, is_native),
+        (4, 27) => create::<D, 27>(&arr, is_native),
+        (4, 28) => create::<D, 28>(&arr, is_native),
+        (4, 29) => create::<D, 29>(&arr, is_native),
+        (4, 30) => create::<D, 30>(&arr, is_native),
+        (4, 31) => create::<D, 31>(&arr, is_native),
+        (4, 32) => create::<D, 32>(&arr, is_native),
+        // Error cases
+        (4, n) => datafusion_common::exec_err!(
+            "Branchless filter for 4-byte types supports 0-32 elements, got {n}"
+        ),
+        (8, n) => datafusion_common::exec_err!(
+            "Branchless filter for 8-byte types supports 0-16 elements, got {n}"
+        ),
+        (16, n) => datafusion_common::exec_err!(
+            "Branchless filter for 16-byte types supports 0-4 elements, got {n}"
+        ),
+        (w, _) => datafusion_common::exec_err!(
+            "Branchless filter not supported for {w}-byte types"
+        ),
+    }
 }
