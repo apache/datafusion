@@ -40,7 +40,7 @@ pub(crate) fn instantiate_static_filter(
         DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
         DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
         DataType::UInt8 => Ok(Arc::new(BitmapFilter::<U8Config>::try_new(&in_array)?)),
-        DataType::UInt16 => Ok(Arc::new(UInt16StaticFilter::try_new(&in_array)?)),
+        DataType::UInt16 => Ok(Arc::new(BitmapFilter::<U16Config>::try_new(&in_array)?)),
         DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
         DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
         DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),

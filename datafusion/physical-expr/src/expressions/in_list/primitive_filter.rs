@@ -57,6 +57,21 @@ impl BitmapStorage for [u64; 4] {
     }
 }
 
+impl BitmapStorage for Box<[u64; 1024]> {
+    #[inline]
+    fn new_zeroed() -> Self {
+        Box::new([0u64; 1024])
+    }
+    #[inline]
+    fn set_bit(&mut self, index: usize) {
+        self[index / 64] |= 1u64 << (index % 64);
+    }
+    #[inline(always)]
+    fn get_bit(&self, index: usize) -> bool {
+        (self[index / 64] >> (index % 64)) & 1 != 0
+    }
+}
+
 /// Configuration trait for bitmap filters.
 pub(crate) trait BitmapFilterConfig: Send + Sync + 'static {
     type Native: ArrowNativeType + Copy + Send + Sync;
@@ -75,6 +90,19 @@ impl BitmapFilterConfig for U8Config {
 
     #[inline(always)]
     fn to_index(v: u8) -> usize {
+        v as usize
+    }
+}
+
+/// Config for u16 bitmap (65536 bits = 8 KB, fits in L1 cache).
+pub(crate) enum U16Config {}
+impl BitmapFilterConfig for U16Config {
+    type Native = u16;
+    type ArrowType = UInt16Type;
+    type Storage = Box<[u64; 1024]>;
+
+    #[inline(always)]
+    fn to_index(v: u16) -> usize {
         v as usize
     }
 }
@@ -285,7 +313,6 @@ primitive_static_filter!(Int8StaticFilter, Int8Type);
 primitive_static_filter!(Int16StaticFilter, Int16Type);
 primitive_static_filter!(Int32StaticFilter, Int32Type);
 primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt16StaticFilter, UInt16Type);
 primitive_static_filter!(UInt32StaticFilter, UInt32Type);
 primitive_static_filter!(UInt64StaticFilter, UInt64Type);
 
