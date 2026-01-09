@@ -28,8 +28,8 @@ use super::{
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    ChildFilterDescription, ChildPushdownResult, FilterDescription,
+    FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::util::PhysicalColumnRewriter;
@@ -373,13 +373,29 @@ impl ExecutionPlan for ProjectionExec {
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
-
         let mut rewriter = PhysicalColumnRewriter::new(invert_alias_map);
-        let rewritten_filters = parent_filters
-            .into_iter()
-            .map(|filter| filter.rewrite(&mut rewriter).map(|t| t.data))
-            .collect::<Result<Vec<_>>>()?;
-        FilterDescription::from_children(rewritten_filters, &self.children())
+
+        let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
+
+        for filter in &parent_filters {
+            rewriter.reset();
+            let rewritten = filter.clone().rewrite(&mut rewriter)?.data;
+
+            if rewriter.has_unmapped_columns() {
+                // Filter contains columns that cannot be mapped through projection
+                // Mark as unsupported - cannot push down
+                child_parent_filters.push(PushedDownPredicate::unsupported(Arc::clone(filter)));
+            } else {
+                // All columns were successfully mapped through the projection
+                // The rewritten filter already has correct column indices for the child
+                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+            }
+        }
+
+        Ok(FilterDescription::new().with_child(ChildFilterDescription {
+            parent_filters: child_parent_filters,
+            self_filters: vec![],
+        }))
     }
 
     fn handle_child_pushdown_result(
@@ -1647,10 +1663,10 @@ mod tests {
 
         let pushed_filters = &description.parent_filters()[0];
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::No));
-        // The column shouldn't be found in the alias map, so it should become UnKnownColumn
+        // The column shouldn't be found in the alias map, so it remains unchanged with its index
         assert_eq!(
             format!("{}", pushed_filters[0].predicate),
-            "unknown_col > 5"
+            "unknown_col@1 > 5"
         );
 
         Ok(())
