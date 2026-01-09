@@ -24,15 +24,17 @@ use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
     DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
-    FIXED_SIZE_LIST_TYPE_VARIATION_REF, INTERVAL_DAY_TIME_TYPE_REF,
-    INTERVAL_MONTH_DAY_NANO_TYPE_NAME, INTERVAL_MONTH_DAY_NANO_TYPE_REF,
-    INTERVAL_YEAR_MONTH_TYPE_REF, LARGE_CONTAINER_TYPE_VARIATION_REF,
-    TIME_32_TYPE_VARIATION_REF, TIME_64_TYPE_VARIATION_REF,
-    TIMESTAMP_MICRO_TYPE_VARIATION_REF, TIMESTAMP_MILLI_TYPE_VARIATION_REF,
-    TIMESTAMP_NANO_TYPE_VARIATION_REF, TIMESTAMP_SECOND_TYPE_VARIATION_REF,
-    UNSIGNED_INTEGER_TYPE_VARIATION_REF, VIEW_CONTAINER_TYPE_VARIATION_REF,
+    INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
+    INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
+    TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
+    VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
+use crate::variation_const::{
+    FIXED_SIZE_LIST_TYPE_NAME, FLOAT_16_TYPE_NAME, NULL_TYPE_NAME,
+};
 use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
 };
@@ -167,10 +169,6 @@ pub fn from_substrait_type(
                 match list.type_variation_reference {
                     DEFAULT_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::List(field)),
                     LARGE_CONTAINER_TYPE_VARIATION_REF => Ok(DataType::LargeList(field)),
-                    v if v >= FIXED_SIZE_LIST_TYPE_VARIATION_REF => {
-                        let size = (v - FIXED_SIZE_LIST_TYPE_VARIATION_REF) as i32;
-                        Ok(DataType::FixedSizeList(field, size))
-                    }
                     v => not_impl_err!(
                         "Unsupported Substrait type variation {v} of type {s_kind:?}"
                     )?,
@@ -260,6 +258,36 @@ pub fn from_substrait_type(
                         }
                         FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         NULL_TYPE_NAME => Ok(DataType::Null),
+                        FIXED_SIZE_LIST_TYPE_NAME => {
+                            if u.type_parameters.len() != 2 {
+                                return substrait_err!(
+                                    "FixedSizeList requires 2 type parameters, got {}",
+                                    u.type_parameters.len()
+                                );
+                            }
+                            let inner_type = match &u.type_parameters[0].parameter {
+                                Some(r#type::parameter::Parameter::DataType(t)) => {
+                                    from_substrait_type(consumer, t, dfs_names, name_idx)?
+                                }
+                                _ => {
+                                    return substrait_err!(
+                                        "Invalid inner type for FixedSizeList"
+                                    );
+                                }
+                            };
+                            let size = match &u.type_parameters[1].parameter {
+                                Some(r#type::parameter::Parameter::Integer(i)) => {
+                                    *i as i32
+                                }
+                                _ => {
+                                    return substrait_err!(
+                                        "Invalid size for FixedSizeList"
+                                    );
+                                }
+                            };
+                            let field = Arc::new(Field::new_list_field(inner_type, true));
+                            Ok(DataType::FixedSizeList(field, size))
+                        }
                         _ => not_impl_err!(
                             "Unsupported Substrait user defined type with ref {} and variation {}",
                             u.type_reference,

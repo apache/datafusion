@@ -55,13 +55,6 @@ pub const TIME_64_TYPE_VARIATION_REF: u32 = 1;
 pub const DEFAULT_CONTAINER_TYPE_VARIATION_REF: u32 = 0;
 pub const LARGE_CONTAINER_TYPE_VARIATION_REF: u32 = 1;
 pub const VIEW_CONTAINER_TYPE_VARIATION_REF: u32 = 2;
-/// Used for the arrow type [`DataType::FixedSizeList`].
-///
-/// The size of the fixed list is encoded by adding it to this base value.
-/// For example, `FixedSizeList(10)` would use variation reference `3 + 10 = 13`.
-///
-/// [`DataType::FixedSizeList`]: datafusion::arrow::datatypes::DataType::FixedSizeList
-pub const FIXED_SIZE_LIST_TYPE_VARIATION_REF: u32 = 3;
 pub const DEFAULT_MAP_TYPE_VARIATION_REF: u32 = 0;
 pub const DICTIONARY_MAP_TYPE_VARIATION_REF: u32 = 1;
 pub const DECIMAL_128_TYPE_VARIATION_REF: u32 = 0;
@@ -137,3 +130,8 @@ pub const FLOAT_16_TYPE_NAME: &str = "fp16";
 ///
 /// [`DataType::Null`]: datafusion::arrow::datatypes::DataType::Null
 pub const NULL_TYPE_NAME: &str = "null";
+
+/// For [`DataType::FixedSizeList`]
+///
+/// [`DataType::FixedSizeList`]: datafusion::arrow::datatypes::DataType::FixedSizeList
+pub const FIXED_SIZE_LIST_TYPE_NAME: &str = "fixed_size_list";
