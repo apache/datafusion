@@ -1469,7 +1469,7 @@ mod test {
 
         // Create a nullable input field
         let nullable_field = Arc::new(Field::new("col", DataType::Float64, true));
-        let return_field = a.return_field(&[nullable_field]).unwrap();
+        let return_field = udf.return_field(&[nullable_field]).unwrap();
 
         // When input is nullable, output should be nullable
         assert!(return_field.is_nullable());
