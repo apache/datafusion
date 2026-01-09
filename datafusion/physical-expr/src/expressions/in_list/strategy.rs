@@ -25,8 +25,11 @@ use datafusion_common::{Result, exec_datafusion_err};
 
 use super::nested_filter::NestedTypeFilter;
 use super::primitive_filter::*;
+use super::result::handle_dictionary;
 use super::static_filter::StaticFilter;
-use super::transform::{make_bitmap_filter, make_branchless_filter};
+use super::transform::{
+    make_bitmap_filter, make_branchless_filter, reinterpret_any_primitive_to,
+};
 
 // =============================================================================
 // LOOKUP STRATEGY THRESHOLDS (tuned via microbenchmarks)
@@ -53,6 +56,8 @@ enum FilterStrategy {
     Bitmap2B,
     /// Branchless OR-chain for small lists.
     Branchless,
+    /// HashSet for larger lists.
+    Hashed,
     /// Generic ArrayStaticFilter fallback.
     Generic,
 }
@@ -66,21 +71,21 @@ fn select_strategy(dt: &DataType, len: usize) -> FilterStrategy {
             if len <= BRANCHLESS_MAX_4B {
                 FilterStrategy::Branchless
             } else {
-                FilterStrategy::Generic
+                FilterStrategy::Hashed
             }
         }
         Some(8) => {
             if len <= BRANCHLESS_MAX_8B {
                 FilterStrategy::Branchless
             } else {
-                FilterStrategy::Generic
+                FilterStrategy::Hashed
             }
         }
         Some(16) => {
             if len <= BRANCHLESS_MAX_16B {
                 FilterStrategy::Branchless
             } else {
-                FilterStrategy::Generic
+                FilterStrategy::Hashed
             }
         }
         _ => FilterStrategy::Generic,
@@ -114,16 +119,13 @@ pub(crate) fn instantiate_static_filter(
             )
         })?,
 
-        // Fallback for larger primitive lists (Legacy HashSet) or complex types (NestedTypeFilter)
-        (_, Generic) => match dt {
-            DataType::Int32 => Ok(Arc::new(Int32StaticFilter::try_new(&in_array)?)),
-            DataType::Int64 => Ok(Arc::new(Int64StaticFilter::try_new(&in_array)?)),
-            DataType::UInt32 => Ok(Arc::new(UInt32StaticFilter::try_new(&in_array)?)),
-            DataType::UInt64 => Ok(Arc::new(UInt64StaticFilter::try_new(&in_array)?)),
-            DataType::Float32 => Ok(Arc::new(Float32StaticFilter::try_new(&in_array)?)),
-            DataType::Float64 => Ok(Arc::new(Float64StaticFilter::try_new(&in_array)?)),
-            _ => Ok(Arc::new(NestedTypeFilter::try_new(in_array)?)),
-        },
+        // Hash filters for larger lists of primitives
+        (_, Hashed) => dispatch_hashed(&in_array).ok_or_else(|| {
+            exec_datafusion_err!("Hashed strategy selected but no filter for {:?}", dt)
+        })?,
+
+        // Fallback for nested/complex types and strings (Phase 4: Strings use fallback)
+        (_, Generic) => Ok(Arc::new(NestedTypeFilter::try_new(in_array)?)),
     }
 }
 
@@ -140,5 +142,87 @@ fn dispatch_branchless(
         Some(8) => Some(make_branchless_filter::<UInt64Type>(arr, 8)),
         Some(16) => Some(make_branchless_filter::<Decimal128Type>(arr, 16)),
         _ => None,
+    }
+}
+
+fn dispatch_hashed(
+    arr: &ArrayRef,
+) -> Option<Result<Arc<dyn StaticFilter + Send + Sync>>> {
+    // Use DirectProbeFilter for fast hash table lookups
+    macro_rules! direct_probe_filter {
+        ($T:ty) => {
+            return Some(
+                DirectProbeFilter::<$T>::try_new(arr)
+                    .map(|f| Arc::new(f) as Arc<dyn StaticFilter + Send + Sync>),
+            )
+        };
+    }
+    match arr.data_type() {
+        DataType::Int32 => direct_probe_filter!(Int32Type),
+        DataType::Int64 => direct_probe_filter!(Int64Type),
+        DataType::UInt32 => direct_probe_filter!(UInt32Type),
+        DataType::UInt64 => direct_probe_filter!(UInt64Type),
+        _ => {}
+    }
+
+    // For other primitive types, reinterpret bits as appropriate UInt/Int type
+    match arr.data_type().primitive_width() {
+        Some(4) => Some(make_direct_probe_filter_reinterpreted::<UInt32Type>(arr)),
+        Some(8) => Some(make_direct_probe_filter_reinterpreted::<UInt64Type>(arr)),
+        Some(16) => Some(make_direct_probe_filter_reinterpreted::<Decimal128Type>(
+            arr,
+        )),
+        _ => None,
+    }
+}
+
+/// Creates a DirectProbeFilter with type reinterpretation for Float types
+fn make_direct_probe_filter_reinterpreted<D>(
+    in_array: &ArrayRef,
+) -> Result<Arc<dyn StaticFilter + Send + Sync>>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Send + Sync + DirectProbeHashable + 'static,
+{
+    // Fast path: already the right type
+    if in_array.data_type() == &D::DATA_TYPE {
+        return Ok(Arc::new(DirectProbeFilter::<D>::try_new(in_array)?));
+    }
+
+    // Reinterpret and create filter
+    let reinterpreted = reinterpret_any_primitive_to::<D>(in_array.as_ref());
+    let inner = DirectProbeFilter::<D>::try_new(&reinterpreted)?;
+    Ok(Arc::new(ReinterpretedDirectProbeFilter { inner }))
+}
+
+/// Wrapper for DirectProbeFilter with type reinterpretation
+struct ReinterpretedDirectProbeFilter<D: ArrowPrimitiveType>
+where
+    D::Native: DirectProbeHashable,
+{
+    inner: DirectProbeFilter<D>,
+}
+
+impl<D> StaticFilter for ReinterpretedDirectProbeFilter<D>
+where
+    D: ArrowPrimitiveType + 'static,
+    D::Native: Send + Sync + DirectProbeHashable + 'static,
+{
+    #[inline]
+    fn null_count(&self) -> usize {
+        self.inner.null_count()
+    }
+
+    #[inline]
+    fn contains(
+        &self,
+        v: &dyn arrow::array::Array,
+        negated: bool,
+    ) -> Result<arrow::array::BooleanArray> {
+        handle_dictionary!(self, v, negated);
+        // Reinterpret needle array to destination type and use inner filter's raw slice path
+        let data = v.to_data();
+        let values: &[D::Native] = data.buffer::<D::Native>(0);
+        Ok(self.inner.contains_slice(values, v.nulls(), negated))
     }
 }

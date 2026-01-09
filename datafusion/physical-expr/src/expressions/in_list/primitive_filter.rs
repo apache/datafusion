@@ -19,14 +19,9 @@
 //!
 //! This module provides high-performance membership testing for Arrow primitive types.
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, downcast_array, downcast_dictionary_array,
-};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
-use arrow::compute::take;
-use arrow::datatypes::*;
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
+use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
-use std::hash::{Hash, Hasher};
 
 use super::result::{build_in_list_result, handle_dictionary};
 use super::static_filter::StaticFilter;
@@ -74,7 +69,7 @@ impl BitmapStorage for Box<[u64; 1024]> {
 
 /// Configuration trait for bitmap filters.
 pub(crate) trait BitmapFilterConfig: Send + Sync + 'static {
-    type Native: ArrowNativeType + Copy + Send + Sync;
+    type Native: arrow::datatypes::ArrowNativeType + Copy + Send + Sync;
     type ArrowType: ArrowPrimitiveType<Native = Self::Native>;
     type Storage: BitmapStorage;
 
@@ -85,7 +80,7 @@ pub(crate) trait BitmapFilterConfig: Send + Sync + 'static {
 pub(crate) enum U8Config {}
 impl BitmapFilterConfig for U8Config {
     type Native = u8;
-    type ArrowType = UInt8Type;
+    type ArrowType = arrow::datatypes::UInt8Type;
     type Storage = [u64; 4];
 
     #[inline(always)]
@@ -98,7 +93,7 @@ impl BitmapFilterConfig for U8Config {
 pub(crate) enum U16Config {}
 impl BitmapFilterConfig for U16Config {
     type Native = u16;
-    type ArrowType = UInt16Type;
+    type ArrowType = arrow::datatypes::UInt16Type;
     type Storage = Box<[u64; 1024]>;
 
     #[inline(always)]
@@ -142,7 +137,7 @@ impl<C: BitmapFilterConfig> BitmapFilter<C> {
     pub(crate) fn contains_slice(
         &self,
         values: &[C::Native],
-        nulls: Option<&NullBuffer>,
+        nulls: Option<&arrow::buffer::NullBuffer>,
         negated: bool,
     ) -> BooleanArray {
         build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
@@ -223,7 +218,7 @@ where
     pub(crate) fn contains_slice(
         &self,
         values: &[T::Native],
-        nulls: Option<&NullBuffer>,
+        nulls: Option<&arrow::buffer::NullBuffer>,
         negated: bool,
     ) -> BooleanArray {
         build_in_list_result(values.len(), nulls, self.null_count > 0, negated, |i| {
@@ -259,255 +254,208 @@ where
 }
 
 // =============================================================================
-// LEGACY FILTERS (to be replaced by optimized ones in subsequent commits)
+// DIRECT PROBE HASH FILTER (O(1) lookup with open addressing)
 // =============================================================================
 
-/// Wrapper for f32 that implements Hash and Eq using bit comparison.
-#[derive(Clone, Copy)]
-pub(crate) struct OrderedFloat32(pub(crate) f32);
+/// Load factor inverse for DirectProbeFilter hash table.
+/// A value of 4 means 25% load factor (table is 4x the number of elements).
+const LOAD_FACTOR_INVERSE: usize = 4;
 
-impl Hash for OrderedFloat32 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
+/// Minimum table size for DirectProbeFilter.
+/// Ensures reasonable performance even for very small IN lists.
+const MIN_TABLE_SIZE: usize = 16;
+
+/// Golden ratio constant for 32-bit hash mixing.
+/// Derived from (2^32 / phi) where phi = (1 + sqrt(5)) / 2.
+const GOLDEN_RATIO_32: u32 = 0x9e3779b9;
+
+/// Golden ratio constant for 64-bit hash mixing.
+/// Derived from (2^64 / phi) where phi = (1 + sqrt(5)) / 2.
+const GOLDEN_RATIO_64: u64 = 0x9e3779b97f4a7c15;
+
+/// Secondary mixing constant for 128-bit hashing (from SplitMix64).
+/// Using a different constant for hi/lo avoids collisions when lo = hi * C.
+const SPLITMIX_CONSTANT: u64 = 0xbf58476d1ce4e5b9;
+
+/// Fast hash filter using open addressing with linear probing.
+///
+/// Uses a power-of-2 sized hash table for O(1) average-case lookups.
+/// Optimized for the IN list use case with:
+/// - Simple/fast hash function (golden ratio multiply + xor-shift)
+/// - 25% load factor for minimal collisions
+/// - Direct array storage for cache-friendly access
+pub(crate) struct DirectProbeFilter<T: ArrowPrimitiveType>
+where
+    T::Native: DirectProbeHashable,
+{
+    null_count: usize,
+    /// Hash table with open addressing. None = empty slot, Some(v) = value present
+    table: Box<[Option<T::Native>]>,
+    /// Mask for slot index (table.len() - 1, always power of 2 minus 1)
+    mask: usize,
+}
+
+/// Trait for types that can be hashed for the direct probe filter.
+///
+/// Requires `Hash + Eq` for deduplication via `HashSet`, even though we use
+/// a custom `probe_hash()` for the actual hash table lookups.
+pub(crate) trait DirectProbeHashable:
+    Copy + PartialEq + std::hash::Hash + Eq
+{
+    fn probe_hash(self) -> usize;
+}
+
+// Simple but fast hash - golden ratio multiply + xor-shift
+impl DirectProbeHashable for i32 {
+    #[inline(always)]
+    fn probe_hash(self) -> usize {
+        let x = self as u32;
+        let x = x.wrapping_mul(GOLDEN_RATIO_32);
+        (x ^ (x >> 16)) as usize
     }
 }
 
-impl PartialEq for OrderedFloat32 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
+impl DirectProbeHashable for i64 {
+    #[inline(always)]
+    fn probe_hash(self) -> usize {
+        let x = self as u64;
+        let x = x.wrapping_mul(GOLDEN_RATIO_64);
+        (x ^ (x >> 32)) as usize
     }
 }
 
-impl Eq for OrderedFloat32 {}
-
-impl From<f32> for OrderedFloat32 {
-    fn from(v: f32) -> Self {
-        Self(v)
+impl DirectProbeHashable for u32 {
+    #[inline(always)]
+    fn probe_hash(self) -> usize {
+        (self as i32).probe_hash()
     }
 }
 
-/// Wrapper for f64 that implements Hash and Eq using bit comparison.
-#[derive(Clone, Copy)]
-pub(crate) struct OrderedFloat64(pub(crate) f64);
-
-impl Hash for OrderedFloat64 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.to_ne_bytes().hash(state);
+impl DirectProbeHashable for u64 {
+    #[inline(always)]
+    fn probe_hash(self) -> usize {
+        (self as i64).probe_hash()
     }
 }
 
-impl PartialEq for OrderedFloat64 {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.to_bits() == other.0.to_bits()
+impl DirectProbeHashable for i128 {
+    #[inline(always)]
+    fn probe_hash(self) -> usize {
+        // Mix both halves with different constants to avoid collisions when lo = hi * C
+        let lo = self as u64;
+        let hi = (self >> 64) as u64;
+        let x = lo.wrapping_mul(GOLDEN_RATIO_64) ^ hi.wrapping_mul(SPLITMIX_CONSTANT);
+        (x ^ (x >> 32)) as usize
     }
 }
 
-impl Eq for OrderedFloat64 {}
+impl<T: ArrowPrimitiveType> DirectProbeFilter<T>
+where
+    T::Native: DirectProbeHashable,
+{
+    pub(crate) fn try_new(in_array: &ArrayRef) -> Result<Self> {
+        let arr = in_array.as_primitive_opt::<T>().ok_or_else(|| {
+            exec_datafusion_err!(
+                "DirectProbeFilter: expected {} array",
+                std::any::type_name::<T>()
+            )
+        })?;
 
-impl From<f64> for OrderedFloat64 {
-    fn from(v: f64) -> Self {
-        Self(v)
+        // Collect unique values using HashSet for deduplication
+        let unique_values: HashSet<_> = arr.iter().flatten().collect();
+
+        Ok(Self::from_values_inner(
+            unique_values.into_iter(),
+            arr.null_count(),
+        ))
     }
-}
 
-macro_rules! primitive_static_filter {
-    ($Name:ident, $ArrowType:ty) => {
-        pub(crate) struct $Name {
-            null_count: usize,
-            values: HashSet<<$ArrowType as ArrowPrimitiveType>::Native>,
-        }
+    /// Internal constructor from deduplicated values
+    fn from_values_inner(
+        unique_values: impl Iterator<Item = T::Native>,
+        null_count: usize,
+    ) -> Self {
+        let unique_values: Vec<_> = unique_values.collect();
 
-        impl $Name {
-            pub(crate) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array = in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
+        // Size table to ~25% load factor for fewer collisions
+        let n = unique_values.len().max(1);
+        let table_size = (n * LOAD_FACTOR_INVERSE)
+            .next_power_of_two()
+            .max(MIN_TABLE_SIZE);
+        let mask = table_size - 1;
 
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
+        let mut table: Box<[Option<T::Native>]> =
+            vec![None; table_size].into_boxed_slice();
 
-                for v in in_array.iter().flatten() {
-                    values.insert(v);
+        // Insert all values using linear probing
+        for v in unique_values {
+            let mut slot = v.probe_hash() & mask;
+            loop {
+                if table[slot].is_none() {
+                    table[slot] = Some(v);
+                    break;
                 }
-
-                Ok(Self { null_count, values })
+                slot = (slot + 1) & mask;
             }
         }
 
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
+        Self {
+            null_count,
+            table,
+            mask,
+        }
+    }
 
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                downcast_dictionary_array! {
-                    v => {
-                        let values_contains = self.contains(v.values().as_ref(), negated)?;
-                        let result = take(&values_contains, v.keys(), None)?;
-                        return Ok(downcast_array(result.as_ref()))
-                    }
-                    _ => {}
-                }
-
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&needle_values[i])
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&needle_values[i])
-                    })
-                };
-
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => None,
-                    (true, false) => needle_nulls.cloned(),
-                    (false, true) => {
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        let needle_validity = needle_nulls
-                            .map(|n| n.inner().clone())
-                            .unwrap_or_else(|| {
-                                BooleanBuffer::new_set(needle_values.len())
-                            });
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
+    /// O(1) single-value lookup with linear probing.
+    ///
+    /// Returns true if the value is in the set.
+    #[inline(always)]
+    pub(crate) fn contains_single(&self, needle: T::Native) -> bool {
+        let mut slot = needle.probe_hash() & self.mask;
+        loop {
+            // SAFETY: `slot` is always < table.len() because:
+            // - `slot = hash & mask` where `mask = table.len() - 1`
+            // - table size is always a power of 2
+            // - `(slot + 1) & mask` wraps around within bounds
+            match unsafe { self.table.get_unchecked(slot) } {
+                None => return false,
+                Some(v) if *v == needle => return true,
+                _ => slot = (slot + 1) & self.mask,
             }
         }
-    };
+    }
+
+    /// Check membership using a raw values slice
+    #[inline]
+    pub(crate) fn contains_slice(
+        &self,
+        input: &[T::Native],
+        nulls: Option<&arrow::buffer::NullBuffer>,
+        negated: bool,
+    ) -> BooleanArray {
+        build_in_list_result(input.len(), nulls, self.null_count > 0, negated, |i| {
+            // SAFETY: i is in bounds since we iterate 0..input.len()
+            self.contains_single(unsafe { *input.get_unchecked(i) })
+        })
+    }
 }
 
-primitive_static_filter!(Int32StaticFilter, Int32Type);
-primitive_static_filter!(Int64StaticFilter, Int64Type);
-primitive_static_filter!(UInt32StaticFilter, UInt32Type);
-primitive_static_filter!(UInt64StaticFilter, UInt64Type);
+impl<T> StaticFilter for DirectProbeFilter<T>
+where
+    T: ArrowPrimitiveType + 'static,
+    T::Native: DirectProbeHashable + Send + Sync + 'static,
+{
+    #[inline]
+    fn null_count(&self) -> usize {
+        self.null_count
+    }
 
-macro_rules! float_static_filter {
-    ($Name:ident, $ArrowType:ty, $OrderedType:ty) => {
-        pub(crate) struct $Name {
-            null_count: usize,
-            values: HashSet<$OrderedType>,
-        }
-
-        impl $Name {
-            pub(crate) fn try_new(in_array: &ArrayRef) -> Result<Self> {
-                let in_array = in_array.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let mut values = HashSet::with_capacity(in_array.len());
-                let null_count = in_array.null_count();
-
-                for v in in_array.iter().flatten() {
-                    values.insert(<$OrderedType>::from(v));
-                }
-
-                Ok(Self { null_count, values })
-            }
-        }
-
-        impl StaticFilter for $Name {
-            fn null_count(&self) -> usize {
-                self.null_count
-            }
-
-            fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
-                downcast_dictionary_array! {
-                    v => {
-                        let values_contains = self.contains(v.values().as_ref(), negated)?;
-                        let result = take(&values_contains, v.keys(), None)?;
-                        return Ok(downcast_array(result.as_ref()))
-                    }
-                    _ => {}
-                }
-
-                let v = v.as_primitive_opt::<$ArrowType>().ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Failed to downcast an array to a '{}' array",
-                        stringify!($ArrowType)
-                    )
-                })?;
-
-                let haystack_has_nulls = self.null_count > 0;
-                let needle_values = v.values();
-                let needle_nulls = v.nulls();
-                let needle_has_nulls = v.null_count() > 0;
-
-                let contains_buffer = if negated {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        !self.values.contains(&<$OrderedType>::from(needle_values[i]))
-                    })
-                } else {
-                    BooleanBuffer::collect_bool(needle_values.len(), |i| {
-                        self.values.contains(&<$OrderedType>::from(needle_values[i]))
-                    })
-                };
-
-                let result_nulls = match (needle_has_nulls, haystack_has_nulls) {
-                    (false, false) => None,
-                    (true, false) => needle_nulls.cloned(),
-                    (false, true) => {
-                        let validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        Some(NullBuffer::new(validity))
-                    }
-                    (true, true) => {
-                        let needle_validity = needle_nulls
-                            .map(|n| n.inner().clone())
-                            .unwrap_or_else(|| {
-                                BooleanBuffer::new_set(needle_values.len())
-                            });
-                        let haystack_validity = if negated {
-                            !&contains_buffer
-                        } else {
-                            contains_buffer.clone()
-                        };
-                        let combined_validity = &needle_validity & &haystack_validity;
-                        Some(NullBuffer::new(combined_validity))
-                    }
-                };
-
-                Ok(BooleanArray::new(contains_buffer, result_nulls))
-            }
-        }
-    };
+    #[inline]
+    fn contains(&self, v: &dyn Array, negated: bool) -> Result<BooleanArray> {
+        handle_dictionary!(self, v, negated);
+        // Use raw buffer access for better optimization
+        let data = v.to_data();
+        let values: &[T::Native] = data.buffer::<T::Native>(0);
+        Ok(self.contains_slice(values, v.nulls(), negated))
+    }
 }
-
-float_static_filter!(Float32StaticFilter, Float32Type, OrderedFloat32);
-float_static_filter!(Float64StaticFilter, Float64Type, OrderedFloat64);
