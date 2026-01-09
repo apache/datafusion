@@ -34,6 +34,7 @@ use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::{
     ListingTableUrl, PartitionedFile, TableSchema, compute_all_files_statistics,
 };
+use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::FileStatisticsCache;
 use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_expr::dml::InsertOp;
@@ -565,7 +566,11 @@ impl TableProvider for ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let _ = lfc.remove(table_path.prefix());
+            let key = TableScopedPath {
+                table: table_path.get_table_ref().clone(),
+                path: table_path.prefix().clone(),
+            };
+            let _ = lfc.remove(&key);
         }
 
         // Sink related option, apart from format
@@ -705,31 +710,42 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<Arc<Statistics>> {
-        match self
+        use datafusion_execution::cache::cache_manager::CachedFileMetadata;
+
+        // Check cache first
+        if let Some(cached) = self
             .collected_statistics
-            .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
+            .get(&part_file.object_meta.location)
         {
-            Some(statistics) => Ok(statistics),
-            None => {
-                let statistics = self
-                    .options
-                    .format
-                    .infer_stats(
-                        ctx,
-                        store,
-                        Arc::clone(&self.file_schema),
-                        &part_file.object_meta,
-                    )
-                    .await?;
-                let statistics = Arc::new(statistics);
-                self.collected_statistics.put_with_extra(
-                    &part_file.object_meta.location,
-                    Arc::clone(&statistics),
-                    &part_file.object_meta,
-                );
-                Ok(statistics)
+            // Validate that cached entry is still valid
+            if cached.is_valid_for(&part_file.object_meta) {
+                return Ok(cached.statistics);
             }
         }
+
+        // Cache miss or invalid - infer statistics
+        let statistics = self
+            .options
+            .format
+            .infer_stats(
+                ctx,
+                store,
+                Arc::clone(&self.file_schema),
+                &part_file.object_meta,
+            )
+            .await?;
+        let statistics = Arc::new(statistics);
+
+        // Store in cache
+        self.collected_statistics.put(
+            &part_file.object_meta.location,
+            CachedFileMetadata::new(
+                part_file.object_meta.clone(),
+                Arc::clone(&statistics),
+                None, // No ordering information in this PR
+            ),
+        );
+        Ok(statistics)
     }
 }
 
