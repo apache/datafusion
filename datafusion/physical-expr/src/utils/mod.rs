@@ -239,22 +239,6 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-/// Recursively check whether the given [`PhysicalExpr`] contains any [`UnKnownColumn`]s.
-pub fn has_unknown_columns(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut found = false;
-    expr.apply(|e| {
-        if e.as_any().downcast_ref::<UnKnownColumn>().is_some() {
-            found = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
-    })
-    .expect("no way to return error during recursion");
-
-    found
-}
-
 /// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
 /// the provided [`Schema`].
 ///
