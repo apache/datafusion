@@ -67,28 +67,21 @@ pub trait Accumulator: Send + Sync + Debug {
     /// arrow-compatible internal state that can be returned without copying
     /// when possible (for example distinct strings).
     ///
-    /// # Window Frame Queries
+    /// ## Correctness
     ///
-    /// When used in a window context without [`Self::supports_retract_batch`],
-    /// `evaluate()` may be called multiple times on the same accumulator instance
-    /// (once per row in the partition). In this case, implementations **must not**
-    /// consume or modify internal state. Use references or clones to preserve state:
+    /// This function must not consume the internal state, as it is also used in window
+    /// aggregate functions where it can be executed multiple times depending on the
+    /// current window frame. Consuming the internal state can cause the next invocation
+    /// to have incorrect results.
     ///
-    /// ```ignore
-    /// // GOOD: Preserves state for subsequent calls
-    /// fn evaluate(&mut self) -> Result<ScalarValue> {
-    ///     calculate_result(&self.values)  // Use reference
-    /// }
+    /// - Even if this accumulator doesn't implement [`retract_batch`] it may still be used
+    ///   in window aggregate functions where the window frame is
+    ///   `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`
     ///
-    /// // BAD: Consumes state, breaks window queries
-    /// fn evaluate(&mut self) -> Result<ScalarValue> {
-    ///     calculate_result(std::mem::take(&mut self.values))
-    /// }
-    /// ```
+    /// It is fine to modify the state (e.g. re-order elements within internal state vec) so long
+    /// as this doesn't cause an incorrect computation on the next call of evaluate.
     ///
-    /// For efficient sliding window calculations, consider implementing
-    /// [`Self::retract_batch`] which allows DataFusion to incrementally
-    /// update state rather than calling `evaluate()` repeatedly.
+    /// [`retract_batch`]: Self::retract_batch
     fn evaluate(&mut self) -> Result<ScalarValue>;
 
     /// Returns the allocated size required for this accumulator, in
