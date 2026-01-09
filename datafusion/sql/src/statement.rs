@@ -108,7 +108,14 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
                 ast::ColumnOption::Unique(UniqueConstraint {
-                    characteristics, ..
+                    characteristics,
+                    name,
+                    index_name: _index_name,
+                    index_type_display: _index_type_display,
+                    index_type: _index_type,
+                    columns: _column,
+                    index_options: _index_options,
+                    nulls_distinct: _nulls_distinct,
                 }) => constraints.push(TableConstraint::Unique(UniqueConstraint {
                     name: name.clone(),
                     index_name: None,
@@ -131,7 +138,11 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 })),
                 ast::ColumnOption::PrimaryKey(PrimaryKeyConstraint {
                     characteristics,
-                    ..
+                    name: _name,
+                    index_name: _index_name,
+                    index_type: _index_type,
+                    columns: _columns,
+                    index_options: _index_options,
                 }) => {
                     constraints.push(TableConstraint::PrimaryKey(PrimaryKeyConstraint {
                         name: name.clone(),
@@ -158,7 +169,10 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     on_delete,
                     on_update,
                     characteristics,
-                    ..
+                    name: _name,
+                    index_name: _index_name,
+                    columns: _columns,
+                    match_kind: _match_kind,
                 }) => {
                     constraints.push(TableConstraint::ForeignKey(ForeignKeyConstraint {
                         name: name.clone(),
@@ -166,19 +180,21 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                         columns: vec![],
                         foreign_table: foreign_table.clone(),
                         referred_columns: referred_columns.clone(),
-                        on_delete: on_delete.clone(),
-                        on_update: on_update.clone(),
+                        on_delete: *on_delete,
+                        on_update: *on_update,
                         match_kind: None,
                         characteristics: *characteristics,
                     }))
                 }
-                ast::ColumnOption::Check(CheckConstraint { name, expr, .. }) => {
-                    constraints.push(TableConstraint::Check(CheckConstraint {
-                        name: name.clone(),
-                        expr: expr.clone(),
-                        enforced: None,
-                    }))
-                }
+                ast::ColumnOption::Check(CheckConstraint {
+                    name,
+                    expr,
+                    enforced: _enforced,
+                }) => constraints.push(TableConstraint::Check(CheckConstraint {
+                    name: name.clone(),
+                    expr: expr.clone(),
+                    enforced: None,
+                })),
                 ast::ColumnOption::Default(_)
                 | ast::ColumnOption::Null
                 | ast::ColumnOption::NotNull
@@ -1042,7 +1058,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
                 limit,
-                ..
+                update_token: _,
             }) => {
                 let from_clauses =
                     from.map(|update_table_from_kind| match update_table_from_kind {
@@ -1074,7 +1090,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 from,
                 order_by,
                 limit,
-                ..
+                delete_token: _,
             }) => {
                 if !tables.is_empty() {
                     plan_err!("DELETE <TABLE> not supported")?;
@@ -1350,10 +1366,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(LogicalPlan::Ddl(statement))
             }
-            Statement::DropFunction(func) => {
+            Statement::DropFunction(ast::DropFunction {
+                if_exists,
+                func_desc,
+                drop_behavior: _,
+            }) => {
                 // According to postgresql documentation it can be only one function
                 // specified in drop statement
-                if let Some(desc) = func.func_desc.first() {
+                if let Some(desc) = func_desc.first() {
                     // At the moment functions can't be qualified `schema.name`
                     let name = match &desc.name.0[..] {
                         [] => exec_err!("Function should have name")?,
@@ -1361,7 +1381,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         [..] => not_impl_err!("Qualified functions are not supported")?,
                     };
                     let statement = DdlStatement::DropFunction(DropFunction {
-                        if_exists: func.if_exists,
+                        if_exists,
                         name,
                         schema: DFSchemaRef::new(DFSchema::empty()),
                     });
@@ -1724,24 +1744,40 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let constraints = constraints
             .iter()
             .map(|c: &TableConstraint| match c {
-                TableConstraint::Unique(constraint) => {
-                    let constraint_name = match &constraint.name {
+                TableConstraint::Unique(UniqueConstraint {
+                    name,
+                    index_name: _,
+                    index_type_display: _,
+                    index_type: _,
+                    columns,
+                    index_options: _,
+                    characteristics: _,
+                    nulls_distinct: _,
+                }) => {
+                    let constraint_name = match &name {
                         Some(name) => &format!("unique constraint with name '{name}'"),
                         None => "unique constraint",
                     };
                     // Get unique constraint indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
-                        &constraint.columns,
+                        &columns,
                         constraint_name,
                     )?;
                     Ok(Constraint::Unique(indices))
                 }
-                TableConstraint::PrimaryKey(constraint) => {
+                TableConstraint::PrimaryKey(PrimaryKeyConstraint {
+                    name: _,
+                    index_name: _,
+                    index_type: _,
+                    columns,
+                    index_options: _,
+                    characteristics: _,
+                }) => {
                     // Get primary key indices in the schema
                     let indices = self.get_constraint_column_indices(
                         df_schema,
-                        &constraint.columns,
+                        &columns,
                         "primary key",
                     )?;
                     Ok(Constraint::PrimaryKey(indices))

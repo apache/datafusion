@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, Result, not_impl_err};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::Values as SQLValues;
 
@@ -31,8 +31,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let SQLValues {
             explicit_row: _,
             rows,
-            value_keyword: _,
+            value_keyword,
         } = values;
+        if value_keyword {
+            return not_impl_err!(
+                "`VALUE` keyword does not support inserting multiple values."
+            )?;
+        }
 
         let empty_schema = Arc::new(DFSchema::empty());
         let values = rows
