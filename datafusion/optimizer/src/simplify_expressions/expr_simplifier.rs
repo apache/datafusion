@@ -38,8 +38,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::{
-    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
-    binary::BinaryTypeCoercer, lit, or,
+    BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Like, Operator, Volatility,
+    and, binary::BinaryTypeCoercer, lit, or,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -641,6 +641,22 @@ impl ConstEvaluator {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
+            // Skip const-folding for struct casts with field count mismatches
+            // as these can cause optimizer hang
+            Expr::Cast(Cast { expr, data_type })
+            | Expr::TryCast(TryCast { expr, data_type }) => {
+                if let (Ok(source_type), DataType::Struct(target_fields)) =
+                    (expr.get_type(&DFSchema::empty()), data_type)
+                {
+                    if let DataType::Struct(source_fields) = source_type {
+                        // Don't const-fold struct casts with different field counts
+                        if source_fields.len() != target_fields.len() {
+                            return false;
+                        }
+                    }
+                }
+                true
+            }
             Expr::Literal(_, _)
             | Expr::Alias(..)
             | Expr::Unnest(_)
@@ -659,8 +675,6 @@ impl ConstEvaluator {
             | Expr::Like { .. }
             | Expr::SimilarTo { .. }
             | Expr::Case(_)
-            | Expr::Cast { .. }
-            | Expr::TryCast { .. }
             | Expr::InList { .. } => true,
         }
     }

@@ -237,6 +237,11 @@ pub fn cast_with_options(
         Ok(Arc::clone(&expr))
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
+    } else if matches!((&expr_type, &cast_type), (Struct(_), Struct(_))) {
+        // Allow struct-to-struct casts even if Arrow's can_cast_types rejects them
+        // (e.g., field count mismatches). These will be handled by name-based casting
+        // at execution time via ColumnarValue::cast_to
+        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
