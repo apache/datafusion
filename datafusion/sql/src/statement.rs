@@ -107,29 +107,32 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
     for column in columns {
         for ast::ColumnOptionDef { name, option } in &column.options {
             match option {
-                ast::ColumnOption::Unique(constraint) => {
-                    constraints.push(TableConstraint::Unique(UniqueConstraint {
-                        name: name.clone(),
-                        index_name: None,
-                        index_type_display: ast::KeyOrIndexDisplay::None,
-                        index_type: None,
-                        columns: vec![IndexColumn {
-                            column: OrderByExpr {
-                                expr: SQLExpr::Identifier(column.name.clone()),
-                                options: OrderByOptions {
-                                    asc: None,
-                                    nulls_first: None,
-                                },
-                                with_fill: None,
+                ast::ColumnOption::Unique(UniqueConstraint {
+                    characteristics, ..
+                }) => constraints.push(TableConstraint::Unique(UniqueConstraint {
+                    name: name.clone(),
+                    index_name: None,
+                    index_type_display: ast::KeyOrIndexDisplay::None,
+                    index_type: None,
+                    columns: vec![IndexColumn {
+                        column: OrderByExpr {
+                            expr: SQLExpr::Identifier(column.name.clone()),
+                            options: OrderByOptions {
+                                asc: None,
+                                nulls_first: None,
                             },
-                            operator_class: None,
-                        }],
-                        index_options: vec![],
-                        characteristics: constraint.characteristics,
-                        nulls_distinct: NullsDistinctOption::None,
-                    }))
-                }
-                ast::ColumnOption::PrimaryKey(constraint) => {
+                            with_fill: None,
+                        },
+                        operator_class: None,
+                    }],
+                    index_options: vec![],
+                    characteristics: *characteristics,
+                    nulls_distinct: NullsDistinctOption::None,
+                })),
+                ast::ColumnOption::PrimaryKey(PrimaryKeyConstraint {
+                    characteristics,
+                    ..
+                }) => {
                     constraints.push(TableConstraint::PrimaryKey(PrimaryKeyConstraint {
                         name: name.clone(),
                         index_name: None,
@@ -146,26 +149,33 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                             operator_class: None,
                         }],
                         index_options: vec![],
-                        characteristics: constraint.characteristics,
+                        characteristics: *characteristics,
                     }))
                 }
-                ast::ColumnOption::ForeignKey(constraint) => {
+                ast::ColumnOption::ForeignKey(ForeignKeyConstraint {
+                    foreign_table,
+                    referred_columns,
+                    on_delete,
+                    on_update,
+                    characteristics,
+                    ..
+                }) => {
                     constraints.push(TableConstraint::ForeignKey(ForeignKeyConstraint {
                         name: name.clone(),
                         index_name: None,
                         columns: vec![],
-                        foreign_table: constraint.foreign_table.clone(),
-                        referred_columns: constraint.referred_columns.clone(),
-                        on_delete: constraint.on_delete,
-                        on_update: constraint.on_update,
+                        foreign_table: foreign_table.clone(),
+                        referred_columns: referred_columns.clone(),
+                        on_delete: on_delete.clone(),
+                        on_update: on_update.clone(),
                         match_kind: None,
-                        characteristics: constraint.characteristics,
+                        characteristics: *characteristics,
                     }))
                 }
-                ast::ColumnOption::Check(constraint) => {
+                ast::ColumnOption::Check(CheckConstraint { name, expr, .. }) => {
                     constraints.push(TableConstraint::Check(CheckConstraint {
                         name: name.clone(),
-                        expr: constraint.expr.clone(),
+                        expr: expr.clone(),
                         enforced: None,
                     }))
                 }
