@@ -16,9 +16,10 @@
 // under the License.
 
 use std::any::Any;
+use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, StringArray};
+use arrow::array::{Array, StringBuilder};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -110,8 +111,26 @@ impl ScalarUDFImpl for SparkHex {
     }
 }
 
-fn hex_int64(num: i64) -> String {
-    format!("{num:X}")
+#[inline]
+fn hex_int64(num: i64, buffer: &mut Vec<u8>) {
+    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+
+    if num == 0 {
+        buffer.push(HEX_CHARS[0]);
+        return;
+    }
+
+    let mut n = num;
+    let mut temp = [0u8; 16];
+    let mut i = 16;
+    while n != 0 && i > 0 {
+        i -= 1;
+        let digest = (n & 0xF) as u8;
+        temp[i] = HEX_CHARS[digest as usize];
+        n >>= 4;
+    }
+
+    buffer.extend_from_slice(&temp[i..]);
 }
 
 /// Hex encoding lookup tables for fast byte-to-hex conversion
@@ -119,28 +138,77 @@ const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
 const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
 #[inline]
-fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
+fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool, buffer: &mut Vec<u8>) {
     let bytes = data.as_ref();
-    let mut s = String::with_capacity(bytes.len() * 2);
     let hex_chars = if lower_case {
         HEX_CHARS_LOWER
     } else {
         HEX_CHARS_UPPER
     };
     for &b in bytes {
-        s.push(hex_chars[(b >> 4) as usize] as char);
-        s.push(hex_chars[(b & 0x0f) as usize] as char);
+        buffer.push(hex_chars[(b >> 4) as usize]);
+        buffer.push(hex_chars[(b & 0x0f) as usize]);
     }
-    s
 }
 
-#[inline(always)]
-fn hex_bytes<T: AsRef<[u8]>>(
-    bytes: T,
+/// Generic hex encoding for byte array types
+fn hex_encode_bytes<'a, I, T>(
+    iter: I,
     lowercase: bool,
-) -> Result<String, std::fmt::Error> {
-    let hex_string = hex_encode(bytes, lowercase);
-    Ok(hex_string)
+    len: usize,
+) -> Result<ColumnarValue, DataFusionError>
+where
+    I: Iterator<Item = Option<T>>,
+    T: AsRef<[u8]> + 'a,
+{
+    let mut builder = StringBuilder::with_capacity(len, len * 64);
+    let mut buffer = Vec::with_capacity(16);
+    let hex_chars = if lowercase {
+        HEX_CHARS_LOWER
+    } else {
+        HEX_CHARS_UPPER
+    };
+
+    for v in iter {
+        if let Some(b) = v {
+            buffer.clear();
+            let bytes = b.as_ref();
+            for &byte in bytes {
+                buffer.push(hex_chars[(byte >> 4) as usize]);
+                buffer.push(hex_chars[(byte & 0x0f) as usize]);
+            }
+            unsafe {
+                builder.append_value(from_utf8_unchecked(&buffer));
+            }
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+}
+
+/// Generic hex encoding for int64 type
+fn hex_encode_int64<'a, I>(iter: I, len: usize) -> Result<ColumnarValue, DataFusionError>
+where
+    I: Iterator<Item = Option<i64>>,
+{
+    let mut builder = StringBuilder::with_capacity(len, len * 64);
+    let mut buffer = Vec::with_capacity(16);
+
+    for v in iter {
+        if let Some(num) = v {
+            buffer.clear();
+            hex_int64(num, &mut buffer);
+            unsafe {
+                builder.append_value(from_utf8_unchecked(&buffer));
+            }
+        } else {
+            builder.append_null();
+        }
+    }
+
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
 /// Spark-compatible `hex` function
@@ -166,103 +234,72 @@ pub fn compute_hex(
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Int64 => {
                 let array = as_int64_array(array)?;
-
-                let hexed_array: StringArray =
-                    array.iter().map(|v| v.map(hex_int64)).collect();
-
-                Ok(ColumnarValue::Array(Arc::new(hexed_array)))
+                hex_encode_int64(array.iter(), array.len())
             }
             DataType::Utf8 => {
                 let array = as_string_array(array);
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::Utf8View => {
                 let array = as_string_view_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::LargeUtf8 => {
                 let array = as_largestring_array(array);
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::Binary => {
                 let array = as_binary_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::LargeBinary => {
                 let array = as_large_binary_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
-
-                let hexed: StringArray = array
-                    .iter()
-                    .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                    .collect::<Result<_, _>>()?;
-
-                Ok(ColumnarValue::Array(Arc::new(hexed)))
+                hex_encode_bytes(array.iter(), lowercase, array.len())
             }
             DataType::Dictionary(_, value_type) => {
                 let dict = as_dictionary_array::<Int32Type>(&array);
+                let keys = dict.keys();
+                let values = dict.values();
+                // let mut buffer = Vec::with_capacity(16);
 
-                let values = match **value_type {
-                    DataType::Int64 => as_int64_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(hex_int64))
-                        .collect::<Vec<_>>(),
-                    DataType::Utf8 => as_string_array(dict.values())
-                        .iter()
-                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                        .collect::<Result<_, _>>()?,
-                    DataType::Binary => as_binary_array(dict.values())?
-                        .iter()
-                        .map(|v| v.map(|b| hex_bytes(b, lowercase)).transpose())
-                        .collect::<Result<_, _>>()?,
-                    _ => exec_err!(
-                        "hex got an unexpected argument type: {}",
-                        array.data_type()
-                    )?,
-                };
-
-                let new_values: Vec<Option<String>> = dict
-                    .keys()
-                    .iter()
-                    .map(|key| key.map(|k| values[k as usize].clone()).unwrap_or(None))
-                    .collect();
-
-                let string_array_values = StringArray::from(new_values);
-
-                Ok(ColumnarValue::Array(Arc::new(string_array_values)))
+                match **value_type {
+                    DataType::Int64 => {
+                        let int_values = as_int64_array(values)?;
+                        hex_encode_int64(
+                            keys.iter().map(|k| k.map(|idx| int_values.value(idx as usize))),
+                            dict.len(),
+                        )
+                    }
+                    DataType::Utf8 => {
+                        let str_values = as_string_array(values);
+                        hex_encode_bytes(
+                            keys.iter().map(|k| {
+                                k.map(|idx| str_values.value(idx as usize).as_bytes())
+                            }),
+                            lowercase,
+                            dict.len(),
+                        )
+                    }
+                    DataType::Binary => {
+                        let bin_values = as_binary_array(values)?;
+                        hex_encode_bytes(
+                            keys.iter()
+                                .map(|k| k.map(|idx| bin_values.value(idx as usize))),
+                            lowercase,
+                            dict.len(),
+                        )
+                    }
+                    _ => {
+                        exec_err!(
+                            "hex got an unexpected argument type: {}",
+                            array.data_type()
+                        )
+                    }
+                }
             }
             _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
         },
@@ -272,6 +309,7 @@ pub fn compute_hex(
 
 #[cfg(test)]
 mod test {
+    use std::str::from_utf8_unchecked;
     use std::sync::Arc;
 
     use arrow::array::{Int64Array, StringArray};
@@ -374,12 +412,18 @@ mod test {
     #[test]
     fn test_hex_int64() {
         let num = 1234;
-        let hexed = super::hex_int64(num);
-        assert_eq!(hexed, "4D2".to_string());
+        let mut cache = Vec::with_capacity(16);
+        super::hex_int64(num, &mut cache);
+        unsafe {
+            assert_eq!(from_utf8_unchecked(&cache), "4D2".to_string());
+        }
 
         let num = -1;
-        let hexed = super::hex_int64(num);
-        assert_eq!(hexed, "FFFFFFFFFFFFFFFF".to_string());
+        cache.clear();
+        super::hex_int64(num, &mut cache);
+        unsafe {
+            assert_eq!(from_utf8_unchecked(&cache), "FFFFFFFFFFFFFFFF".to_string());
+        }
     }
 
     #[test]
