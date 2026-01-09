@@ -376,6 +376,12 @@ where
         Ok(Self::from_unique_values(unique_values, arr.null_count()))
     }
 
+    /// Creates a DirectProbeFilter from pre-processed values.
+    pub(super) fn from_values(values: impl Iterator<Item = T::Native>) -> Self {
+        let unique_values: HashSet<_> = values.collect();
+        Self::from_unique_values(unique_values, 0)
+    }
+
     fn from_unique_values(unique_values: HashSet<T::Native>, null_count: usize) -> Self {
         // Size table to ~25% load factor for fewer collisions
         let n = unique_values.len().max(1);
@@ -410,7 +416,7 @@ where
     ///
     /// Returns true if the value is in the set.
     #[inline(always)]
-    fn contains_single(&self, needle: T::Native) -> bool {
+    pub(super) fn contains_single(&self, needle: T::Native) -> bool {
         let mut slot = needle.probe_hash() & self.mask;
         loop {
             // SAFETY: `slot` is always < table.len() because:
