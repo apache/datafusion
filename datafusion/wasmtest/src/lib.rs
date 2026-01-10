@@ -104,8 +104,8 @@ mod test {
     #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
     fn datafusion_test() {
-        basic_exprs();
-        basic_parse();
+        super::basic_exprs();
+        super::basic_parse();
     }
 
     fn get_ctx() -> Arc<SessionContext> {
