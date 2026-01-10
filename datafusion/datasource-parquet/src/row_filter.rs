@@ -276,7 +276,7 @@ struct PushdownChecker<'schema> {
     /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
     /// Indices into the file schema of columns required to evaluate the expression.
-    required_columns: BTreeSet<usize>,
+    required_columns: Vec<usize>,
     /// Tracks the nested column behavior found during traversal.
     nested_behavior: NestedColumnSupport,
     /// Whether nested list columns are supported by the predicate semantics.
@@ -290,7 +290,7 @@ impl<'schema> PushdownChecker<'schema> {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
-            required_columns: BTreeSet::default(),
+            required_columns: Vec::new(),
             nested_behavior: NestedColumnSupport::PrimitiveOnly,
             allow_list_columns,
             file_schema,
@@ -307,7 +307,9 @@ impl<'schema> PushdownChecker<'schema> {
             }
         };
 
-        self.required_columns.insert(idx);
+        if !self.required_columns.contains(&idx) {
+            self.required_columns.push(idx);
+        }
         let data_type = self.file_schema.field(idx).data_type();
 
         if DataType::is_nested(data_type) {
@@ -390,9 +392,8 @@ enum NestedColumnSupport {
     Unsupported,
 }
 
-#[derive(Debug)]
 struct PushdownColumns {
-    required_columns: BTreeSet<usize>,
+    required_columns: Vec<usize>,
     nested: NestedColumnSupport,
 }
 
@@ -411,9 +412,13 @@ fn pushdown_columns(
     let allow_list_columns = supports_list_predicates(expr);
     let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
     expr.visit(&mut checker)?;
-    Ok((!checker.prevents_pushdown()).then_some(PushdownColumns {
-        required_columns: checker.required_columns,
-        nested: checker.nested_behavior,
+    let prevents_pushdown = checker.prevents_pushdown();
+    let nested = checker.nested_behavior;
+    let mut required_columns = checker.required_columns;
+    required_columns.sort_unstable();
+    Ok((!prevents_pushdown).then_some(PushdownColumns {
+        required_columns,
+        nested,
     }))
 }
 
