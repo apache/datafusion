@@ -62,10 +62,6 @@ pub async fn from_project_rel(
                 // to transform it into a column reference
                 window_exprs.insert(e.clone());
             }
-            // The improved NameTracker now handles uniqueness for both schema names and qualified names,
-            // ensuring that literals and other expressions don't cause naming conflicts.
-            // This eliminates the need for UUID-based aliasing.
-            // See: https://github.com/apache/datafusion/pull/17299
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
 
