@@ -272,21 +272,21 @@ inherits = "release"
 debug = true
 strip = false
 
-## Temporary arrow-rs patch until 57.2.0 is released
+## Temporary arrow-rs patch until 58 is released
 
 [patch.crates-io]
-arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-array = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-buffer = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-cast = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-data = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-ipc = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-schema = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-select = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-string = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-ord = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
-parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_57.2.0" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", branch = "main" }
 
 #arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
 #arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
