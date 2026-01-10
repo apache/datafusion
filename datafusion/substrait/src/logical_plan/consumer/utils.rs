@@ -379,7 +379,7 @@ impl NameTracker {
     }
 
     /// Gets a unique name that is unique in both schema names and qualified names
-    pub(super) fn get_unique_name(
+    fn get_unique_name(
         &mut self,
         schema_name: String,
         qualified_name: String,
