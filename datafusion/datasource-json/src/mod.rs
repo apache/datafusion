@@ -21,6 +21,7 @@
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![deny(clippy::allow_attributes)]
 
+pub mod boundary_utils;
 pub mod file_format;
 pub mod source;
 
