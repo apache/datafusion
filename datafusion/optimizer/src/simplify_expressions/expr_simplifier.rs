@@ -1969,16 +1969,16 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
             // NOTE: we only consider immutable UDFs with literal RHS values
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                use datafusion_expr::Operator::*;
                 let is_preimage_op = matches!(
                     op,
-                    Operator::Eq
-                        | Operator::NotEq
-                        | Operator::Lt
-                        | Operator::LtEq
-                        | Operator::Gt
-                        | Operator::GtEq
-                        | Operator::IsDistinctFrom
-                        | Operator::IsNotDistinctFrom
+                    Eq | NotEq
+                        | Lt
+                        | LtEq
+                        | Gt
+                        | GtEq
+                        | IsDistinctFrom
+                        | IsNotDistinctFrom
                 );
                 if !is_preimage_op {
                     return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
