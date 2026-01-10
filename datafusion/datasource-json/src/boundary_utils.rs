@@ -357,6 +357,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_aligned_bytes_start_equals_end() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+
+        store.put(&path, "line1\n".into()).await.unwrap();
+
+        let result = get_aligned_bytes(&store, &path, 3, 3, 6, b'\n', 4096)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_aligned_bytes_start_beyond_file_size() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+
+        store.put(&path, "line1\n".into()).await.unwrap();
+
+        let result = get_aligned_bytes(&store, &path, 10, 20, 6, b'\n', 4096)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_aligned_bytes_multi_window_extension() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+
+        // Create a line longer than scan_window (use scan_window=4)
+        // "aaaaaaaaaa\n" = 11 bytes, need multiple 4-byte windows to find newline
+        store.put(&path, "aaaaaaaaaa\nbbbb\n".into()).await.unwrap();
+
+        // Request [0, 5), end is in the middle of line, need to extend
+        // with scan_window=4, need 2 extensions to reach position 10 (the newline)
+        let result = get_aligned_bytes(&store, &path, 0, 5, 16, b'\n', 4)
+            .await
+            .unwrap();
+
+        assert_eq!(result.unwrap().as_ref(), b"aaaaaaaaaa\n");
+    }
+
+    #[tokio::test]
+    async fn test_get_aligned_bytes_partitions_complete_coverage() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+
+        // 5 lines, each 10 bytes = 50 bytes total
+        let content = "aaaaaaaaa\nbbbbbbbbb\nccccccccc\nddddddddd\neeeeeeeee\n";
+        store.put(&path, content.into()).await.unwrap();
+        let file_size = content.len() as u64;
+
+        // Split at arbitrary boundaries: [0, 15), [15, 35), [35, 50)
+        let boundaries = vec![0u64, 15, 35, file_size];
+        let mut combined = Vec::new();
+
+        for window in boundaries.windows(2) {
+            let (start, end) = (window[0], window[1]);
+            let bytes =
+                get_aligned_bytes(&store, &path, start, end, file_size, b'\n', 4096)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            combined.extend_from_slice(&bytes);
+        }
+
+        assert_eq!(combined, content.as_bytes());
+    }
+
+    #[tokio::test]
     async fn test_get_aligned_bytes_reduces_requested_bytes() {
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let store = Arc::new(CountingObjectStore::new(Arc::clone(&inner)));
