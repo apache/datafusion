@@ -79,7 +79,6 @@ pub fn basic_parse() {
 mod test {
     use std::sync::Arc;
 
-    use super::*;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int32Array, RecordBatch, StringArray},
