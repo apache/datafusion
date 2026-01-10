@@ -1981,7 +1981,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         | Operator::IsNotDistinctFrom
                 );
                 if !is_preimage_op {
-                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
+                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op,
+                        right,
+                    })));
                 }
 
                 if let (Some(interval), Some(col_expr)) =
@@ -2036,7 +2040,9 @@ fn is_literal_or_literal_cast(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(_, _) => true,
         Expr::Cast(Cast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
-        Expr::TryCast(TryCast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
+        Expr::TryCast(TryCast { expr, .. }) => {
+            matches!(expr.as_ref(), Expr::Literal(_, _))
+        }
         _ => false,
     }
 }
