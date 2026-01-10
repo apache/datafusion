@@ -1967,36 +1967,43 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // but they cannot do so for complex expressions.
             // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
             // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if get_preimage(&left, &right, info)?.0.is_some()
-                    && get_preimage(&left, &right, info)?.1.is_some() =>
-            {
-                // todo use let binding (if let Some(interval) = ...) once stabilized to avoid computing this thrice😢
-                let (Some(interval), Some(col_expr)) =
-                    get_preimage(left.as_ref(), &right, info)?
-                else {
-                    unreachable!(
-                        "The above if statement insures interval and col_expr are Some"
-                    )
-                };
-                rewrite_with_preimage(info, interval, op, Box::new(col_expr))?
-            }
-            // literal op date_part(literal, expression)
-            // -->
-            // date_part(literal, expression) op_swap literal
-            Expr::BinaryExpr(BinaryExpr { left, op, right })
-                if get_preimage(&right, &left, info)?.0.is_some()
-                    && get_preimage(&right, &left, info)?.1.is_some()
-                    && op.swap().is_some() =>
-            {
-                let swapped = op.swap().unwrap();
-                let (Some(interval), Some(col_expr)) = get_preimage(&right, &left, info)?
-                else {
-                    unreachable!(
-                        "The above if statement insures interval and col_expr are Some"
-                    )
-                };
-                rewrite_with_preimage(info, interval, swapped, Box::new(col_expr))?
+            // NOTE: we only consider immutable UDFs with literal RHS values
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                let is_preimage_op = matches!(
+                    op,
+                    Operator::Eq
+                        | Operator::NotEq
+                        | Operator::Lt
+                        | Operator::LtEq
+                        | Operator::Gt
+                        | Operator::GtEq
+                        | Operator::IsDistinctFrom
+                        | Operator::IsNotDistinctFrom
+                );
+                if !is_preimage_op {
+                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right })));
+                }
+
+                if let (Some(interval), Some(col_expr)) =
+                    get_preimage(left.as_ref(), right.as_ref(), info)?
+                {
+                    rewrite_with_preimage(info, interval, op, Box::new(col_expr))?
+                } else if let Some(swapped) = op.swap() {
+                    if let (Some(interval), Some(col_expr)) =
+                        get_preimage(right.as_ref(), left.as_ref(), info)?
+                    {
+                        rewrite_with_preimage(
+                            info,
+                            interval,
+                            swapped,
+                            Box::new(col_expr),
+                        )?
+                    } else {
+                        Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                    }
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
             }
 
             // no additional rewrites possible
@@ -2013,10 +2020,25 @@ fn get_preimage(
     let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
         return Ok((None, None));
     };
+    if !is_literal_or_literal_cast(right_expr) {
+        return Ok((None, None));
+    }
+    if func.signature().volatility != Volatility::Immutable {
+        return Ok((None, None));
+    }
     Ok((
         func.preimage(args, right_expr, info)?,
         func.column_expr(args),
     ))
+}
+
+fn is_literal_or_literal_cast(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(_, _) => true,
+        Expr::Cast(Cast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
+        Expr::TryCast(TryCast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
+        _ => false,
+    }
 }
 
 fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
