@@ -19,6 +19,7 @@
 
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
+#[cfg(debug_assertions)]
 use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
