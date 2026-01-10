@@ -189,13 +189,13 @@ mod tests {
     fn test_scalar_value() -> Result<()> {
         let fun = UnionExtractFun::new();
 
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, false),
                 Field::new("int", DataType::Int32, false),
             ],
-        );
+        )?;
 
         let args = vec![
             ColumnarValue::Scalar(ScalarValue::Union(
