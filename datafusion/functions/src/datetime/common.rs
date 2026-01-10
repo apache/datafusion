@@ -38,7 +38,6 @@ use datafusion_common::{
     DataFusionError, Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err,
     internal_datafusion_err, unwrap_or_internal_err,
 };
-
 use datafusion_expr::ColumnarValue;
 
 /// Error message if nanosecond conversion request beyond supported interval
