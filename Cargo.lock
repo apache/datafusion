@@ -2310,6 +2310,7 @@ name = "datafusion-functions-window"
 version = "51.0.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-common",
  "datafusion-doc",
  "datafusion-expr",
@@ -2570,6 +2571,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-functions-nested",
  "log",
  "percent-encoding",
