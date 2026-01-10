@@ -48,11 +48,10 @@ pub(super) fn rewrite_with_preimage(
 
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < upper
-        // <expr> >= x  ==>  <expr> >= lower
-        Operator::Lt | Operator::GtEq => Expr::BinaryExpr(BinaryExpr {
+        Operator::Lt => Expr::BinaryExpr(BinaryExpr {
             left: expr,
             op,
-            right: Box::new(lower),
+            right: Box::new(upper),
         }),
         // <expr> > x ==> <expr> >= upper
         Operator::Gt => Expr::BinaryExpr(BinaryExpr {
@@ -65,6 +64,12 @@ pub(super) fn rewrite_with_preimage(
             left: expr,
             op: Operator::Lt,
             right: Box::new(upper),
+        }),
+        // <expr> >= x  ==>  <expr> >= lower
+        Operator::GtEq => Expr::BinaryExpr(BinaryExpr {
+            left: expr,
+            op: Operator::GtEq,
+            right: Box::new(lower),
         }),
         // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
         //
