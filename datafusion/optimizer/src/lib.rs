@@ -40,6 +40,7 @@
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`TypeCoercion`]: analyzer::type_coercion::TypeCoercion
 pub mod analyzer;
+pub mod avg_to_sum;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;
 pub mod decorrelate_lateral_join;
