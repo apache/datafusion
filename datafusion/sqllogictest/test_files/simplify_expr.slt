@@ -124,10 +124,10 @@ EXPLAIN SELECT
 FROM (VALUES (0), (1), (2)) t(v)
 ----
 logical_plan
-01)Projection: CASE t.v WHEN Int64(100) THEN Int64(1) ELSE Int64(1) END AS opt1, CASE t.v WHEN Int64(200) THEN Int64(2) WHEN Int64(201) THEN Int64(2) ELSE Int64(2) END AS opt2, CASE t.v WHEN Int64(300) THEN Int64(3) WHEN Int64(301) THEN Int64(3) ELSE Int64(4) END AS noopt1, CASE t.v WHEN Int64(400) THEN Int64(4) WHEN Int64(401) THEN Int64(4) END AS noopt2
+01)Projection: Int64(1) AS opt1, Int64(2) AS opt2, CASE t.v WHEN Int64(300) THEN Int64(3) WHEN Int64(301) THEN Int64(3) ELSE Int64(4) END AS noopt1, CASE t.v WHEN Int64(400) THEN Int64(4) WHEN Int64(401) THEN Int64(4) END AS noopt2
 02)--SubqueryAlias: t
 03)----Projection: column1 AS v
 04)------Values: (Int64(0)), (Int64(1)), (Int64(2))
 physical_plan
-01)ProjectionExec: expr=[CASE column1@0 WHEN 100 THEN 1 ELSE 1 END as opt1, CASE column1@0 WHEN 200 THEN 2 WHEN 201 THEN 2 ELSE 2 END as opt2, CASE column1@0 WHEN 300 THEN 3 WHEN 301 THEN 3 ELSE 4 END as noopt1, CASE column1@0 WHEN 400 THEN 4 WHEN 401 THEN 4 END as noopt2]
+01)ProjectionExec: expr=[1 as opt1, 2 as opt2, CASE column1@0 WHEN 300 THEN 3 WHEN 301 THEN 3 ELSE 4 END as noopt1, CASE column1@0 WHEN 400 THEN 4 WHEN 401 THEN 4 END as noopt2]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
