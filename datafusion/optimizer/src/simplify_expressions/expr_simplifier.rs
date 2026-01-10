@@ -38,7 +38,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::{
-    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and, binary::BinaryTypeCoercer, interval_arithmetic::Interval, lit, or
+    BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
+    binary::BinaryTypeCoercer, interval_arithmetic::Interval, lit, or,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -50,13 +51,16 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::{analyzer::type_coercion::TypeCoercionRewriter, simplify_expressions::udf_preimage::rewrite_with_preimage};
 use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
+};
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::udf_preimage::rewrite_with_preimage,
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
@@ -1994,7 +1998,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 };
                 rewrite_with_preimage(info, interval, swapped, Box::new(col_expr))?
             }
-
 
             // no additional rewrites possible
             expr => Transformed::no(expr),

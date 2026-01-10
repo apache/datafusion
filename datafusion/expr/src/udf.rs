@@ -232,7 +232,7 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
-        /// Return a preimage
+    /// Return a preimage
     ///
     /// See [`ScalarUDFImpl::preimage`] for more details.
     pub fn preimage(
@@ -744,7 +744,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn column_expr(&self, _args: &[Expr]) -> Option<Expr> {
         None
     }
-
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.

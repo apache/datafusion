@@ -16,7 +16,9 @@
 // under the License.
 
 use datafusion_common::{Result, internal_err, tree_node::Transformed};
-use datafusion_expr::{BinaryExpr, Expr, Operator, and, lit, or, simplify::SimplifyContext};
+use datafusion_expr::{
+    BinaryExpr, Expr, Operator, and, lit, or, simplify::SimplifyContext,
+};
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 /// Rewrites a binary expression using its "preimage"
