@@ -16,12 +16,14 @@
 // under the License.
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
+use std::sync::Arc;
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 
@@ -42,6 +44,33 @@ pub async fn from_scalar_function(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
+    if fn_name == "outer_reference" {
+        let arg = f.arguments.first().ok_or_else(|| {
+            DataFusionError::Substrait(
+                "outer_reference function requires at least one argument".to_string(),
+            )
+        })?;
+
+        let col_name = match &arg.arg_type {
+            Some(substrait::proto::function_argument::ArgType::Value(e)) => {
+                match &e.rex_type {
+                    Some(substrait::proto::expression::RexType::Literal(
+                        substrait::proto::expression::Literal {
+                            literal_type: Some(substrait::proto::expression::literal::LiteralType::String(s)),
+                            ..
+                        },
+                    )) => s.clone(),
+                    _ => return substrait_err!("outer_reference argument must be a string literal"),
+                }
+            }
+            _ => return substrait_err!("outer_reference argument must be a value"),
+        };
+
+        return Ok(Expr::OuterReferenceColumn(
+            Arc::new(Field::new("placeholder", DataType::Null, true)),
+            datafusion::common::Column::from_qualified_name(col_name),
+        ));
+    }
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
     let udf_func = consumer.get_function_registry().udf(fn_name).or_else(|e| {
