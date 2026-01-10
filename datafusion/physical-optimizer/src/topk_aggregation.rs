@@ -20,13 +20,13 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
+use datafusion_physical_plan::aggregates::LimitOptions;
+use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -48,15 +48,11 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // Only support single group key
-        let (group_key, group_key_alias) =
-            aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
-        if !kt.is_primitive()
-            && kt != DataType::Utf8
-            && kt != DataType::Utf8View
-            && kt != DataType::LargeUtf8
-        {
+        let (field, _) = aggr.get_minmax_desc()?;
+        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
+        let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
+        let vt = field.data_type();
+        if !topk_types_supported(&kt, vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {

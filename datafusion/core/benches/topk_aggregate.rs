@@ -19,7 +19,7 @@ mod data_utils;
 
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
-use data_utils::{make_data, make_distinct_data};
+use data_utils::make_data;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
@@ -27,6 +27,8 @@ use datafusion_execution::config::SessionConfig;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+const LIMIT: usize = 10;
 
 async fn create_context(
     partition_cnt: i32,
@@ -71,6 +73,11 @@ fn run(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool, asc: boo
     black_box(rt.block_on(async { aggregate(ctx, limit, use_topk, asc).await })).unwrap();
 }
 
+fn run_string(rt: &Runtime, ctx: SessionContext, limit: usize, use_topk: bool) {
+    black_box(rt.block_on(async { aggregate_string(ctx, limit, use_topk).await }))
+        .unwrap();
+}
+
 fn run_distinct(
     rt: &Runtime,
     ctx: SessionContext,
@@ -102,7 +109,7 @@ async fn aggregate(
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), 10);
+    assert_eq!(batch.num_rows(), LIMIT);
 
     let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
     let expected_asc = r#"
@@ -125,6 +132,33 @@ async fn aggregate(
     if asc {
         assert_eq!(actual.trim(), expected_asc);
     }
+
+    Ok(())
+}
+
+/// Benchmark for string aggregate functions with topk optimization.
+/// This tests grouping by a numeric column (timestamp_ms) and aggregating
+/// a string column (trace_id) with Utf8 or Utf8View data types.
+async fn aggregate_string(
+    ctx: SessionContext,
+    limit: usize,
+    use_topk: bool,
+) -> Result<()> {
+    let sql = format!(
+        "select max(trace_id) from traces group by timestamp_ms order by max(trace_id) desc limit {limit};"
+    );
+    let df = ctx.sql(sql.as_str()).await?;
+    let plan = df.create_physical_plan().await?;
+    let actual_phys_plan = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(
+        actual_phys_plan.contains(&format!("lim=[{limit}]")),
+        use_topk
+    );
+
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_eq!(batches.len(), 1);
+    let batch = batches.first().unwrap();
+    assert_eq!(batch.num_rows(), LIMIT);
 
     Ok(())
 }
@@ -209,7 +243,7 @@ async fn aggregate_distinct(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
-    let limit = 10;
+    let limit = LIMIT;
     let partitions = 10;
     let samples = 1_000_000;
 
@@ -279,6 +313,56 @@ fn criterion_benchmark(c: &mut Criterion) {
         |b| b.iter(|| run(&rt, ctx.clone(), limit, true, true)),
     );
 
+    // String aggregate benchmarks - grouping by timestamp, aggregating string column
+    let ctx = rt
+        .block_on(create_context(partitions, samples, false, true, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} time-series rows [Utf8]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, true, false))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} worst-case rows [Utf8]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, false, true, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} time-series rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    let ctx = rt
+        .block_on(create_context(partitions, samples, true, true, true))
+        .unwrap();
+    c.bench_function(
+        format!(
+            "top k={limit} string aggregate {} worst-case rows [Utf8View]",
+            partitions * samples
+        )
+        .as_str(),
+        |b| b.iter(|| run_string(&rt, ctx.clone(), limit, true)),
+    );
+
+    // DISTINCT benchmarks
     let ctx = rt.block_on(async {
         create_context_distinct(partitions, samples, false)
             .await
