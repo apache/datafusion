@@ -2371,8 +2371,8 @@ mod tests {
             Field::new("c2", DataType::Int32, true),
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
-        let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let expr = logical2physical(&expr, Arc::clone(&schema));
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -2671,7 +2671,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_eq() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1";
 
@@ -2692,7 +2693,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_not_eq() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr =
             "c1_null_count@2 != row_count@3 AND (c1_min@0 != 1 OR 1 != c1_max@1)";
 
@@ -2713,7 +2715,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_gt() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_max@0 > 1";
 
         // test column on the left
@@ -2733,7 +2736,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_gt_eq() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_max@0 >= 1";
 
         // test column on the left
@@ -2752,7 +2756,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_lt() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_min@0 < 1";
 
         // test column on the left
@@ -2772,7 +2777,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_lt_eq() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_min@0 <= 1";
 
         // test column on the left
@@ -2791,11 +2797,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_and() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
             Field::new("c3", DataType::Int32, false),
-        ]);
+        ]));
         // test AND operator joining supported c1 < 1 expression and unsupported c2 > c3 expression
         let expr = col("c1").lt(lit(1)).and(col("c2").lt(col("c3")));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_min@0 < 1";
@@ -2808,10 +2814,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_or() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         // test OR operator joining supported c1 < 1 expression and unsupported c2 % 2 = 0 expression
         let expr = col("c1").lt(lit(1)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expected_expr = "true";
@@ -2824,7 +2830,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_not() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "true";
 
         let expr = col("c1").not();
@@ -2837,7 +2844,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_not_bool() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Boolean,
+            false,
+        )]));
         let expected_expr = "NOT c1_min@0 AND c1_max@1";
 
         let expr = col("c1").not();
@@ -2850,7 +2861,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_bool() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Boolean,
+            false,
+        )]));
         let expected_expr = "c1_min@0 OR c1_max@1";
 
         let expr = col("c1");
@@ -2981,7 +2996,7 @@ mod tests {
             // Note that we have no stats, pruning can only happen via partition value pruning from the dynamic filter
             .with_row_counts("c1", vec![Some(10)]);
         let dynamic_filter_expr = col("c1").gt(lit(5)).and(col("part").eq(lit("B")));
-        let phys_expr = logical2physical(&dynamic_filter_expr, &schema);
+        let phys_expr = logical2physical(&dynamic_filter_expr, Arc::clone(&schema));
         let children = collect_columns(&phys_expr)
             .iter()
             .map(|c| Arc::new(c.clone()) as Arc<dyn PhysicalExpr>)
@@ -3021,7 +3036,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Boolean,
+            false,
+        )]));
         let expected_expr = "c1_null_count@1 != row_count@2 AND c1_min@0 < true";
 
         // DF doesn't support arithmetic on boolean columns so
@@ -3036,10 +3055,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_required_columns() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         let mut required_columns = RequiredColumns::new();
         // c1 < 1 and (c2 = 2 or c2 = 3)
         let expr = col("c1")
@@ -3127,10 +3146,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_in_list() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         // test c1 in(1, 2, 3)
         let expr = Expr::InList(InList::new(
             Box::new(col("c1")),
@@ -3147,10 +3166,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_in_list_empty() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         // test c1 in()
         let expr = Expr::InList(InList::new(Box::new(col("c1")), vec![], false));
         let expected_expr = "true";
@@ -3163,10 +3182,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_in_list_negated() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         // test c1 not in(1, 2, 3)
         let expr = Expr::InList(InList::new(
             Box::new(col("c1")),
@@ -3183,10 +3202,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_between() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
 
         // test c1 BETWEEN 1 AND 5
         let expr1 = col("c1").between(lit(1), lit(5));
@@ -3206,10 +3225,10 @@ mod tests {
 
     #[test]
     fn row_group_predicate_between_with_in_list() -> Result<()> {
-        let schema = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
-        ]);
+        ]));
         // test c1 in(1, 2)
         let expr1 = col("c1").in_list(vec![lit(1), lit(2)], false);
 
@@ -3229,7 +3248,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         // test c1 in(1..21)
         // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
         // always true
@@ -3245,7 +3265,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_int_int() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 1 AND 1 <= CAST(c1_max@1 AS Int64)";
 
         // test cast(c1 as int64) = 1
@@ -3283,7 +3304,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_string_string() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            false,
+        )]));
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Utf8) <= 1 AND 1 <= CAST(c1_max@1 AS Utf8)";
 
         // test column on the left
@@ -3305,7 +3330,11 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_string_int() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            false,
+        )]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3325,7 +3354,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_int_string() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3347,7 +3377,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_date_date() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Date32, false)]));
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Date64) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Date64)";
 
         // test column on the left
@@ -3370,7 +3401,8 @@ mod tests {
     #[test]
     fn row_group_predicate_dict_string_date() -> Result<()> {
         // Test with Dictionary<UInt8, Utf8> for the literal
-        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Date32, false)]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3398,11 +3430,11 @@ mod tests {
     #[test]
     fn row_group_predicate_date_dict_string() -> Result<()> {
         // Test with Dictionary<UInt8, Utf8> for the column
-        let schema = Schema::new(vec![Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
             false,
-        )]);
+        )]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3425,11 +3457,11 @@ mod tests {
     #[test]
     fn row_group_predicate_dict_dict_same_value_type() -> Result<()> {
         // Test with Dictionary types that have the same value type but different key types
-        let schema = Schema::new(vec![Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
             false,
-        )]);
+        )]));
 
         // Direct comparison with no cast
         let expr = col("c1").eq(lit(ScalarValue::Utf8(Some("test".to_string()))));
@@ -3456,11 +3488,11 @@ mod tests {
     #[test]
     fn row_group_predicate_dict_dict_different_value_type() -> Result<()> {
         // Test with Dictionary types that have different value types
-        let schema = Schema::new(vec![Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
             false,
-        )]);
+        )]));
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Int64) <= 123 AND 123 <= CAST(c1_max@1 AS Int64)";
 
         // Test with literal of a different type
@@ -3476,7 +3508,7 @@ mod tests {
     #[test]
     fn row_group_predicate_nested_dict() -> Result<()> {
         // Test with nested Dictionary types
-        let schema = Schema::new(vec![Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Dictionary(
                 Box::new(DataType::UInt8),
@@ -3486,7 +3518,7 @@ mod tests {
                 )),
             ),
             false,
-        )]);
+        )]));
         let expected_expr =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= test AND test <= c1_max@1";
 
@@ -3502,11 +3534,11 @@ mod tests {
     #[test]
     fn row_group_predicate_dict_date_dict_date() -> Result<()> {
         // Test with dictionary-wrapped date types for both sides
-        let schema = Schema::new(vec![Field::new(
+        let schema = Arc::new(Schema::new(vec![Field::new(
             "c1",
             DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Date32)),
             false,
-        )]);
+        )]));
         let expected_expr = "c1_null_count@2 != row_count@3 AND CAST(c1_min@0 AS Dictionary(UInt16, Date64)) <= 1970-01-01 AND 1970-01-01 <= CAST(c1_max@1 AS Dictionary(UInt16, Date64))";
 
         // Test with a cast to a different date type
@@ -3524,7 +3556,7 @@ mod tests {
 
     #[test]
     fn row_group_predicate_date_string() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, false)]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3546,7 +3578,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_string_date() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Date32, false)]));
         let expected_expr = "true";
 
         // test column on the left
@@ -3568,7 +3601,8 @@ mod tests {
 
     #[test]
     fn row_group_predicate_cast_list() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         // test cast(c1 as int64) in int64(1, 2, 3)
         let expr = Expr::InList(InList::new(
             Box::new(cast(col("c1"), DataType::Int64)),
@@ -4682,7 +4716,7 @@ mod tests {
             true,
             // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
             true,
-            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate 
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate
             // original (min, max) maybe ("A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}\u{10ffff}\u{10ffff}")
             true,
         ];
@@ -4785,14 +4819,14 @@ mod tests {
 
     #[test]
     fn test_rewrite_expr_to_prunable() {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
         let df_schema = DFSchema::try_from(schema.clone()).unwrap();
 
         // column op lit
         let left_input = col("a");
-        let left_input = logical2physical(&left_input, &schema);
+        let left_input = logical2physical(&left_input, Arc::clone(&schema));
         let right_input = lit(ScalarValue::Int32(Some(12)));
-        let right_input = logical2physical(&right_input, &schema);
+        let right_input = logical2physical(&right_input, Arc::clone(&schema));
         let (result_left, _, result_right) = rewrite_expr_to_prunable(
             &left_input,
             Operator::Eq,
@@ -4805,9 +4839,9 @@ mod tests {
 
         // cast op lit
         let left_input = cast(col("a"), DataType::Decimal128(20, 3));
-        let left_input = logical2physical(&left_input, &schema);
+        let left_input = logical2physical(&left_input, Arc::clone(&schema));
         let right_input = lit(ScalarValue::Decimal128(Some(12), 20, 3));
-        let right_input = logical2physical(&right_input, &schema);
+        let right_input = logical2physical(&right_input, Arc::clone(&schema));
         let (result_left, _, result_right) = rewrite_expr_to_prunable(
             &left_input,
             Operator::Gt,
@@ -4820,9 +4854,9 @@ mod tests {
 
         // try_cast op lit
         let left_input = try_cast(col("a"), DataType::Int64);
-        let left_input = logical2physical(&left_input, &schema);
+        let left_input = logical2physical(&left_input, Arc::clone(&schema));
         let right_input = lit(ScalarValue::Int64(Some(12)));
-        let right_input = logical2physical(&right_input, &schema);
+        let right_input = logical2physical(&right_input, Arc::clone(&schema));
         let (result_left, _, result_right) =
             rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema)
                 .unwrap();
@@ -4845,17 +4879,17 @@ mod tests {
             }
         }
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
-        let schema_with_b = Schema::new(vec![
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let schema_with_b = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
-        ]);
+        ]));
 
         let rewriter = PredicateRewriter::new()
             .with_unhandled_hook(Arc::new(CustomUnhandledHook {}));
 
         let transform_expr = |expr| {
-            let expr = logical2physical(&expr, &schema_with_b);
+            let expr = logical2physical(&expr, Arc::clone(&schema_with_b));
             rewriter.rewrite_predicate_to_statistics_predicate(&expr, &schema)
         };
 
@@ -4863,13 +4897,13 @@ mod tests {
         let known_expression = col("a").eq(lit(12));
         let known_expression_transformed = PredicateRewriter::new()
             .rewrite_predicate_to_statistics_predicate(
-                &logical2physical(&known_expression, &schema),
+                &logical2physical(&known_expression, Arc::clone(&schema)),
                 &schema,
             );
 
         // an expression referencing an unknown column (that is not in the schema) gets passed to the hook
         let input = col("b").eq(lit(12));
-        let expected = logical2physical(&lit(42), &schema);
+        let expected = logical2physical(&lit(42), Arc::clone(&schema));
         let transformed = transform_expr(input.clone());
         assert_eq!(transformed.to_string(), expected.to_string());
 
@@ -4878,14 +4912,14 @@ mod tests {
         let expected = phys_expr::BinaryExpr::new(
             Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
-            logical2physical(&lit(42), &schema),
+            logical2physical(&lit(42), Arc::clone(&schema)),
         );
         let transformed = transform_expr(input.clone());
         assert_eq!(transformed.to_string(), expected.to_string());
 
         // an unknown expression gets passed to the hook
         let input = array_has(make_array(vec![lit(1)]), col("a"));
-        let expected = logical2physical(&lit(42), &schema);
+        let expected = logical2physical(&lit(42), Arc::clone(&schema));
         let transformed = transform_expr(input.clone());
         assert_eq!(transformed.to_string(), expected.to_string());
 
@@ -4894,7 +4928,7 @@ mod tests {
         let expected = phys_expr::BinaryExpr::new(
             Arc::<dyn PhysicalExpr>::clone(&known_expression_transformed),
             Operator::And,
-            logical2physical(&lit(42), &schema),
+            logical2physical(&lit(42), Arc::clone(&schema)),
         );
         let transformed = transform_expr(input.clone());
         assert_eq!(transformed.to_string(), expected.to_string());
@@ -4904,12 +4938,12 @@ mod tests {
     fn test_rewrite_expr_to_prunable_error() {
         // cast string value to numeric value
         // this cast is not supported
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
         let df_schema = DFSchema::try_from(schema.clone()).unwrap();
         let left_input = cast(col("a"), DataType::Int64);
-        let left_input = logical2physical(&left_input, &schema);
+        let left_input = logical2physical(&left_input, Arc::clone(&schema));
         let right_input = lit(ScalarValue::Int64(Some(12)));
-        let right_input = logical2physical(&right_input, &schema);
+        let right_input = logical2physical(&right_input, Arc::clone(&schema));
         let result = rewrite_expr_to_prunable(
             &left_input,
             Operator::Gt,
@@ -4920,9 +4954,9 @@ mod tests {
 
         // other expr
         let left_input = is_null(col("a"));
-        let left_input = logical2physical(&left_input, &schema);
+        let left_input = logical2physical(&left_input, Arc::clone(&schema));
         let right_input = lit(ScalarValue::Int64(Some(12)));
-        let right_input = logical2physical(&right_input, &schema);
+        let right_input = logical2physical(&right_input, Arc::clone(&schema));
         let result =
             rewrite_expr_to_prunable(&left_input, Operator::Gt, &right_input, df_schema);
         assert!(result.is_err());
@@ -5376,8 +5410,8 @@ mod tests {
         expected: &[bool],
     ) {
         println!("Pruning with expr: {expr}");
-        let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let expr = logical2physical(&expr, Arc::clone(schema));
+        let p = PruningPredicate::try_new(expr, Arc::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5389,55 +5423,58 @@ mod tests {
         expected: &[bool],
     ) {
         println!("Pruning with expr: {expr}");
-        let expr = logical2physical(&expr, schema);
+        let expr = logical2physical(&expr, Arc::clone(schema));
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
 
     fn test_build_predicate_expression(
         expr: &Expr,
-        schema: &Schema,
+        schema: &SchemaRef,
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
-        let expr = logical2physical(expr, schema);
+        let expr = logical2physical(expr, Arc::clone(schema));
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
-        build_predicate_expression(
-            &expr,
-            &Arc::new(schema.clone()),
-            required_columns,
-            &unhandled_hook,
-        )
+        build_predicate_expression(&expr, schema, required_columns, &unhandled_hook)
     }
 
     #[test]
     fn test_build_predicate_expression_with_false() {
         let expr = lit(ScalarValue::Boolean(Some(false)));
-        let schema = Schema::empty();
+        let schema = Arc::new(Schema::empty());
         let res =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        let expected = logical2physical(&expr, &schema);
+        let expected = logical2physical(&expr, schema);
         assert_eq!(&res, &expected);
     }
 
     #[test]
     fn test_build_predicate_expression_with_and_false() {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            false,
+        )]));
         let expr = and(
             col("c1").eq(lit("a")),
             lit(ScalarValue::Boolean(Some(false))),
         );
         let res =
             test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
-        let expected = logical2physical(&lit(ScalarValue::Boolean(Some(false))), &schema);
+        let expected = logical2physical(&lit(ScalarValue::Boolean(Some(false))), schema);
         assert_eq!(&res, &expected);
     }
 
     #[test]
     fn test_build_predicate_expression_with_or_false() {
-        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8View, false)]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            false,
+        )]));
         let left_expr = col("c1").eq(lit("a"));
         let right_expr = lit(ScalarValue::Boolean(Some(false)));
         let res = test_build_predicate_expression(
