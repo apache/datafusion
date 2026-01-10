@@ -379,6 +379,13 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
+# Test array_agg with DISTINCT and IGNORE NULLS (regression test for issue #19735)
+query ?
+SELECT array_sort(ARRAY_AGG(DISTINCT x IGNORE NULLS)) as result
+FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
+----
+[1, 2]
+
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
