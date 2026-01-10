@@ -48,11 +48,16 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        let (field, _) = aggr.get_minmax_desc()?;
-        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        let vt = field.data_type();
-        if !topk_types_supported(&kt, vt) {
+        // Current only support single group key
+        let (group_key, group_key_alias) =
+            aggr.group_expr().expr().iter().exactly_one().ok()?;
+        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
+        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
+            field.data_type().clone()
+        } else {
+            kt.clone()
+        };
+        if !topk_types_supported(&kt, &vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
@@ -70,31 +75,20 @@ impl TopKAggregation {
                 return None;
             }
         } else if aggr.aggr_expr().is_empty() {
-            // TODO: remove this after https://github.com/apache/datafusion/issues/19219
-            if !kt.is_primitive() {
-                return None;
-            }
-            // This is a GROUP BY without aggregates (DISTINCT-like operation)
-            // Check if ordering is on the group key itself
+            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
             if order_by != group_key_alias {
                 return None;
             }
         } else {
-            // Has aggregates but not MIN/MAX, or doesn't match our patterns
+            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
             return None;
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
-            *aggr.mode(),
-            aggr.group_expr().clone(),
-            aggr.aggr_expr().to_vec(),
-            aggr.filter_expr().to_vec(),
-            Arc::clone(aggr.input()),
-            aggr.input_schema(),
-        )
-        .expect("Unable to copy Aggregate!")
-        .with_limit_options(Some(LimitOptions::new_with_order(limit, order_desc)));
+        let new_aggr = AggregateExec::with_new_limit_options(
+            aggr,
+            Some(LimitOptions::new_with_order(limit, order_desc)),
+        );
         Some(Arc::new(new_aggr))
     }
 

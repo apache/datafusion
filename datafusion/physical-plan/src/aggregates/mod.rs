@@ -603,9 +603,9 @@ impl AggregateExec {
     }
 
     /// Clone this exec, overriding only the limit hint.
-    pub fn with_new_limit(&self, limit: Option<usize>) -> Self {
+    pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         Self {
-            limit,
+            limit_options,
             // clone the rest of the fields
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),

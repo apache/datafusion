@@ -28,6 +28,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
+use crate::data_utils::make_distinct_data;
+
 const LIMIT: usize = 10;
 
 async fn create_context(
