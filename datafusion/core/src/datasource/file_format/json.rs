@@ -218,13 +218,13 @@ mod tests {
         let result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_num_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r###"
-            +----------------------+
-            | sum(json_parallel.a) |
-            +----------------------+
-            | -7                   |
-            +----------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&result),@r"
+        +----------------------+
+        | sum(json_parallel.a) |
+        +----------------------+
+        | -7                   |
+        +----------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 
@@ -249,10 +249,10 @@ mod tests {
 
         let result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -284,15 +284,15 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::InputExhausted);
 
-        assert_snapshot!(batches_to_string(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            | 11 | 12 | 13 | 14 | 15 |
-            +----+----+----+----+----+
-        "###);
+        assert_snapshot!(batches_to_string(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        | 11 | 12 | 13 | 14 | 15 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }
@@ -324,14 +324,14 @@ mod tests {
         }
         assert_eq!(deserializer.next()?, DeserializerOutput::RequiresMoreData);
 
-        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r###"
-            +----+----+----+----+----+
-            | c1 | c2 | c3 | c4 | c5 |
-            +----+----+----+----+----+
-            | 1  | 2  | 3  | 4  | 5  |
-            | 6  | 7  | 8  | 9  | 10 |
-            +----+----+----+----+----+
-        "###);
+        insta::assert_snapshot!(fmt_batches(&[all_batches]),@r"
+        +----+----+----+----+----+
+        | c1 | c2 | c3 | c4 | c5 |
+        +----+----+----+----+----+
+        | 1  | 2  | 3  | 4  | 5  |
+        | 6  | 7  | 8  | 9  | 10 |
+        +----+----+----+----+----+
+        ");
 
         Ok(())
     }
@@ -348,5 +348,47 @@ mod tests {
 
     fn fmt_batches(batches: &[RecordBatch]) -> String {
         pretty::pretty_format_batches(batches).unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_json_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.json", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
+        df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist and be empty
+        assert!(std::path::Path::new(&path).exists());
+        let metadata = std::fs::metadata(&path)?;
+        assert_eq!(metadata.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_json_from_record_batch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let empty_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(Vec::<i64>::new())),
+                Arc::new(arrow::array::StringArray::from(Vec::<Option<&str>>::new())),
+            ],
+        )?;
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_batch.json", tmp_dir.path().to_string_lossy());
+        let df = ctx.read_batch(empty_batch.clone())?;
+        df.write_json(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist and be empty
+        assert!(std::path::Path::new(&path).exists());
+        let metadata = std::fs::metadata(&path)?;
+        assert_eq!(metadata.len(), 0);
+        Ok(())
     }
 }

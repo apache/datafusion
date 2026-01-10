@@ -17,6 +17,9 @@
 
 //! See `main.rs` for how to run it.
 
+use std::pin::Pin;
+use std::sync::Arc;
+
 use arrow::array::{ArrayRef, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
@@ -38,12 +41,11 @@ use arrow_flight::{
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::info;
 use mimalloc::MiMalloc;
 use prost::Message;
-use std::pin::Pin;
-use std::sync::Arc;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -100,16 +102,19 @@ impl FlightSqlServiceImpl {
             .with_information_schema(true);
         let ctx = Arc::new(SessionContext::new_with_config(session_config));
 
-        let testdata = datafusion::test_util::parquet_test_data();
+        // Convert the CSV input into a temporary Parquet directory for querying
+        let dataset = ExampleDataset::Cars;
+        let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path())
+            .await
+            .map_err(|e| status!("Error writing csv to parquet", e))?;
+        let parquet_path = parquet_temp
+            .path_str()
+            .map_err(|e| status!("Error getting parquet path", e))?;
 
         // register parquet file with the execution context
-        ctx.register_parquet(
-            "alltypes_plain",
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
-        .await
-        .map_err(|e| status!("Error registering table", e))?;
+        ctx.register_parquet("cars", parquet_path, ParquetReadOptions::default())
+            .await
+            .map_err(|e| status!("Error registering table", e))?;
 
         self.contexts.insert(uuid.clone(), ctx);
         Ok(uuid)

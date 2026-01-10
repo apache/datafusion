@@ -20,31 +20,31 @@ use datafusion::logical_expr::select_expr::SelectExpr;
 use datafusion_common::instant::Instant;
 use std::path::PathBuf;
 
+use clap::Args;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use structopt::StructOpt;
 
 use datafusion::common::not_impl_err;
 
 use super::IMDB_TABLES;
 use super::get_imdb_table_schema;
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct ConvertOpt {
     /// Path to csv files
-    #[structopt(parse(from_os_str), required = true, short = "i", long = "input")]
+    #[arg(required = true, short = 'i', long = "input")]
     input_path: PathBuf,
 
     /// Output path
-    #[structopt(parse(from_os_str), required = true, short = "o", long = "output")]
+    #[arg(required = true, short = 'o', long = "output")]
     output_path: PathBuf,
 
     /// Output file format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format")]
+    #[arg(short = 'f', long = "format")]
     file_format: String,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    #[arg(short = 's', long = "batch-size", default_value = "8192")]
     batch_size: usize,
 }
 

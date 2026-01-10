@@ -46,6 +46,7 @@ pub async fn serialize(
         .open(path)
         .await?;
     file.write_all(&protobuf_out).await?;
+    file.flush().await?;
     Ok(())
 }
 

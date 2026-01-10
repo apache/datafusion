@@ -1134,6 +1134,12 @@ impl TryFrom<SchemaRef> for DFSchema {
     }
 }
 
+impl From<DFSchema> for SchemaRef {
+    fn from(dfschema: DFSchema) -> Self {
+        Arc::clone(&dfschema.inner)
+    }
+}
+
 // Hashing refers to a subset of fields considered in PartialEq.
 impl Hash for DFSchema {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -2070,7 +2076,7 @@ mod tests {
     fn test_print_schema_empty() {
         let schema = DFSchema::empty();
         let output = schema.tree_string();
-        insta::assert_snapshot!(output, @r###"root"###);
+        insta::assert_snapshot!(output, @"root");
     }
 
     #[test]

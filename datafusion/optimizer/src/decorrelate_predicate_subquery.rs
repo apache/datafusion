@@ -613,7 +613,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
                 plan,
-                @r###"
+                @r"
         Projection: customer.c_custkey [c_custkey:Int64]
           LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_2.o_custkey [c_custkey:Int64, c_name:Utf8]
             LeftSemi Join:  Filter: customer.c_custkey = __correlated_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8]
@@ -624,7 +624,7 @@ mod tests {
             SubqueryAlias: __correlated_sq_2 [o_custkey:Int64]
               Projection: orders.o_custkey [o_custkey:Int64]
                 TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
-        "###    
+        "    
         )
     }
 

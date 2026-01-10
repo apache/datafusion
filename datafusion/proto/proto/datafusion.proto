@@ -872,6 +872,8 @@ message PhysicalExprNode {
     PhysicalExtensionExprNode extension = 19;
 
     UnknownColumn unknown_column = 20;
+
+    PhysicalHashExprNode hash_expr = 21;
   }
 }
 
@@ -988,6 +990,15 @@ message PhysicalNegativeNode {
 message PhysicalExtensionExprNode {
   bytes expr = 1;
   repeated PhysicalExprNode inputs = 2;
+}
+
+message PhysicalHashExprNode {
+  repeated PhysicalExprNode on_columns = 1;
+  uint64 seed0 = 2;
+  uint64 seed1 = 3;
+  uint64 seed2 = 4;
+  uint64 seed3 = 5;
+  string description = 6;
 }
 
 message FilterExecNode {

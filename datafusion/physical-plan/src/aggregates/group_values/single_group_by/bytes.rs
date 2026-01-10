@@ -19,7 +19,7 @@ use std::mem::size_of;
 
 use crate::aggregates::group_values::GroupValues;
 
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
@@ -120,7 +120,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         Ok(vec![group_values])
     }
 
-    fn clear_shrink(&mut self, _batch: &RecordBatch) {
+    fn clear_shrink(&mut self, _num_rows: usize) {
         // in theory we could potentially avoid this reallocation and clear the
         // contents of the maps, but for now we just reset the map from the beginning
         self.map.take();

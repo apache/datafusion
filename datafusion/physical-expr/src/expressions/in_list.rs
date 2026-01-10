@@ -898,6 +898,7 @@ mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast};
     use arrow::buffer::NullBuffer;
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -1335,16 +1336,59 @@ mod tests {
     /// Test data: 0 (in list), 2000 (not in list), [1000, 3000] (other list values)
     #[test]
     fn in_list_timestamp_types() -> Result<()> {
-        run_test_cases(vec![InListPrimitiveTestCase {
-            name: "timestamp_nanosecond",
-            value_in: ScalarValue::TimestampNanosecond(Some(0), None),
-            value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
-            other_list_values: vec![
-                ScalarValue::TimestampNanosecond(Some(1000), None),
-                ScalarValue::TimestampNanosecond(Some(3000), None),
-            ],
-            null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
-        }])
+        run_test_cases(vec![
+            InListPrimitiveTestCase {
+                name: "timestamp_nanosecond",
+                value_in: ScalarValue::TimestampNanosecond(Some(0), None),
+                value_not_in: ScalarValue::TimestampNanosecond(Some(2000), None),
+                other_list_values: vec![
+                    ScalarValue::TimestampNanosecond(Some(1000), None),
+                    ScalarValue::TimestampNanosecond(Some(3000), None),
+                ],
+                null_value: Some(ScalarValue::TimestampNanosecond(None, None)),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_with_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![ScalarValue::TimestampMillisecond(
+                    Some(3500000),
+                    Some("+05:00".into()),
+                )],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+            InListPrimitiveTestCase {
+                name: "timestamp_millisecond_mixed_tz",
+                value_in: ScalarValue::TimestampMillisecond(
+                    Some(1500000),
+                    Some("+05:00".into()),
+                ),
+                value_not_in: ScalarValue::TimestampMillisecond(
+                    Some(2500000),
+                    Some("+05:00".into()),
+                ),
+                other_list_values: vec![
+                    ScalarValue::TimestampMillisecond(
+                        Some(3500000),
+                        Some("+01:00".into()),
+                    ),
+                    ScalarValue::TimestampMillisecond(Some(4500000), Some("UTC".into())),
+                ],
+                null_value: Some(ScalarValue::TimestampMillisecond(
+                    None,
+                    Some("+05:00".into()),
+                )),
+            },
+        ])
     }
 
     #[test]
@@ -3222,6 +3266,244 @@ mod tests {
             col_a,
             &schema
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_esoteric_types() -> Result<()> {
+        // Test esoteric/less common types to validate the transform and mapping flow.
+        // These types are reinterpreted to base primitive types (e.g., Timestamp -> UInt64,
+        // Interval -> Decimal128, Float16 -> UInt16). We just need to verify basic
+        // functionality works - no need for comprehensive null handling tests.
+
+        // Helper: simple IN test that expects [Some(true), Some(false)]
+        let test_type = |data_type: DataType,
+                         in_array: ArrayRef,
+                         list_values: Vec<ScalarValue>|
+         -> Result<()> {
+            let schema = Schema::new(vec![Field::new("a", data_type.clone(), false)]);
+            let col_a = col("a", &schema)?;
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![in_array])?;
+
+            let list = list_values.into_iter().map(lit).collect();
+            in_list!(
+                batch,
+                list,
+                &false,
+                vec![Some(true), Some(false)],
+                col_a,
+                &schema
+            );
+            Ok(())
+        };
+
+        // Timestamp types (all units map to Int64 -> UInt64)
+        test_type(
+            DataType::Timestamp(TimeUnit::Second, None),
+            Arc::new(TimestampSecondArray::from(vec![Some(1000), Some(2000)])),
+            vec![
+                ScalarValue::TimestampSecond(Some(1000), None),
+                ScalarValue::TimestampSecond(Some(1500), None),
+            ],
+        )?;
+
+        test_type(
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            Arc::new(TimestampMillisecondArray::from(vec![
+                Some(1000000),
+                Some(2000000),
+            ])),
+            vec![
+                ScalarValue::TimestampMillisecond(Some(1000000), None),
+                ScalarValue::TimestampMillisecond(Some(1500000), None),
+            ],
+        )?;
+
+        test_type(
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            Arc::new(TimestampMicrosecondArray::from(vec![
+                Some(1000000000),
+                Some(2000000000),
+            ])),
+            vec![
+                ScalarValue::TimestampMicrosecond(Some(1000000000), None),
+                ScalarValue::TimestampMicrosecond(Some(1500000000), None),
+            ],
+        )?;
+
+        // Time32 and Time64 (map to Int32 -> UInt32 and Int64 -> UInt64 respectively)
+        test_type(
+            DataType::Time32(TimeUnit::Second),
+            Arc::new(Time32SecondArray::from(vec![Some(3600), Some(7200)])),
+            vec![
+                ScalarValue::Time32Second(Some(3600)),
+                ScalarValue::Time32Second(Some(5400)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time32(TimeUnit::Millisecond),
+            Arc::new(Time32MillisecondArray::from(vec![
+                Some(3600000),
+                Some(7200000),
+            ])),
+            vec![
+                ScalarValue::Time32Millisecond(Some(3600000)),
+                ScalarValue::Time32Millisecond(Some(5400000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time64(TimeUnit::Microsecond),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                Some(3600000000),
+                Some(7200000000),
+            ])),
+            vec![
+                ScalarValue::Time64Microsecond(Some(3600000000)),
+                ScalarValue::Time64Microsecond(Some(5400000000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Time64(TimeUnit::Nanosecond),
+            Arc::new(Time64NanosecondArray::from(vec![
+                Some(3600000000000),
+                Some(7200000000000),
+            ])),
+            vec![
+                ScalarValue::Time64Nanosecond(Some(3600000000000)),
+                ScalarValue::Time64Nanosecond(Some(5400000000000)),
+            ],
+        )?;
+
+        // Duration types (map to Int64 -> UInt64)
+        test_type(
+            DataType::Duration(TimeUnit::Second),
+            Arc::new(DurationSecondArray::from(vec![Some(86400), Some(172800)])),
+            vec![
+                ScalarValue::DurationSecond(Some(86400)),
+                ScalarValue::DurationSecond(Some(129600)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Millisecond),
+            Arc::new(DurationMillisecondArray::from(vec![
+                Some(86400000),
+                Some(172800000),
+            ])),
+            vec![
+                ScalarValue::DurationMillisecond(Some(86400000)),
+                ScalarValue::DurationMillisecond(Some(129600000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Microsecond),
+            Arc::new(DurationMicrosecondArray::from(vec![
+                Some(86400000000),
+                Some(172800000000),
+            ])),
+            vec![
+                ScalarValue::DurationMicrosecond(Some(86400000000)),
+                ScalarValue::DurationMicrosecond(Some(129600000000)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Duration(TimeUnit::Nanosecond),
+            Arc::new(DurationNanosecondArray::from(vec![
+                Some(86400000000000),
+                Some(172800000000000),
+            ])),
+            vec![
+                ScalarValue::DurationNanosecond(Some(86400000000000)),
+                ScalarValue::DurationNanosecond(Some(129600000000000)),
+            ],
+        )?;
+
+        // Interval types (map to 16-byte Decimal128Type)
+        test_type(
+            DataType::Interval(IntervalUnit::YearMonth),
+            Arc::new(IntervalYearMonthArray::from(vec![Some(12), Some(24)])),
+            vec![
+                ScalarValue::IntervalYearMonth(Some(12)),
+                ScalarValue::IntervalYearMonth(Some(18)),
+            ],
+        )?;
+
+        test_type(
+            DataType::Interval(IntervalUnit::DayTime),
+            Arc::new(IntervalDayTimeArray::from(vec![
+                Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 0,
+                }),
+                Some(IntervalDayTime {
+                    days: 2,
+                    milliseconds: 0,
+                }),
+            ])),
+            vec![
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 0,
+                })),
+                ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                    days: 1,
+                    milliseconds: 500,
+                })),
+            ],
+        )?;
+
+        test_type(
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            Arc::new(IntervalMonthDayNanoArray::from(vec![
+                Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 0,
+                    nanoseconds: 0,
+                }),
+                Some(IntervalMonthDayNano {
+                    months: 2,
+                    days: 0,
+                    nanoseconds: 0,
+                }),
+            ])),
+            vec![
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 0,
+                    nanoseconds: 0,
+                })),
+                ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano {
+                    months: 1,
+                    days: 15,
+                    nanoseconds: 0,
+                })),
+            ],
+        )?;
+
+        // Decimal256 (maps to Decimal128Type for 16-byte width)
+        // Need to use with_precision_and_scale() to set the metadata
+        let precision = 38;
+        let scale = 10;
+        test_type(
+            DataType::Decimal256(precision, scale),
+            Arc::new(
+                Decimal256Array::from(vec![
+                    Some(i256::from(12345)),
+                    Some(i256::from(67890)),
+                ])
+                .with_precision_and_scale(precision, scale)?,
+            ),
+            vec![
+                ScalarValue::Decimal256(Some(i256::from(12345)), precision, scale),
+                ScalarValue::Decimal256(Some(i256::from(54321)), precision, scale),
+            ],
+        )?;
 
         Ok(())
     }

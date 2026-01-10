@@ -408,8 +408,8 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
                         column.name()
                     );
                 }
-                // If the column is missing from the physical schema fill it in with nulls as `SchemaAdapter` used to do.
-                // If users want a different behavior they need to provide a custom `PhysicalExprAdapter` implementation.
+                // If the column is missing from the physical schema fill it in with nulls.
+                // For a different behavior, provide a custom `PhysicalExprAdapter` implementation.
                 let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
                 return Ok(Transformed::yes(expressions::lit(null_value)));
             }

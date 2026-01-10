@@ -290,16 +290,12 @@ async fn unparse_cross_join() -> Result<()> {
         .await?;
 
     let unopt_sql = plan_to_sql(df.logical_plan())?;
-    assert_snapshot!(unopt_sql, @r#"
-        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
-    "#);
+    assert_snapshot!(unopt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
 
     let optimized_plan = df.into_optimized_plan()?;
 
     let opt_sql = plan_to_sql(&optimized_plan)?;
-    assert_snapshot!(opt_sql, @r#"
-        SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)
-    "#);
+    assert_snapshot!(opt_sql, @"SELECT j1.j1_id, j2.j2_string FROM j1 CROSS JOIN j2 WHERE (j2.j2_id = 0)");
 
     Ok(())
 }

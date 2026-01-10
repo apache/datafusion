@@ -25,21 +25,21 @@
 //! access the runtime, then you will get a panic when trying to do operations
 //! such as spawning a tokio task.
 
-use std::{any::Any, fmt::Debug, sync::Arc};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
+
+use arrow::datatypes::Schema;
+use async_trait::async_trait;
+use datafusion_catalog::{
+    CatalogProvider, CatalogProviderList, MemTable, MemoryCatalogProvider,
+    MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
+};
+use datafusion_common::{Result, exec_err};
 
 use crate::catalog_provider::FFI_CatalogProvider;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
-use arrow::datatypes::Schema;
-use async_trait::async_trait;
-use datafusion::{
-    catalog::{
-        CatalogProvider, CatalogProviderList, MemoryCatalogProvider,
-        MemoryCatalogProviderList, MemorySchemaProvider, SchemaProvider, TableProvider,
-    },
-    common::exec_err,
-    datasource::MemTable,
-    error::{DataFusionError, Result},
-};
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
 
 /// This schema provider is intended only for unit tests. It prepopulates with one
 /// table and only allows for tables named sales and purchases.
@@ -50,7 +50,7 @@ pub struct FixedSchemaProvider {
 
 pub fn fruit_table() -> Arc<dyn TableProvider + 'static> {
     use arrow::datatypes::{DataType, Field};
-    use datafusion::common::record_batch;
+    use datafusion_common::record_batch;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("units", DataType::Int32, true),
@@ -97,10 +97,7 @@ impl SchemaProvider for FixedSchemaProvider {
         self.inner.table_names()
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         self.inner.table(name).await
     }
 
@@ -180,9 +177,11 @@ impl CatalogProvider for FixedCatalogProvider {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider() -> FFI_CatalogProvider {
+pub(crate) extern "C" fn create_catalog_provider(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProvider {
     let catalog_provider = Arc::new(FixedCatalogProvider::default());
-    FFI_CatalogProvider::new(catalog_provider, None)
+    FFI_CatalogProvider::new_with_ffi_codec(catalog_provider, None, codec)
 }
 
 /// This catalog provider list is intended only for unit tests. It prepopulates with one
@@ -234,7 +233,9 @@ impl CatalogProviderList for FixedCatalogProviderList {
     }
 }
 
-pub(crate) extern "C" fn create_catalog_provider_list() -> FFI_CatalogProviderList {
+pub(crate) extern "C" fn create_catalog_provider_list(
+    codec: FFI_LogicalExtensionCodec,
+) -> FFI_CatalogProviderList {
     let catalog_provider_list = Arc::new(FixedCatalogProviderList::default());
-    FFI_CatalogProviderList::new(catalog_provider_list, None)
+    FFI_CatalogProviderList::new_with_ffi_codec(catalog_provider_list, None, codec)
 }

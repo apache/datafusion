@@ -415,7 +415,7 @@ impl Accumulator for ArrayAggAccumulator {
 }
 
 #[derive(Debug)]
-struct DistinctArrayAggAccumulator {
+pub struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
     sort_options: Option<SortOptions>,
@@ -1111,7 +1111,7 @@ mod tests {
         ])])?;
 
         // without compaction, the size is 17112
-        assert_eq!(acc.size(), 2184);
+        assert_eq!(acc.size(), 2224);
 
         Ok(())
     }

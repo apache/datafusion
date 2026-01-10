@@ -15,38 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, task::Poll};
+use std::ffi::c_void;
+use std::task::Poll;
 
-use abi_stable::{
-    StableAbi,
-    std_types::{ROption, RResult},
-};
-use arrow::array::{Array, RecordBatch};
-use arrow::{
-    array::{StructArray, make_array},
-    ffi::{from_ffi, to_ffi},
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RResult};
+use arrow::array::{Array, RecordBatch, StructArray, make_array};
+use arrow::ffi::{from_ffi, to_ffi};
 use async_ffi::{ContextExt, FfiContext, FfiPoll};
-use datafusion::error::Result;
-use datafusion::{
-    error::DataFusionError,
-    execution::{RecordBatchStream, SendableRecordBatchStream},
-};
-use datafusion_common::{ffi_datafusion_err, ffi_err};
+use datafusion_common::{DataFusionError, Result, ffi_datafusion_err, ffi_err};
+use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
+use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::rresult;
 use crate::util::FFIResult;
-use crate::{
-    arrow_wrappers::{WrappedArray, WrappedSchema},
-    rresult,
-};
 
 /// A stable struct for sharing [`RecordBatchStream`] across FFI boundaries.
 /// We use the async-ffi crate for handling async calls across libraries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_RecordBatchStream {
     /// This mirrors the `poll_next` of [`RecordBatchStream`] but does so
     /// in a FFI safe manner.
@@ -116,12 +105,11 @@ unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_RecordBatchStream) {
 pub(crate) fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
 ) -> FFIResult<WrappedArray> {
+    let schema = WrappedSchema::from(record_batch.schema());
     let struct_array = StructArray::from(record_batch);
     rresult!(
-        to_ffi(&struct_array.to_data()).map(|(array, schema)| WrappedArray {
-            array,
-            schema: WrappedSchema(schema)
-        })
+        to_ffi(&struct_array.to_data())
+            .map(|(array, _schema)| WrappedArray { array, schema })
     )
 }
 
@@ -168,6 +156,7 @@ impl RecordBatchStream for FFI_RecordBatchStream {
 pub(crate) fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<RecordBatch> {
     let array_data =
         unsafe { from_ffi(array.array, &array.schema.0).map_err(DataFusionError::from)? };
+    let schema: arrow::datatypes::SchemaRef = array.schema.into();
     let array = make_array(array_data);
     let struct_array = array
         .as_any()
@@ -176,7 +165,9 @@ pub(crate) fn wrapped_array_to_record_batch(array: WrappedArray) -> Result<Recor
         "Unexpected array type during record batch collection in FFI_RecordBatchStream - expected StructArray"
     ))?;
 
-    Ok(struct_array.into())
+    let rb: RecordBatch = struct_array.into();
+
+    rb.with_schema(schema).map_err(Into::into)
 }
 
 fn maybe_wrapped_array_to_record_batch(
@@ -224,13 +215,17 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::{
-        common::record_batch, error::Result, execution::SendableRecordBatchStream,
-        test_util::bounded_stream,
-    };
-
-    use super::FFI_RecordBatchStream;
+    use datafusion::common::record_batch;
+    use datafusion::error::Result;
+    use datafusion::execution::SendableRecordBatchStream;
+    use datafusion::test_util::bounded_stream;
     use futures::StreamExt;
+
+    use super::{
+        FFI_RecordBatchStream, record_batch_to_wrapped_array,
+        wrapped_array_to_record_batch,
+    };
+    use crate::df_result;
 
     #[tokio::test]
     async fn test_round_trip_record_batch_stream() -> Result<()> {
@@ -261,6 +256,30 @@ mod tests {
         let no_batch = ffi_rbs.next().await;
         assert!(no_batch.is_none());
 
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_record_batch_with_metadata() -> Result<()> {
+        let rb = record_batch!(
+            ("a", Int32, vec![1, 2, 3]),
+            ("b", Float64, vec![Some(4.0), None, Some(5.0)])
+        )?;
+
+        let schema = rb
+            .schema()
+            .as_ref()
+            .clone()
+            .with_metadata([("some_key".to_owned(), "some_value".to_owned())].into())
+            .into();
+
+        let rb = rb.with_schema(schema)?;
+
+        let ffi_rb = df_result!(record_batch_to_wrapped_array(rb.clone()))?;
+
+        let round_trip_rb = wrapped_array_to_record_batch(ffi_rb)?;
+
+        assert_eq!(rb, round_trip_rb);
         Ok(())
     }
 }

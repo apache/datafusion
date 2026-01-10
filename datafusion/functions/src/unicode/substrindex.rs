@@ -19,8 +19,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
-    PrimitiveArray, StringBuilder,
+    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
+    GenericStringBuilder, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
@@ -182,7 +182,8 @@ fn substr_index_general<
 where
     T::Native: OffsetSizeTrait,
 {
-    let mut builder = StringBuilder::new();
+    let num_rows = string_array.len();
+    let mut builder = GenericStringBuilder::<T::Native>::with_capacity(num_rows, 0);
     let string_iter = ArrayIter::new(string_array);
     let delimiter_array_iter = ArrayIter::new(delimiter_array);
     let count_array_iter = ArrayIter::new(count_array);
@@ -198,31 +199,49 @@ where
                 }
 
                 let occurrences = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-                let length = if n > 0 {
-                    let split = string.split(delimiter);
-                    split
-                        .take(occurrences)
-                        .map(|s| s.len() + delimiter.len())
-                        .sum::<usize>()
-                        - delimiter.len()
+                let result_idx = if delimiter.len() == 1 {
+                    // Fast path: use byte-level search for single-character delimiters
+                    let d_byte = delimiter.as_bytes()[0];
+                    let bytes = string.as_bytes();
+
+                    if n > 0 {
+                        bytes
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &b)| b == d_byte)
+                            .nth(occurrences - 1)
+                            .map(|(idx, _)| idx)
+                    } else {
+                        bytes
+                            .iter()
+                            .enumerate()
+                            .rev()
+                            .filter(|&(_, &b)| b == d_byte)
+                            .nth(occurrences - 1)
+                            .map(|(idx, _)| idx + 1)
+                    }
+                } else if n > 0 {
+                    // Multi-byte path: forward search for n-th occurrence
+                    string
+                        .match_indices(delimiter)
+                        .nth(occurrences - 1)
+                        .map(|(idx, _)| idx)
                 } else {
-                    let split = string.rsplit(delimiter);
-                    split
-                        .take(occurrences)
-                        .map(|s| s.len() + delimiter.len())
-                        .sum::<usize>()
-                        - delimiter.len()
+                    // Multi-byte path: backward search for n-th occurrence from the right
+                    string
+                        .rmatch_indices(delimiter)
+                        .nth(occurrences - 1)
+                        .map(|(idx, _)| idx + delimiter.len())
                 };
-                if n > 0 {
-                    match string.get(..length) {
-                        Some(substring) => builder.append_value(substring),
-                        None => builder.append_null(),
+                match result_idx {
+                    Some(idx) => {
+                        if n > 0 {
+                            builder.append_value(&string[..idx]);
+                        } else {
+                            builder.append_value(&string[idx..]);
+                        }
                     }
-                } else {
-                    match string.get(string.len().saturating_sub(length)..) {
-                        Some(substring) => builder.append_value(substring),
-                        None => builder.append_null(),
-                    }
+                    None => builder.append_value(string),
                 }
             }
             _ => builder.append_null(),
@@ -328,7 +347,6 @@ mod tests {
             Utf8,
             StringArray
         );
-
         Ok(())
     }
 }

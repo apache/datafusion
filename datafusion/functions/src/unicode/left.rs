@@ -139,14 +139,23 @@ fn left_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
     n_array: &Int64Array,
 ) -> Result<ArrayRef> {
     let iter = ArrayIter::new(string_array);
+    let mut chars_buf = Vec::new();
     let result = iter
         .zip(n_array.iter())
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
-                    let len = string.chars().count() as i64;
-                    Some(if n.abs() < len {
-                        string.chars().take((len + n) as usize).collect::<String>()
+                    // Collect chars once and reuse for both count and take
+                    chars_buf.clear();
+                    chars_buf.extend(string.chars());
+                    let len = chars_buf.len() as i64;
+
+                    // For negative n, take (len + n) chars if n > -len (avoiding abs() which panics on i64::MIN)
+                    Some(if n > -len {
+                        chars_buf
+                            .iter()
+                            .take((len + n) as usize)
+                            .collect::<String>()
                     } else {
                         "".to_string()
                     })

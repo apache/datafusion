@@ -248,6 +248,7 @@ pub async fn spawn_writer_tasks_and_join(
     context: &Arc<TaskContext>,
     serializer: Arc<dyn BatchSerializer>,
     compression: FileCompressionType,
+    compression_level: Option<u32>,
     object_store: Arc<dyn ObjectStore>,
     demux_task: SpawnedTask<Result<()>>,
     mut file_stream_rx: DemuxedStreamReceiver,
@@ -273,6 +274,7 @@ pub async fn spawn_writer_tasks_and_join(
                         .execution
                         .objectstore_writer_buffer_size,
                 ))
+                .with_compression_level(compression_level)
                 .build()?;
 
         if tx_file_bundle

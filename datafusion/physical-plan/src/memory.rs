@@ -144,6 +144,9 @@ pub trait LazyBatchGenerator: Send + Sync + fmt::Debug + fmt::Display {
 
     /// Generate the next batch, return `None` when no more batches are available
     fn generate_next_batch(&mut self) -> Result<Option<RecordBatch>>;
+
+    /// Returns a new instance with the state reset.
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>>;
 }
 
 /// Execution plan for lazy in-memory batches of data
@@ -352,6 +355,21 @@ impl ExecutionPlan for LazyMemoryExec {
     fn statistics(&self) -> Result<Statistics> {
         Ok(Statistics::new_unknown(&self.schema))
     }
+
+    fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
+        let generators = self
+            .generators()
+            .iter()
+            .map(|g| g.read().reset_state())
+            .collect::<Vec<_>>();
+        Ok(Arc::new(LazyMemoryExec {
+            schema: Arc::clone(&self.schema),
+            batch_generators: generators,
+            cache: self.cache.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            projection: self.projection.clone(),
+        }))
+    }
 }
 
 /// Stream that generates record batches on demand
@@ -449,6 +467,15 @@ mod lazy_memory_tests {
                 Arc::clone(&self.schema),
                 vec![Arc::new(array)],
             )?))
+        }
+
+        fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            Arc::new(RwLock::new(TestGenerator {
+                counter: 0,
+                max_batches: self.max_batches,
+                batch_size: self.batch_size,
+                schema: Arc::clone(&self.schema),
+            }))
         }
     }
 
@@ -565,6 +592,33 @@ mod lazy_memory_tests {
             assert_eq!(metrics.output_rows().unwrap(), expected_rows);
             assert!(metrics.elapsed_compute().unwrap() > 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lazy_memory_exec_reset_state() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let generator = TestGenerator {
+            counter: 0,
+            max_batches: 3,
+            batch_size: 2,
+            schema: Arc::clone(&schema),
+        };
+
+        let exec = Arc::new(LazyMemoryExec::try_new(
+            schema,
+            vec![Arc::new(RwLock::new(generator))],
+        )?);
+        let stream = exec.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = collect(stream).await?;
+
+        let exec_reset = exec.reset_state()?;
+        let stream = exec_reset.execute(0, Arc::new(TaskContext::default()))?;
+        let batches_reset = collect(stream).await?;
+
+        // if the reset_state is not correct, the batches_reset will be empty
+        assert_eq!(batches, batches_reset);
 
         Ok(())
     }

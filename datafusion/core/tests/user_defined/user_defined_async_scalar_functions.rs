@@ -21,16 +21,14 @@ use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::prelude::*;
+use datafusion_common::test_util::format_batches;
 use datafusion_common::{Result, assert_batches_eq};
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
-// This test checks the case where batch_size doesn't evenly divide
-// the number of rows.
-#[tokio::test]
-async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
+fn register_table_and_udf() -> Result<SessionContext> {
     let num_rows = 3;
     let batch_size = 2;
 
@@ -59,6 +57,15 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
             .into_scalar_udf(),
     );
 
+    Ok(ctx)
+}
+
+// This test checks the case where batch_size doesn't evenly divide
+// the number of rows.
+#[tokio::test]
+async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
     let df = ctx
         .sql("SELECT id, test_async_udf(prompt) as result FROM test_table")
         .await?;
@@ -77,6 +84,31 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
         ],
         &result
     );
+
+    Ok(())
+}
+
+// This test checks if metrics are printed for `AsyncFuncExec`
+#[tokio::test]
+async fn test_async_udf_metrics() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
+    let df = ctx
+        .sql(
+            "EXPLAIN ANALYZE SELECT id, test_async_udf(prompt) as result FROM test_table",
+        )
+        .await?;
+
+    let result = df.collect().await?;
+
+    let explain_analyze_str = format_batches(&result)?.to_string();
+    let async_func_exec_without_metrics =
+        explain_analyze_str.split("\n").any(|metric_line| {
+            metric_line.contains("AsyncFuncExec")
+                && !metric_line.contains("output_rows=3")
+        });
+
+    assert!(!async_func_exec_without_metrics);
 
     Ok(())
 }

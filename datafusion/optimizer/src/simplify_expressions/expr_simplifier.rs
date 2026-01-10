@@ -27,6 +27,7 @@ use std::collections::HashSet;
 use std::ops::Not;
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -51,7 +52,7 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
-use crate::simplify_expressions::SimplifyInfo;
+use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
@@ -72,7 +73,6 @@ use regex::Regex;
 /// ```
 /// use arrow::datatypes::{DataType, Field, Schema};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
-/// use datafusion_expr::execution_props::ExecutionProps;
 /// use datafusion_expr::simplify::SimplifyContext;
 /// use datafusion_expr::{col, lit};
 /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -83,8 +83,7 @@ use regex::Regex;
 ///     .unwrap();
 ///
 /// // Create the simplifier
-/// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props).with_schema(schema);
+/// let context = SimplifyContext::default().with_schema(schema);
 /// let simplifier = ExprSimplifier::new(context);
 ///
 /// // Use the simplifier
@@ -96,8 +95,8 @@ use regex::Regex;
 /// let simplified = simplifier.simplify(expr).unwrap();
 /// assert_eq!(simplified, col("b").lt(lit(2)));
 /// ```
-pub struct ExprSimplifier<S> {
-    info: S,
+pub struct ExprSimplifier {
+    info: SimplifyContext,
     /// Guarantees about the values of columns. This is provided by the user
     /// in [ExprSimplifier::with_guarantees()].
     guarantees: Vec<(Expr, NullableInterval)>,
@@ -111,13 +110,12 @@ pub struct ExprSimplifier<S> {
 pub const THRESHOLD_INLINE_INLIST: usize = 3;
 pub const DEFAULT_MAX_SIMPLIFIER_CYCLES: u32 = 3;
 
-impl<S: SimplifyInfo> ExprSimplifier<S> {
-    /// Create a new `ExprSimplifier` with the given `info` such as an
-    /// instance of [`SimplifyContext`]. See
-    /// [`simplify`](Self::simplify) for an example.
+impl ExprSimplifier {
+    /// Create a new `ExprSimplifier` with the given [`SimplifyContext`].
+    /// See [`simplify`](Self::simplify) for an example.
     ///
     /// [`SimplifyContext`]: datafusion_expr::simplify::SimplifyContext
-    pub fn new(info: S) -> Self {
+    pub fn new(info: SimplifyContext) -> Self {
         Self {
             info,
             guarantees: vec![],
@@ -142,40 +140,21 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// `b > 2`
     ///
     /// ```
-    /// use arrow::datatypes::DataType;
-    /// use datafusion_common::DFSchema;
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::{DFSchema, ToDFSchema};
     /// use datafusion_common::Result;
-    /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
-    /// use datafusion_expr::simplify::SimplifyInfo;
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     /// use std::sync::Arc;
     ///
-    /// /// Simple implementation that provides `Simplifier` the information it needs
-    /// /// See SimplifyContext for a structure that does this.
-    /// #[derive(Default)]
-    /// struct Info {
-    ///     execution_props: ExecutionProps,
-    /// };
-    ///
-    /// impl SimplifyInfo for Info {
-    ///     fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-    ///         Ok(false)
-    ///     }
-    ///     fn nullable(&self, expr: &Expr) -> Result<bool> {
-    ///         Ok(true)
-    ///     }
-    ///     fn execution_props(&self) -> &ExecutionProps {
-    ///         &self.execution_props
-    ///     }
-    ///     fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-    ///         Ok(DataType::Int32)
-    ///     }
-    /// }
-    ///
+    /// // Create a schema and SimplifyContext
+    /// let schema = Schema::new(vec![Field::new("b", DataType::Int32, true)])
+    ///     .to_dfschema_ref()
+    ///     .unwrap();
     /// // Create the simplifier
-    /// let simplifier = ExprSimplifier::new(Info::default());
+    /// let context = SimplifyContext::default().with_schema(schema);
+    /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // b < 2
     /// let b_lt_2 = col("b").gt(lit(2));
@@ -225,7 +204,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
         mut expr: Expr,
     ) -> Result<(Transformed<Expr>, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let config_options = Some(Arc::clone(self.info.config_options()));
+        let mut const_evaluator = ConstEvaluator::try_new(config_options)?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
@@ -287,7 +267,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_expr::{col, lit, Expr};
@@ -302,8 +281,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// .unwrap();
     ///
     /// // Create the simplifier
-    /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props).with_schema(schema);
+    /// let context = SimplifyContext::default().with_schema(schema);
     ///
     /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
     /// let expr_x = col("x").gt_eq(lit(3_i64));
@@ -349,7 +327,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// ```rust
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_expr::{col, lit, Expr};
@@ -364,8 +341,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// .unwrap();
     ///
     /// // Create the simplifier
-    /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props).with_schema(schema);
+    /// let context = SimplifyContext::default().with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a = c AND 1 = b
@@ -410,7 +386,6 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
-    /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     ///
@@ -420,9 +395,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   .to_dfschema_ref().unwrap();
     ///
     /// // Create the simplifier
-    /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
-    ///    .with_schema(schema);
+    /// let context = SimplifyContext::default().with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
     /// // Expression: a IS NOT NULL
@@ -500,7 +473,7 @@ impl TreeNodeRewriter for Canonicalizer {
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
 /// --> `a`, which is handled by [`Simplifier`]
-struct ConstEvaluator<'a> {
+struct ConstEvaluator {
     /// `can_evaluate` is used during the depth-first-search of the
     /// `Expr` tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -514,8 +487,13 @@ struct ConstEvaluator<'a> {
     /// means there were no non evaluatable siblings (or their
     /// descendants) so this `Expr` can be evaluated
     can_evaluate: Vec<bool>,
-
-    execution_props: &'a ExecutionProps,
+    /// Execution properties needed to call [`create_physical_expr`].
+    /// `ConstEvaluator` only evaluates expressions without column references
+    /// (i.e. constant expressions) and doesn't use the variable binding features
+    /// of `ExecutionProps` (we explicitly filter out [`Expr::ScalarVariable`]).
+    /// The `config_options` are passed from the session to allow scalar functions
+    /// to access configuration like timezone.
+    execution_props: ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -530,7 +508,7 @@ enum ConstSimplifyResult {
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
-impl TreeNodeRewriter for ConstEvaluator<'_> {
+impl TreeNodeRewriter for ConstEvaluator {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -593,11 +571,17 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
     }
 }
 
-impl<'a> ConstEvaluator<'a> {
-    /// Create a new `ConstantEvaluator`. Session constants (such as
-    /// the time for `now()` are taken from the passed
-    /// `execution_props`.
-    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
+impl ConstEvaluator {
+    /// Create a new `ConstantEvaluator`.
+    ///
+    /// Note: `ConstEvaluator` filters out expressions with scalar variables
+    /// (like `$var`) and volatile functions, so it creates its own default
+    /// `ExecutionProps` internally. The filtered expressions will be evaluated
+    /// at runtime where proper variable bindings are available.
+    ///
+    /// The `config_options` parameter is used to pass session configuration
+    /// (like timezone) to scalar functions during constant evaluation.
+    pub fn try_new(config_options: Option<Arc<ConfigOptions>>) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
@@ -610,6 +594,9 @@ impl<'a> ConstEvaluator<'a> {
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
         let input_batch = RecordBatch::try_new(schema, vec![col])?;
+
+        let mut execution_props = ExecutionProps::new();
+        execution_props.config_options = config_options;
 
         Ok(Self {
             can_evaluate: vec![],
@@ -684,11 +671,14 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s, m);
         }
 
-        let phys_expr =
-            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
-                Ok(e) => e,
-                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-            };
+        let phys_expr = match create_physical_expr(
+            &expr,
+            &self.input_schema,
+            &self.execution_props,
+        ) {
+            Ok(e) => e,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         let metadata = phys_expr
             .return_field(self.input_batch.schema_ref())
             .ok()
@@ -745,17 +735,17 @@ impl<'a> ConstEvaluator<'a> {
 /// * `false = true` and `true = false` to `false`
 /// * `!!expr` to `expr`
 /// * `expr = null` and `expr != null` to `null`
-struct Simplifier<'a, S> {
-    info: &'a S,
+struct Simplifier<'a> {
+    info: &'a SimplifyContext,
 }
 
-impl<'a, S> Simplifier<'a, S> {
-    pub fn new(info: &'a S) -> Self {
+impl<'a> Simplifier<'a> {
+    pub fn new(info: &'a SimplifyContext) -> Self {
         Self { info }
     }
 }
 
-impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
+impl TreeNodeRewriter for Simplifier<'_> {
     type Node = Expr;
 
     /// rewrite the expression simplifying any constant expressions
@@ -2117,7 +2107,7 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 }
 
 /// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
-fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
+fn is_exactly_true(expr: Expr, info: &SimplifyContext) -> Result<Expr> {
     if !info.nullable(&expr)? {
         Ok(expr)
     } else {
@@ -2133,8 +2123,8 @@ fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
 // A / 1 -> A
 //
 // Move this function body out of the large match branch avoid stack overflow
-fn simplify_right_is_one_case<S: SimplifyInfo>(
-    info: &S,
+fn simplify_right_is_one_case(
+    info: &SimplifyContext,
     left: Box<Expr>,
     op: &Operator,
     right: &Expr,
@@ -2187,9 +2177,8 @@ mod tests {
     // ------------------------------
     #[test]
     fn api_basic() {
-        let props = ExecutionProps::new();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
 
         let expr = lit(1) + lit(2);
         let expected = lit(3);
@@ -2199,9 +2188,8 @@ mod tests {
     #[test]
     fn basic_coercion() {
         let schema = test_schema();
-        let props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&props).with_schema(Arc::clone(&schema)),
+            SimplifyContext::default().with_schema(Arc::clone(&schema)),
         );
 
         // Note expr type is int32 (not int64)
@@ -2229,9 +2217,8 @@ mod tests {
 
     #[test]
     fn simplify_and_constant_prop() {
-        let props = ExecutionProps::new();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
 
         // should be able to simplify to false
         // (i * (1 - 2)) > 0
@@ -2242,9 +2229,8 @@ mod tests {
 
     #[test]
     fn simplify_and_constant_prop_with_case() {
-        let props = ExecutionProps::new();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
 
         //   CASE
         //     WHEN i>5 AND false THEN i > 5
@@ -3358,18 +3344,15 @@ mod tests {
 
     fn try_simplify(expr: Expr) -> Result<Expr> {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
-        let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
-        );
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
         simplifier.simplify(expr)
     }
 
     fn coerce(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(Arc::clone(&schema)),
+            SimplifyContext::default().with_schema(Arc::clone(&schema)),
         );
         simplifier.coerce(expr, schema.as_ref()).unwrap()
     }
@@ -3380,10 +3363,8 @@ mod tests {
 
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
-        let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
-        );
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
         let (expr, count) = simplifier.simplify_with_cycle_count_transformed(expr)?;
         Ok((expr.data, count))
     }
@@ -3397,11 +3378,9 @@ mod tests {
         guarantees: Vec<(Expr, NullableInterval)>,
     ) -> Expr {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
-        let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
-        )
-        .with_guarantees(guarantees);
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(schema))
+                .with_guarantees(guarantees);
         simplifier.simplify(expr).unwrap()
     }
 
@@ -4303,8 +4282,7 @@ mod tests {
     fn just_simplifier_simplify_null_in_empty_inlist() {
         let simplify = |expr: Expr| -> Expr {
             let schema = expr_test_schema();
-            let execution_props = ExecutionProps::new();
-            let info = SimplifyContext::new(&execution_props).with_schema(schema);
+            let info = SimplifyContext::default().with_schema(schema);
             let simplifier = &mut Simplifier::new(&info);
             expr.rewrite(simplifier)
                 .expect("Failed to simplify expression")
@@ -4670,10 +4648,9 @@ mod tests {
 
     #[test]
     fn simplify_common_factor_conjunction_in_disjunction() {
-        let props = ExecutionProps::new();
         let schema = boolean_test_schema();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
 
         let a = || col("A");
         let b = || col("B");
@@ -5003,9 +4980,8 @@ mod tests {
 
         // The simplification should now fail with an error at plan time
         let schema = test_schema();
-        let props = ExecutionProps::new();
         let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+            ExprSimplifier::new(SimplifyContext::default().with_schema(schema));
         let result = simplifier.simplify(expr);
         assert!(result.is_err(), "Expected error for invalid cast");
         let err_msg = result.unwrap_err().to_string();

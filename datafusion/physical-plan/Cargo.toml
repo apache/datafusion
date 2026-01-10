@@ -67,6 +67,7 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }

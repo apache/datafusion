@@ -35,7 +35,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_expr::type_coercion::functions::fields_with_aggregate_udf;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
@@ -451,7 +451,7 @@ fn get_random_function(
         // Do type coercion first argument
         let a = args[0].clone();
         let dt = a.return_field(schema.as_ref()).unwrap();
-        let coerced = fields_with_aggregate_udf(&[dt], udf).unwrap();
+        let coerced = fields_with_udf(&[dt], udf.as_ref()).unwrap();
         args[0] = cast(a, schema, coerced[0].data_type().clone()).unwrap();
     }
 

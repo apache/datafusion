@@ -1,0 +1,41 @@
+# interval * double precision → interval
+# Multiply an interval by a scalar
+# interval '1 second' * 900 → 00:15:00
+# interval '1 day' * 21 → 21 days
+# interval '1 hour' * 3.5 → 03:30:00
+
+# these currently do not work - https://github.com/apache/arrow-rs/issues/9030
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT interval '1 second' * 900
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT 900 * interval '1 second'
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT interval '1 day' * 21
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT interval '1 hour' * 3.5
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT 3.5 * interval '1 hour'
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) \* Interval\(MonthDayNano\)
+SELECT arrow_typeof(interval '1 second' * 900)
+
+# interval / double precision → interval
+# Divide an interval by a scalar
+# interval '1 hour' / 1.5 → 00:40:00
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) / Interval\(MonthDayNano\)
+SELECT interval '1 hour' / 1.5
+
+
+query error Invalid interval arithmetic operation: Interval\(MonthDayNano\) / Interval\(MonthDayNano\)
+SELECT arrow_typeof(interval '1 hour' / 1.5)

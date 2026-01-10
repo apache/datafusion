@@ -24,7 +24,6 @@ use abi_stable::StableAbi;
 /// defined in [`Range`].
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_Range {
     pub start: usize,
     pub end: usize,

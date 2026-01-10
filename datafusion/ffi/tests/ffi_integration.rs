@@ -15,22 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod utils;
+
 /// Add an additional module here for convenience to scope this to only
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::catalog::TableProvider;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::prelude::SessionContext;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use std::sync::Arc;
 
     /// It is important that this test is in the `tests` directory and not in the
     /// library directory so we can verify we are building a dynamic library and
     /// testing it via a different executable.
     async fn test_table_provider(synchronous: bool) -> Result<()> {
         let table_provider_module = get_module()?;
+        let (ctx, codec) = super::utils::ctx_and_codec();
 
         // By calling the code below, the table provided will be created within
         // the module's code.
@@ -38,13 +41,11 @@ mod tests {
             DataFusionError::NotImplemented(
                 "External table provider failed to implement create_table".to_string(),
             ),
-        )?(synchronous);
+        )?(synchronous, codec);
 
         // In order to access the table provider within this executable, we need to
         // turn it into a `TableProvider`.
         let foreign_table_provider: Arc<dyn TableProvider> = (&ffi_table_provider).into();
-
-        let ctx = SessionContext::new();
 
         // Display the data to show the full cycle works.
         ctx.register_table("external_table", foreign_table_provider)?;

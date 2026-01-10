@@ -95,8 +95,11 @@ SELECT arrow_cast('1', 'Int16')
 query error
 SELECT arrow_cast('1')
 
-query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
 SELECT arrow_cast('1', 43)
+
+query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')

@@ -57,10 +57,8 @@ use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
-use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::{
-    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, WindowUDF,
-};
+use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::{AggregateUDF, Explain, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerRule,
@@ -744,13 +742,18 @@ impl SessionState {
         expr: Expr,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-        let simplifier =
-            ExprSimplifier::new(SessionSimplifyProvider::new(self, df_schema));
+        let config_options = self.config_options();
+        let simplify_context = SimplifyContext::default()
+            .with_schema(Arc::new(df_schema.clone()))
+            .with_config_options(Arc::clone(config_options))
+            .with_query_execution_start_time(
+                self.execution_props().query_execution_start_time,
+            );
+        let simplifier = ExprSimplifier::new(simplify_context);
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        let config_options = self.config_options();
         for rewrite in self.analyzer.function_rewrites() {
             expr = expr
                 .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
@@ -1834,9 +1837,12 @@ impl ContextProvider for SessionContextProvider<'_> {
             .get(name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table function '{name}' not found"))?;
-        let dummy_schema = DFSchema::empty();
-        let simplifier =
-            ExprSimplifier::new(SessionSimplifyProvider::new(self.state, &dummy_schema));
+        let simplify_context = SimplifyContext::default()
+            .with_config_options(Arc::clone(self.state.config_options()))
+            .with_query_execution_start_time(
+                self.state.execution_props().query_execution_start_time,
+            );
+        let simplifier = ExprSimplifier::new(simplify_context);
         let args = args
             .into_iter()
             .map(|arg| simplifier.simplify(arg))
@@ -2063,7 +2069,7 @@ impl datafusion_execution::TaskContextProvider for SessionState {
 }
 
 impl OptimizerConfig for SessionState {
-    fn query_execution_start_time(&self) -> DateTime<Utc> {
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
         self.execution_props.query_execution_start_time
     }
 
@@ -2112,35 +2118,6 @@ impl QueryPlanner for DefaultQueryPlanner {
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
-    }
-}
-
-struct SessionSimplifyProvider<'a> {
-    state: &'a SessionState,
-    df_schema: &'a DFSchema,
-}
-
-impl<'a> SessionSimplifyProvider<'a> {
-    fn new(state: &'a SessionState, df_schema: &'a DFSchema) -> Self {
-        Self { state, df_schema }
-    }
-}
-
-impl SimplifyInfo for SessionSimplifyProvider<'_> {
-    fn is_boolean_type(&self, expr: &Expr) -> datafusion_common::Result<bool> {
-        Ok(expr.get_type(self.df_schema)? == DataType::Boolean)
-    }
-
-    fn nullable(&self, expr: &Expr) -> datafusion_common::Result<bool> {
-        expr.nullable(self.df_schema)
-    }
-
-    fn execution_props(&self) -> &ExecutionProps {
-        self.state.execution_props()
-    }
-
-    fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {
-        expr.get_type(self.df_schema)
     }
 }
 

@@ -33,7 +33,7 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
-use std::fmt::{self, Write};
+use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -157,14 +157,18 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
-/// this function exists so that we do not need to pull in the crate hex. it is only used by md5
-/// function below
+/// Hex encoding lookup table for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+
+/// Fast hex encoding using a lookup table instead of format strings.
+/// This is significantly faster than using `write!("{:02x}")` for each byte.
 #[inline]
 fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
-    let mut s = String::with_capacity(data.as_ref().len() * 2);
-    for b in data.as_ref() {
-        // Writing to a string never errors, so we can unwrap here.
-        write!(&mut s, "{b:02x}").unwrap();
+    let bytes = data.as_ref();
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        s.push(HEX_CHARS_LOWER[(b >> 4) as usize] as char);
+        s.push(HEX_CHARS_LOWER[(b & 0x0f) as usize] as char);
     }
     s
 }
@@ -173,26 +177,14 @@ macro_rules! digest_to_array {
     ($METHOD:ident, $INPUT:expr) => {{
         let binary_array: BinaryArray = $INPUT
             .iter()
-            .map(|x| {
-                x.map(|x| {
-                    let mut digest = $METHOD::default();
-                    digest.update(x);
-                    digest.finalize()
-                })
-            })
+            .map(|x| x.map(|x| $METHOD::digest(x)))
             .collect();
         Arc::new(binary_array)
     }};
 }
 
 macro_rules! digest_to_scalar {
-    ($METHOD: ident, $INPUT:expr) => {{
-        ScalarValue::Binary($INPUT.as_ref().map(|v| {
-            let mut digest = $METHOD::default();
-            digest.update(v);
-            digest.finalize().as_slice().to_vec()
-        }))
-    }};
+    ($METHOD: ident, $INPUT:expr) => {{ ScalarValue::Binary($INPUT.map(|v| $METHOD::digest(v).as_slice().to_vec())) }};
 }
 
 impl DigestAlgorithm {

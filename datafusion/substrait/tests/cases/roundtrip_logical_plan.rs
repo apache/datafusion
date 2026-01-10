@@ -234,10 +234,10 @@ async fn wildcard_select() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: data.a, data.b, data.c, data.d, data.e, data.f
       TableScan: data
-    "#
+    "
     );
     Ok(())
 }
@@ -353,11 +353,11 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
-        Projection: data.a, data.c, data.e, avg(data.b)
-          Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
-            TableScan: data projection=[a, b, c, e]
-        "#
+    @r"
+    Projection: data.a, data.c, data.e, avg(data.b)
+      Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
+        TableScan: data projection=[a, b, c, e]
+    "
     );
     Ok(())
 }
@@ -373,11 +373,11 @@ async fn aggregate_grouping_cube() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
-        Projection: data.a, data.c, avg(data.b)
-          Aggregate: groupBy=[[GROUPING SETS ((), (data.a), (data.c), (data.a, data.c))]], aggr=[[avg(data.b)]]
-            TableScan: data projection=[a, b, c]
-        "#
+    @r"
+    Projection: data.a, data.c, avg(data.b)
+      Aggregate: groupBy=[[GROUPING SETS ((), (data.a), (data.c), (data.a, data.c))]], aggr=[[avg(data.b)]]
+        TableScan: data projection=[a, b, c]
+    "
     );
     Ok(())
 }
@@ -393,11 +393,11 @@ async fn multilayer_aggregate() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]
       Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]
         TableScan: data projection=[a, b]
-    "#
+    "
     );
     Ok(())
 }
@@ -581,10 +581,10 @@ async fn aggregate_case() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]
       TableScan: data projection=[a]
-    "#
+    "
     );
     Ok(())
 }
@@ -679,12 +679,12 @@ async fn roundtrip_exists_filter() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: data.b
       LeftSemi Join: data.a = data2.a Filter: data2.e != CAST(data.e AS Int64)
         TableScan: data projection=[a, b, e]
         TableScan: data2 projection=[a, e]
-    "#
+    "
             );
     Ok(())
 }
@@ -700,11 +700,11 @@ async fn roundtrip_not_exists_filter_left_anti_join() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     LeftAnti Join: book_author.isbn = book.isbn
       TableScan: book_author projection=[isbn, author]
       TableScan: book projection=[isbn]
-    "#
+    "
             );
     Ok(())
 }
@@ -720,11 +720,11 @@ async fn roundtrip_right_anti_join() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     RightAnti Join: book.isbn = book_author.isbn
       TableScan: book projection=[isbn]
       TableScan: book_author projection=[isbn, author]
-    "#
+    "
             );
     Ok(())
 }
@@ -740,11 +740,11 @@ async fn roundtrip_right_semi_join() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     RightSemi Join: book.isbn = book_author.isbn
       TableScan: book projection=[isbn]
       TableScan: book_author projection=[isbn, author]
-    "#
+    "
             );
     Ok(())
 }
@@ -760,12 +760,12 @@ async fn inner_join() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: data.a
       Inner Join: data.a = data2.a
         TableScan: data projection=[a]
         TableScan: data2 projection=[a]
-    "#
+    "
             );
     Ok(())
 }
@@ -813,14 +813,14 @@ async fn self_join_introduces_aliases() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: left.b, right.c
       Inner Join: left.b = right.b
         SubqueryAlias: left
           TableScan: data projection=[b]
         SubqueryAlias: right
           TableScan: data projection=[b, c]
-    "#
+    "
             );
     Ok(())
 }
@@ -970,10 +970,10 @@ async fn aggregate_wo_projection_consume() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
     plan,
-    @r#"
-            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
-              TableScan: data projection=[a]
-            "#
+    @r"
+    Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+      TableScan: data projection=[a]
+    "
         );
     Ok(())
 }
@@ -987,10 +987,10 @@ async fn aggregate_wo_projection_group_expression_ref_consume() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
     plan,
-    @r#"
-            Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
-              TableScan: data projection=[a]
-            "#
+    @r"
+    Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) AS countA]]
+      TableScan: data projection=[a]
+    "
         );
     Ok(())
 }
@@ -1003,10 +1003,10 @@ async fn aggregate_wo_projection_sorted_consume() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Aggregate: groupBy=[[data.a]], aggr=[[count(data.a) ORDER BY [data.a DESC NULLS FIRST] AS countA]]
       TableScan: data projection=[a]
-    "#
+    "
             );
     Ok(())
 }
@@ -1020,10 +1020,10 @@ async fn aggregate_identical_grouping_expressions() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Aggregate: groupBy=[[Int32(1) AS grouping_col_1, Int32(1) AS grouping_col_2]], aggr=[[]]
       TableScan: data projection=[]
-    "#
+    "
             );
     Ok(())
 }
@@ -1333,10 +1333,10 @@ async fn roundtrip_literal_struct() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: Struct({c0:1,c1:true,c2:}) AS struct(Int64(1),Boolean(true),NULL)
       TableScan: data projection=[]
-    "#
+    "
             );
     Ok(())
 }
@@ -1373,10 +1373,10 @@ async fn roundtrip_literal_renamed_struct() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: Struct({int_field:1}) AS Struct({c0:1})
       TableScan: data projection=[]
-    "#
+    "
             );
     Ok(())
 }
@@ -1402,9 +1402,7 @@ async fn roundtrip_values() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
-    Values: (Int64(1), Utf8("a"), List([[-213.1, , 5.5, 2.0, 1.0], []]), LargeList([1, 2, 3]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])), (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())
-    "#
+    @r#"Values: (Int64(1), Utf8("a"), List([[-213.1, , 5.5, 2.0, 1.0], []]), LargeList([1, 2, 3]), Struct({c0:true,int_field:1,c2:}), List([{struct_field: {string_field: a}}, {struct_field: {string_field: b}}])), (Int64(NULL), Utf8(NULL), List(), LargeList(), Struct({c0:,int_field:,c2:}), List())"#
             );
     Ok(())
 }
@@ -1485,11 +1483,11 @@ async fn duplicate_column() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r#"
+    @r"
     Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2
       Projection: data.a + Int64(1)
         TableScan: data projection=[a]
-    "#
+    "
         );
     Ok(())
 }

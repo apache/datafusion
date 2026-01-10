@@ -444,6 +444,17 @@ select column1 from foo group by column1 order by min(column2), max(column2);
 3
 5
 
+# Test GROUP BY alias with ORDER BY column index
+# Regression test: GROUP BY an aliased column, ORDER BY using column index
+query TI
+with t as (select 'foo' as x)
+select x, count(*) as "Count"
+from t
+group by x
+order by 2 desc;
+----
+foo 1
+
 # Test issue: https://github.com/apache/datafusion/issues/11549
 query I
 select column1 from foo order by log(column2);

@@ -148,6 +148,9 @@ impl ExprPlanner for FieldAccessPlanner {
 
         match field_access {
             // expr["field"] => get_field(expr, "field")
+            // Nested accesses like expr["a"]["b"] create nested get_field calls,
+            // which are then merged by the SimplifyExpressions optimizer pass via
+            // the GetFieldFunc::simplify() method.
             GetFieldAccess::NamedStructField { name } => {
                 Ok(PlannerResult::Planned(get_field(expr, name)))
             }

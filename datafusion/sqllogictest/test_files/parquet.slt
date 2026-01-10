@@ -21,6 +21,10 @@
 statement ok
 set datafusion.execution.target_partitions = 2;
 
+# disable the listing cache so DataFusion picks up changes from COPY statements
+statement ok
+set datafusion.runtime.list_files_cache_limit = "0K";
+
 # Create a table as a data source
 statement ok
 CREATE TABLE src_table (

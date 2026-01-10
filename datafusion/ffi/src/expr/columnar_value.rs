@@ -25,7 +25,6 @@ use crate::arrow_wrappers::WrappedArray;
 /// Scalar values are passed as an Arrow array of length 1.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub enum FFI_ColumnarValue {
     Array(WrappedArray),
     Scalar(WrappedArray),

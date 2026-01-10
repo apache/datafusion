@@ -153,6 +153,7 @@ where
     S: StringArrayType<'a>,
 {
     let mut total_capacity = 0;
+    let mut max_item_capacity = 0;
     string_array.iter().zip(number_array.iter()).try_for_each(
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
@@ -166,6 +167,7 @@ where
                         );
                     }
                     total_capacity += item_capacity;
+                    max_item_capacity = max_item_capacity.max(item_capacity);
                 }
                 _ => (),
             }
@@ -176,18 +178,37 @@ where
     let mut builder =
         GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
 
-    string_array.iter().zip(number_array.iter()).try_for_each(
-        |(string, number)| -> Result<(), DataFusionError> {
+    // Reusable buffer to avoid allocations in string.repeat()
+    let mut buffer = Vec::<u8>::with_capacity(max_item_capacity);
+
+    string_array
+        .iter()
+        .zip(number_array.iter())
+        .for_each(|(string, number)| {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    builder.append_value(string.repeat(number as usize));
+                    buffer.clear();
+                    let count = number as usize;
+                    if count > 0 && !string.is_empty() {
+                        let src = string.as_bytes();
+                        // Initial copy
+                        buffer.extend_from_slice(src);
+                        // Doubling strategy: copy what we have so far until we reach the target
+                        while buffer.len() < src.len() * count {
+                            let copy_len =
+                                buffer.len().min(src.len() * count - buffer.len());
+                            // SAFETY: we're copying valid UTF-8 bytes that we already verified
+                            buffer.extend_from_within(..copy_len);
+                        }
+                    }
+                    // SAFETY: buffer contains valid UTF-8 since we only ever copy from a valid &str
+                    builder
+                        .append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
                 }
                 (Some(_), Some(_)) => builder.append_value(""),
                 _ => builder.append_null(),
             }
-            Ok(())
-        },
-    )?;
+        });
     let array = builder.finish();
 
     Ok(Arc::new(array) as ArrayRef)

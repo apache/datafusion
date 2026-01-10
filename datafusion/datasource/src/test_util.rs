@@ -17,7 +17,6 @@
 
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
-    schema_adapter::SchemaAdapterFactory,
 };
 
 use std::sync::Arc;
@@ -32,7 +31,6 @@ use object_store::ObjectStore;
 #[derive(Clone)]
 pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
     filter: Option<Arc<dyn PhysicalExpr>>,
     table_schema: crate::table_schema::TableSchema,
     projection: crate::projection::SplitProjection,
@@ -44,7 +42,6 @@ impl Default for MockSource {
             crate::table_schema::TableSchema::new(Arc::new(Schema::empty()), vec![]);
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
             filter: None,
             projection: crate::projection::SplitProjection::unprojected(&table_schema),
             table_schema,
@@ -57,7 +54,6 @@ impl MockSource {
         let table_schema = table_schema.into();
         Self {
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
             filter: None,
             projection: crate::projection::SplitProjection::unprojected(&table_schema),
             table_schema,
@@ -98,20 +94,6 @@ impl FileSource for MockSource {
 
     fn file_type(&self) -> &str {
         "mock"
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 
     fn table_schema(&self) -> &crate::table_schema::TableSchema {

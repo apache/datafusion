@@ -35,10 +35,10 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r#"
-                Aggregate: groupBy=[[]], aggr=[[sum(c0) AS summation]]
-                  EmptyRelation: rows=0
-                "#
+            @r"
+        Aggregate: groupBy=[[]], aggr=[[sum(c0) AS summation]]
+          EmptyRelation: rows=0
+        "
         );
 
         // Trigger execution to ensure plan validity
@@ -57,10 +57,10 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r#"
-                Aggregate: groupBy=[[c0]], aggr=[[sum(c0) AS summation]]
-                  EmptyRelation: rows=0
-                "#
+            @r"
+        Aggregate: groupBy=[[c0]], aggr=[[sum(c0) AS summation]]
+          EmptyRelation: rows=0
+        "
         );
 
         // Trigger execution to ensure plan validity

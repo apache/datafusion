@@ -100,8 +100,9 @@ pub trait OptimizerRule: Debug {
 /// Options to control the DataFusion Optimizer.
 pub trait OptimizerConfig {
     /// Return the time at which the query execution started. This
-    /// time is used as the value for now()
-    fn query_execution_start_time(&self) -> DateTime<Utc>;
+    /// time is used as the value for `now()`. If `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>>;
 
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
@@ -118,8 +119,9 @@ pub trait OptimizerConfig {
 #[derive(Debug)]
 pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
-    /// expressions such as `now()` to use a literal value instead
-    query_execution_start_time: DateTime<Utc>,
+    /// expressions such as `now()` to use a literal value instead.
+    /// If `None`, time-dependent functions will not be simplified.
+    query_execution_start_time: Option<DateTime<Utc>>,
 
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
@@ -139,7 +141,7 @@ impl OptimizerContext {
     /// Create a optimizer config with provided [ConfigOptions].
     pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
-            query_execution_start_time: Utc::now(),
+            query_execution_start_time: Some(Utc::now()),
             alias_generator: Arc::new(AliasGenerator::new()),
             options,
         }
@@ -153,13 +155,19 @@ impl OptimizerContext {
         self
     }
 
-    /// Specify whether the optimizer should skip rules that produce
-    /// errors, or fail the query
+    /// Set the query execution start time
     pub fn with_query_execution_start_time(
         mut self,
-        query_execution_tart_time: DateTime<Utc>,
+        query_execution_start_time: DateTime<Utc>,
     ) -> Self {
-        self.query_execution_start_time = query_execution_tart_time;
+        self.query_execution_start_time = Some(query_execution_start_time);
+        self
+    }
+
+    /// Clear the query execution start time. When `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    pub fn without_query_execution_start_time(mut self) -> Self {
+        self.query_execution_start_time = None;
         self
     }
 
@@ -185,7 +193,7 @@ impl Default for OptimizerContext {
 }
 
 impl OptimizerConfig for OptimizerContext {
-    fn query_execution_start_time(&self) -> DateTime<Utc> {
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
         self.query_execution_start_time
     }
 

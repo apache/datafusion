@@ -19,6 +19,7 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
@@ -370,6 +371,33 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
+        if self.ignore_nulls {
+            match self.state.kind {
+                // Prune on first non-null output in case of FIRST_VALUE
+                NthValueKind::First => {
+                    if let Some(nulls) = out.nulls() {
+                        if self.state.finalized_result.is_none() {
+                            if let Some(valid_index) = nulls.valid_indices().next() {
+                                let result =
+                                    ScalarValue::try_from_array(out, valid_index)?;
+                                self.state.finalized_result = Some(result);
+                            } else {
+                                // The output is empty or all nulls, ignore
+                            }
+                        }
+                        if state.window_frame_range.start < state.window_frame_range.end {
+                            state.window_frame_range.start =
+                                state.window_frame_range.end - 1;
+                        }
+                        return Ok(());
+                    } else {
+                        // Fall through to the main case because there are no nulls
+                    }
+                }
+                // Do not memoize for other kinds when nulls are ignored
+                NthValueKind::Last | NthValueKind::Nth => return Ok(()),
+            }
+        }
         let mut buffer_size = 1;
         // Decide if we arrived at a final result yet:
         let (is_prunable, is_reverse_direction) = match self.state.kind {
@@ -397,8 +425,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         };
-        // Do not memoize results when nulls are ignored.
-        if is_prunable && !self.ignore_nulls {
+        if is_prunable {
             if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
@@ -424,88 +451,9 @@ impl PartitionEvaluator for NthValueEvaluator {
                 // We produce None if the window is empty.
                 return ScalarValue::try_from(arr.data_type());
             }
-
-            // If null values exist and need to be ignored, extract the valid indices.
-            let valid_indices = if self.ignore_nulls {
-                // Calculate valid indices, inside the window frame boundaries.
-                let slice = arr.slice(range.start, n_range);
-                match slice.nulls() {
-                    Some(nulls) => {
-                        let valid_indices = nulls
-                            .valid_indices()
-                            .map(|idx| {
-                                // Add offset `range.start` to valid indices, to point correct index in the original arr.
-                                idx + range.start
-                            })
-                            .collect::<Vec<_>>();
-                        if valid_indices.is_empty() {
-                            // If all values are null, return directly.
-                            return ScalarValue::try_from(arr.data_type());
-                        }
-                        Some(valid_indices)
-                    }
-                    None => None,
-                }
-            } else {
-                None
-            };
-            match self.state.kind {
-                NthValueKind::First => {
-                    if let Some(valid_indices) = &valid_indices {
-                        ScalarValue::try_from_array(arr, valid_indices[0])
-                    } else {
-                        ScalarValue::try_from_array(arr, range.start)
-                    }
-                }
-                NthValueKind::Last => {
-                    if let Some(valid_indices) = &valid_indices {
-                        ScalarValue::try_from_array(
-                            arr,
-                            valid_indices[valid_indices.len() - 1],
-                        )
-                    } else {
-                        ScalarValue::try_from_array(arr, range.end - 1)
-                    }
-                }
-                NthValueKind::Nth => {
-                    match self.n.cmp(&0) {
-                        Ordering::Greater => {
-                            // SQL indices are not 0-based.
-                            let index = (self.n as usize) - 1;
-                            if index >= n_range {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
-                            } else if let Some(valid_indices) = valid_indices {
-                                if index >= valid_indices.len() {
-                                    return ScalarValue::try_from(arr.data_type());
-                                }
-                                ScalarValue::try_from_array(&arr, valid_indices[index])
-                            } else {
-                                ScalarValue::try_from_array(arr, range.start + index)
-                            }
-                        }
-                        Ordering::Less => {
-                            let reverse_index = (-self.n) as usize;
-                            if n_range < reverse_index {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
-                            } else if let Some(valid_indices) = valid_indices {
-                                if reverse_index > valid_indices.len() {
-                                    return ScalarValue::try_from(arr.data_type());
-                                }
-                                let new_index =
-                                    valid_indices[valid_indices.len() - reverse_index];
-                                ScalarValue::try_from_array(&arr, new_index)
-                            } else {
-                                ScalarValue::try_from_array(
-                                    arr,
-                                    range.start + n_range - reverse_index,
-                                )
-                            }
-                        }
-                        Ordering::Equal => ScalarValue::try_from(arr.data_type()),
-                    }
-                }
+            match self.valid_index(arr, range) {
+                Some(index) => ScalarValue::try_from_array(arr, index),
+                None => ScalarValue::try_from(arr.data_type()),
             }
         }
     }
@@ -516,6 +464,76 @@ impl PartitionEvaluator for NthValueEvaluator {
 
     fn uses_window_frame(&self) -> bool {
         true
+    }
+}
+
+impl NthValueEvaluator {
+    fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
+        let n_range = range.end - range.start;
+        if self.ignore_nulls {
+            // Calculate valid indices, inside the window frame boundaries.
+            let slice = array.slice(range.start, n_range);
+            if let Some(nulls) = slice.nulls()
+                && nulls.null_count() > 0
+            {
+                return self.valid_index_with_nulls(nulls, range.start);
+            }
+        }
+        // Either no nulls, or nulls are regarded as valid rows
+        match self.state.kind {
+            NthValueKind::First => Some(range.start),
+            NthValueKind::Last => Some(range.end - 1),
+            NthValueKind::Nth => match self.n.cmp(&0) {
+                Ordering::Greater => {
+                    // SQL indices are not 0-based.
+                    let index = (self.n as usize) - 1;
+                    if index >= n_range {
+                        // Outside the range, return NULL:
+                        None
+                    } else {
+                        Some(range.start + index)
+                    }
+                }
+                Ordering::Less => {
+                    let reverse_index = (-self.n) as usize;
+                    if n_range < reverse_index {
+                        // Outside the range, return NULL:
+                        None
+                    } else {
+                        Some(range.end - reverse_index)
+                    }
+                }
+                Ordering::Equal => None,
+            },
+        }
+    }
+
+    fn valid_index_with_nulls(&self, nulls: &NullBuffer, offset: usize) -> Option<usize> {
+        match self.state.kind {
+            NthValueKind::First => nulls.valid_indices().next().map(|idx| idx + offset),
+            NthValueKind::Last => nulls.valid_indices().last().map(|idx| idx + offset),
+            NthValueKind::Nth => {
+                match self.n.cmp(&0) {
+                    Ordering::Greater => {
+                        // SQL indices are not 0-based.
+                        let index = (self.n as usize) - 1;
+                        nulls.valid_indices().nth(index).map(|idx| idx + offset)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = (-self.n) as usize;
+                        let valid_indices_len = nulls.len() - nulls.null_count();
+                        if reverse_index > valid_indices_len {
+                            return None;
+                        }
+                        nulls
+                            .valid_indices()
+                            .nth(valid_indices_len - reverse_index)
+                            .map(|idx| idx + offset)
+                    }
+                    Ordering::Equal => None,
+                }
+            }
+        }
     }
 }
 

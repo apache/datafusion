@@ -139,6 +139,28 @@ impl Display for Partitioning {
         }
     }
 }
+
+/// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartitioningSatisfaction {
+    /// The partitioning does not satisfy the distribution requirement
+    NotSatisfied,
+    /// The partitioning exactly matches the distribution requirement
+    Exact,
+    /// The partitioning satisfies the distribution requirement via subset logic
+    Subset,
+}
+
+impl PartitioningSatisfaction {
+    pub fn is_satisfied(&self) -> bool {
+        matches!(self, Self::Exact | Self::Subset)
+    }
+
+    pub fn is_subset(&self) -> bool {
+        matches!(self, Self::Subset)
+    }
+}
+
 impl Partitioning {
     /// Returns the number of partitions in this partitioning scheme
     pub fn partition_count(&self) -> usize {
@@ -148,51 +170,104 @@ impl Partitioning {
         }
     }
 
-    /// Returns true when the guarantees made by this [`Partitioning`] are sufficient to
-    /// satisfy the partitioning scheme mandated by the `required` [`Distribution`].
+    /// Returns true if `subset_exprs` is a subset of `exprs`.
+    /// For example: Hash(a, b) is subset of Hash(a) since a partition with all occurrences of
+    /// a distinct (a) must also contain all occurrences of a distinct (a, b) with the same (a).
+    fn is_subset_partitioning(
+        subset_exprs: &[Arc<dyn PhysicalExpr>],
+        superset_exprs: &[Arc<dyn PhysicalExpr>],
+    ) -> bool {
+        // Require strict subset: fewer expressions, not equal
+        if subset_exprs.is_empty() || subset_exprs.len() >= superset_exprs.len() {
+            return false;
+        }
+
+        subset_exprs.iter().all(|subset_expr| {
+            superset_exprs
+                .iter()
+                .any(|superset_expr| subset_expr.eq(superset_expr))
+        })
+    }
+
+    #[deprecated(since = "52.0.0", note = "Use satisfaction instead")]
     pub fn satisfy(
         &self,
         required: &Distribution,
         eq_properties: &EquivalenceProperties,
     ) -> bool {
+        self.satisfaction(required, eq_properties, false)
+            == PartitioningSatisfaction::Exact
+    }
+
+    /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
+    /// by the `required` [`Distribution`].
+    pub fn satisfaction(
+        &self,
+        required: &Distribution,
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> PartitioningSatisfaction {
         match required {
-            Distribution::UnspecifiedDistribution => true,
-            Distribution::SinglePartition if self.partition_count() == 1 => true,
-            // When partition count is 1, hash requirement is satisfied.
-            Distribution::HashPartitioned(_) if self.partition_count() == 1 => true,
-            Distribution::HashPartitioned(required_exprs) => {
-                match self {
-                    // Here we do not check the partition count for hash partitioning and assumes the partition count
-                    // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
-                    // then we need to have the partition count and hash functions validation.
-                    Partitioning::Hash(partition_exprs, _) => {
-                        let fast_match =
-                            physical_exprs_equal(required_exprs, partition_exprs);
-                        // If the required exprs do not match, need to leverage the eq_properties provided by the child
-                        // and normalize both exprs based on the equivalent groups.
-                        if !fast_match {
-                            let eq_groups = eq_properties.eq_group();
-                            if !eq_groups.is_empty() {
-                                let normalized_required_exprs = required_exprs
-                                    .iter()
-                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                                    .collect::<Vec<_>>();
-                                let normalized_partition_exprs = partition_exprs
-                                    .iter()
-                                    .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
-                                    .collect::<Vec<_>>();
-                                return physical_exprs_equal(
-                                    &normalized_required_exprs,
-                                    &normalized_partition_exprs,
-                                );
-                            }
-                        }
-                        fast_match
-                    }
-                    _ => false,
-                }
+            Distribution::UnspecifiedDistribution => PartitioningSatisfaction::Exact,
+            Distribution::SinglePartition if self.partition_count() == 1 => {
+                PartitioningSatisfaction::Exact
             }
-            _ => false,
+            // When partition count is 1, hash requirement is satisfied.
+            Distribution::HashPartitioned(_) if self.partition_count() == 1 => {
+                PartitioningSatisfaction::Exact
+            }
+            Distribution::HashPartitioned(required_exprs) => match self {
+                // Here we do not check the partition count for hash partitioning and assumes the partition count
+                // and hash functions in the system are the same. In future if we plan to support storage partition-wise joins,
+                // then we need to have the partition count and hash functions validation.
+                Partitioning::Hash(partition_exprs, _) => {
+                    // Empty hash partitioning is invalid
+                    if partition_exprs.is_empty() || required_exprs.is_empty() {
+                        return PartitioningSatisfaction::NotSatisfied;
+                    }
+
+                    // Fast path: exact match
+                    if physical_exprs_equal(required_exprs, partition_exprs) {
+                        return PartitioningSatisfaction::Exact;
+                    }
+
+                    // Normalization path using equivalence groups
+                    let eq_groups = eq_properties.eq_group();
+                    if !eq_groups.is_empty() {
+                        let normalized_required_exprs = required_exprs
+                            .iter()
+                            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                            .collect::<Vec<_>>();
+                        let normalized_partition_exprs = partition_exprs
+                            .iter()
+                            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
+                            .collect::<Vec<_>>();
+                        if physical_exprs_equal(
+                            &normalized_required_exprs,
+                            &normalized_partition_exprs,
+                        ) {
+                            return PartitioningSatisfaction::Exact;
+                        }
+
+                        if allow_subset
+                            && Self::is_subset_partitioning(
+                                &normalized_partition_exprs,
+                                &normalized_required_exprs,
+                            )
+                        {
+                            return PartitioningSatisfaction::Subset;
+                        }
+                    } else if allow_subset
+                        && Self::is_subset_partitioning(partition_exprs, required_exprs)
+                    {
+                        return PartitioningSatisfaction::Subset;
+                    }
+
+                    PartitioningSatisfaction::NotSatisfied
+                }
+                _ => PartitioningSatisfaction::NotSatisfied,
+            },
+            _ => PartitioningSatisfaction::NotSatisfied,
         }
     }
 
@@ -317,11 +392,21 @@ mod tests {
 
         for distribution in distribution_types {
             let result = (
-                single_partition.satisfy(&distribution, &eq_properties),
-                unspecified_partition.satisfy(&distribution, &eq_properties),
-                round_robin_partition.satisfy(&distribution, &eq_properties),
-                hash_partition1.satisfy(&distribution, &eq_properties),
-                hash_partition2.satisfy(&distribution, &eq_properties),
+                single_partition
+                    .satisfaction(&distribution, &eq_properties, true)
+                    .is_satisfied(),
+                unspecified_partition
+                    .satisfaction(&distribution, &eq_properties, true)
+                    .is_satisfied(),
+                round_robin_partition
+                    .satisfaction(&distribution, &eq_properties, true)
+                    .is_satisfied(),
+                hash_partition1
+                    .satisfaction(&distribution, &eq_properties, true)
+                    .is_satisfied(),
+                hash_partition2
+                    .satisfaction(&distribution, &eq_properties, true)
+                    .is_satisfied(),
             );
 
             match distribution {
@@ -335,6 +420,427 @@ mod tests {
                     assert_eq!(result, (true, false, false, true, false))
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_satisfy_by_subset() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let col_c: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("c", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([a]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a, b]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([b]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([b, a]) vs Hash([a, b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::Subset,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_current_superset() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let col_c: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("c", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([a, b]) vs Hash([a])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a, b, c]) vs Hash([a])",
+                Partitioning::Hash(
+                    vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)],
+                    4,
+                ),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a, b, c]) vs Hash([a, b])",
+                Partitioning::Hash(
+                    vec![Arc::clone(&col_a), Arc::clone(&col_b), Arc::clone(&col_c)],
+                    4,
+                ),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_partial_overlap() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let col_c: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("c", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![(
+            "Partial overlap: Hash([a, c]) vs Hash([a, b])",
+            Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_c)], 4),
+            Distribution::HashPartitioned(vec![Arc::clone(&col_a), Arc::clone(&col_b)]),
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        )];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_no_overlap() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let col_c: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("c", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([a]) vs Hash([b, c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_b),
+                    Arc::clone(&col_c),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a, b]) vs Hash([c])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_c)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_exact_match() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([a, b]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+            (
+                "Hash([a]) vs Hash([a])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                PartitioningSatisfaction::Exact,
+                PartitioningSatisfaction::Exact,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_unknown() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let col_b: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("b", &schema)?);
+        let unknown: Arc<dyn PhysicalExpr> = Arc::new(UnKnownColumn::new("dropped"));
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([unknown]) vs Hash([a, b])",
+                Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
+                Distribution::HashPartitioned(vec![
+                    Arc::clone(&col_a),
+                    Arc::clone(&col_b),
+                ]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a, b]) vs Hash([unknown])",
+                Partitioning::Hash(vec![Arc::clone(&col_a), Arc::clone(&col_b)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([unknown]) vs Hash([unknown])",
+                Partitioning::Hash(vec![Arc::clone(&unknown)], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&unknown)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_partitioning_empty_hash() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+        let col_a: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new_with_schema("a", &schema)?);
+        let eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let test_cases = vec![
+            (
+                "Hash([]) vs Hash([a])",
+                Partitioning::Hash(vec![], 4),
+                Distribution::HashPartitioned(vec![Arc::clone(&col_a)]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([a]) vs Hash([])",
+                Partitioning::Hash(vec![Arc::clone(&col_a)], 4),
+                Distribution::HashPartitioned(vec![]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+            (
+                "Hash([]) vs Hash([])",
+                Partitioning::Hash(vec![], 4),
+                Distribution::HashPartitioned(vec![]),
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            ),
+        ];
+
+        for (desc, partition, required, expected_with_subset, expected_without_subset) in
+            test_cases
+        {
+            let result = partition.satisfaction(&required, &eq_properties, true);
+            assert_eq!(
+                result, expected_with_subset,
+                "Failed for {desc} with subset enabled"
+            );
+
+            let result = partition.satisfaction(&required, &eq_properties, false);
+            assert_eq!(
+                result, expected_without_subset,
+                "Failed for {desc} with subset disabled"
+            );
         }
 
         Ok(())

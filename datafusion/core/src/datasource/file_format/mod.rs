@@ -73,17 +73,7 @@ pub(crate) mod test_util {
             .infer_stats(state, &store, file_schema.clone(), &meta)
             .await?;
 
-        let file_groups = vec![
-            vec![PartitionedFile {
-                object_meta: meta,
-                partition_values: vec![],
-                range: None,
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            }]
-            .into(),
-        ];
+        let file_groups = vec![vec![PartitionedFile::new_from_meta(meta)].into()];
 
         let exec = format
             .create_physical_plan(

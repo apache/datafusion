@@ -34,7 +34,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results_count),
-        @r###"
+        @r"
     +----------------+-----+
     | dict_null_keys | cnt |
     +----------------+-----+
@@ -42,7 +42,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     | group_a        | 2   |
     | group_b        | 1   |
     +----------------+-----+
-    "###
+    "
     );
 
     // Test SUM null handling with extended data
@@ -69,7 +69,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results_min),
-        @r###"
+        @r"
     +----------------+---------+
     | dict_null_keys | minimum |
     +----------------+---------+
@@ -78,7 +78,7 @@ async fn test_aggregates_null_handling_comprehensive() -> Result<()> {
     | group_b        | 1       |
     | group_c        | 7       |
     +----------------+---------+
-    "###
+    "
     );
 
     // Test MEDIAN null handling with median data
@@ -168,7 +168,7 @@ async fn test_first_last_value_order_by_null_handling() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
+        @r"
     +------------+-------+--------------------+---------------------+-------------------+--------------------+
     | dict_group | value | first_ignore_nulls | first_respect_nulls | last_ignore_nulls | last_respect_nulls |
     +------------+-------+--------------------+---------------------+-------------------+--------------------+
@@ -178,7 +178,7 @@ async fn test_first_last_value_order_by_null_handling() -> Result<()> {
     | group_a    |       | 5                  |                     | 20                |                    |
     | group_b    |       | 5                  |                     | 20                |                    |
     +------------+-------+--------------------+---------------------+-------------------+--------------------+
-    "###
+    "
     );
 
     Ok(())
@@ -249,7 +249,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
+        @r"
     +----------------+-----------+----------+-----+
     | dict_null_keys | first_val | last_val | cnt |
     +----------------+-----------+----------+-----+
@@ -257,7 +257,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
     | group_a        | 10        | 50       | 2   |
     | group_b        | 30        | 30       | 1   |
     +----------------+-----------+----------+-----+
-    "###
+    "
     );
 
     // Test GROUP BY with null values in dictionary
@@ -275,7 +275,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results2),
-        @r###"
+        @r"
     +----------------+-----------+----------+-----+
     | dict_null_vals | first_val | last_val | cnt |
     +----------------+-----------+----------+-----+
@@ -283,7 +283,7 @@ async fn test_first_last_value_group_by_dict_nulls() -> Result<()> {
     | val_x          | 10        | 50       | 2   |
     | val_y          | 30        | 30       | 1   |
     +----------------+-----------+----------+-----+
-    "###
+    "
     );
 
     Ok(())
@@ -394,7 +394,7 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&results),
-        @r###"
+        @r"
     +--------+----------+---------------------+------+------+
     | u8_low | utf8_low | dictionary_utf8_low | col1 | col2 |
     +--------+----------+---------------------+------+------+
@@ -405,7 +405,7 @@ async fn test_count_distinct_with_fuzz_table_dict_nulls() -> Result<()> {
     | 20     | text_e   |                     | 0    | 1    |
     | 25     | text_f   | group_gamma         | 1    | 1    |
     +--------+----------+---------------------+------+------+
-    "###
+    "
     );
 
     Ok(())

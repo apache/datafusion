@@ -119,20 +119,14 @@ pub async fn from_substrait_rel(
                         .unwrap();
                         let size = 0;
 
-                        let partitioned_file = PartitionedFile {
-                            object_meta: ObjectMeta {
+                        let partitioned_file =
+                            PartitionedFile::new_from_meta(ObjectMeta {
                                 last_modified: last_modified.into(),
                                 location: path.into(),
                                 size,
                                 e_tag: None,
                                 version: None,
-                            },
-                            partition_values: vec![],
-                            range: None,
-                            statistics: None,
-                            extensions: None,
-                            metadata_size_hint: None,
-                        };
+                            });
 
                         let part_index = file.partition_index as usize;
                         while part_index >= file_groups.len() {

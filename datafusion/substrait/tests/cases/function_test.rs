@@ -35,10 +35,10 @@ mod tests {
         assert_snapshot!(
         plan,
         @r#"
-            Projection: nation.n_name
-              Filter: contains(nation.n_name, Utf8("IA"))
-                TableScan: nation
-            "#
+        Projection: nation.n_name
+          Filter: contains(nation.n_name, Utf8("IA"))
+            TableScan: nation
+        "#
                 );
         Ok(())
     }

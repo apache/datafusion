@@ -237,21 +237,21 @@ NULL 1
 
 # Regression test: first_value should preserve metadata
 query IT
-select first_value(id order by id asc nulls last), get_metadata(first_value(id order by id asc nulls last), 'metadata_key')
+select first_value(id order by id asc nulls last), arrow_metadata(first_value(id order by id asc nulls last), 'metadata_key')
 from table_with_metadata;
 ----
 1 the id field
 
 # Regression test: last_value should preserve metadata
 query IT
-select last_value(id order by id asc nulls first), get_metadata(last_value(id order by id asc nulls first), 'metadata_key')
+select last_value(id order by id asc nulls first), arrow_metadata(last_value(id order by id asc nulls first), 'metadata_key')
 from table_with_metadata;
 ----
 3 the id field
 
 # Regression test: DISTINCT ON should preserve metadata (uses first_value internally)
 query ITTT
-select distinct on (id) id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select distinct on (id) id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from table_with_metadata order by id asc nulls last;
 ----
 1 the id field NULL the name field
@@ -263,7 +263,7 @@ query ITTT
 with res AS (
   select distinct id, name from table_with_metadata
 )
-select id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from res
 order by id asc nulls last;
 ----
@@ -278,13 +278,19 @@ with res AS (
   from table_with_metadata
   group by id, name
 )
-select id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from res
 order by id asc nulls last, name asc nulls last
 ----
 1 the id field NULL the name field
 3 the id field baz the name field
 NULL the id field bar the name field
+
+# Test arrow_metadata with single argument (returns Map)
+query ?
+select arrow_metadata(id) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
 
 statement ok
 drop table table_with_metadata;

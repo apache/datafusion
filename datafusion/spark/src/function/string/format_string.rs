@@ -23,7 +23,7 @@ use core::num::FpCategory;
 
 use arrow::{
     array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray},
-    datatypes::DataType,
+    datatypes::{DataType, Field, FieldRef},
 };
 use bigdecimal::{
     BigDecimal, ToPrimitive,
@@ -34,8 +34,8 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
 };
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 
 /// Spark-compatible `format_string` expression
@@ -78,14 +78,23 @@ impl ScalarUDFImpl for FormatStringFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Null => Ok(DataType::Utf8),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion_common::internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        match args.arg_fields[0].data_type() {
+            DataType::Null => {
+                Ok(Arc::new(Field::new("format_string", DataType::Utf8, true)))
             }
-            _ => plan_err!(
-                "The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View"
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(Arc::clone(&args.arg_fields[0]))
+            }
+            _ => exec_err!(
+                "format_string expects the first argument to be Utf8, LargeUtf8 or Utf8View, got {} instead",
+                args.arg_fields[0].data_type()
             ),
         }
     }
@@ -2346,4 +2355,40 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
         }
     }
     number
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType::Utf8;
+    use datafusion_common::Result;
+
+    #[test]
+    fn test_format_string_nullability() -> Result<()> {
+        let func = FormatStringFunc::new();
+        let nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, true));
+
+        let out_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[nullable_format],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            out_nullable.is_nullable(),
+            "format_string(fmt, ...) should be nullable when fmt is nullable"
+        );
+        let non_nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, false));
+
+        let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[non_nullable_format],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            !out_non_nullable.is_nullable(),
+            "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
+        );
+
+        Ok(())
+    }
 }

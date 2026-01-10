@@ -63,7 +63,8 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let mut table_path = ListingTableUrl::parse(&cmd.location)?;
+        let mut table_path =
+            ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
         let file_extension = match table_path.is_collection() {
             // Setting the extension to be empty instead of allowing the default extension seems
             // odd, but was done to ensure existing behavior isn't modified. It seems like this
@@ -160,7 +161,9 @@ impl TableProviderFactory for ListingTableFactory {
                         }
                         None => format!("*.{}", cmd.file_type.to_lowercase()),
                     };
-                    table_path = table_path.with_glob(glob.as_ref())?;
+                    table_path = table_path
+                        .with_glob(glob.as_ref())?
+                        .with_table_ref(cmd.name.clone());
                 }
                 let schema = options.infer_schema(session_state, &table_path).await?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;

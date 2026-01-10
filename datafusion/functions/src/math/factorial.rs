@@ -15,18 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{
-    array::{ArrayRef, Int64Array},
-    error::ArrowError,
-};
+use arrow::array::{ArrayRef, AsArray, Int64Array};
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::{DataType, Int64Type};
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{Result, arrow_datafusion_err, exec_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -92,26 +89,45 @@ impl ScalarUDFImpl for FactorialFunc {
     }
 }
 
+const FACTORIALS: [i64; 21] = [
+    1,
+    1,
+    2,
+    6,
+    24,
+    120,
+    720,
+    5040,
+    40320,
+    362880,
+    3628800,
+    39916800,
+    479001600,
+    6227020800,
+    87178291200,
+    1307674368000,
+    20922789888000,
+    355687428096000,
+    6402373705728000,
+    121645100408832000,
+    2432902008176640000,
+]; // if return type changes, this constant needs to be updated accordingly
+
 /// Factorial SQL function
 fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Int64 => {
-            let arg = downcast_named_arg!((&args[0]), "value", Int64Array);
-            Ok(arg
-                .iter()
-                .map(|a| match a {
-                    Some(a) => (2..=a)
-                        .try_fold(1i64, i64::checked_mul)
-                        .ok_or_else(|| {
-                            arrow_datafusion_err!(ArrowError::ComputeError(format!(
-                                "Overflow happened on FACTORIAL({a})"
-                            )))
-                        })
-                        .map(Some),
-                    _ => Ok(None),
-                })
-                .collect::<Result<Int64Array>>()
-                .map(Arc::new)? as ArrayRef)
+            let result: Int64Array =
+                args[0].as_primitive::<Int64Type>().try_unary(|a| {
+                    if a < 0 {
+                        Ok(1)
+                    } else if a < FACTORIALS.len() as i64 {
+                        Ok(FACTORIALS[a as usize])
+                    } else {
+                        exec_err!("Overflow happened on FACTORIAL({a})")
+                    }
+                })?;
+            Ok(Arc::new(result) as ArrayRef)
         }
         other => exec_err!("Unsupported data type {other:?} for function factorial."),
     }
@@ -119,23 +135,31 @@ fn factorial(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod test {
-
-    use datafusion_common::cast::as_int64_array;
-
     use super::*;
+    use datafusion_common::cast::as_int64_array;
 
     #[test]
     fn test_factorial_i64() {
         let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 1, 2, 4])), // input
+            Arc::new(Int64Array::from(vec![0, 1, 2, 4, 20, -1])), // input
         ];
 
         let result = factorial(&args).expect("failed to initialize function factorial");
         let ints =
             as_int64_array(&result).expect("failed to initialize function factorial");
 
-        let expected = Int64Array::from(vec![1, 1, 2, 24]);
+        let expected = Int64Array::from(vec![1, 1, 2, 24, 2432902008176640000, 1]);
 
         assert_eq!(ints, &expected);
+    }
+
+    #[test]
+    fn test_overflow() {
+        let args: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![21])), // input
+        ];
+
+        let result = factorial(&args);
+        assert!(result.is_err());
     }
 }

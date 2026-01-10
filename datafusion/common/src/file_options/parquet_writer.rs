@@ -33,7 +33,7 @@ use parquet::{
         metadata::KeyValue,
         properties::{
             DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties,
-            WriterPropertiesBuilder, WriterVersion,
+            WriterPropertiesBuilder,
         },
     },
     schema::types::ColumnPath,
@@ -214,7 +214,7 @@ impl ParquetOptions {
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
-            .set_writer_version(parse_version_string(writer_version.as_str())?)
+            .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
                 statistics_enabled
@@ -373,18 +373,6 @@ pub fn parse_compression_string(
     }
 }
 
-pub(crate) fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
-        "1.0" => Ok(WriterVersion::PARQUET_1_0),
-        "2.0" => Ok(WriterVersion::PARQUET_2_0),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet writer version {str_setting} \
-            valid options are 1.0 and 2.0"
-        ))),
-    }
-}
-
 pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
     let str_setting_lower: &str = &str_setting.to_lowercase();
     match str_setting_lower {
@@ -405,6 +393,7 @@ mod tests {
     #[cfg(feature = "parquet_encryption")]
     use crate::config::ConfigFileEncryptionProperties;
     use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::parquet_config::DFParquetWriterVersion;
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -431,16 +420,17 @@ mod tests {
 
     fn parquet_options_with_non_defaults() -> ParquetOptions {
         let defaults = ParquetOptions::default();
-        let writer_version = if defaults.writer_version.eq("1.0") {
-            "2.0"
+        let writer_version = if defaults.writer_version.eq(&DFParquetWriterVersion::V1_0)
+        {
+            DFParquetWriterVersion::V2_0
         } else {
-            "1.0"
+            DFParquetWriterVersion::V1_0
         };
 
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
-            writer_version: writer_version.into(),
+            writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 42,
@@ -548,7 +538,7 @@ mod tests {
                 // global options
                 data_pagesize_limit: props.dictionary_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
-                writer_version: format!("{}.0", props.writer_version().as_num()),
+                writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
                 max_row_group_size: props.max_row_group_size(),
                 created_by: props.created_by().to_string(),

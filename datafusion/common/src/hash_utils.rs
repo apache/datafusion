@@ -162,7 +162,7 @@ macro_rules! hash_value {
         })+
     };
 }
-hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
+hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128);
 hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
@@ -266,6 +266,127 @@ fn hash_array<T>(
                 *hash = value.hash_one(random_state);
             }
         }
+    }
+}
+
+/// Hash a StringView or BytesView array
+///
+/// Templated to optimize inner loop based on presence of nulls and external buffers.
+///
+/// HAS_NULLS: do we have to check null in the inner loop
+/// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
+/// REHASH: if true, combining with existing hash, otherwise initializing
+#[inline(never)]
+fn hash_string_view_array_inner<
+    T: ByteViewType,
+    const HAS_NULLS: bool,
+    const HAS_BUFFERS: bool,
+    const REHASH: bool,
+>(
+    array: &GenericByteViewArray<T>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let buffers = array.data_buffers();
+    let view_bytes = |view_len: u32, view: u128| {
+        let view = ByteView::from(view);
+        let offset = view.offset as usize;
+        // SAFETY: view is a valid view as it came from the array
+        unsafe {
+            let data = buffers.get_unchecked(view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        }
+    };
+
+    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
+    for (i, (hash, &v)) in hashes_and_views.enumerate() {
+        if HAS_NULLS && array.is_null(i) {
+            continue;
+        }
+        let view_len = v as u32;
+        // all views are inlined, no need to access external buffers
+        if !HAS_BUFFERS || view_len <= 12 {
+            if REHASH {
+                *hash = combine_hashes(v.hash_one(random_state), *hash);
+            } else {
+                *hash = v.hash_one(random_state);
+            }
+            continue;
+        }
+        // view is not inlined, so we need to hash the bytes as well
+        let value = view_bytes(view_len, v);
+        if REHASH {
+            *hash = combine_hashes(value.hash_one(random_state), *hash);
+        } else {
+            *hash = value.hash_one(random_state);
+        }
+    }
+}
+
+/// Builds hash values for array views and writes them into `hashes_buffer`
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_generic_byte_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    // instantiate the correct version based on presence of nulls and external buffers
+    match (
+        array.null_count() != 0,
+        !array.data_buffers().is_empty(),
+        rehash,
+    ) {
+        // no nulls or buffers ==> hash the inlined views directly
+        // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
+        (false, false, false) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = view.hash_one(random_state);
+            }
+        }
+        (false, false, true) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = combine_hashes(view.hash_one(random_state), *hash);
+            }
+        }
+        (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_string_view_array_inner::<T, false, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_string_view_array_inner::<T, true, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_string_view_array_inner::<T, true, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_string_view_array_inner::<T, true, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_string_view_array_inner::<T, true, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
     }
 }
 
@@ -568,10 +689,10 @@ fn hash_single_array(
         DataType::Null => hash_null(random_state, hashes_buffer, rehash),
         DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
         DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::Utf8View => hash_array(&as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8View => hash_generic_byte_view_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
         DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
         DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
-        DataType::BinaryView => hash_array(&as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::BinaryView => hash_generic_byte_view_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
         DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
         DataType::FixedSizeBinary(_) => {
             let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
@@ -767,17 +888,12 @@ mod tests {
 
                 let binary_array: ArrayRef =
                     Arc::new(binary.iter().cloned().collect::<$ARRAY>());
-                let ref_array: ArrayRef =
-                    Arc::new(binary.iter().cloned().collect::<BinaryArray>());
 
                 let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
                 let mut binary_hashes = vec![0; binary.len()];
                 create_hashes(&[binary_array], &random_state, &mut binary_hashes)
                     .unwrap();
-
-                let mut ref_hashes = vec![0; binary.len()];
-                create_hashes(&[ref_array], &random_state, &mut ref_hashes).unwrap();
 
                 // Null values result in a zero hash,
                 for (val, hash) in binary.iter().zip(binary_hashes.iter()) {
@@ -786,9 +902,6 @@ mod tests {
                         None => assert_eq!(*hash, 0),
                     }
                 }
-
-                // same logical values should hash to the same hash value
-                assert_eq!(binary_hashes, ref_hashes);
 
                 // Same values should map to same hash values
                 assert_eq!(binary[0], binary[5]);
@@ -801,6 +914,7 @@ mod tests {
     }
 
     create_hash_binary!(binary_array, BinaryArray);
+    create_hash_binary!(large_binary_array, LargeBinaryArray);
     create_hash_binary!(binary_view_array, BinaryViewArray);
 
     #[test]

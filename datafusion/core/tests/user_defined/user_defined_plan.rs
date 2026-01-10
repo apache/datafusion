@@ -161,7 +161,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
         insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +-------------+---------+
             | customer_id | revenue |
             +-------------+---------+
@@ -169,7 +169,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
             | jorge       | 200     |
             | andy        | 150     |
             +-------------+---------+
-        "###);
+            ");
         });
     }
 
@@ -188,13 +188,13 @@ async fn run_and_compare_query_with_analyzer_rule(
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(actual, @r###"
+        insta::assert_snapshot!(actual, @r"
         +------------+--------------------------+
         | UInt64(42) | arrow_typeof(UInt64(42)) |
         +------------+--------------------------+
         | 42         | UInt64                   |
         +------------+--------------------------+
-        "###);
+        ");
     });
 
     Ok(())
@@ -212,7 +212,7 @@ async fn run_and_compare_query_with_auto_schemas(
     insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +----------+----------+
             | column_1 | column_2 |
             +----------+----------+
@@ -220,7 +220,7 @@ async fn run_and_compare_query_with_auto_schemas(
             | jorge    | 200      |
             | andy     | 150      |
             +----------+----------+
-        "###);
+            ");
     });
 
     Ok(())

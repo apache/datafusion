@@ -191,7 +191,11 @@ async fn row_count_demuxer(
         part_idx += 1;
     }
 
+    let schema = input.schema();
+    let mut is_batch_received = false;
+
     while let Some(rb) = input.next().await.transpose()? {
+        is_batch_received = true;
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
             open_file_streams.push(create_new_file_stream(
@@ -228,6 +232,19 @@ async fn row_count_demuxer(
 
         next_send_steam = (next_send_steam + 1) % minimum_parallel_files;
     }
+
+    // if there is no batch send but with a single file, send an empty batch
+    if single_file_output && !is_batch_received {
+        open_file_streams
+            .first_mut()
+            .ok_or_else(|| internal_datafusion_err!("Expected a single output file"))?
+            .send(RecordBatch::new_empty(schema))
+            .await
+            .map_err(|_| {
+                exec_datafusion_err!("Error sending empty RecordBatch to file stream!")
+            })?;
+    }
+
     Ok(())
 }
 

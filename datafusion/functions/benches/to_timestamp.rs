@@ -114,16 +114,21 @@ fn criterion_benchmark(c: &mut Criterion) {
         Field::new("f", DataType::Timestamp(TimeUnit::Nanosecond, None), true).into();
     let arg_field = Field::new("a", DataType::Utf8, false).into();
     let arg_fields = vec![arg_field];
-    let config_options = Arc::new(ConfigOptions::default());
+    let mut options = ConfigOptions::default();
+    options.execution.time_zone = Some("UTC".into());
+    let config_options = Arc::new(options);
+
+    let to_timestamp_udf = to_timestamp(config_options.as_ref());
 
     c.bench_function("to_timestamp_no_formats_utf8", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let arr_data = data();
         let batch_len = arr_data.len();
         let string_array = ColumnarValue::Array(Arc::new(arr_data) as ArrayRef);
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
                         arg_fields: arg_fields.clone(),
@@ -137,13 +142,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_timestamp_no_formats_largeutf8", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let data = cast(&data(), &DataType::LargeUtf8).unwrap();
         let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
                         arg_fields: arg_fields.clone(),
@@ -157,13 +163,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_timestamp_no_formats_utf8view", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let data = cast(&data(), &DataType::Utf8View).unwrap();
         let batch_len = data.len();
         let string_array = ColumnarValue::Array(Arc::new(data) as ArrayRef);
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: vec![string_array.clone()],
                         arg_fields: arg_fields.clone(),
@@ -177,6 +184,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_timestamp_with_formats_utf8", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let (inputs, format1, format2, format3) = data_with_formats();
         let batch_len = inputs.len();
 
@@ -196,7 +204,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
@@ -210,6 +218,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_timestamp_with_formats_largeutf8", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let (inputs, format1, format2, format3) = data_with_formats();
         let batch_len = inputs.len();
 
@@ -237,7 +246,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
@@ -251,6 +260,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_timestamp_with_formats_utf8view", |b| {
+        let to_timestamp_udf = Arc::clone(&to_timestamp_udf);
         let (inputs, format1, format2, format3) = data_with_formats();
 
         let batch_len = inputs.len();
@@ -279,7 +289,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                to_timestamp()
+                to_timestamp_udf
                     .invoke_with_args(ScalarFunctionArgs {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),

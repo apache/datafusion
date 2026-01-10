@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -56,6 +57,10 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`LimitedBatchCoalescer`] for more information
+#[deprecated(
+    since = "52.0.0",
+    note = "We now use BatchCoalescer from arrow-rs instead of a dedicated operator"
+)]
 #[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
@@ -69,6 +74,7 @@ pub struct CoalesceBatchesExec {
     cache: PlanProperties,
 }
 
+#[expect(deprecated)]
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
@@ -111,6 +117,7 @@ impl CoalesceBatchesExec {
     }
 }
 
+#[expect(deprecated)]
 impl DisplayAs for CoalesceBatchesExec {
     fn fmt_as(
         &self,
@@ -141,6 +148,7 @@ impl DisplayAs for CoalesceBatchesExec {
     }
 }
 
+#[expect(deprecated)]
 impl ExecutionPlan for CoalesceBatchesExec {
     fn name(&self) -> &'static str {
         "CoalesceBatchesExec"
@@ -224,6 +232,18 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
+            None => Ok(None),
+        }
     }
 
     fn gather_filters_for_pushdown(

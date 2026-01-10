@@ -69,10 +69,10 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r#"
-                Projection: DATA.a, DATA.b
-                  TableScan: DATA
-                "#
+            @r"
+            Projection: DATA.a, DATA.b
+              TableScan: DATA
+            "
                         );
             Ok(())
         }
@@ -92,10 +92,10 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r#"
-                Projection: DATA.a, DATA.b
-                  TableScan: DATA projection=[a, b]
-                "#
+            @r"
+            Projection: DATA.a, DATA.b
+              TableScan: DATA projection=[a, b]
+            "
                         );
             Ok(())
         }
@@ -117,10 +117,10 @@ mod tests {
 
             assert_snapshot!(
             plan,
-            @r#"
-                Projection: DATA.a, DATA.b
-                  TableScan: DATA projection=[a, b]
-                "#
+            @r"
+            Projection: DATA.a, DATA.b
+              TableScan: DATA projection=[a, b]
+            "
                         );
             Ok(())
         }

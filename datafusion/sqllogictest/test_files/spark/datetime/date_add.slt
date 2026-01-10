@@ -45,11 +45,15 @@ SELECT date_sub('2016-07-30'::date, 0::int);
 ----
 2016-07-30
 
-query error DataFusion error: Arrow error: Arithmetic overflow: date_add
-SELECT date_add('2016-07-30'::date, 2147483647::int);
+query I
+SELECT date_add('2016-07-30'::date, 2147483647::int)::int;
+----
+-2147466637
 
-query error DataFusion error: Arrow error: Arithmetic overflow: date_sub
-SELECT date_sub('1969-01-01'::date, 2147483647::int);
+query I
+SELECT date_sub('1969-01-01'::date, 2147483647::int)::int;
+----
+2147483284
 
 query D
 SELECT date_add('2016-07-30'::date, 100000::int);

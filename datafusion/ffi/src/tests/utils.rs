@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::tests::ForeignLibraryModuleRef;
-use abi_stable::library::RootModule;
-use datafusion::error::{DataFusionError, Result};
 use std::path::Path;
+
+use abi_stable::library::RootModule;
+use datafusion_common::{DataFusionError, Result};
+
+use crate::tests::ForeignLibraryModuleRef;
 
 /// Compute the path to the library. It would be preferable to simply use
 /// abi_stable::library::development_utils::compute_library_path however

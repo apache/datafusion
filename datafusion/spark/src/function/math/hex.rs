@@ -37,8 +37,6 @@ use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
 };
-use std::fmt::Write;
-
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#hex>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkHex {
@@ -116,19 +114,22 @@ fn hex_int64(num: i64) -> String {
     format!("{num:X}")
 }
 
-#[inline(always)]
+/// Hex encoding lookup tables for fast byte-to-hex conversion
+const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
+const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+#[inline]
 fn hex_encode<T: AsRef<[u8]>>(data: T, lower_case: bool) -> String {
-    let mut s = String::with_capacity(data.as_ref().len() * 2);
-    if lower_case {
-        for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02x}").unwrap();
-        }
+    let bytes = data.as_ref();
+    let mut s = String::with_capacity(bytes.len() * 2);
+    let hex_chars = if lower_case {
+        HEX_CHARS_LOWER
     } else {
-        for b in data.as_ref() {
-            // Writing to a string never errors, so we can unwrap here.
-            write!(&mut s, "{b:02X}").unwrap();
-        }
+        HEX_CHARS_UPPER
+    };
+    for &b in bytes {
+        s.push(hex_chars[(b >> 4) as usize] as char);
+        s.push(hex_chars[(b & 0x0f) as usize] as char);
     }
     s
 }

@@ -20,13 +20,12 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -55,11 +54,8 @@ impl TopKAggregation {
         }
         let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
         let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        if !kt.is_primitive()
-            && kt != DataType::Utf8
-            && kt != DataType::Utf8View
-            && kt != DataType::LargeUtf8
-        {
+        let vt = field.data_type();
+        if !topk_types_supported(&kt, vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
@@ -72,16 +68,7 @@ impl TopKAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
-            *aggr.mode(),
-            aggr.group_expr().clone(),
-            aggr.aggr_expr().to_vec(),
-            aggr.filter_expr().to_vec(),
-            Arc::clone(aggr.input()),
-            aggr.input_schema(),
-        )
-        .expect("Unable to copy Aggregate!")
-        .with_limit(Some(limit));
+        let new_aggr = aggr.with_new_limit(Some(limit));
         Some(Arc::new(new_aggr))
     }
 

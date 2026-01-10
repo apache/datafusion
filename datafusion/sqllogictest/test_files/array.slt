@@ -504,6 +504,17 @@ FROM array_intersect_table_1D_UTF8
 ;
 
 statement ok
+CREATE TABLE array_intersect_table_1D_NULL
+AS VALUES
+  ([1, 2, 2, 3], [2, 3, 4]),
+  ([2, 3, 3], [3]),
+  ([3], [3, 3, 4]),
+  (null, [3, 4]),
+  ([1, 2], null),
+  (null, null)
+;
+
+statement ok
 CREATE TABLE array_intersect_table_2D
 AS VALUES
   (make_array([1,2]), make_array([1,3]), make_array([1,2,3], [4,5], [6,7]), make_array([4,5], [6,7])),
@@ -4816,6 +4827,16 @@ select array_union(arrow_cast(['hello'], 'LargeList(Utf8)'), arrow_cast(['hello'
 ----
 [hello, datafusion]
 
+query ?
+select array_union(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[1, 2, 3, 4]
+[2, 3]
+[3, 4]
+NULL
+NULL
+NULL
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
 query TTT
@@ -6764,6 +6785,17 @@ from large_array_intersect_table_1D_UTF8;
 ----
 [bc] [arrow, rust] []
 [] [arrow, datafusion, rust] [arrow, rust]
+
+query ?
+select array_intersect(column1, column2)
+from array_intersect_table_1D_NULL;
+----
+[2, 3]
+[3]
+[3]
+NULL
+NULL
+NULL
 
 query ??
 select array_intersect(column1, column2),

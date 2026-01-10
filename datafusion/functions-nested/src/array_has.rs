@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArrayHas {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+        _info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [haystack, needle] = take_function_args(self.name(), &mut args)?;
 
@@ -684,8 +684,8 @@ mod tests {
         utils::SingleRowListArrayBuilder,
     };
     use datafusion_expr::{
-        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col,
-        execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
+        simplify::ExprSimplifyResult,
     };
 
     use crate::expr_fn::make_array;
@@ -701,8 +701,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -725,8 +724,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -749,8 +747,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -767,8 +764,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -783,8 +779,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

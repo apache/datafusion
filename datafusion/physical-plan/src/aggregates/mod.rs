@@ -31,7 +31,6 @@ use crate::filter_pushdown::{
     FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::windows::get_ordered_partition_by_indices;
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
     SendableRecordBatchStream, Statistics,
@@ -42,7 +41,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -65,6 +64,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use topk::hash_table::is_supported_hash_key_type;
+use topk::heap::is_supported_heap_type;
 
 pub mod group_values;
 mod no_grouping;
@@ -72,6 +73,17 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Returns true if TopK aggregation data structures support the provided key and value types.
+///
+/// This function checks whether both the key type (used for grouping) and value type
+/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
+/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
+/// ```text
+pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
+}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -554,6 +566,26 @@ impl AggregateExec {
         }
     }
 
+    /// Clone this exec, overriding only the limit hint.
+    pub fn with_new_limit(&self, limit: Option<usize>) -> Self {
+        Self {
+            limit,
+            // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        }
+    }
+
     pub fn cache(&self) -> &PlanProperties {
         &self.cache
     }
@@ -613,12 +645,13 @@ impl AggregateExec {
         // If existing ordering satisfies a prefix of the GROUP BY expressions,
         // prefix requirements with this section. In this case, aggregation will
         // work more efficiently.
-        let indices = get_ordered_partition_by_indices(&groupby_exprs, &input)?;
-        let mut new_requirements = indices
-            .iter()
-            .map(|&idx| {
-                PhysicalSortRequirement::new(Arc::clone(&groupby_exprs[idx]), None)
-            })
+        // Copy the `PhysicalSortExpr`s to retain the sort options.
+        let (new_sort_exprs, indices) =
+            input_eq_properties.find_longest_permutation(&groupby_exprs)?;
+
+        let mut new_requirements = new_sort_exprs
+            .into_iter()
+            .map(PhysicalSortRequirement::from)
             .collect::<Vec<_>>();
 
         let req = get_finer_aggregate_exprs_requirement(
@@ -1803,7 +1836,6 @@ mod tests {
 
     use super::*;
     use crate::RecordBatchStream;
-    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
@@ -1815,7 +1847,7 @@ mod tests {
     use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
 
     use arrow::array::{
-        DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
+        DictionaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StructArray,
         UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
@@ -1837,6 +1869,8 @@ mod tests {
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::expressions::lit;
 
+    use crate::projection::ProjectionExec;
+    use datafusion_physical_expr::projection::ProjectionExpr;
     use futures::{FutureExt, Stream};
     use insta::{allow_duplicates, assert_snapshot};
 
@@ -2002,30 +2036,30 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 1               |
-|   | 1.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 2.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 3.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-|   | 4.0 | 2             | 1               |
-| 2 |     | 1             | 1               |
-| 2 |     | 1             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 2 | 1.0 | 0             | 1               |
-| 3 |     | 1             | 1               |
-| 3 |     | 1             | 2               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 1               |
-| 4 |     | 1             | 2               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 1               |
+            |   | 1.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 2.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 3.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            |   | 4.0 | 2             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 |     | 1             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 2 | 1.0 | 0             | 1               |
+            | 3 |     | 1             | 1               |
+            | 3 |     | 1             | 2               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 1               |
+            | 4 |     | 1             | 2               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2033,22 +2067,22 @@ mod tests {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result),
             @r"
-+---+-----+---------------+-----------------+
-| a | b   | __grouping_id | COUNT(1)[count] |
-+---+-----+---------------+-----------------+
-|   | 1.0 | 2             | 2               |
-|   | 2.0 | 2             | 2               |
-|   | 3.0 | 2             | 2               |
-|   | 4.0 | 2             | 2               |
-| 2 |     | 1             | 2               |
-| 2 | 1.0 | 0             | 2               |
-| 3 |     | 1             | 3               |
-| 3 | 2.0 | 0             | 2               |
-| 3 | 3.0 | 0             | 1               |
-| 4 |     | 1             | 3               |
-| 4 | 3.0 | 0             | 1               |
-| 4 | 4.0 | 0             | 2               |
-+---+-----+---------------+-----------------+
+            +---+-----+---------------+-----------------+
+            | a | b   | __grouping_id | COUNT(1)[count] |
+            +---+-----+---------------+-----------------+
+            |   | 1.0 | 2             | 2               |
+            |   | 2.0 | 2             | 2               |
+            |   | 3.0 | 2             | 2               |
+            |   | 4.0 | 2             | 2               |
+            | 2 |     | 1             | 2               |
+            | 2 | 1.0 | 0             | 2               |
+            | 3 |     | 1             | 3               |
+            | 3 | 2.0 | 0             | 2               |
+            | 3 | 3.0 | 0             | 1               |
+            | 4 |     | 1             | 3               |
+            | 4 | 3.0 | 0             | 1               |
+            | 4 | 4.0 | 0             | 2               |
+            +---+-----+---------------+-----------------+
             "
             );
             }
@@ -2082,23 +2116,23 @@ mod tests {
         assert_snapshot!(
             batches_to_sort_string(&result),
             @r"
-            +---+-----+---------------+----------+
-            | a | b   | __grouping_id | COUNT(1) |
-            +---+-----+---------------+----------+
-            |   | 1.0 | 2             | 2        |
-            |   | 2.0 | 2             | 2        |
-            |   | 3.0 | 2             | 2        |
-            |   | 4.0 | 2             | 2        |
-            | 2 |     | 1             | 2        |
-            | 2 | 1.0 | 0             | 2        |
-            | 3 |     | 1             | 3        |
-            | 3 | 2.0 | 0             | 2        |
-            | 3 | 3.0 | 0             | 1        |
-            | 4 |     | 1             | 3        |
-            | 4 | 3.0 | 0             | 1        |
-            | 4 | 4.0 | 0             | 2        |
-            +---+-----+---------------+----------+
-            "
+        +---+-----+---------------+----------+
+        | a | b   | __grouping_id | COUNT(1) |
+        +---+-----+---------------+----------+
+        |   | 1.0 | 2             | 2        |
+        |   | 2.0 | 2             | 2        |
+        |   | 3.0 | 2             | 2        |
+        |   | 4.0 | 2             | 2        |
+        | 2 |     | 1             | 2        |
+        | 2 | 1.0 | 0             | 2        |
+        | 3 |     | 1             | 3        |
+        | 3 | 2.0 | 0             | 2        |
+        | 3 | 3.0 | 0             | 1        |
+        | 4 |     | 1             | 3        |
+        | 4 | 3.0 | 0             | 1        |
+        | 4 | 4.0 | 0             | 2        |
+        +---+-----+---------------+----------+
+        "
         );
         }
 
@@ -2149,27 +2183,27 @@ mod tests {
         if spill {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 1             | 1.0         |
-                | 2 | 1             | 1.0         |
-                | 3 | 1             | 2.0         |
-                | 3 | 2             | 5.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 1             | 1.0         |
+            | 2 | 1             | 1.0         |
+            | 3 | 1             | 2.0         |
+            | 3 | 2             | 5.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&result), @r"
-                +---+---------------+-------------+
-                | a | AVG(b)[count] | AVG(b)[sum] |
-                +---+---------------+-------------+
-                | 2 | 2             | 2.0         |
-                | 3 | 3             | 7.0         |
-                | 4 | 3             | 11.0        |
-                +---+---------------+-------------+
+            +---+---------------+-------------+
+            | a | AVG(b)[count] | AVG(b)[sum] |
+            +---+---------------+-------------+
+            | 2 | 2             | 2.0         |
+            | 3 | 3             | 7.0         |
+            | 4 | 3             | 11.0        |
+            +---+---------------+-------------+
             ");
             }
         };
@@ -2204,14 +2238,14 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&result), @r"
-            +---+--------------------+
-            | a | AVG(b)             |
-            +---+--------------------+
-            | 2 | 1.0                |
-            | 3 | 2.3333333333333335 |
-            | 4 | 3.6666666666666665 |
-            +---+--------------------+
-            ");
+        +---+--------------------+
+        | a | AVG(b)             |
+        +---+--------------------+
+        | 2 | 1.0                |
+        | 3 | 2.3333333333333335 |
+        | 4 | 3.6666666666666665 |
+        +---+--------------------+
+        ");
             // For row 2: 3, (2 + 3 + 2) / 3
             // For row 3: 4, (3 + 4 + 4) / 3
         }
@@ -2484,7 +2518,7 @@ mod tests {
         ] {
             let n_aggr = aggregates.len();
             let partial_aggregate = Arc::new(AggregateExec::try_new(
-                AggregateMode::Partial,
+                AggregateMode::Single,
                 groups,
                 aggregates,
                 vec![None; n_aggr],
@@ -2599,17 +2633,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_first_last_multi_partitions() -> Result<()> {
-        for use_coalesce_batches in [false, true] {
-            for is_first_acc in [false, true] {
-                for spill in [false, true] {
-                    first_last_multi_partitions(
-                        use_coalesce_batches,
-                        is_first_acc,
-                        spill,
-                        4200,
-                    )
-                    .await?
-                }
+        for is_first_acc in [false, true] {
+            for spill in [false, true] {
+                first_last_multi_partitions(is_first_acc, spill, 4200).await?
             }
         }
         Ok(())
@@ -2652,15 +2678,7 @@ mod tests {
             .map(Arc::new)
     }
 
-    // This function either constructs the physical plan below,
-    //
-    // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
-    // "  CoalesceBatchesExec: target_batch_size=1024",
-    // "    CoalescePartitionsExec",
-    // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
-    // "        DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
-    //
-    // or
+    // This function constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
@@ -2670,7 +2688,6 @@ mod tests {
     // and checks whether the function `merge_batch` works correctly for
     // FIRST_VALUE and LAST_VALUE functions.
     async fn first_last_multi_partitions(
-        use_coalesce_batches: bool,
         is_first_acc: bool,
         spill: bool,
         max_memory: usize,
@@ -2718,13 +2735,8 @@ mod tests {
             memory_exec,
             Arc::clone(&schema),
         )?);
-        let coalesce = if use_coalesce_batches {
-            let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
-            Arc::new(CoalesceBatchesExec::new(coalesce, 1024)) as Arc<dyn ExecutionPlan>
-        } else {
-            Arc::new(CoalescePartitionsExec::new(aggregate_exec))
-                as Arc<dyn ExecutionPlan>
-        };
+        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec))
+            as Arc<dyn ExecutionPlan>;
         let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,
@@ -2738,26 +2750,26 @@ mod tests {
         if is_first_acc {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------------------------------------------+
-                | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+--------------------------------------------+
-                | 2 | 0.0                                        |
-                | 3 | 1.0                                        |
-                | 4 | 3.0                                        |
-                +---+--------------------------------------------+
-                ");
+            +---+--------------------------------------------+
+            | a | first_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+--------------------------------------------+
+            | 2 | 0.0                                        |
+            | 3 | 1.0                                        |
+            | 4 | 3.0                                        |
+            +---+--------------------------------------------+
+            ");
             }
         } else {
             allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+-------------------------------------------+
-                | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
-                +---+-------------------------------------------+
-                | 2 | 3.0                                       |
-                | 3 | 5.0                                       |
-                | 4 | 6.0                                       |
-                +---+-------------------------------------------+
-                ");
+            +---+-------------------------------------------+
+            | a | last_value(b) ORDER BY [b ASC NULLS LAST] |
+            +---+-------------------------------------------+
+            | 2 | 3.0                                       |
+            | 3 | 5.0                                       |
+            | 4 | 6.0                                       |
+            +---+-------------------------------------------+
+            ");
             }
         };
         Ok(())
@@ -2946,13 +2958,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_sort_string(&output), @r"
-            +-----+-----+-------+---------------+-------+
-            | a   | b   | const | __grouping_id | 1     |
-            +-----+-----+-------+---------------+-------+
-            |     |     | 1     | 6             | 32768 |
-            |     | 0.0 |       | 5             | 32768 |
-            | 0.0 |     |       | 3             | 32768 |
-            +-----+-----+-------+---------------+-------+
+        +-----+-----+-------+---------------+-------+
+        | a   | b   | const | __grouping_id | 1     |
+        +-----+-----+-------+---------------+-------+
+        |     |     | 1     | 6             | 32768 |
+        |     | 0.0 |       | 5             | 32768 |
+        | 0.0 |     |       | 3             | 32768 |
+        +-----+-----+-------+---------------+-------+
         ");
         }
 
@@ -3061,13 +3073,13 @@ mod tests {
 
         allow_duplicates! {
         assert_snapshot!(batches_to_string(&output), @r"
-            +--------------+------------+
-            | labels       | SUM(value) |
-            +--------------+------------+
-            | {a: a, b: b} | 2          |
-            | {a: , b: c}  | 1          |
-            +--------------+------------+
-            ");
+        +--------------+------------+
+        | labels       | SUM(value) |
+        +--------------+------------+
+        | {a: a, b: b} | 2          |
+        | {a: , b: c}  | 1          |
+        +--------------+------------+
+        ");
         }
 
         Ok(())
@@ -3369,13 +3381,13 @@ mod tests {
 
         allow_duplicates! {
             assert_snapshot!(batches_to_string(&result), @r"
-                +---+--------+--------+
-                | a | MIN(b) | AVG(b) |
-                +---+--------+--------+
-                | 2 | 1.0    | 1.0    |
-                | 3 | 2.0    | 2.0    |
-                | 4 | 3.0    | 3.5    |
-                +---+--------+--------+
+            +---+--------+--------+
+            | a | MIN(b) | AVG(b) |
+            +---+--------+--------+
+            | 2 | 1.0    | 1.0    |
+            | 3 | 2.0    | 2.0    |
+            | 4 | 3.0    | 3.5    |
+            +---+--------+--------+
             ");
         }
 
@@ -3417,6 +3429,117 @@ mod tests {
         run_test_with_spill_pool_if_necessary(2_000, true).await?;
         // test without spill
         run_test_with_spill_pool_if_necessary(20_000, false).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_grouped_aggregation_respects_memory_limit() -> Result<()> {
+        // test with spill
+        fn create_record_batch(
+            schema: &Arc<Schema>,
+            data: (Vec<u32>, Vec<f64>),
+        ) -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(UInt32Array::from(data.0)),
+                    Arc::new(Float64Array::from(data.1)),
+                ],
+            )?)
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let batches = vec![
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+        ];
+        let plan: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let proj = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr::new(lit("0"), "l".to_string()),
+                ProjectionExpr::new_from_expression(col("a", &schema)?, &schema)?,
+                ProjectionExpr::new_from_expression(col("b", &schema)?, &schema)?,
+            ],
+            plan,
+        )?;
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(proj);
+        let schema = plan.schema();
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![
+                (col("l", &schema)?, "l".to_string()),
+                (col("a", &schema)?, "a".to_string()),
+            ],
+            vec![],
+            vec![vec![false, false]],
+            false,
+        );
+
+        // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            Arc::new(
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::min_udaf(),
+                    vec![col("b", &schema)?],
+                )
+                .schema(Arc::clone(&schema))
+                .alias("MIN(b)")
+                .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            ),
+        ];
+
+        let single_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set,
+            aggregates,
+            vec![None, None],
+            plan,
+            Arc::clone(&schema),
+        )?);
+
+        let batch_size = 2;
+        let memory_pool = Arc::new(FairSpillPool::new(2000));
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_runtime(Arc::new(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build()?,
+                )),
+        );
+
+        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await;
+        match result {
+            Ok(result) => {
+                assert_spill_count_metric(true, single_aggregate);
+
+                allow_duplicates! {
+                    assert_snapshot!(batches_to_string(&result), @r"
+                +---+---+--------+--------+
+                | l | a | MIN(b) | AVG(b) |
+                +---+---+--------+--------+
+                | 0 | 2 | 1.0    | 1.0    |
+                | 0 | 3 | 2.0    | 2.0    |
+                | 0 | 4 | 3.0    | 3.5    |
+                +---+---+--------+--------+
+            ");
+                }
+            }
+            Err(e) => assert!(matches!(e, DataFusionError::ResourcesExhausted(_))),
+        }
+
         Ok(())
     }
 
@@ -3490,6 +3613,89 @@ mod tests {
         let stats_zero = agg_zero.partition_statistics(None)?;
         assert_eq!(stats_zero.total_byte_size, Precision::Absent);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_order_is_retained_when_spilling() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("c", DataType::Int64, false),
+        ]));
+
+        let batches = vec![vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Int64Array::from(vec![2])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Int64Array::from(vec![1])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![0])),
+                    Arc::new(Int64Array::from(vec![0])),
+                    Arc::new(Int64Array::from(vec![1])),
+                ],
+            )?,
+        ]];
+        let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
+        let scan = scan.try_with_sort_information(vec![
+            LexOrdering::new([PhysicalSortExpr::new(
+                col("b", schema.as_ref())?,
+                SortOptions::default().desc(),
+            )])
+            .unwrap(),
+        ])?;
+
+        let aggr = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new(
+                vec![
+                    (col("b", schema.as_ref())?, "b".to_string()),
+                    (col("c", schema.as_ref())?, "c".to_string()),
+                ],
+                vec![],
+                vec![vec![false, false]],
+                false,
+            ),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("c", schema.as_ref())?])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(c)")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(scan) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?);
+
+        let task_ctx = new_spill_ctx(1, 600);
+        let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
+        assert_spill_count_metric(true, aggr);
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&result), @r"
+            +---+---+--------+
+            | b | c | SUM(c) |
+            +---+---+--------+
+            | 2 | 1 | 1      |
+            | 1 | 1 | 1      |
+            | 0 | 1 | 1      |
+            +---+---+--------+
+        ");
+        }
         Ok(())
     }
 }

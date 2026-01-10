@@ -795,7 +795,7 @@ select
 39 Decimal128(2, 1)
 
 # factorial overflow
-query error DataFusion error: Arrow error: Compute error: Overflow happened on FACTORIAL\(350943270\)
+query error DataFusion error: Execution error: Overflow happened on FACTORIAL\(350943270\)
 select FACTORIAL(350943270);
 
 statement ok

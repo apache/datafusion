@@ -700,8 +700,10 @@ SELECT var(distinct c2) FROM aggregate_test_100
 ----
 2.5
 
-statement error DataFusion error: This feature is not implemented: VAR\(DISTINCT\) aggregations are not available
+query RR
 SELECT var(c2), var(distinct c2) FROM aggregate_test_100
+----
+1.886363636364 2.5
 
 # csv_query_distinct_variance_population
 query R
@@ -709,8 +711,10 @@ SELECT var_pop(distinct c2) FROM aggregate_test_100
 ----
 2
 
-statement error DataFusion error: This feature is not implemented: VAR_POP\(DISTINCT\) aggregations are not available
+query RR
 SELECT var_pop(c2), var_pop(distinct c2) FROM aggregate_test_100
+----
+1.8675 2
 
 # csv_query_variance_5
 query R
@@ -990,6 +994,62 @@ SELECT approx_median(col_f64_nan) FROM median_table
 ----
 NaN
 
+
+# median_i8_overflow_negative
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-85, 'Int8')), (arrow_cast(-56, 'Int8'))) AS t(v);
+----
+-70
+
+# median_i8_overflow_positive
+# Test overflow with positive values: 100 + 120 = 220 > 127 (max i8)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(100, 'Int8')), (arrow_cast(120, 'Int8'))) AS t(v);
+----
+110
+
+# median_u8_overflow
+# Test unsigned overflow: 200 + 250 = 450 > 255 (max u8)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(200, 'UInt8')), (arrow_cast(250, 'UInt8'))) AS t(v);
+----
+225
+
+# median_i8_no_overflow_normal_case
+# Normal case that doesn't overflow for comparison
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(4, 'Int8')), (arrow_cast(5, 'Int8'))) AS t(v);
+----
+4
+
+# median_i8_max_values
+# Test with both i8::MAX values: 127 + 127 = 254 > 127, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(127, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+127
+
+# median_i8_min_values
+# Test with both i8::MIN values: -128 + -128 = -256 < -128, underflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(-128, 'Int8'))) AS t(v);
+----
+-128
+
+# median_i8_min_max_values
+# Test with i8::MIN and i8::MAX: -128 + 127 = -1, no overflow, median = 0 (truncated from -0.5)
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(-128, 'Int8')), (arrow_cast(127, 'Int8'))) AS t(v);
+----
+0
+
+# median_u8_max_values
+# Test with both u8::MAX values: 255 + 255 = 510 > 255, overflow
+query I
+SELECT median(v) FROM (VALUES (arrow_cast(255, 'UInt8')), (arrow_cast(255, 'UInt8'))) AS t(v);
+----
+255
+
 # median_sliding_window
 statement ok
 CREATE TABLE median_window_test (
@@ -1069,6 +1129,102 @@ ORDER BY tags, timestamp;
 3 tag2 80 70 80 90
 4 tag2 90 75 80 95
 5 tag2 100 80 80 100
+
+###########
+# Issue #19612: Test that percentile_cont produces correct results
+# in window frame queries. Previously percentile_cont consumed its internal state
+# during evaluate(), causing incorrect results when called multiple times.
+###########
+
+# Test percentile_cont sliding window (same as median)
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+    ) AS value_percentile_50
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 15
+2 tag1 20 20
+3 tag1 30 30
+4 tag1 40 40
+5 tag1 50 45
+1 tag2 60 65
+2 tag2 70 70
+3 tag2 80 80
+4 tag2 90 90
+5 tag2 100 95
+
+# Test percentile_cont non-sliding window
+query ITRRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS value_percentile_unbounded_preceding,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS value_percentile_unbounded_both,
+    percentile_cont(value, 0.5) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    ) AS value_percentile_unbounded_following
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 30 30
+2 tag1 20 15 30 35
+3 tag1 30 20 30 40
+4 tag1 40 25 30 45
+5 tag1 50 30 30 50
+1 tag2 60 60 80 80
+2 tag2 70 65 80 85
+3 tag2 80 70 80 90
+4 tag2 90 75 80 95
+5 tag2 100 80 80 100
+
+# Test percentile_cont with different percentile values
+query ITRRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    percentile_cont(value, 0.25) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p25,
+    percentile_cont(value, 0.75) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS p75
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10 10
+2 tag1 20 12.5 17.5
+3 tag1 30 15 25
+4 tag1 40 17.5 32.5
+5 tag1 50 20 40
+1 tag2 60 60 60
+2 tag2 70 62.5 67.5
+3 tag2 80 65 75
+4 tag2 90 67.5 82.5
+5 tag2 100 70 90
 
 statement ok
 DROP TABLE median_window_test;
@@ -6193,14 +6349,12 @@ logical_plan
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
 01)CoalescePartitionsExec: fetch=5
-02)--AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-03)----RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
-04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
-06)----------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
+02)--AggregateExec: mode=SinglePartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+04)------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
 
 #
@@ -8187,3 +8341,49 @@ NULL NULL NULL NULL
 
 statement ok
 drop table distinct_avg;
+
+query R
+select percentile_cont(null, 0.5);
+----
+NULL
+
+# Test string_agg window frame behavior (fix for issue #19612)
+statement ok
+CREATE TABLE string_agg_window_test (
+    id INT,
+    grp VARCHAR,
+    val VARCHAR
+);
+
+statement ok
+INSERT INTO string_agg_window_test (id, grp, val) VALUES
+(1, 'A', 'a'),
+(2, 'A', 'b'),
+(3, 'A', 'c'),
+(1, 'B', 'x'),
+(2, 'B', 'y'),
+(3, 'B', 'z');
+
+# Test string_agg with ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+# The function should maintain state correctly across multiple evaluate() calls
+query ITT
+SELECT
+    id,
+    grp,
+    string_agg(val, ',') OVER (
+        PARTITION BY grp
+        ORDER BY id
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS cumulative_string
+FROM string_agg_window_test
+ORDER BY grp, id;
+----
+1 A a
+2 A a,b
+3 A a,b,c
+1 B x
+2 B x,y
+3 B x,y,z
+
+statement ok
+DROP TABLE string_agg_window_test;

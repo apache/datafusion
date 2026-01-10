@@ -83,13 +83,12 @@ use std::{
     any::Any,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
-    ops::{Add, Div, Mul, Sub},
     pin::Pin,
-    str::FromStr,
     sync::Arc,
     task::{Context, Poll},
 };
 
+use arrow::datatypes::{Float64Type, Int64Type};
 use arrow::{
     array::{ArrayRef, Int32Array, RecordBatch, StringArray, UInt32Array},
     compute,
@@ -102,6 +101,7 @@ use futures::{
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use tonic::async_trait;
 
+use datafusion::optimizer::simplify_expressions::simplify_literal::parse_literal;
 use datafusion::{
     execution::{
         RecordBatchStream, SendableRecordBatchStream, SessionState, SessionStateBuilder,
@@ -410,11 +410,12 @@ impl RelationPlanner for TableSamplePlanner {
                 "TABLESAMPLE requires a quantity (percentage, fraction, or row count)"
             );
         };
+        let quantity_value_expr = context.sql_to_expr(quantity.value, input.schema())?;
 
         match quantity.unit {
             // TABLESAMPLE (N ROWS) - exact row limit
             Some(TableSampleUnit::Rows) => {
-                let rows = parse_quantity::<i64>(&quantity.value)?;
+                let rows: i64 = parse_literal::<Int64Type>(&quantity_value_expr)?;
                 if rows < 0 {
                     return plan_err!("row count must be non-negative, got {}", rows);
                 }
@@ -426,7 +427,7 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
             Some(TableSampleUnit::Percent) => {
-                let percent = parse_quantity::<f64>(&quantity.value)?;
+                let percent: f64 = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
@@ -434,7 +435,7 @@ impl RelationPlanner for TableSamplePlanner {
 
             // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
             None => {
-                let value = parse_quantity::<f64>(&quantity.value)?;
+                let value = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 if value < 0.0 {
                     return plan_err!("sample value must be non-negative, got {}", value);
                 }
@@ -450,40 +451,6 @@ impl RelationPlanner for TableSamplePlanner {
                 Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
             }
         }
-    }
-}
-
-/// Parse a SQL expression as a numeric value (supports basic arithmetic).
-fn parse_quantity<T>(expr: &ast::Expr) -> Result<T>
-where
-    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
-{
-    eval_numeric_expr(expr)
-        .ok_or_else(|| plan_datafusion_err!("invalid numeric expression: {:?}", expr))
-}
-
-/// Recursively evaluate numeric SQL expressions.
-fn eval_numeric_expr<T>(expr: &ast::Expr) -> Option<T>
-where
-    T: FromStr + Add<Output = T> + Sub<Output = T> + Mul<Output = T> + Div<Output = T>,
-{
-    match expr {
-        ast::Expr::Value(v) => match &v.value {
-            ast::Value::Number(n, _) => n.to_string().parse().ok(),
-            _ => None,
-        },
-        ast::Expr::BinaryOp { left, op, right } => {
-            let l = eval_numeric_expr::<T>(left)?;
-            let r = eval_numeric_expr::<T>(right)?;
-            match op {
-                ast::BinaryOperator::Plus => Some(l + r),
-                ast::BinaryOperator::Minus => Some(l - r),
-                ast::BinaryOperator::Multiply => Some(l * r),
-                ast::BinaryOperator::Divide => Some(l / r),
-                _ => None,
-            }
-        }
-        _ => None,
     }
 }
 

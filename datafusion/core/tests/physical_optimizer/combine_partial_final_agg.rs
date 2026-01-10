@@ -191,7 +191,7 @@ fn aggregations_combined() -> datafusion_common::Result<()> {
     // should combine the Partial/Final AggregateExecs to the Single AggregateExec
     assert_optimized!(
         plan,
-        @ "
+        @ r"
     AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]
       DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet
     "

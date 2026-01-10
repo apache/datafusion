@@ -22,6 +22,7 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates the process of converting logical plan
 /// into physical execution plans using DataFusion.
@@ -37,25 +38,23 @@ use datafusion::prelude::*;
 pub async fn planner_api() -> Result<()> {
     // Set up a DataFusion context and load a Parquet file
     let ctx = SessionContext::new();
-    let testdata = datafusion::test_util::parquet_test_data();
+
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
+
     let df = ctx
-        .read_parquet(
-            &format!("{testdata}/alltypes_plain.parquet"),
-            ParquetReadOptions::default(),
-        )
+        .read_parquet(parquet_temp.path_str()?, ParquetReadOptions::default())
         .await?;
 
     // Construct the input logical plan using DataFrame API
     let df = df
         .clone()
-        .select(vec![
-            df.parse_sql_expr("int_col")?,
-            df.parse_sql_expr("double_col")?,
-        ])?
-        .filter(df.parse_sql_expr("int_col < 5 OR double_col = 8.0")?)?
+        .select(vec![df.parse_sql_expr("car")?, df.parse_sql_expr("speed")?])?
+        .filter(df.parse_sql_expr("car = 'red' OR speed > 1.0")?)?
         .aggregate(
-            vec![df.parse_sql_expr("double_col")?],
-            vec![df.parse_sql_expr("SUM(int_col) as sum_int_col")?],
+            vec![df.parse_sql_expr("car")?],
+            vec![df.parse_sql_expr("SUM(speed) as sum_speed")?],
         )?
         .limit(0, Some(1))?;
     let logical_plan = df.logical_plan().clone();

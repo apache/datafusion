@@ -17,13 +17,18 @@
 
 //! Functions that are query-able and searchable via the `\h` command
 
+use datafusion_common::instant::Instant;
 use std::fmt;
 use std::fs::File;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow::array::{Int64Array, StringArray, TimestampMillisecondArray, UInt64Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::array::{
+    DurationMillisecondArray, GenericListArray, Int64Array, StringArray, StructArray,
+    TimestampMillisecondArray, UInt64Array,
+};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::catalog::{Session, TableFunctionImpl};
@@ -695,5 +700,181 @@ impl TableFunctionImpl for StatisticsCacheFunc {
 
         let statistics_cache = StatisticsCacheTable { schema, batch };
         Ok(Arc::new(statistics_cache))
+    }
+}
+
+// Implementation of the `list_files_cache` table function in datafusion-cli.
+///
+/// This function returns the cached results of running a LIST command on a particular object store path for a table. The object metadata is returned as a List of Structs, with one Struct for each object.
+/// DataFusion uses these cached results to plan queries against external tables.
+/// # Schema
+/// ```sql
+/// > describe select * from list_files_cache();
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | column_name         | data_type                                                                                                                                                                | is_nullable |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | table               | Utf8                                                                                                                                                                     | NO          |
+/// | path                | Utf8                                                                                                                                                                     | NO          |
+/// | metadata_size_bytes | UInt64                                                                                                                                                                   | NO          |
+/// | expires_in          | Duration(ms)                                                                                                                                                             | YES         |
+/// | metadata_list       | List(Struct("file_path": non-null Utf8, "file_modified": non-null Timestamp(ms), "file_size_bytes": non-null UInt64, "e_tag": Utf8, "version": Utf8), field: 'metadata') | YES         |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// ```
+#[derive(Debug)]
+struct ListFilesCacheTable {
+    schema: SchemaRef,
+    batch: RecordBatch,
+}
+
+#[async_trait]
+impl TableProvider for ListFilesCacheTable {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.schema.clone()
+    }
+
+    fn table_type(&self) -> datafusion::logical_expr::TableType {
+        datafusion::logical_expr::TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(MemorySourceConfig::try_new_exec(
+            &[vec![self.batch.clone()]],
+            TableProvider::schema(self),
+            projection.cloned(),
+        )?)
+    }
+}
+
+#[derive(Debug)]
+pub struct ListFilesCacheFunc {
+    cache_manager: Arc<CacheManager>,
+}
+
+impl ListFilesCacheFunc {
+    pub fn new(cache_manager: Arc<CacheManager>) -> Self {
+        Self { cache_manager }
+    }
+}
+
+impl TableFunctionImpl for ListFilesCacheFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        if !exprs.is_empty() {
+            return plan_err!("list_files_cache should have no arguments");
+        }
+
+        let nested_fields = Fields::from(vec![
+            Field::new("file_path", DataType::Utf8, false),
+            Field::new(
+                "file_modified",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new("file_size_bytes", DataType::UInt64, false),
+            Field::new("e_tag", DataType::Utf8, true),
+            Field::new("version", DataType::Utf8, true),
+        ]);
+
+        let metadata_field =
+            Field::new("metadata", DataType::Struct(nested_fields.clone()), true);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("table", DataType::Utf8, false),
+            Field::new("path", DataType::Utf8, false),
+            Field::new("metadata_size_bytes", DataType::UInt64, false),
+            // expires field in ListFilesEntry has type Instant when set, from which we cannot get "the number of seconds", hence using Duration instead of Timestamp as data type.
+            Field::new(
+                "expires_in",
+                DataType::Duration(TimeUnit::Millisecond),
+                true,
+            ),
+            Field::new(
+                "metadata_list",
+                DataType::List(Arc::new(metadata_field.clone())),
+                true,
+            ),
+        ]));
+
+        let mut table_arr = vec![];
+        let mut path_arr = vec![];
+        let mut metadata_size_bytes_arr = vec![];
+        let mut expires_arr = vec![];
+
+        let mut file_path_arr = vec![];
+        let mut file_modified_arr = vec![];
+        let mut file_size_bytes_arr = vec![];
+        let mut etag_arr = vec![];
+        let mut version_arr = vec![];
+        let mut offsets: Vec<i32> = vec![0];
+
+        if let Some(list_files_cache) = self.cache_manager.get_list_files_cache() {
+            let now = Instant::now();
+            let mut current_offset: i32 = 0;
+
+            for (path, entry) in list_files_cache.list_entries() {
+                table_arr.push(path.table.map_or("NULL".to_string(), |t| t.to_string()));
+                path_arr.push(path.path.to_string());
+                metadata_size_bytes_arr.push(entry.size_bytes as u64);
+                // calculates time left before entry expires
+                expires_arr.push(
+                    entry
+                        .expires
+                        .map(|t| t.duration_since(now).as_millis() as i64),
+                );
+
+                for meta in entry.metas.files.iter() {
+                    file_path_arr.push(meta.location.to_string());
+                    file_modified_arr.push(meta.last_modified.timestamp_millis());
+                    file_size_bytes_arr.push(meta.size);
+                    etag_arr.push(meta.e_tag.clone());
+                    version_arr.push(meta.version.clone());
+                }
+                current_offset += entry.metas.files.len() as i32;
+                offsets.push(current_offset);
+            }
+        }
+
+        let struct_arr = StructArray::new(
+            nested_fields,
+            vec![
+                Arc::new(StringArray::from(file_path_arr)),
+                Arc::new(TimestampMillisecondArray::from(file_modified_arr)),
+                Arc::new(UInt64Array::from(file_size_bytes_arr)),
+                Arc::new(StringArray::from(etag_arr)),
+                Arc::new(StringArray::from(version_arr)),
+            ],
+            None,
+        );
+
+        let offsets_buffer: OffsetBuffer<i32> =
+            OffsetBuffer::new(ScalarBuffer::from(Buffer::from_vec(offsets)));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(table_arr)),
+                Arc::new(StringArray::from(path_arr)),
+                Arc::new(UInt64Array::from(metadata_size_bytes_arr)),
+                Arc::new(DurationMillisecondArray::from(expires_arr)),
+                Arc::new(GenericListArray::new(
+                    Arc::new(metadata_field),
+                    offsets_buffer,
+                    Arc::new(struct_arr),
+                    None,
+                )),
+            ],
+        )?;
+
+        let list_files_cache = ListFilesCacheTable { schema, batch };
+        Ok(Arc::new(list_files_cache))
     }
 }

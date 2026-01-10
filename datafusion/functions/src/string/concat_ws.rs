@@ -28,7 +28,7 @@ use crate::strings::{ColumnarValueRef, StringArrayBuilder};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -136,43 +136,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 None => return internal_err!("Expected string literal, got {scalar:?}"),
             };
 
-            let mut result = String::new();
-            // iterator over Option<str>
-            let iter = &mut args[1..].iter().map(|arg| {
+            let mut values = Vec::with_capacity(args.len() - 1);
+            for arg in &args[1..] {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     // loop above checks for all args being scalar
                     unreachable!()
                 };
-                scalar.try_as_str()
-            });
 
-            // append first non null arg
-            for scalar in iter.by_ref() {
-                match scalar {
-                    Some(Some(s)) => {
-                        result.push_str(s);
-                        break;
-                    }
+                match scalar.try_as_str() {
+                    Some(Some(v)) => values.push(v),
                     Some(None) => {} // null literal string
                     None => {
                         return internal_err!("Expected string literal, got {scalar:?}");
                     }
                 }
             }
-
-            // handle subsequent non null args
-            for scalar in iter.by_ref() {
-                match scalar {
-                    Some(Some(s)) => {
-                        result.push_str(sep);
-                        result.push_str(s);
-                    }
-                    Some(None) => {} // null literal string
-                    None => {
-                        return internal_err!("Expected string literal, got {scalar:?}");
-                    }
-                }
-            }
+            let result = values.join(sep);
 
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
         }
@@ -301,7 +280,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         match &args[..] {
             [delimiter, vals @ ..] => simplify_concat_ws(delimiter, vals),

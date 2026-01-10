@@ -24,14 +24,12 @@
 
 extern crate wasm_bindgen;
 
-use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_common::ScalarValue;
 use datafusion_expr::lit;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
-use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -63,10 +61,7 @@ pub fn basic_exprs() {
     log(&format!("Expr: {expr:?}"));
 
     // Simplify Expr (using datafusion-phys-expr and datafusion-optimizer)
-    let schema = Arc::new(DFSchema::empty());
-    let execution_props = ExecutionProps::new();
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::new(&execution_props).with_schema(schema));
+    let simplifier = ExprSimplifier::new(SimplifyContext::default());
     let simplified_expr = simplifier.simplify(expr).unwrap();
     log(&format!("Simplified Expr: {simplified_expr:?}"));
 }
@@ -82,6 +77,8 @@ pub fn basic_parse() {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use super::*;
     use datafusion::{
         arrow::{

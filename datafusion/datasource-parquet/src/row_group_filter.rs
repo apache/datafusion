@@ -1559,14 +1559,7 @@ mod tests {
             ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
                 .with_file_size(object_meta.size);
 
-        let partitioned_file = PartitionedFile {
-            object_meta,
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let partitioned_file = PartitionedFile::new_from_meta(object_meta);
 
         let reader = ParquetFileReader {
             inner,

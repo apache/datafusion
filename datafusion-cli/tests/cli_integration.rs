@@ -24,10 +24,12 @@ use insta::{Settings, glob};
 use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
 use std::{env, fs};
-use testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt, TestcontainersError};
 use testcontainers_modules::minio;
+use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
+use testcontainers_modules::testcontainers::runners::AsyncRunner;
+use testcontainers_modules::testcontainers::{
+    ContainerAsync, ImageExt, TestcontainersError,
+};
 
 fn cli() -> Command {
     Command::new(get_cargo_bin("datafusion-cli"))

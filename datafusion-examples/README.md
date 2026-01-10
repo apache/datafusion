@@ -106,10 +106,11 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand            | File Path                                                                           | Description                                            |
-| --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| dataframe             | [`dataframe/dataframe.rs`](examples/dataframe/dataframe.rs)                         | Query DataFrames from various sources and write output |
-| deserialize_to_struct | [`dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs) | Convert Arrow arrays into Rust structs                 |
+| Subcommand            | File Path                                                                           | Description                                             |
+| --------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| cache_factory         | [`dataframe/cache_factory.rs`](examples/dataframe/cache_factory.rs)                 | Custom lazy caching for DataFrames using `CacheFactory` |
+| dataframe             | [`dataframe/dataframe.rs`](examples/dataframe/dataframe.rs)                         | Query DataFrames from various sources and write output  |
+| deserialize_to_struct | [`dataframe/deserialize_to_struct.rs`](examples/dataframe/deserialize_to_struct.rs) | Convert Arrow arrays into Rust structs                  |
 
 ## Execution Monitoring Examples
 
@@ -191,12 +192,12 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand | File Path                                             | Description                    |
-| ---------- | ----------------------------------------------------- | ------------------------------ |
-| analysis   | [`sql_ops/analysis.rs`](examples/sql_ops/analysis.rs) | Analyze SQL queries            |
-| dialect    | [`sql_ops/dialect.rs`](examples/sql_ops/dialect.rs)   | Implement a custom SQL dialect |
-| frontend   | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs) | Build LogicalPlans from SQL    |
-| query      | [`sql_ops/query.rs`](examples/sql_ops/query.rs)       | Query data using SQL           |
+| Subcommand        | File Path                                                               | Description                                        |
+| ----------------- | ----------------------------------------------------------------------- | -------------------------------------------------- |
+| analysis          | [`sql_ops/analysis.rs`](examples/sql_ops/analysis.rs)                   | Analyze SQL queries                                |
+| custom_sql_parser | [`sql_ops/custom_sql_parser.rs`](examples/sql_ops/custom_sql_parser.rs) | Implement a custom SQL parser to extend DataFusion |
+| frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
+| query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
 
 ## UDF Examples
 

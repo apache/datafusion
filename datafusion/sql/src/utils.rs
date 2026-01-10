@@ -406,6 +406,24 @@ impl RecursiveUnnestRewriter<'_> {
             .collect()
     }
 
+    /// Check if the current expression is at the root level for struct unnest purposes.
+    /// This is true if:
+    /// 1. The expression IS the root expression, OR
+    /// 2. The root expression is an Alias wrapping this expression
+    ///
+    /// This allows `unnest(struct_col) AS alias` to work, where the alias is simply
+    /// ignored for struct unnest (matching DuckDB behavior).
+    fn is_at_struct_allowed_root(&self, expr: &Expr) -> bool {
+        if expr == self.root_expr {
+            return true;
+        }
+        // Allow struct unnest when root is an alias wrapping the unnest
+        if let Expr::Alias(Alias { expr: inner, .. }) = self.root_expr {
+            return inner.as_ref() == expr;
+        }
+        false
+    }
+
     fn transform(
         &mut self,
         level: usize,
@@ -566,7 +584,8 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                 // instead of unnest(struct_arr_col, depth = 2)
 
                 let unnest_recursion = unnest_stack.len();
-                let struct_allowed = (&expr == self.root_expr) && unnest_recursion == 1;
+                let struct_allowed =
+                    self.is_at_struct_allowed_root(&expr) && unnest_recursion == 1;
 
                 let mut transformed_exprs = self.transform(
                     unnest_recursion,
@@ -574,7 +593,9 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
                     inner_expr,
                     struct_allowed,
                 )?;
-                if struct_allowed {
+                // Only set transformed_root_exprs for struct unnest (which returns multiple expressions).
+                // For list unnest (single expression), we let the normal rewrite handle the alias.
+                if struct_allowed && transformed_exprs.len() > 1 {
                     self.transformed_root_exprs = Some(transformed_exprs.clone());
                 }
                 return Ok(Transformed::new(

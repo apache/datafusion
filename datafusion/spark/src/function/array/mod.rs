@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod repeat;
 pub mod shuffle;
 pub mod spark_array;
 
@@ -24,6 +25,7 @@ use std::sync::Arc;
 
 make_udf_function!(spark_array::SparkArray, array);
 make_udf_function!(shuffle::SparkShuffle, shuffle);
+make_udf_function!(repeat::SparkArrayRepeat, array_repeat);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -34,8 +36,13 @@ pub mod expr_fn {
         "Returns a random permutation of the given array.",
         args
     ));
+    export_functions!((
+        array_repeat,
+        "returns an array containing element count times.",
+        element count
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![array(), shuffle()]
+    vec![array(), shuffle(), array_repeat()]
 }

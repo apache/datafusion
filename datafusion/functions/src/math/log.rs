@@ -21,11 +21,11 @@ use std::any::Any;
 
 use super::power::PowerFunc;
 
-use crate::utils::{calculate_binary_math, decimal128_to_i128};
+use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
-use arrow::compute::kernels::cast;
 use arrow::datatypes::{
-    DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
+    DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
+    Float32Type, Float64Type,
 };
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
@@ -34,7 +34,7 @@ use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
@@ -42,7 +42,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
-use num_traits::Float;
+use num_traits::{Float, ToPrimitive};
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -102,38 +102,109 @@ impl LogFunc {
     }
 }
 
-/// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
-/// Returns error if base is invalid
-fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
-    if !base.is_finite() || base.trunc() != base {
-        return Err(ArrowError::ComputeError(format!(
-            "Log cannot use non-integer base: {base}"
-        )));
-    }
-    if (base as u32) < 2 {
-        return Err(ArrowError::ComputeError(format!(
-            "Log base must be greater than 1: {base}"
-        )));
-    }
-
-    let unscaled_value = decimal128_to_i128(value, scale)?;
-    if unscaled_value > 0 {
-        let log_value: u32 = unscaled_value.ilog(base as i128);
-        Ok(log_value as f64)
-    } else {
-        // Reflect f64::log behaviour
-        Ok(f64::NAN)
-    }
+/// Checks if the base is valid for the efficient integer logarithm algorithm.
+#[inline]
+fn is_valid_integer_base(base: f64) -> bool {
+    base.trunc() == base && base >= 2.0 && base <= u32::MAX as f64
 }
 
-/// Binary function to calculate an integer logarithm of Decimal128 `value` using `base` base
-/// Returns error if base is invalid or if value is out of bounds of Decimal128
+/// Calculate logarithm for Decimal32 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u32 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal32(value: i32, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u32(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u32) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Calculate logarithm for Decimal64 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u64 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal64(value: i64, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u64(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u64) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Calculate logarithm for Decimal128 values.
+/// For integer bases >= 2 with non-negative scale, uses the efficient u128 ilog algorithm.
+/// Otherwise falls back to f64 computation.
+fn log_decimal128(value: i128, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    if is_valid_integer_base(base)
+        && scale >= 0
+        && let Some(unscaled) = unscale_to_u128(value, scale)
+    {
+        return if unscaled > 0 {
+            Ok(unscaled.ilog(base as u128) as f64)
+        } else {
+            Ok(f64::NAN)
+        };
+    }
+    decimal_to_f64(value, scale).map(|v| v.log(base))
+}
+
+/// Unscale a Decimal32 value to u32.
+#[inline]
+fn unscale_to_u32(value: i32, scale: i8) -> Option<u32> {
+    let value_u32 = u32::try_from(value).ok()?;
+    let divisor = 10u32.checked_pow(scale as u32)?;
+    Some(value_u32 / divisor)
+}
+
+/// Unscale a Decimal64 value to u64.
+#[inline]
+fn unscale_to_u64(value: i64, scale: i8) -> Option<u64> {
+    let value_u64 = u64::try_from(value).ok()?;
+    let divisor = 10u64.checked_pow(scale as u32)?;
+    Some(value_u64 / divisor)
+}
+
+/// Unscale a Decimal128 value to u128.
+#[inline]
+fn unscale_to_u128(value: i128, scale: i8) -> Option<u128> {
+    let value_u128 = u128::try_from(value).ok()?;
+    let divisor = 10u128.checked_pow(scale as u32)?;
+    Some(value_u128 / divisor)
+}
+
+/// Convert a scaled decimal value to f64.
+#[inline]
+fn decimal_to_f64<T: ToPrimitive + Copy>(value: T, scale: i8) -> Result<f64, ArrowError> {
+    let value_f64 = value.to_f64().ok_or_else(|| {
+        ArrowError::ComputeError("Cannot convert value to f64".to_string())
+    })?;
+    let scale_factor = 10f64.powi(scale as i32);
+    Ok(value_f64 / scale_factor)
+}
+
 fn log_decimal256(value: i256, scale: i8, base: f64) -> Result<f64, ArrowError> {
+    // Try to convert to i128 for the optimized path
     match value.to_i128() {
-        Some(value) => log_decimal128(value, scale, base),
-        None => Err(ArrowError::NotYetImplemented(format!(
-            "Log of Decimal256 larger than Decimal128 is not yet supported: {value}"
-        ))),
+        Some(v) => log_decimal128(v, scale, base),
+        None => {
+            // For very large Decimal256 values, use f64 computation
+            let value_f64 = value.to_f64().ok_or_else(|| {
+                ArrowError::ComputeError(format!("Cannot convert {value} to f64"))
+            })?;
+            let scale_factor = 10f64.powi(scale as i32);
+            Ok((value_f64 / scale_factor).log(base))
+        }
     }
 }
 
@@ -223,15 +294,18 @@ impl ScalarUDFImpl for LogFunc {
                     |value, base| Ok(value.log(base)),
                 )?
             }
-            // TODO: native log support for decimal 32 & 64; right now upcast
-            //       to decimal128 to calculate
-            //       https://github.com/apache/datafusion/issues/17555
-            DataType::Decimal32(precision, scale)
-            | DataType::Decimal64(precision, scale) => {
-                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
-                    &cast(&value, &DataType::Decimal128(*precision, *scale))?,
+            DataType::Decimal32(_, scale) => {
+                calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
+                    &value,
                     &base,
-                    |value, base| log_decimal128(value, *scale, base),
+                    |value, base| log_decimal32(value, *scale, base),
+                )?
+            }
+            DataType::Decimal64(_, scale) => {
+                calculate_binary_math::<Decimal64Type, Float64Type, Float64Type, _>(
+                    &value,
+                    &base,
+                    |value, base| log_decimal64(value, *scale, base),
                 )?
             }
             DataType::Decimal128(_, scale) => {
@@ -267,7 +341,7 @@ impl ScalarUDFImpl for LogFunc {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let mut arg_types = args
             .iter()
@@ -289,6 +363,19 @@ impl ScalarUDFImpl for LogFunc {
         if num_args != 1 && num_args != 2 {
             return plan_err!("Expected log to have 1 or 2 arguments, got {num_args}");
         }
+
+        match arg_types.last().unwrap() {
+            DataType::Decimal32(_, scale)
+            | DataType::Decimal64(_, scale)
+            | DataType::Decimal128(_, scale)
+            | DataType::Decimal256(_, scale)
+                if *scale < 0 =>
+            {
+                return Ok(ExprSimplifyResult::Original(args));
+            }
+            _ => (),
+        };
+
         let number = args.pop().unwrap();
         let number_datatype = arg_types.pop().unwrap();
         // default to base 10
@@ -341,7 +428,6 @@ fn is_pow(func: &ScalarUDF) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
@@ -351,10 +437,8 @@ mod tests {
     };
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DECIMAL256_MAX_PRECISION, Field};
-    use datafusion_common::DFSchema;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 
     #[test]
@@ -695,10 +779,7 @@ mod tests {
     #[test]
     // Test log() simplification errors
     fn test_log_simplify_errors() {
-        let props = ExecutionProps::new();
-        let schema =
-            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::default();
         // Expect 0 args to error
         let _ = LogFunc::new().simplify(vec![], &context).unwrap_err();
         // Expect 3 args to error
@@ -710,10 +791,7 @@ mod tests {
     #[test]
     // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
-        let props = ExecutionProps::new();
-        let schema =
-            Arc::new(DFSchema::new_with_metadata(vec![], HashMap::new()).unwrap());
-        let context = SimplifyContext::new(&props).with_schema(schema);
+        let context = SimplifyContext::default();
         // One argument with no simplifications
         let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
         let ExprSimplifyResult::Original(args) = result else {
@@ -1080,7 +1158,8 @@ mod tests {
     }
 
     #[test]
-    fn test_log_decimal128_wrong_base() {
+    fn test_log_decimal128_invalid_base() {
+        // Invalid base (-2.0) should return NaN, matching f64::log behavior
         let arg_fields = vec![
             Field::new("b", DataType::Float64, false).into(),
             Field::new("x", DataType::Decimal128(38, 0), false).into(),
@@ -1095,16 +1174,26 @@ mod tests {
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        let result = LogFunc::new().invoke_with_args(args);
-        assert!(result.is_err());
-        assert_eq!(
-            "Arrow error: Compute error: Log base must be greater than 1: -2",
-            result.unwrap_err().to_string().lines().next().unwrap()
-        );
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("should not error on invalid base");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 1);
+                assert!(floats.value(0).is_nan());
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 
     #[test]
-    fn test_log_decimal256_error() {
+    fn test_log_decimal256_large() {
+        // Large Decimal256 values that don't fit in i128 now use f64 fallback
         let arg_field = Field::new("a", DataType::Decimal256(38, 0), false).into();
         let args = ScalarFunctionArgs {
             args: vec![
@@ -1118,11 +1207,26 @@ mod tests {
             return_field: Field::new("f", DataType::Float64, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        let result = LogFunc::new().invoke_with_args(args);
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string().lines().next().unwrap(),
-            "Arrow error: Not yet implemented: Log of Decimal256 larger than Decimal128 is not yet supported: 170141183460469231731687303715884106727"
-        );
+        let result = LogFunc::new()
+            .invoke_with_args(args)
+            .expect("should handle large Decimal256 via f64 fallback");
+
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
+                assert_eq!(floats.len(), 1);
+                // The f64 fallback may lose some precision for very large numbers,
+                // but we verify we get a reasonable positive result (not NaN/infinity)
+                let log_result = floats.value(0);
+                assert!(
+                    log_result.is_finite() && log_result > 0.0,
+                    "Expected positive finite log result, got {log_result}"
+                );
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 }

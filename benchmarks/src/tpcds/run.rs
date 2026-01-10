@@ -36,8 +36,8 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_PARQUET_EXTENSION, plan_err};
 
+use clap::Args;
 use log::info;
-use structopt::StructOpt;
 
 // hack to avoid `default_value is meaningless for bool` errors
 type BoolDefaultTrue = bool;
@@ -95,46 +95,46 @@ pub fn get_query_sql(base_query_path: &str, query: usize) -> Result<Vec<String>>
 }
 
 /// Run the tpcds benchmark.
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// Path to query files
-    #[structopt(parse(from_os_str), required = true, short = "Q", long = "query_path")]
+    #[arg(required = true, short = 'Q', long = "query_path")]
     query_path: PathBuf,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Path to machine readable output file
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[structopt(short = "S", long = "disable-statistics")]
+    #[arg(short = 'S', long = "disable-statistics")]
     disable_statistics: bool,
 
     /// If true then hash join used, if false then sort merge join
     /// True by default.
-    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
+    #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 
     /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
     /// False by default.
-    #[structopt(
-        short = "w",
+    #[arg(
+        short = 'w',
         long = "enable_piecewise_merge_join",
         default_value = "false"
     )]
@@ -142,7 +142,7 @@ pub struct RunOpt {
 
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
-    #[structopt(short = "t", long = "sorted")]
+    #[arg(short = 't', long = "sorted")]
     sorted: bool,
 }
 

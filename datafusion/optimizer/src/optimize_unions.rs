@@ -497,9 +497,7 @@ mod tests {
             OptimizerContext::new().with_max_passes(1),
             vec![Arc::new(OptimizeUnions::new())],
             plan,
-            @r"
-        TableScan: table
-        "
+            @"TableScan: table"
         )
     }
 }
