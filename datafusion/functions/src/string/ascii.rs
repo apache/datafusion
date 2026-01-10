@@ -103,20 +103,20 @@ fn calculate_ascii<'a, V>(array: &V) -> Result<ArrayRef, ArrowError>
 where
     V: StringArrayType<'a, Item = &'a str>,
 {
-    let values: Vec<_> = (0..array.len())
-        .map(|i| {
-            if array.is_null(i) {
-                0
-            } else {
-                let s = array.value(i);
-                s.chars().next().map_or(0, |c| c as i32)
-            }
-        })
-        .collect();
+    let len = array.len();
+    let mut builder = Int32Array::builder(len);
 
-    let array = Int32Array::new(values.into(), array.nulls().cloned());
+    for i in 0..len {
+        if array.is_null(i) {
+            builder.append_null();
+        } else {
+            let s = array.value(i);
+            let value = s.chars().next().map_or(0, |c| c as i32);
+            builder.append_value(value);
+        }
+    }
 
-    Ok(Arc::new(array))
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Returns the numeric code of the first character of the argument.
