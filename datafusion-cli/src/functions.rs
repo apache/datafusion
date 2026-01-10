@@ -703,10 +703,13 @@ impl TableFunctionImpl for StatisticsCacheFunc {
     }
 }
 
-// Implementation of the `list_files_cache` table function in datafusion-cli.
+/// Implementation of the `list_files_cache` table function in datafusion-cli.
 ///
-/// This function returns the cached results of running a LIST command on a particular object store path for a table. The object metadata is returned as a List of Structs, with one Struct for each object.
-/// DataFusion uses these cached results to plan queries against external tables.
+/// This function returns the cached results of running a LIST command on a
+/// particular object store path for a table. The object metadata is returned as
+/// a List of Structs, with one Struct for each object. DataFusion uses these
+/// cached results to plan queries against external tables.
+///
 /// # Schema
 /// ```sql
 /// > describe select * from list_files_cache();
@@ -788,7 +791,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             Field::new("metadata", DataType::Struct(nested_fields.clone()), true);
 
         let schema = Arc::new(Schema::new(vec![
-            Field::new("table", DataType::Utf8, false),
+            Field::new("table", DataType::Utf8, true),
             Field::new("path", DataType::Utf8, false),
             Field::new("metadata_size_bytes", DataType::UInt64, false),
             // expires field in ListFilesEntry has type Instant when set, from which we cannot get "the number of seconds", hence using Duration instead of Timestamp as data type.
@@ -821,7 +824,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             let mut current_offset: i32 = 0;
 
             for (path, entry) in list_files_cache.list_entries() {
-                table_arr.push(path.table.map_or("NULL".to_string(), |t| t.to_string()));
+                table_arr.push(path.table.map(|t| t.to_string()));
                 path_arr.push(path.path.to_string());
                 metadata_size_bytes_arr.push(entry.size_bytes as u64);
                 // calculates time left before entry expires
