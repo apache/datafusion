@@ -362,6 +362,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
     }
+
+    fn is_trivial(&self) -> bool {
+        if !self.fun.is_trivial() {
+            return false;
+        }
+        self.args.iter().all(|arg| arg.is_trivial())
+    }
 }
 
 #[cfg(test)]

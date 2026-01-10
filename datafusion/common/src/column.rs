@@ -30,7 +30,7 @@ use std::fmt;
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
-    /// field/column name.
+    /// Field/column name.
     pub name: String,
     /// Original source code location, if known
     pub spans: Spans,

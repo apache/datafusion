@@ -499,6 +499,10 @@ impl ScalarUDFImpl for GetFieldFunc {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn is_trivial(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
