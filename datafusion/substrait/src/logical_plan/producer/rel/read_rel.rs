@@ -18,10 +18,17 @@
 use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
+use crate::logical_plan::recursive::{
+    RECURSIVE_SCAN_TYPE_URL, encode_recursive_scan_detail,
+};
+use datafusion::catalog::{
+    cte_worktable::CteWorkTable, default_table_source::DefaultTableSource,
+};
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
+use pbjson_types::Any as ProtoAny;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
@@ -29,7 +36,7 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::{ReadRel, Rel, extensions};
 
 /// Converts rows of literal expressions into Substrait literal structs.
 ///
@@ -93,6 +100,20 @@ fn convert_expression_rows(
         .collect()
 }
 
+fn recursive_scan_name(scan: &TableScan) -> Option<String> {
+    scan.source
+        .as_any()
+        .downcast_ref::<DefaultTableSource>()
+        .and_then(|source| {
+            source
+                .table_provider
+                .as_any()
+                .downcast_ref::<CteWorkTable>()
+                .map(|table| table.name().to_string())
+        })
+        .filter(|name| scan.table_name.table() == name)
+}
+
 pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
@@ -131,6 +152,18 @@ pub fn from_table_scan(
         Some(Box::new(filter_expr))
     };
 
+    let advanced_extension = if let Some(name) = recursive_scan_name(scan) {
+        Some(extensions::AdvancedExtension {
+            enhancement: Some(ProtoAny {
+                type_url: RECURSIVE_SCAN_TYPE_URL.to_string(),
+                value: encode_recursive_scan_detail(&name)?.into(),
+            }),
+            optimization: vec![],
+        })
+    } else {
+        None
+    };
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
@@ -138,7 +171,7 @@ pub fn from_table_scan(
             filter: filter_option,
             best_effort_filter: None,
             projection,
-            advanced_extension: None,
+            advanced_extension,
             read_type: Some(ReadType::NamedTable(NamedTable {
                 names: scan.table_name.to_vec(),
                 advanced_extension: None,
@@ -244,4 +277,74 @@ pub fn from_values(
             })),
         }))),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::{
+        producer::DefaultSubstraitProducer, recursive::decode_recursive_scan_detail,
+    };
+    use datafusion::{
+        arrow::datatypes::{DataType, Field, Schema},
+        catalog::{
+            cte_worktable::CteWorkTable, default_table_source::DefaultTableSource,
+        },
+        common::DFSchema,
+        execution::SessionStateBuilder,
+        logical_expr::TableScan as DFTableScan,
+    };
+
+    #[test]
+    fn from_table_scan_sets_advanced_extension_for_cte_work_table()
+    -> datafusion::common::Result<()> {
+        // create a schema for the work-table
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+
+        // create a CteWorkTable provider and wrap as DefaultTableSource
+        let provider = Arc::new(CteWorkTable::new("nodes", Arc::clone(&schema)));
+        let source = Arc::new(DefaultTableSource::new(provider));
+
+        // create a TableScan using a bare table reference matching the provider name
+        // TryFrom<&Schema> returns Infallible; prefer converting from Arc<Schema>
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let scan = DFTableScan {
+            table_name: datafusion::common::TableReference::bare("nodes"),
+            source,
+            projection: None,
+            projected_schema: Arc::new(df_schema),
+            filters: vec![],
+            fetch: None,
+        };
+
+        // create a producer and serialize the scan
+        let state = SessionStateBuilder::default().build();
+        let mut producer = DefaultSubstraitProducer::new(&state);
+
+        let rel = from_table_scan(&mut producer, &scan)?;
+
+        // validate Rel -> ReadRel advanced_extension has expected type_url and payload
+        match *rel {
+            Rel {
+                rel_type: Some(RelType::Read(ref read)),
+            } => {
+                let adv = read
+                    .advanced_extension
+                    .as_ref()
+                    .expect("expected advanced_extension for CteWorkTable");
+                let any = adv
+                    .enhancement
+                    .as_ref()
+                    .expect("expected enhancement in advanced_extension");
+                assert_eq!(any.type_url, RECURSIVE_SCAN_TYPE_URL.to_string());
+
+                // decode payload and ensure it contains the work-table name
+                let name = decode_recursive_scan_detail(&any.value)?;
+                assert_eq!(name, "nodes");
+            }
+            other => panic!("expected ReadRel, got: {other:?}"),
+        }
+
+        Ok(())
+    }
 }
