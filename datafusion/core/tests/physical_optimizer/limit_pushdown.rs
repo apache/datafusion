@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    coalesce_batches_exec, coalesce_partitions_exec, global_limit_exec, local_limit_exec,
-    sort_exec, sort_preserving_merge_exec, stream_exec,
+    coalesce_partitions_exec, global_limit_exec, local_limit_exec, sort_exec,
+    sort_preserving_merge_exec, stream_exec,
 };
 
 use arrow::compute::SortOptions;
@@ -139,45 +139,6 @@ fn transforms_streaming_table_exec_into_fetching_version_and_keeps_the_global_li
 }
 
 #[test]
-fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limit()
--> Result<()> {
-    let schema = create_schema();
-    let streaming_table = stream_exec(&schema);
-    let repartition = repartition_exec(streaming_table)?;
-    let filter = filter_exec(schema, repartition)?;
-    let coalesce_batches = coalesce_batches_exec(filter, 8192);
-    let local_limit = local_limit_exec(coalesce_batches, 5);
-    let coalesce_partitions = coalesce_partitions_exec(local_limit);
-    let global_limit = global_limit_exec(coalesce_partitions, 0, Some(5));
-
-    let initial = get_plan_string(&global_limit);
-    let expected_initial = [
-        "GlobalLimitExec: skip=0, fetch=5",
-        "  CoalescePartitionsExec",
-        "    LocalLimitExec: fetch=5",
-        "      CoalesceBatchesExec: target_batch_size=8192",
-        "        FilterExec: c3@2 > 0",
-        "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-        "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
-    ];
-    assert_eq!(initial, expected_initial);
-
-    let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
-
-    let expected = [
-        "CoalescePartitionsExec: fetch=5",
-        "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
-        "    FilterExec: c3@2 > 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
-    ];
-    assert_eq!(get_plan_string(&after_optimize), expected);
-
-    Ok(())
-}
-
-#[test]
 fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
     let schema = create_schema();
     let streaming_table = stream_exec(&schema);
@@ -208,43 +169,10 @@ fn pushes_global_limit_exec_through_projection_exec() -> Result<()> {
 }
 
 #[test]
-fn pushes_global_limit_exec_through_projection_exec_and_transforms_coalesce_batches_exec_into_fetching_version()
--> Result<()> {
-    let schema = create_schema();
-    let streaming_table = stream_exec(&schema);
-    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
-    let projection = projection_exec(schema, coalesce_batches)?;
-    let global_limit = global_limit_exec(projection, 0, Some(5));
-
-    let initial = get_plan_string(&global_limit);
-    let expected_initial = [
-        "GlobalLimitExec: skip=0, fetch=5",
-        "  ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "    CoalesceBatchesExec: target_batch_size=8192",
-        "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
-    ];
-
-    assert_eq!(initial, expected_initial);
-
-    let after_optimize =
-        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
-
-    let expected = [
-        "ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
-        "    StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
-    ];
-    assert_eq!(get_plan_string(&after_optimize), expected);
-
-    Ok(())
-}
-
-#[test]
 fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let schema = create_schema();
     let streaming_table = stream_exec(&schema);
-    let coalesce_batches = coalesce_batches_exec(streaming_table, 8192);
-    let projection = projection_exec(Arc::clone(&schema), coalesce_batches)?;
+    let projection = projection_exec(Arc::clone(&schema), streaming_table)?;
     let repartition = repartition_exec(projection)?;
     let ordering: LexOrdering = [PhysicalSortExpr {
         expr: col("c1", &schema)?,
@@ -262,8 +190,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
         "    SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]",
         "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         "        ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "          CoalesceBatchesExec: target_batch_size=8192",
-        "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+        "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
     ];
 
     assert_eq!(initial, expected_initial);
@@ -276,8 +203,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
         "  SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]",
         "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
         "      ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "        CoalesceBatchesExec: target_batch_size=8192",
-        "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
+        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true",
     ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 

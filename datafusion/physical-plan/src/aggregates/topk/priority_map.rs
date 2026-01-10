@@ -374,6 +374,102 @@ mod tests {
     }
 
     #[test]
+    fn should_track_lexicographic_min_utf8_value() -> Result<()> {
+        let ids: ArrayRef = Arc::new(Int64Array::from(vec![1, 1]));
+        let vals: ArrayRef = Arc::new(StringArray::from(vec!["zulu", "alpha"]));
+        let mut agg = PriorityMap::new(DataType::Int64, DataType::Utf8, 1, false)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+        agg.insert(1)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema_value(DataType::Utf8), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+
+        assert_snapshot!(actual, @r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | alpha        |
++----------+--------------+
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_track_lexicographic_max_utf8_value_desc() -> Result<()> {
+        let ids: ArrayRef = Arc::new(Int64Array::from(vec![1, 1]));
+        let vals: ArrayRef = Arc::new(StringArray::from(vec!["alpha", "zulu"]));
+        let mut agg = PriorityMap::new(DataType::Int64, DataType::Utf8, 1, true)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+        agg.insert(1)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema_value(DataType::Utf8), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+
+        assert_snapshot!(actual, @r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | zulu         |
++----------+--------------+
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_track_large_utf8_values() -> Result<()> {
+        let ids: ArrayRef = Arc::new(Int64Array::from(vec![1, 1]));
+        let vals: ArrayRef = Arc::new(LargeStringArray::from(vec!["zulu", "alpha"]));
+        let mut agg = PriorityMap::new(DataType::Int64, DataType::LargeUtf8, 1, false)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+        agg.insert(1)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema_value(DataType::LargeUtf8), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+
+        assert_snapshot!(actual, @r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | alpha        |
++----------+--------------+
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_track_utf8_view_values() -> Result<()> {
+        let ids: ArrayRef = Arc::new(Int64Array::from(vec![1, 1]));
+        let vals: ArrayRef = Arc::new(StringViewArray::from(vec!["alpha", "zulu"]));
+        let mut agg = PriorityMap::new(DataType::Int64, DataType::Utf8View, 1, true)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+        agg.insert(1)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema_value(DataType::Utf8View), cols)?;
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+
+        assert_snapshot!(actual, @r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | zulu         |
++----------+--------------+
+        "#);
+
+        Ok(())
+    }
+
+    #[test]
     fn should_handle_null_ids() -> Result<()> {
         let ids: ArrayRef = Arc::new(StringArray::from(vec![Some("1"), None, None]));
         let vals: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
@@ -417,6 +513,13 @@ mod tests {
         Arc::new(Schema::new(vec![
             Field::new("trace_id", DataType::LargeUtf8, true),
             Field::new("timestamp_ms", DataType::Int64, true),
+        ]))
+    }
+
+    fn test_schema_value(value_type: DataType) -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("trace_id", DataType::Int64, true),
+            Field::new("timestamp_ms", value_type, true),
         ]))
     }
 }
