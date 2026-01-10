@@ -67,9 +67,12 @@ See [use cases] for examples. The following related subprojects target end users
   DataFusion.
 
 "Out of the box,"
-DataFusion offers [SQL](https://datafusion.apache.org/user-guide/sql/index.html) and [Dataframe](https://datafusion.apache.org/user-guide/dataframe.html) APIs, excellent [performance],
-built-in support for CSV, Parquet, JSON, and Avro, extensive customization, and
-a great community.
+DataFusion offers
+[SQL](https://datafusion.apache.org/user-guide/sql/index.html) and
+[Dataframe](https://datafusion.apache.org/user-guide/dataframe.html) APIs,
+excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
+extensive customization, and a great community.
+
 
 DataFusion features a full query planner, a columnar, streaming, multi-threaded,
 vectorized execution engine, and partitioned data sources. You can
@@ -84,7 +87,8 @@ See the [Architecture] section for more details.
 [performance]: https://benchmark.clickhouse.com/
 [architecture]: https://datafusion.apache.org/contributor-guide/architecture.html
 
-Here are links to some important information
+Here are links to some important information:
+
 
 - [Project Site](https://datafusion.apache.org/)
 - [Installation](https://datafusion.apache.org/user-guide/cli/installation.html)
