@@ -953,7 +953,7 @@ impl AggregateFunction {
 pub enum WindowFunctionDefinition {
     /// A user defined aggregate function
     AggregateUDF(Arc<AggregateUDF>),
-    /// A user defined aggregate function
+    /// A user defined window function
     WindowUDF(Arc<WindowUDF>),
 }
 
