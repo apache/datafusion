@@ -58,7 +58,7 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    filter::FilterExec,
+    filter::{FilterExec, FilterExecBuilder},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
@@ -477,9 +477,9 @@ fn test_filter_with_projection() {
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
-            .unwrap()
+        FilterExecBuilder::new(predicate, Arc::clone(&scan))
             .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
 
@@ -502,9 +502,9 @@ fn test_filter_with_projection() {
     let projection = vec![1];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
-            .unwrap()
+        FilterExecBuilder::new(predicate, scan)
             .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
     insta::assert_snapshot!(
