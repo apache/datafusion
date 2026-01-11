@@ -408,7 +408,6 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
@@ -444,11 +443,14 @@ mod tests {
 
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of
-    fn generate_task_ctx_for_round_robin_tie_breaker() -> Result<Arc<TaskContext>> {
+    fn generate_task_ctx_for_round_robin_tie_breaker(
+        target_batch_size: usize,
+    ) -> Result<Arc<TaskContext>> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(20_000_000, 1.0)
             .build_arc()?;
-        let config = SessionConfig::new();
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.batch_size = target_batch_size;
         let task_ctx = TaskContext::default()
             .with_runtime(runtime)
             .with_session_config(config);
@@ -459,7 +461,6 @@ mod tests {
     fn generate_spm_for_round_robin_tie_breaker(
         enable_round_robin_repartition: bool,
     ) -> Result<Arc<SortPreservingMergeExec>> {
-        let target_batch_size = 12500;
         let row_size = 12500;
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1; row_size]));
         let b: ArrayRef = Arc::new(StringArray::from_iter(vec![Some("a"); row_size]));
@@ -485,9 +486,7 @@ mod tests {
             TestMemoryExec::try_new_exec(&[rbs], schema, None)?,
             Partitioning::RoundRobinBatch(2),
         )?;
-        let coalesce_batches_exec =
-            CoalesceBatchesExec::new(Arc::new(repartition_exec), target_batch_size);
-        let spm = SortPreservingMergeExec::new(sort, Arc::new(coalesce_batches_exec))
+        let spm = SortPreservingMergeExec::new(sort, Arc::new(repartition_exec))
             .with_round_robin_repartition(enable_round_robin_repartition);
         Ok(Arc::new(spm))
     }
@@ -499,7 +498,8 @@ mod tests {
     /// based on whether the tie breaker is enabled or disabled.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_round_robin_tie_breaker_success() -> Result<()> {
-        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let target_batch_size = 12500;
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker(target_batch_size)?;
         let spm = generate_spm_for_round_robin_tie_breaker(true)?;
         let _collected = collect(spm, task_ctx).await?;
         Ok(())
@@ -512,7 +512,7 @@ mod tests {
     /// based on whether the tie breaker is enabled or disabled.
     #[tokio::test(flavor = "multi_thread")]
     async fn test_round_robin_tie_breaker_fail() -> Result<()> {
-        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker()?;
+        let task_ctx = generate_task_ctx_for_round_robin_tie_breaker(8192)?;
         let spm = generate_spm_for_round_robin_tie_breaker(false)?;
         let _err = collect(spm, task_ctx).await.unwrap_err();
         Ok(())

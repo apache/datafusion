@@ -413,7 +413,7 @@ impl ExprSchemable for Expr {
     ///   with the default implementation returning empty field metadata
     /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
     ///   with the default implementation returning empty field metadata
-    /// - **Window functions**: field metadata is empty
+    /// - **Window functions**: field metadata follows the function's return field
     ///
     /// ## Table Reference Scoping
     /// - Establishes proper qualified field references when columns belong to specific tables
