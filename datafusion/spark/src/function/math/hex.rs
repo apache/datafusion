@@ -122,10 +122,10 @@ fn hex_int64(num: i64, buffer: &mut Vec<u8>) {
         return;
     }
 
-    let mut n = num;
+    let mut n = num as u64;
     let mut temp = [0u8; 16];
     let mut i = 16;
-    while n != 0 && i > 0 {
+    while n != 0 {
         i -= 1;
         let digest = (n & 0xF) as u8;
         temp[i] = HEX_CHARS_UPPER[digest as usize];
