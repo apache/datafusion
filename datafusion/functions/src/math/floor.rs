@@ -95,6 +95,31 @@ impl ScalarUDFImpl for FloorFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg = &args.args[0];
+
+        // Scalar fast path for float types - avoid array conversion overhead
+        // Note: Decimal types use the array path for proper precision/overflow validation
+        if let ColumnarValue::Scalar(scalar) = arg {
+            match scalar {
+                ScalarValue::Float64(v) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(
+                        v.map(f64::floor),
+                    )));
+                }
+                ScalarValue::Float32(v) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(
+                        v.map(f32::floor),
+                    )));
+                }
+                ScalarValue::Null => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                }
+                // Decimal types fall through to array path for overflow validation
+                _ => {}
+            }
+        }
+
+        // Array path
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         let value = &args[0];
 
