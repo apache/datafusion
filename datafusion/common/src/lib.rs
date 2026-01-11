@@ -47,6 +47,7 @@ pub mod error;
 pub mod file_options;
 pub mod format;
 pub mod hash_utils;
+pub mod heap_size;
 pub mod instant;
 pub mod metadata;
 pub mod nested_struct;
