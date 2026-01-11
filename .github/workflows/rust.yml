@@ -709,6 +709,10 @@ jobs:
           ./dev/update_function_docs.sh
           git diff --exit-code
 
+# This job ensures `datafusion-examples/README.md` stays in sync with the source code:
+# 1. Generates README automatically from examples/*.rs and examples.toml
+# 2. Formats it with DataFusion's standard prettier script
+# 3. Compares against committed README.md and fails if out-of-date
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib
