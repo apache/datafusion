@@ -90,20 +90,10 @@ pub fn last_value(expression: Expr, order_by: Vec<SortExpr>) -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct FirstValue {
     signature: Signature,
     is_input_pre_ordered: bool,
-}
-
-impl Debug for FirstValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("FirstValue")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
 }
 
 impl Default for FirstValue {
@@ -1040,20 +1030,10 @@ impl Accumulator for FirstValueAccumulator {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct LastValue {
     signature: Signature,
     is_input_pre_ordered: bool,
-}
-
-impl Debug for LastValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("LastValue")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .field("accumulator", &"<FUNC>")
-            .finish()
-    }
 }
 
 impl Default for LastValue {

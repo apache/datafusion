@@ -367,7 +367,7 @@ fn accumulate_correlation_states(
 /// where:
 /// n = number of observations
 /// sum_x = sum of x values
-/// sum_y = sum of y values  
+/// sum_y = sum of y values
 /// sum_xy = sum of (x * y)
 /// sum_xx = sum of x^2 values
 /// sum_yy = sum of y^2 values
