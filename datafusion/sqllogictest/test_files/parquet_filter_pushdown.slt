@@ -721,3 +721,139 @@ from t1
 where struct_col['field'][1]['nested'] > 1;
 ----
 2
+
+###
+# Comprehensive struct column filter pushdown tests
+# Tests for various struct access patterns being pushed down to parquet
+###
+
+statement ok
+COPY (
+  SELECT * FROM VALUES
+    ({id: 1, name: 'alice', score: 75.0, status: 'active', optional_field: arrow_cast(10, 'Int64')},
+     [{item_id: 1, value: 100.0}, {item_id: 2, value: 200.0}],
+     {outer: {inner: 1}}),
+    ({id: 2, name: 'bob', score: 45.0, status: 'inactive', optional_field: arrow_cast(NULL, 'Int64')},
+     [{item_id: 3, value: 300.0}, {item_id: 4, value: 400.0}],
+     {outer: {inner: 2}}),
+    ({id: 3, name: 'charlie', score: 90.0, status: 'active', optional_field: arrow_cast(30, 'Int64')},
+     [{item_id: 5, value: 500.0}],
+     {outer: {inner: 3}})
+  AS t(struct_col, list_of_structs, nested_struct)
+) TO 'test_files/scratch/parquet_filter_pushdown/struct_tests.parquet';
+
+statement ok
+DROP TABLE IF EXISTS struct_test;
+
+statement ok
+CREATE EXTERNAL TABLE struct_test
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/struct_tests.parquet';
+
+# Category 1: Simple struct field access
+
+# Test equality filter on struct field - verify pushdown in EXPLAIN
+query TT
+EXPLAIN SELECT struct_col FROM struct_test WHERE struct_col['id'] = 1;
+----
+logical_plan
+01)Filter: get_field(struct_test.struct_col, Utf8("id")) = Int64(1)
+02)--TableScan: struct_test projection=[struct_col], partial_filters=[get_field(struct_test.struct_col, Utf8("id")) = Int64(1)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/struct_tests.parquet]]}, projection=[struct_col], file_type=parquet, predicate=get_field(struct_col@0, id) = 1
+
+query ?
+SELECT struct_col FROM struct_test WHERE struct_col['id'] = 1;
+----
+{id: 1, name: alice, score: 75.0, status: active, optional_field: 10}
+
+# Test comparison filter on struct field
+query ?
+SELECT struct_col FROM struct_test WHERE struct_col['score'] > 50.0 ORDER BY struct_col['id'];
+----
+{id: 1, name: alice, score: 75.0, status: active, optional_field: 10}
+{id: 3, name: charlie, score: 90.0, status: active, optional_field: 30}
+
+# Test string equality filter on struct field
+query ?
+SELECT struct_col FROM struct_test WHERE struct_col['status'] = 'active' ORDER BY struct_col['id'];
+----
+{id: 1, name: alice, score: 75.0, status: active, optional_field: 10}
+{id: 3, name: charlie, score: 90.0, status: active, optional_field: 30}
+
+# Category 2: List of structs access
+
+# Test list element struct field access - verify pushdown in EXPLAIN
+query TT
+EXPLAIN SELECT list_of_structs FROM struct_test WHERE list_of_structs[1]['item_id'] = 1;
+----
+logical_plan
+01)Filter: get_field(array_element(struct_test.list_of_structs, Int64(1)), Utf8("item_id")) = Int64(1)
+02)--TableScan: struct_test projection=[list_of_structs], partial_filters=[get_field(array_element(struct_test.list_of_structs, Int64(1)), Utf8("item_id")) = Int64(1)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/struct_tests.parquet]]}, projection=[list_of_structs], file_type=parquet, predicate=get_field(array_element(list_of_structs@1, 1), item_id) = 1
+
+query ?
+SELECT list_of_structs FROM struct_test WHERE list_of_structs[1]['item_id'] = 1;
+----
+[{item_id: 1, value: 100.0}, {item_id: 2, value: 200.0}]
+
+# Test list element struct field with comparison
+query ?
+SELECT list_of_structs FROM struct_test WHERE list_of_structs[1]['value'] > 200.0 ORDER BY struct_col['id'];
+----
+[{item_id: 3, value: 300.0}, {item_id: 4, value: 400.0}]
+[{item_id: 5, value: 500.0}]
+
+# Category 3: Nested struct access
+
+# Test nested struct field access - verify pushdown in EXPLAIN
+query TT
+EXPLAIN SELECT nested_struct FROM struct_test WHERE nested_struct['outer']['inner'] = 2;
+----
+logical_plan
+01)Filter: get_field(struct_test.nested_struct, Utf8("outer"), Utf8("inner")) = Int64(2)
+02)--TableScan: struct_test projection=[nested_struct], partial_filters=[get_field(struct_test.nested_struct, Utf8("outer"), Utf8("inner")) = Int64(2)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/struct_tests.parquet]]}, projection=[nested_struct], file_type=parquet, predicate=get_field(nested_struct@2, outer, inner) = 2
+
+query ?
+SELECT nested_struct FROM struct_test WHERE nested_struct['outer']['inner'] = 2;
+----
+{outer: {inner: 2}}
+
+# Category 4: Combined predicates with AND/OR
+
+# Test AND with multiple struct field predicates
+query ?
+SELECT struct_col FROM struct_test
+WHERE struct_col['status'] = 'active' AND struct_col['score'] > 80.0;
+----
+{id: 3, name: charlie, score: 90.0, status: active, optional_field: 30}
+
+# Test OR with struct field predicates
+query ?
+SELECT struct_col FROM struct_test
+WHERE struct_col['id'] = 1 OR struct_col['id'] = 3
+ORDER BY struct_col['id'];
+----
+{id: 1, name: alice, score: 75.0, status: active, optional_field: 10}
+{id: 3, name: charlie, score: 90.0, status: active, optional_field: 30}
+
+# Category 5: NULL handling
+
+# Test IS NULL filter on struct field
+query ?
+SELECT struct_col FROM struct_test WHERE struct_col['optional_field'] IS NULL;
+----
+{id: 2, name: bob, score: 45.0, status: inactive, optional_field: NULL}
+
+# Test IS NOT NULL filter on struct field
+query ?
+SELECT struct_col FROM struct_test
+WHERE struct_col['optional_field'] IS NOT NULL
+ORDER BY struct_col['id'];
+----
+{id: 1, name: alice, score: 75.0, status: active, optional_field: 10}
+{id: 3, name: charlie, score: 90.0, status: active, optional_field: 30}
+
+# Cleanup
+statement ok
+DROP TABLE struct_test;

@@ -492,11 +492,8 @@ Struct("r": Utf8, "c": Float64)
 statement ok
 drop table t;
 
-statement ok
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Float64 type
 create table t as values({r: 'a', c: 1}), ({c: 2.3, r: 'b'});
-
-statement ok
-drop table t;
 
 ##################################
 ## Test Coalesce with Struct
@@ -563,11 +560,9 @@ create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as valu
     (row('purple', 1), row('green', 2.3));
 
 # out of order struct literal
-statement ok
+# TODO: This query should not fail
+statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
-
-statement ok
-drop table t;
 
 ##################################
 ## Test Array of Struct
@@ -578,11 +573,9 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 ----
 [{r: a, c: 1}, {r: b, c: 2}]
 
-# out of order struct literal in array
-query ?
+# Can't create a list of struct with different field types
+query error
 select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
-----
-[{c: 1, r: a}, {c: 2, r: b}]
 
 statement ok
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
@@ -599,11 +592,9 @@ drop table t;
 statement ok
 create table t(a struct(r varchar, c int), b struct(c float, r varchar)) as values (row('a', 1), row(2.3, 'b'));
 
-# create array with different struct field order
-query T
+# create array with different struct type is not valid
+query error
 select arrow_typeof([a, b]) from t;
-----
-List(Struct("c": Float32, "r": Utf8View))
 
 statement ok
 drop table t;

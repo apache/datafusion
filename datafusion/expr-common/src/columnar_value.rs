@@ -20,7 +20,7 @@
 use arrow::{
     array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
     compute::{CastOptions, kernels, max, min},
-    datatypes::{DataType, Field},
+    datatypes::DataType,
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
@@ -28,7 +28,6 @@ use datafusion_common::{
     Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
     internal_err,
-    nested_struct,
     scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
 };
 use std::fmt;

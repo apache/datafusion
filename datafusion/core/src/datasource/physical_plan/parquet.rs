@@ -169,8 +169,7 @@ mod tests {
             if self.pushdown_predicate {
                 source = source
                     .with_pushdown_filters(true)
-                    .with_reorder_filters(true)
-                    .with_filter_effectiveness_threshold(0.0);
+                    .with_reorder_filters(true);
             } else {
                 source = source.with_pushdown_filters(false);
             }
