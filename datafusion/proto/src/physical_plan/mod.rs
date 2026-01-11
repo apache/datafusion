@@ -86,9 +86,9 @@ use self::from_proto::parse_protobuf_partitioning;
 use self::to_proto::{serialize_partitioning, serialize_physical_expr};
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_sort_expr, parse_physical_sort_exprs, parse_physical_window_expr,
-    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
-    proto_to_physical_expr,
+    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
+    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
+    parse_table_schema_from_proto,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
@@ -3656,7 +3656,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalExtensionProtoCodec {
         Self: Sized,
     {
         // Default implementation calls the free function
-        proto_to_physical_expr(proto, ctx, input_schema, codec, self)
+        parse_physical_expr(proto, ctx, input_schema, codec, self)
     }
 
     fn physical_expr_to_proto(

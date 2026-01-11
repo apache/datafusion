@@ -230,7 +230,8 @@ where
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-pub fn proto_to_physical_expr(
+/// * `proto_converter` - Conversion functions for physical plans and expressions
+pub fn parse_physical_expr(
     proto: &protobuf::PhysicalExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,

@@ -57,7 +57,7 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::from_proto::proto_to_physical_expr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, PhysicalExtensionCodec, PhysicalProtoConverterExtension,
@@ -430,7 +430,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         input_schema: &Schema,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        proto_to_physical_expr(proto, ctx, input_schema, codec, self)
+        parse_physical_expr(proto, ctx, input_schema, codec, self)
     }
 
     fn physical_expr_to_proto(

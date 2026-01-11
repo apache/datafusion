@@ -46,7 +46,7 @@ use datafusion::physical_plan::expressions::{BinaryExpr, col};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::prelude::SessionContext;
-use datafusion_proto::physical_plan::from_proto::proto_to_physical_expr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
@@ -246,7 +246,7 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         }
 
         // Cache miss - deserialize and store
-        let expr = proto_to_physical_expr(proto, ctx, input_schema, codec, self)?;
+        let expr = parse_physical_expr(proto, ctx, input_schema, codec, self)?;
 
         // Store in cache
         {

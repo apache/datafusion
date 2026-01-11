@@ -90,8 +90,8 @@ pub trait Serializeable: Sized {
 impl Serializeable for Expr {
     fn to_bytes(&self) -> Result<Bytes> {
         let mut buffer = BytesMut::new();
-        let codec = DefaultLogicalExtensionCodec {};
-        let protobuf: protobuf::LogicalExprNode = serialize_expr(self, &codec)
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        let protobuf: protobuf::LogicalExprNode = serialize_expr(self, &extension_codec)
             .map_err(|e| plan_datafusion_err!("Error encoding expr as protobuf: {e}"))?;
 
         protobuf
@@ -192,8 +192,8 @@ impl Serializeable for Expr {
         let protobuf = protobuf::LogicalExprNode::decode(bytes)
             .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
 
-        let codec = DefaultLogicalExtensionCodec {};
-        logical_plan::from_proto::parse_expr(&protobuf, registry, &codec)
+        let extension_codec = DefaultLogicalExtensionCodec {};
+        logical_plan::from_proto::parse_expr(&protobuf, registry, &extension_codec)
             .map_err(|e| plan_datafusion_err!("Error parsing protobuf into Expr: {e}"))
     }
 }
