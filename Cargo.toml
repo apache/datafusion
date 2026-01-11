@@ -273,14 +273,14 @@ debug = true
 strip = false
 
 [patch.crates-io]
-parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
-arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "fix-cache-nested" }
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
