@@ -43,7 +43,10 @@ async fn test_repartition_memory_limit() {
         .unwrap();
     let config = SessionConfig::new()
         .with_batch_size(32)
-        .with_target_partitions(2);
+        .with_target_partitions(2)
+        // Ensure this test still triggers repartitioning even when the
+        // optimizer uses `repartition_file_min_size` as a threshold.
+        .with_repartition_file_min_size(1);
     let ctx = SessionContext::new_with_config_rt(config, Arc::new(runtime));
     let batches = vec![
         RecordBatch::try_from_iter(vec![(

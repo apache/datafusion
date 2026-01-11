@@ -223,6 +223,12 @@ impl SessionConfig {
         self.options.execution.target_partitions
     }
 
+    /// Minimum input size in bytes before the optimizer will repartition file
+    /// scans or other operators that make use of `repartition_file_min_size`.
+    pub fn repartition_file_min_size(&self) -> usize {
+        self.options.optimizer.repartition_file_min_size
+    }
+
     /// Is the information schema enabled?
     pub fn information_schema(&self) -> bool {
         self.options.catalog.information_schema
