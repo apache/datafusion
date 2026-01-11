@@ -58,11 +58,11 @@ SELECT size(make_array(1, NULL, 3));
 ----
 3
 
-# NULL array returns NULL
+# NULL array returns -1 (Spark behavior)
 query I
 SELECT size(NULL::int[]);
 ----
-NULL
+-1
 
 # Map size tests
 query I
@@ -104,3 +104,26 @@ query I
 SELECT size(make_array(1.5, 2.5, 3.5, 4.5));
 ----
 4
+
+# LargeList tests
+query I
+SELECT size(arrow_cast(make_array(1, 2, 3), 'LargeList(Int32)'));
+----
+3
+
+query I
+SELECT size(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'));
+----
+5
+
+# FixedSizeList tests
+query I
+SELECT size(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int32)'));
+----
+3
+
+query I
+SELECT size(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int32)'));
+----
+4
+
