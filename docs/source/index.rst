@@ -61,7 +61,7 @@ The following related subprojects target end users and have separate documentati
 "Out of the box," DataFusion offers `SQL <https://datafusion.apache.org/user-guide/sql/index.html>`_
 and `Dataframe <https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html>`_ APIs,
 excellent `performance <https://benchmark.clickhouse.com/>`_, built-in support for CSV, Parquet, JSON, and Avro,
-extensive customization, and a great community.
+extensive customization, and a great `community`_.
 `Python Bindings <https://github.com/apache/datafusion-python>`_ are also available.
 `Ballista <https://datafusion.apache.org/ballista/>`_ is Apache DataFusion extension enabling the parallelized execution of workloads across multiple nodes in a distributed environment.
 
@@ -81,6 +81,7 @@ To get started, see
 .. _datafusion-examples: https://github.com/apache/datafusion/tree/main/datafusion-examples
 .. _developer’s guide: contributor-guide/index.html#developer-s-guide
 .. _library user guide: library-user-guide/index.html
+.. _community: contributor-guide/communication.html
 .. _communication: contributor-guide/communication.html
 
 .. _toc.asf-links:
