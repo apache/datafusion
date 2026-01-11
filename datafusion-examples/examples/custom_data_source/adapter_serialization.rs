@@ -37,8 +37,7 @@ use std::sync::Arc;
 use arrow::array::record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::assert_batches_eq;
-use datafusion::common::Result;
-use datafusion::common::not_impl_err;
+use datafusion::common::{Result, not_impl_err};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
@@ -55,15 +54,17 @@ use datafusion_physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
 use datafusion_proto::bytes::{
-    physical_plan_from_bytes_with_extension_codec,
-    physical_plan_to_bytes_with_extension_codec,
+    physical_plan_from_bytes_with_proto_converter,
+    physical_plan_to_bytes_with_proto_converter,
 };
+use datafusion_proto::physical_plan::from_proto::proto_to_physical_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, PhysicalExtensionCodec, PhysicalExtensionProtoCodec,
+    AsExecutionPlan, PhysicalExtensionCodec, PhysicalProtoConverterExtension,
 };
+use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{
     PhysicalExprNode, PhysicalExtensionNode, PhysicalPlanNode,
-    physical_plan_node::PhysicalPlanType,
 };
 use object_store::memory::InMemory;
 use object_store::path::Path;
@@ -126,7 +127,7 @@ pub async fn adapter_serialization() -> Result<()> {
     // Step 4: Serialize with our custom codec
     println!("\nStep 4: Serializing plan with AdapterPreservingCodec...");
     let codec = AdapterPreservingCodec;
-    let bytes = physical_plan_to_bytes_with_extension_codec(
+    let bytes = physical_plan_to_bytes_with_proto_converter(
         Arc::clone(&original_plan),
         &codec,
         &codec,
@@ -138,7 +139,7 @@ pub async fn adapter_serialization() -> Result<()> {
     println!("\nStep 5: Deserializing plan with AdapterPreservingCodec...");
     let task_ctx = ctx.task_ctx();
     let restored_plan =
-        physical_plan_from_bytes_with_extension_codec(&bytes, &task_ctx, &codec, &codec)?;
+        physical_plan_from_bytes_with_proto_converter(&bytes, &task_ctx, &codec, &codec)?;
 
     // Verify adapter is restored
     let has_adapter_after = verify_adapter_in_plan(&restored_plan, "restored");
@@ -314,10 +315,10 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
     }
 }
 
-impl PhysicalExtensionProtoCodec for AdapterPreservingCodec {
+impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
     fn execution_plan_to_proto(
         &self,
-        plan: Arc<dyn ExecutionPlan>,
+        plan: &Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
         // Check if this is a DataSourceExec with adapter
@@ -378,7 +379,7 @@ impl PhysicalExtensionProtoCodec for AdapterPreservingCodec {
         }
 
         // No adapter found - use default serialization
-        PhysicalPlanNode::try_from_physical_plan(plan, extension_codec, self)
+        PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), extension_codec, self)
     }
 
     // Interception point: override deserialization to unwrap adapters
@@ -424,12 +425,20 @@ impl PhysicalExtensionProtoCodec for AdapterPreservingCodec {
 
     fn proto_to_physical_expr(
         &self,
-        _proto: &PhysicalExprNode,
-        _ctx: &TaskContext,
-        _input_schema: &Schema,
-        _codec: &dyn PhysicalExtensionCodec,
+        proto: &PhysicalExprNode,
+        ctx: &TaskContext,
+        input_schema: &Schema,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        todo!()
+        proto_to_physical_expr(proto, ctx, input_schema, codec, self)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalExprNode> {
+        serialize_physical_expr(expr, codec, self)
     }
 }
 

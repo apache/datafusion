@@ -112,7 +112,7 @@ use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
-    PhysicalExtensionCodec, PhysicalExtensionProtoCodec,
+    PhysicalExtensionCodec, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use prost::Message;
@@ -143,7 +143,7 @@ fn roundtrip_test_and_return(
     exec_plan: Arc<dyn ExecutionPlan>,
     ctx: &SessionContext,
     codec: &dyn PhysicalExtensionCodec,
-    proto_codec: &dyn PhysicalExtensionProtoCodec,
+    proto_codec: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let proto: PhysicalPlanNode =
         PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), codec, proto_codec)

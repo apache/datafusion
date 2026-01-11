@@ -47,9 +47,10 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::from_proto::proto_to_physical_expr;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
-    PhysicalExtensionProtoCodec,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
@@ -103,13 +104,7 @@ pub async fn expression_deduplication() -> Result<()> {
 
     let extension_codec = DefaultPhysicalExtensionCodec {};
     let caching_codec = CachingCodec::new();
-    // let proto = PhysicalPlanNode::try_from_physical_plan(
-    //     filter_plan.clone(),
-    //     &extension_codec,
-    //     &caching_codec,
-    // )?;
-    let proto =
-        caching_codec.execution_plan_to_proto(filter_plan.clone(), &extension_codec)?;
+    let proto = caching_codec.execution_plan_to_proto(&filter_plan, &extension_codec)?;
 
     // Serialize to bytes
     let mut bytes = Vec::new();
@@ -205,7 +200,7 @@ impl PhysicalExtensionCodec for CachingCodec {
     }
 }
 
-impl PhysicalExtensionProtoCodec for CachingCodec {
+impl PhysicalProtoConverterExtension for CachingCodec {
     fn proto_to_execution_plan(
         &self,
         _ctx: &TaskContext,
@@ -217,10 +212,10 @@ impl PhysicalExtensionProtoCodec for CachingCodec {
 
     fn execution_plan_to_proto(
         &self,
-        plan: Arc<dyn ExecutionPlan>,
+        plan: &Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
-        PhysicalPlanNode::try_from_physical_plan(plan, extension_codec, self)
+        PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), extension_codec, self)
     }
 
     // CACHING IMPLEMENTATION: Intercept expression deserialization
@@ -262,5 +257,13 @@ impl PhysicalExtensionProtoCodec for CachingCodec {
         }
 
         Ok(expr)
+    }
+
+    fn physical_expr_to_proto(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalExprNode> {
+        serialize_physical_expr(expr, codec, self)
     }
 }
