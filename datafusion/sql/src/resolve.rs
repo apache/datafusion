@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::TableReference;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use datafusion_common::{DataFusionError, Result};
+
+use crate::TableReference;
 use crate::parser::{CopyToSource, CopyToStatement, Statement as DFStatement};
-use crate::planner::{IdentNormalizer, object_name_to_table_reference};
+use crate::planner::object_name_to_table_reference;
 use sqlparser::ast::*;
 
 // following constants are used in `resolve_table_references`
@@ -45,45 +47,40 @@ const INFORMATION_SCHEMA_TABLES: &[&str] = &[
     PARAMETERS,
 ];
 
+// Collect table/CTE references as `TableReference`s and normalize them during traversal.
+// This avoids a second normalization/conversion pass after visiting the AST.
 struct RelationVisitor {
-    relations: BTreeSet<ObjectName>,
-    all_ctes: BTreeSet<ObjectName>,
-    ctes_in_scope: Vec<ObjectName>,
-    normalizer: IdentNormalizer,
+    relations: BTreeSet<TableReference>,
+    all_ctes: BTreeSet<TableReference>,
+    ctes_in_scope: Vec<TableReference>,
+    enable_ident_normalization: bool,
 }
 
 impl RelationVisitor {
-    fn normalize_object_name(&self, name: &ObjectName) -> ObjectName {
-        let parts: Vec<ObjectNamePart> = name
-            .0
-            .iter()
-            .cloned()
-            .map(|part| match part {
-                ObjectNamePart::Identifier(ident) => ObjectNamePart::Identifier(
-                    Ident::new(self.normalizer.normalize(ident)),
-                ),
-                other => other,
-            })
-            .collect();
-        ObjectName(parts)
-    }
-
     /// Record the reference to `relation`, if it's not a CTE reference.
-    fn insert_relation(&mut self, relation: &ObjectName) {
-        let relation = self.normalize_object_name(relation);
-        if !self.relations.contains(&relation) && !self.ctes_in_scope.contains(&relation)
-        {
-            self.relations.insert(relation);
+    fn insert_relation(&mut self, relation: &ObjectName) -> ControlFlow<DataFusionError> {
+        match object_name_to_table_reference(
+            relation.clone(),
+            self.enable_ident_normalization,
+        ) {
+            Ok(relation) => {
+                if !self.relations.contains(&relation)
+                    && !self.ctes_in_scope.contains(&relation)
+                {
+                    self.relations.insert(relation);
+                }
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(e),
         }
     }
 }
 
 impl Visitor for RelationVisitor {
-    type Break = ();
+    type Break = DataFusionError;
 
-    fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<()> {
-        self.insert_relation(relation);
-        ControlFlow::Continue(())
+    fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<Self::Break> {
+        self.insert_relation(relation)
     }
 
     fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
@@ -96,12 +93,18 @@ impl Visitor for RelationVisitor {
                 if !with.recursive {
                     // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
                     // but thankfully `insert_relation` is idempotent.
-                    let _ = cte.visit(self);
+                    if let Some(err) = cte.visit(self).break_value() {
+                        return ControlFlow::Break(err);
+                    }
                 }
-                self.ctes_in_scope
-                    .push(self.normalize_object_name(&ObjectName::from(vec![
-                        cte.alias.name.clone(),
-                    ])));
+                let cte_name = ObjectName::from(vec![cte.alias.name.clone()]);
+                match object_name_to_table_reference(
+                    cte_name,
+                    self.enable_ident_normalization,
+                ) {
+                    Ok(cte_ref) => self.ctes_in_scope.push(cte_ref),
+                    Err(e) => return ControlFlow::Break(e),
+                }
             }
         }
         ControlFlow::Continue(())
@@ -117,13 +120,15 @@ impl Visitor for RelationVisitor {
         ControlFlow::Continue(())
     }
 
-    fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+    fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
         if let Statement::ShowCreate {
             obj_type: ShowCreateObject::Table | ShowCreateObject::View,
             obj_name,
         } = statement
         {
-            self.insert_relation(obj_name)
+            if let Some(err) = self.insert_relation(obj_name).break_value() {
+                return ControlFlow::Break(err);
+            }
         }
 
         // SHOW statements will later be rewritten into a SELECT from the information_schema
@@ -140,35 +145,53 @@ impl Visitor for RelationVisitor {
         );
         if requires_information_schema {
             for s in INFORMATION_SCHEMA_TABLES {
-                self.relations.insert(ObjectName::from(vec![
+                // Information schema references are synthesized here, so convert directly.
+                let obj = ObjectName::from(vec![
                     Ident::new(INFORMATION_SCHEMA),
                     Ident::new(*s),
-                ]));
+                ]);
+                match object_name_to_table_reference(obj, self.enable_ident_normalization)
+                {
+                    Ok(tbl_ref) => {
+                        self.relations.insert(tbl_ref);
+                    }
+                    Err(e) => return ControlFlow::Break(e),
+                }
             }
         }
         ControlFlow::Continue(())
     }
 }
 
-fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
+fn control_flow_to_result(flow: ControlFlow<DataFusionError>) -> Result<()> {
+    match flow {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(err) => Err(err),
+    }
+}
+
+fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Result<()> {
     match statement {
         DFStatement::Statement(s) => {
-            let _ = s.as_ref().visit(visitor);
+            control_flow_to_result(s.as_ref().visit(visitor))?;
         }
         DFStatement::CreateExternalTable(table) => {
-            visitor.insert_relation(&table.name);
+            control_flow_to_result(visitor.insert_relation(&table.name))?;
         }
         DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
             CopyToSource::Relation(table_name) => {
-                visitor.insert_relation(table_name);
+                control_flow_to_result(visitor.insert_relation(table_name))?;
             }
             CopyToSource::Query(query) => {
-                let _ = query.visit(visitor);
+                control_flow_to_result(query.visit(visitor))?;
             }
         },
-        DFStatement::Explain(explain) => visit_statement(&explain.statement, visitor),
+        DFStatement::Explain(explain) => {
+            visit_statement(&explain.statement, visitor)?;
+        }
         DFStatement::Reset(_) => {}
     }
+    Ok(())
 }
 
 /// Collects all tables and views referenced in the SQL statement. CTEs are collected separately.
@@ -208,27 +231,20 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) {
 pub fn resolve_table_references(
     statement: &crate::parser::Statement,
     enable_ident_normalization: bool,
-) -> datafusion_common::Result<(Vec<TableReference>, Vec<TableReference>)> {
+) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
     let mut visitor = RelationVisitor {
         relations: BTreeSet::new(),
         all_ctes: BTreeSet::new(),
         ctes_in_scope: vec![],
-        normalizer: IdentNormalizer::new(enable_ident_normalization),
+        enable_ident_normalization,
     };
 
-    visit_statement(statement, &mut visitor);
+    visit_statement(statement, &mut visitor)?;
 
-    let table_refs = visitor
-        .relations
-        .into_iter()
-        .map(|x| object_name_to_table_reference(x, false))
-        .collect::<datafusion_common::Result<_>>()?;
-    let ctes = visitor
-        .all_ctes
-        .into_iter()
-        .map(|x| object_name_to_table_reference(x, false))
-        .collect::<datafusion_common::Result<_>>()?;
-    Ok((table_refs, ctes))
+    Ok((
+        visitor.relations.into_iter().collect(),
+        visitor.all_ctes.into_iter().collect(),
+    ))
 }
 
 #[cfg(test)]
