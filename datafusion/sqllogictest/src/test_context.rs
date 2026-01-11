@@ -30,7 +30,7 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
-    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
@@ -96,6 +96,10 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "cte_quoted_reference.slt" => {
+                info!("Registering strict catalog provider for CTE tests");
+                register_strict_orders_catalog(test_ctx.session_ctx());
+            }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
                 register_temp_table(test_ctx.session_ctx()).await;
@@ -169,6 +173,104 @@ impl TestContext {
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
     }
+}
+
+// ==============================================================================
+// Strict Catalog / Schema Provider (sqllogictest-only)
+// ==============================================================================
+//
+// The goal of `cte_quoted_reference.slt` is to exercise end-to-end query planning
+// while detecting *unexpected* catalog lookups.
+//
+// Specifically, if DataFusion incorrectly treats a CTE reference (e.g. `"barbaz"`)
+// as a real table reference, the planner will attempt to resolve it through the
+// schema provider. The types below deliberately `panic!` on any lookup other than
+// the one table we expect (`orders`).
+//
+// This makes the "extra provider lookup" bug observable in an end-to-end test,
+// rather than being silently ignored by default providers that return `Ok(None)`
+// for unknown tables.
+
+#[derive(Debug)]
+struct StrictOrdersCatalog {
+    schema: Arc<dyn SchemaProvider>,
+}
+
+impl CatalogProvider for StrictOrdersCatalog {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema_names(&self) -> Vec<String> {
+        vec!["public".to_string()]
+    }
+
+    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        (name == "public").then(|| Arc::clone(&self.schema))
+    }
+}
+
+#[derive(Debug)]
+struct StrictOrdersSchema {
+    orders: Arc<dyn TableProvider>,
+}
+
+#[async_trait]
+impl SchemaProvider for StrictOrdersSchema {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn table_names(&self) -> Vec<String> {
+        vec!["orders".to_string()]
+    }
+
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        match name {
+            "orders" => Ok(Some(Arc::clone(&self.orders))),
+            other => panic!(
+                "unexpected table lookup: {other}. This maybe indicates a CTE reference was \
+                 incorrectly treated as a catalog table reference."
+            ),
+        }
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        name == "orders"
+    }
+}
+
+fn register_strict_orders_catalog(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "order_id",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )
+    .expect("record batch should be valid");
+
+    let orders =
+        MemTable::try_new(schema, vec![vec![batch]]).expect("memtable should be valid");
+
+    let schema_provider: Arc<dyn SchemaProvider> = Arc::new(StrictOrdersSchema {
+        orders: Arc::new(orders),
+    });
+
+    // Override the default "datafusion" catalog for this test file so that any
+    // unexpected lookup is caught immediately.
+    ctx.register_catalog(
+        "datafusion",
+        Arc::new(StrictOrdersCatalog {
+            schema: schema_provider,
+        }),
+    );
 }
 
 #[cfg(feature = "avro")]
