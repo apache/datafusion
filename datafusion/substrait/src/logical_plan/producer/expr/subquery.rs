@@ -17,8 +17,9 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchemaRef;
-use datafusion::logical_expr::expr::InSubquery;
-use substrait::proto::expression::subquery::InPredicate;
+use datafusion::logical_expr::Subquery;
+use datafusion::logical_expr::expr::{Exists, InSubquery};
+use substrait::proto::expression::subquery::{InPredicate, Scalar, SetPredicate};
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};
@@ -68,5 +69,72 @@ pub fn from_in_subquery(
         })
     } else {
         Ok(substrait_subquery)
+    }
+}
+
+/// Convert DataFusion ScalarSubquery to Substrait Scalar subquery type
+pub fn from_scalar_subquery(
+    producer: &mut impl SubstraitProducer,
+    subquery: &Subquery,
+    _schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+
+    Ok(Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::Scalar(
+                        Box::new(Scalar {
+                            input: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    })
+}
+
+/// Convert DataFusion Exists expression to Substrait SetPredicate subquery type
+pub fn from_exists(
+    producer: &mut impl SubstraitProducer,
+    exists: &Exists,
+    _schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    let subquery_plan = producer.handle_plan(exists.subquery.subquery.as_ref())?;
+
+    let substrait_exists = Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::SetPredicate(
+                        Box::new(SetPredicate {
+                            predicate_op: substrait::proto::expression::subquery::set_predicate::PredicateOp::Exists as i32,
+                            tuples: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    };
+
+    // Handle negated EXISTS (NOT EXISTS)
+    if exists.negated {
+        let function_anchor = producer.register_function("not".to_string());
+
+        #[expect(deprecated)]
+        Ok(Expression {
+            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
+                function_reference: function_anchor,
+                arguments: vec![FunctionArgument {
+                    arg_type: Some(ArgType::Value(substrait_exists)),
+                }],
+                output_type: None,
+                args: vec![],
+                options: vec![],
+            })),
+        })
+    } else {
+        Ok(substrait_exists)
     }
 }
