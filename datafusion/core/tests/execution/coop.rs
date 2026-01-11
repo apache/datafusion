@@ -606,6 +606,7 @@ async fn join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -655,6 +656,7 @@ async fn join_agg_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     // Project only one column (“value” from the left side) because we just want to sum that
@@ -720,6 +722,7 @@ async fn hash_join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -751,9 +754,10 @@ async fn hash_join_without_repartition_and_no_agg(
         /* filter */ None,
         &JoinType::Inner,
         /* output64 */ None,
-        // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
+        // Using CollectLeft is fine—just avoid RepartitionExec's partitioned channels.
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await

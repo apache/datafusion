@@ -133,6 +133,7 @@ impl TreeNode for LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -143,6 +144,7 @@ impl TreeNode for LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -564,6 +566,7 @@ impl LogicalPlan {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -574,6 +577,7 @@ impl LogicalPlan {
                     join_constraint,
                     schema,
                     null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
