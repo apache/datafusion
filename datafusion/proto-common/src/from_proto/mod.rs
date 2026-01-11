@@ -310,10 +310,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     false => union.type_ids.iter().map(|i| *i as i8).collect(),
                 };
 
-                DataType::Union(
-                    UnionFields::try_new(type_ids, union_fields).unwrap(),
-                    union_mode,
-                )
+                DataType::Union(UnionFields::new(type_ids, union_fields), union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let key_datatype = dict.as_ref().key.as_deref().required("key")?;
@@ -605,14 +602,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .collect::<Option<Vec<_>>>();
                 let fields = fields.ok_or_else(|| Error::required("UnionField"))?;
                 let fields = parse_proto_fields_to_fields(&fields)?;
-                let fields = match UnionFields::try_new(ids, fields) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        return Err(Error::General(format!(
-                            "Invalid UnionFields in ScalarValue::Union: {e}"
-                        )));
-                    }
-                };
+                let fields = UnionFields::new(ids, fields);
                 let v_id = val.value_id as i8;
                 let val = match &val.value {
                     None => None,

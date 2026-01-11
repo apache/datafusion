@@ -8339,7 +8339,7 @@ mod tests {
             )))),
         ];
 
-        let check_array = |array: Arc<dyn Array>| {
+        let check_array = |array| {
             let is_null = is_null(&array).unwrap();
             assert_eq!(is_null, BooleanArray::from(vec![true, false, false]));
 
@@ -8868,7 +8868,7 @@ mod tests {
             .unwrap(),
             ScalarValue::try_new_null(&DataType::Map(map_field_ref, false)).unwrap(),
             ScalarValue::try_new_null(&DataType::Union(
-                UnionFields::try_new(vec![42], vec![field_ref]).unwrap(),
+                UnionFields::new(vec![42], vec![field_ref]),
                 UnionMode::Dense,
             ))
             .unwrap(),
@@ -8971,14 +8971,13 @@ mod tests {
         }
 
         // Test union type
-        let union_fields = UnionFields::try_new(
+        let union_fields = UnionFields::new(
             vec![0, 1],
             vec![
                 Field::new("i32", DataType::Int32, false),
                 Field::new("f64", DataType::Float64, false),
             ],
-        )
-        .unwrap();
+        );
         let union_result = ScalarValue::new_default(&DataType::Union(
             union_fields.clone(),
             UnionMode::Sparse,
