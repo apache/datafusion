@@ -370,7 +370,7 @@ dependencies = [
  "futures",
  "once_cell",
  "paste",
- "prost",
+ "prost 0.14.3",
  "prost-types",
  "tonic",
  "tonic-prost",
@@ -1117,7 +1117,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85a885520bf6249ab931a764ffdb87b0ceef48e6e7d807cfdb21b751e086e1ad"
 dependencies = [
- "prost",
+ "prost 0.14.3",
  "prost-types",
  "tonic",
  "tonic-prost",
@@ -1134,7 +1134,7 @@ dependencies = [
  "bollard-buildkit-proto",
  "bytes",
  "chrono",
- "prost",
+ "prost 0.14.3",
  "serde",
  "serde_json",
  "serde_repr",
@@ -2095,7 +2095,7 @@ dependencies = [
  "mimalloc",
  "nix",
  "object_store",
- "prost",
+ "prost 0.14.3",
  "rand 0.9.2",
  "serde_json",
  "strum",
@@ -2196,7 +2196,7 @@ dependencies = [
  "doc-comment",
  "futures",
  "log",
- "prost",
+ "prost 0.14.3",
  "semver",
  "tokio",
 ]
@@ -2509,7 +2509,7 @@ dependencies = [
  "object_store",
  "pbjson 0.9.0",
  "pretty_assertions",
- "prost",
+ "prost 0.14.3",
  "serde",
  "serde_json",
  "tokio",
@@ -2523,7 +2523,7 @@ dependencies = [
  "datafusion-common",
  "doc-comment",
  "pbjson 0.9.0",
- "prost",
+ "prost 0.14.3",
  "serde",
 ]
 
@@ -2651,7 +2651,7 @@ dependencies = [
  "itertools 0.14.0",
  "object_store",
  "pbjson-types 0.9.0",
- "prost",
+ "prost 0.8.0",
  "serde_json",
  "substrait",
  "tokio",
@@ -3719,6 +3719,15 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4421,7 +4430,7 @@ checksum = "af22d08a625a2213a78dbb0ffa253318c5c79ce3133d32d296655a7bdfb02095"
 dependencies = [
  "heck",
  "itertools 0.14.0",
- "prost",
+ "prost 0.14.3",
  "prost-types",
 ]
 
@@ -4433,7 +4442,7 @@ checksum = "2ed4d5c6ae95e08ac768883c8401cf0e8deb4e6e1d6a4e1fd3d2ec4f0ec63200"
 dependencies = [
  "heck",
  "itertools 0.14.0",
- "prost",
+ "prost 0.14.3",
  "prost-types",
 ]
 
@@ -4447,7 +4456,7 @@ dependencies = [
  "chrono",
  "pbjson 0.8.0",
  "pbjson-build 0.8.0",
- "prost",
+ "prost 0.14.3",
  "prost-build",
  "serde",
 ]
@@ -4462,7 +4471,7 @@ dependencies = [
  "chrono",
  "pbjson 0.9.0",
  "pbjson-build 0.9.0",
- "prost",
+ "prost 0.14.3",
  "prost-build",
  "serde",
 ]
@@ -4710,12 +4719,22 @@ dependencies = [
 
 [[package]]
 name = "prost"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de5e2533f59d08fcf364fd374ebda0692a70bd6d7e66ef97f306f45c6c5d8020"
+dependencies = [
+ "bytes",
+ "prost-derive 0.8.0",
+]
+
+[[package]]
+name = "prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
 dependencies = [
  "bytes",
- "prost-derive",
+ "prost-derive 0.14.3",
 ]
 
 [[package]]
@@ -4730,11 +4749,24 @@ dependencies = [
  "multimap",
  "petgraph",
  "prettyplease",
- "prost",
+ "prost 0.14.3",
  "prost-types",
  "regex",
  "syn 2.0.114",
  "tempfile",
+]
+
+[[package]]
+name = "prost-derive"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "600d2f334aa05acb02a755e217ef1ab6dea4d51b58b7846588b747edec04efba"
+dependencies = [
+ "anyhow",
+ "itertools 0.10.5",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4756,7 +4788,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8991c4cbdb8bc5b11f0b074ffe286c30e523de90fee5ba8132f1399f23cb3dd7"
 dependencies = [
- "prost",
+ "prost 0.14.3",
 ]
 
 [[package]]
@@ -5825,7 +5857,7 @@ dependencies = [
  "pbjson-build 0.8.0",
  "pbjson-types 0.8.0",
  "prettyplease",
- "prost",
+ "prost 0.14.3",
  "prost-build",
  "prost-types",
  "protobuf-src",
@@ -6234,7 +6266,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66bd50ad6ce1252d87ef024b3d64fe4c3cf54a86fb9ef4c631fdd0ded7aeaa67"
 dependencies = [
  "bytes",
- "prost",
+ "prost 0.14.3",
  "tonic",
 ]
 
