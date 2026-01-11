@@ -118,7 +118,10 @@ fn schema_to_field_with_props(
                     .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
                     .collect::<Result<Vec<Field>>>()?;
                 let type_ids = 0_i8..fields.len() as i8;
-                DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
+                DataType::Union(
+                    UnionFields::try_new(type_ids, fields).unwrap(),
+                    UnionMode::Dense,
+                )
             }
         }
         AvroSchema::Record(RecordSchema { fields, .. }) => {
