@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::SubstraitProducer;
+use crate::logical_plan::producer::{SubstraitProducer, negate_if_needed};
 use datafusion::common::{DFSchemaRef, substrait_err};
-use datafusion::logical_expr::Operator;
-use datafusion::logical_expr::expr::{InSubquery, SetComparison, SetQuantifier};
-use substrait::proto::expression::subquery::InPredicate;
+use datafusion::logical_expr::{Operator, Subquery};
+use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
+use substrait::proto::expression::subquery::{InPredicate, Scalar, SetPredicate};
 use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
-use substrait::proto::expression::{RexType, ScalarFunction};
-use substrait::proto::function_argument::ArgType;
-use substrait::proto::{Expression, FunctionArgument};
+use substrait::proto::expression::RexType;
+use substrait::proto::Expression;
 
 pub fn from_in_subquery(
     producer: &mut impl SubstraitProducer,
@@ -53,24 +52,7 @@ pub fn from_in_subquery(
             },
         ))),
     };
-    if *negated {
-        let function_anchor = producer.register_function("not".to_string());
-
-        #[expect(deprecated)]
-        Ok(Expression {
-            rex_type: Some(RexType::ScalarFunction(ScalarFunction {
-                function_reference: function_anchor,
-                arguments: vec![FunctionArgument {
-                    arg_type: Some(ArgType::Value(substrait_subquery)),
-                }],
-                output_type: None,
-                args: vec![],
-                options: vec![],
-            })),
-        })
-    } else {
-        Ok(substrait_subquery)
-    }
+    Ok(negate_if_needed(producer, substrait_subquery, *negated))
 }
 
 fn comparison_op_to_proto(op: &Operator) -> datafusion::common::Result<ComparisonOp> {
@@ -121,4 +103,53 @@ pub fn from_set_comparison(
             },
         ))),
     })
+}
+
+/// Convert DataFusion ScalarSubquery to Substrait Scalar subquery type
+pub fn from_scalar_subquery(
+    producer: &mut impl SubstraitProducer,
+    subquery: &Subquery,
+    _schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    let subquery_plan = producer.handle_plan(subquery.subquery.as_ref())?;
+
+    Ok(Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::Scalar(
+                        Box::new(Scalar {
+                            input: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    })
+}
+
+/// Convert DataFusion Exists expression to Substrait SetPredicate subquery type
+pub fn from_exists(
+    producer: &mut impl SubstraitProducer,
+    exists: &Exists,
+    _schema: &DFSchemaRef,
+) -> datafusion::common::Result<Expression> {
+    let subquery_plan = producer.handle_plan(exists.subquery.subquery.as_ref())?;
+
+    let substrait_exists = Expression {
+        rex_type: Some(RexType::Subquery(Box::new(
+            substrait::proto::expression::Subquery {
+                subquery_type: Some(
+                    substrait::proto::expression::subquery::SubqueryType::SetPredicate(
+                        Box::new(SetPredicate {
+                            predicate_op: substrait::proto::expression::subquery::set_predicate::PredicateOp::Exists as i32,
+                            tuples: Some(subquery_plan),
+                        }),
+                    ),
+                ),
+            },
+        ))),
+    };
+
+    Ok(negate_if_needed(producer, substrait_exists, exists.negated))
 }

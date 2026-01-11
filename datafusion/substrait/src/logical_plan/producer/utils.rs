@@ -19,7 +19,7 @@ use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion::common::{DFSchemaRef, plan_err};
 use datafusion::logical_expr::SortExpr;
-use substrait::proto::SortField;
+use substrait::proto::{Expression, SortField};
 use substrait::proto::sort_field::{SortDirection, SortKind};
 
 // Substrait wants a list of all field names, including nested fields from structs,
@@ -85,3 +85,35 @@ pub(crate) fn to_substrait_precision(time_unit: &TimeUnit) -> i32 {
         TimeUnit::Nanosecond => 9,
     }
 }
+
+/// Wraps an expression with a `not()` function if `negated` is true.
+/// This is used for negated IN, EXISTS, and other predicates.
+pub(crate) fn negate_if_needed(
+    producer: &mut impl SubstraitProducer,
+    expr: Expression,
+    negated: bool,
+) -> Expression {
+    if negated {
+        let function_anchor = producer.register_function("not".to_string());
+
+        #[expect(deprecated)]
+        Expression {
+            rex_type: Some(substrait::proto::expression::RexType::ScalarFunction(
+                substrait::proto::expression::ScalarFunction {
+                    function_reference: function_anchor,
+                    arguments: vec![substrait::proto::FunctionArgument {
+                        arg_type: Some(substrait::proto::function_argument::ArgType::Value(
+                            expr,
+                        )),
+                    }],
+                    output_type: None,
+                    args: vec![],
+                    options: vec![],
+                },
+            )),
+        }
+    } else {
+        expr
+    }
+}
+
