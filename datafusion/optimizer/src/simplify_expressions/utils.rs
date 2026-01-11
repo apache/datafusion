@@ -290,6 +290,58 @@ pub fn is_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(_, _))
 }
 
+/// Checks if `eq_expr` is `A = L1` and `ne_expr` is `A != L2` where L1 != L2.
+/// This pattern can be simplified to just `A = L1` since if A equals L1
+/// and L1 is different from L2, then A is automatically not equal to L2.
+pub fn is_eq_and_ne_with_different_literal(eq_expr: &Expr, ne_expr: &Expr) -> bool {
+    match (eq_expr, ne_expr) {
+        (
+            Expr::BinaryExpr(BinaryExpr {
+                left: eq_left,
+                op: Operator::Eq,
+                right: eq_right,
+            }),
+            Expr::BinaryExpr(BinaryExpr {
+                left: ne_left,
+                op: Operator::NotEq,
+                right: ne_right,
+            }),
+        ) => {
+            // Check if both compare the same expression against different literals
+            // Pattern: A = L1 AND A != L2 where L1 != L2
+            if eq_left == ne_left
+                && let (Expr::Literal(l1, _), Expr::Literal(l2, _)) =
+                    (eq_right.as_ref(), ne_right.as_ref())
+            {
+                return l1 != l2;
+            }
+            // Also check: L1 = A AND A != L2
+            if eq_right == ne_left
+                && let (Expr::Literal(l1, _), Expr::Literal(l2, _)) =
+                    (eq_left.as_ref(), ne_right.as_ref())
+            {
+                return l1 != l2;
+            }
+            // Also check: A = L1 AND L2 != A
+            if eq_left == ne_right
+                && let (Expr::Literal(l1, _), Expr::Literal(l2, _)) =
+                    (eq_right.as_ref(), ne_left.as_ref())
+            {
+                return l1 != l2;
+            }
+            // Also check: L1 = A AND L2 != A
+            if eq_right == ne_right
+                && let (Expr::Literal(l1, _), Expr::Literal(l2, _)) =
+                    (eq_left.as_ref(), ne_left.as_ref())
+            {
+                return l1 != l2;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// negate a Not clause
 /// input is the clause to be negated.(args of Not clause)
 /// For BinaryExpr, use the negation of op instead.
