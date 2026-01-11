@@ -1362,6 +1362,53 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     exec_err!("Function name not provided")
                 }
             }
+            Statement::Truncate {
+                table_names,
+                partitions,
+                identity,
+                cascade,
+                on_cluster,
+                ..
+            } => {
+                if table_names.len() != 1 {
+                    return not_impl_err!(
+                        "TRUNCATE with multiple tables is not supported"
+                    );
+                }
+
+                let target = &table_names[0];
+                if target.only {
+                    return not_impl_err!("TRUNCATE with ONLY is not supported");
+                }
+                if partitions.is_some() {
+                    return not_impl_err!("TRUNCATE with PARTITION is not supported");
+                }
+                if identity.is_some() {
+                    return not_impl_err!(
+                        "TRUNCATE with RESTART/CONTINUE IDENTITY is not supported"
+                    );
+                }
+                if cascade.is_some() {
+                    return not_impl_err!(
+                        "TRUNCATE with CASCADE/RESTRICT is not supported"
+                    );
+                }
+                if on_cluster.is_some() {
+                    return not_impl_err!("TRUNCATE with ON CLUSTER is not supported");
+                }
+                let table = self.object_name_to_table_reference(target.name.clone())?;
+                let source = self.context_provider.get_table_source(table.clone())?;
+
+                Ok(LogicalPlan::Dml(DmlStatement::new(
+                    table.clone(),
+                    source,
+                    WriteOp::Truncate,
+                    Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: DFSchemaRef::new(DFSchema::empty()),
+                    })),
+                )))
+            }
             Statement::CreateIndex(CreateIndex {
                 name,
                 table_name,
