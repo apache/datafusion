@@ -1466,6 +1466,21 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 }))
             }
 
+            // CASE [expr] WHEN ... THEN A WHEN ... THEN A ... ELSE A END --> A
+            // All branches (THEN expressions and ELSE) must be identical.
+            // ELSE clause must be present (otherwise unmatched cases return NULL).
+            Expr::Case(Case {
+                expr: _,
+                when_then_expr,
+                else_expr: Some(else_expr),
+            }) if !when_then_expr.is_empty()
+                && when_then_expr
+                    .iter()
+                    .all(|(_, then_expr)| then_expr.as_ref() == else_expr.as_ref()) =>
+            {
+                Transformed::yes(*else_expr)
+            }
+
             // CASE
             //   WHEN X THEN A
             //   WHEN Y THEN B
