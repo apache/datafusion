@@ -3704,7 +3704,13 @@ impl ScalarValue {
         }
 
         let scalar_array = self.to_array()?;
-        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
+        // Use cast_column for struct types to handle field reordering by name
+        let cast_arr = if matches!(target_type, DataType::Struct(_)) {
+            let target_field = Field::new("", target_type.clone(), true);
+            crate::nested_struct::cast_column(&scalar_array, &target_field, cast_options)?
+        } else {
+            cast_with_options(&scalar_array, target_type, cast_options)?
+        };
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 
