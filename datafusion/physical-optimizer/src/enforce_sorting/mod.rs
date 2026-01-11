@@ -581,11 +581,17 @@ fn analyze_immediate_sort_removal(
         // Remove the sort:
         node.children = node.children.swap_remove(0).children;
         if let Some(fetch) = sort_exec.fetch() {
+            let required_ordering = sort_exec.properties().output_ordering().cloned();
             // If the sort has a fetch, we need to add a limit:
             if properties.output_partitioning().partition_count() == 1 {
-                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
+                let mut global_limit =
+                    GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch));
+                global_limit.set_required_ordering(required_ordering);
+                Arc::new(global_limit)
             } else {
-                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
+                let mut local_limit = LocalLimitExec::new(Arc::clone(sort_input), fetch);
+                local_limit.set_required_ordering(required_ordering);
+                Arc::new(local_limit)
             }
         } else {
             Arc::clone(sort_input)

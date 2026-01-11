@@ -372,19 +372,31 @@ impl Drop for ScopedTimerGuard<'_> {
 pub struct PruningMetrics {
     pruned: Arc<AtomicUsize>,
     matched: Arc<AtomicUsize>,
+    fully_matched: Arc<AtomicUsize>,
 }
 
 impl Display for PruningMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let matched = self.matched.load(Ordering::Relaxed);
         let total = self.pruned.load(Ordering::Relaxed) + matched;
+        let fully_matched = self.fully_matched.load(Ordering::Relaxed);
 
-        write!(
-            f,
-            "{} total → {} matched",
-            human_readable_count(total),
-            human_readable_count(matched)
-        )
+        if fully_matched != 0 {
+            write!(
+                f,
+                "{} total → {} matched -> {} fully matched",
+                human_readable_count(total),
+                human_readable_count(matched),
+                human_readable_count(fully_matched)
+            )
+        } else {
+            write!(
+                f,
+                "{} total → {} matched",
+                human_readable_count(total),
+                human_readable_count(matched)
+            )
+        }
     }
 }
 
@@ -400,6 +412,7 @@ impl PruningMetrics {
         Self {
             pruned: Arc::new(AtomicUsize::new(0)),
             matched: Arc::new(AtomicUsize::new(0)),
+            fully_matched: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -417,6 +430,13 @@ impl PruningMetrics {
         self.matched.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Add `n` to the metric's fully matched value
+    pub fn add_fully_matched(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.fully_matched.fetch_add(n, Ordering::Relaxed);
+    }
+
     /// Subtract `n` to the metric's matched value.
     pub fn subtract_matched(&self, n: usize) {
         // relaxed ordering for operations on `value` poses no issues
@@ -432,6 +452,11 @@ impl PruningMetrics {
     /// Number of items matched (not pruned)
     pub fn matched(&self) -> usize {
         self.matched.load(Ordering::Relaxed)
+    }
+
+    /// Number of items fully matched
+    pub fn fully_matched(&self) -> usize {
+        self.fully_matched.load(Ordering::Relaxed)
     }
 }
 
@@ -906,8 +931,11 @@ impl MetricValue {
             ) => {
                 let pruned = other_pruning_metrics.pruned.load(Ordering::Relaxed);
                 let matched = other_pruning_metrics.matched.load(Ordering::Relaxed);
+                let fully_matched =
+                    other_pruning_metrics.fully_matched.load(Ordering::Relaxed);
                 pruning_metrics.add_pruned(pruned);
                 pruning_metrics.add_matched(matched);
+                pruning_metrics.add_fully_matched(fully_matched);
             }
             (
                 Self::Ratio { ratio_metrics, .. },
