@@ -220,7 +220,6 @@ async fn single_file() {
 }
 
 #[tokio::test]
-#[allow(dead_code)]
 async fn single_file_small_data_pages() {
     let batches = read_parquet_test_data(
         "tests/data/filter_pushdown/single_file_small_pages.gz.parquet",

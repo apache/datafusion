@@ -301,7 +301,7 @@ mod sp_repartition_fuzz_tests {
                 let mut handles = Vec::new();
 
                 for seed in seed_start..seed_end {
-                    #[allow(clippy::disallowed_methods)] // spawn allowed only in tests
+                    #[expect(clippy::disallowed_methods)] // spawn allowed only in tests
                     let job = tokio::spawn(run_sort_preserving_repartition_test(
                         make_staggered_batches::<true>(n_row, n_distinct, seed as u64),
                         is_first_roundrobin,
