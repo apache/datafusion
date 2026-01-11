@@ -42,7 +42,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, ComposedPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
+    AsExecutionPlan, ComposedPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
     PhysicalExtensionCodec,
 };
 use datafusion_proto::protobuf;
@@ -63,7 +63,7 @@ pub async fn composed_extension_codec() -> Result<()> {
         Arc::new(ParentPhysicalExtensionCodec {}),
         Arc::new(ChildPhysicalExtensionCodec {}),
     ]);
-    let proto_codec = DefaultPhysicalExtensionProtoCodec {};
+    let proto_codec = DefaultPhysicalProtoConverter {};
 
     // serialize execution plan to proto
     let proto: protobuf::PhysicalPlanNode =

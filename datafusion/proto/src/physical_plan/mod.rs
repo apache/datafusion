@@ -3622,8 +3622,8 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
-pub struct DefaultPhysicalExtensionProtoCodec;
-impl PhysicalProtoConverterExtension for DefaultPhysicalExtensionProtoCodec {
+pub struct DefaultPhysicalProtoConverter;
+impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     fn proto_to_execution_plan(
         &self,
         ctx: &TaskContext,

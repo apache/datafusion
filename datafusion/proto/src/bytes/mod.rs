@@ -21,7 +21,7 @@ use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
 use crate::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalExtensionProtoCodec,
+    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
     PhysicalExtensionCodec, PhysicalProtoConverterExtension,
 };
 use crate::protobuf;
@@ -284,7 +284,7 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 #[cfg(feature = "json")]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     let protobuf = protobuf::PhysicalPlanNode::try_from_physical_plan(
         plan,
         &extension_codec,
@@ -300,7 +300,7 @@ pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Bytes> {
-    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     physical_plan_to_bytes_with_proto_converter(plan, extension_codec, &proto_converter)
 }
 
@@ -328,7 +328,7 @@ pub fn physical_plan_from_json(
     let back: protobuf::PhysicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error serializing plan: {e}"))?;
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     back.try_into_physical_plan(ctx, &extension_codec, &proto_converter)
 }
 
@@ -338,7 +338,7 @@ pub fn physical_plan_from_bytes(
     ctx: &TaskContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     physical_plan_from_bytes_with_proto_converter(
         bytes,
         ctx,
@@ -353,7 +353,7 @@ pub fn physical_plan_from_bytes_with_extension_codec(
     ctx: &TaskContext,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
     physical_plan_from_bytes_with_proto_converter(
         bytes,
         ctx,
