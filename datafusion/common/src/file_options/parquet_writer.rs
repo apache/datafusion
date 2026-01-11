@@ -341,10 +341,6 @@ pub fn parse_compression_string(
                 level,
             )?))
         }
-        "lzo" => {
-            check_level_is_none(codec, &level)?;
-            Ok(parquet::basic::Compression::LZO)
-        }
         "brotli" => {
             let level = require_level(codec, level)?;
             Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
@@ -368,7 +364,7 @@ pub fn parse_compression_string(
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet compression: \
         {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
-        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
+        brotli(level), lz4, zstd(level), and lz4_raw."
         ))),
     }
 }
