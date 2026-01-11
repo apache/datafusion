@@ -937,7 +937,7 @@ pub fn find_valid_equijoin_key_pair(
 ///     round(Float32)
 /// ```
 #[expect(clippy::needless_pass_by_value)]
-#[deprecated(since = "52.0.0", note = "Internal function")]
+#[deprecated(since = "53.0.0", note = "Internal function")]
 pub fn generate_signature_error_msg(
     func_name: &str,
     func_signature: Signature,

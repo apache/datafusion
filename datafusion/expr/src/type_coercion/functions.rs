@@ -800,7 +800,7 @@ fn maybe_data_types_without_coercion(
 /// (losslessly converted) into a value of `type_to`
 ///
 /// See the module level documentation for more detail on coercion.
-#[deprecated(since = "52.0.0", note = "Unused internal function")]
+#[deprecated(since = "53.0.0", note = "Unused internal function")]
 pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
     if type_into == type_from {
         return true;
