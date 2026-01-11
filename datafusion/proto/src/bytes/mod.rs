@@ -300,8 +300,8 @@ pub fn physical_plan_to_bytes_with_extension_codec(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Bytes> {
-    let proto_conveter = DefaultPhysicalExtensionProtoCodec {};
-    physical_plan_to_bytes_with_proto_converter(plan, extension_codec, &proto_conveter)
+    let proto_converter = DefaultPhysicalExtensionProtoCodec {};
+    physical_plan_to_bytes_with_proto_converter(plan, extension_codec, &proto_converter)
 }
 
 /// Serialize a PhysicalPlan as bytes, using the provided extension codec
