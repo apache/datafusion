@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::Array;
-use arrow::buffer::NullBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::{Result, ScalarValue};
@@ -28,6 +26,10 @@ use datafusion_expr::{
 use datafusion_functions::string::concat::ConcatFunc;
 use std::any::Any;
 use std::sync::Arc;
+
+use crate::function::null_utils::{
+    NullMaskResolution, apply_null_mask, compute_null_mask,
+};
 
 /// Spark-compatible `concat` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#concat>
@@ -94,16 +96,6 @@ impl ScalarUDFImpl for SparkConcat {
     }
 }
 
-/// Represents the null state for Spark concat
-enum NullMaskResolution {
-    /// Return NULL as the result (e.g., scalar inputs with at least one NULL)
-    ReturnNull,
-    /// No null mask needed (e.g., all scalar inputs are non-NULL)
-    NoMask,
-    /// Null mask to apply for arrays
-    Apply(NullBuffer),
-}
-
 /// Concatenates strings, returning NULL if any input is NULL
 /// This is a Spark-specific wrapper around DataFusion's concat that returns NULL
 /// if any argument is NULL (Spark behavior), whereas DataFusion's concat ignores NULLs.
@@ -133,6 +125,7 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 
     // Step 2: Delegate to DataFusion's concat
     let concat_func = ConcatFunc::new();
+    let return_type = return_field.data_type().clone();
     let func_args = ScalarFunctionArgs {
         args: arg_values,
         arg_fields,
@@ -143,103 +136,14 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
     let result = concat_func.invoke_with_args(func_args)?;
 
     // Step 3: Apply NULL mask to result
-    apply_null_mask(result, null_mask)
-}
-
-/// Compute NULL mask for the arguments using NullBuffer::union
-fn compute_null_mask(
-    args: &[ColumnarValue],
-    number_rows: usize,
-) -> Result<NullMaskResolution> {
-    // Check if all arguments are scalars
-    let all_scalars = args
-        .iter()
-        .all(|arg| matches!(arg, ColumnarValue::Scalar(_)));
-
-    if all_scalars {
-        // For scalars, check if any is NULL
-        for arg in args {
-            if let ColumnarValue::Scalar(scalar) = arg
-                && scalar.is_null()
-            {
-                return Ok(NullMaskResolution::ReturnNull);
-            }
-        }
-        // No NULLs in scalars
-        Ok(NullMaskResolution::NoMask)
-    } else {
-        // For arrays, compute NULL mask for each row using NullBuffer::union
-        let array_len = args
-            .iter()
-            .find_map(|arg| match arg {
-                ColumnarValue::Array(array) => Some(array.len()),
-                _ => None,
-            })
-            .unwrap_or(number_rows);
-
-        // Convert all scalars to arrays for uniform processing
-        let arrays: Result<Vec<_>> = args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(array) => Ok(Arc::clone(array)),
-                ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(array_len),
-            })
-            .collect();
-        let arrays = arrays?;
-
-        // Use NullBuffer::union to combine all null buffers
-        let combined_nulls = arrays
-            .iter()
-            .map(|arr| arr.nulls())
-            .fold(None, |acc, nulls| NullBuffer::union(acc.as_ref(), nulls));
-
-        match combined_nulls {
-            Some(nulls) => Ok(NullMaskResolution::Apply(nulls)),
-            None => Ok(NullMaskResolution::NoMask),
-        }
-    }
-}
-
-/// Apply NULL mask to the result using NullBuffer::union
-fn apply_null_mask(
-    result: ColumnarValue,
-    null_mask: NullMaskResolution,
-) -> Result<ColumnarValue> {
-    match (result, null_mask) {
-        // Scalar with ReturnNull mask means return NULL
-        (ColumnarValue::Scalar(_), NullMaskResolution::ReturnNull) => {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-        }
-        // Scalar without mask, return as-is
-        (scalar @ ColumnarValue::Scalar(_), NullMaskResolution::NoMask) => Ok(scalar),
-        // Array with NULL mask - use NullBuffer::union to combine nulls
-        (ColumnarValue::Array(array), NullMaskResolution::Apply(null_mask)) => {
-            // Combine the result's existing nulls with our computed null mask
-            let combined_nulls = NullBuffer::union(array.nulls(), Some(&null_mask));
-
-            // Create new array with combined nulls
-            let new_array = array
-                .into_data()
-                .into_builder()
-                .nulls(combined_nulls)
-                .build()?;
-
-            Ok(ColumnarValue::Array(Arc::new(arrow::array::make_array(
-                new_array,
-            ))))
-        }
-        // Array without NULL mask, return as-is
-        (array @ ColumnarValue::Array(_), NullMaskResolution::NoMask) => Ok(array),
-        // Edge cases that shouldn't happen in practice
-        (scalar, _) => Ok(scalar),
-    }
+    apply_null_mask(result, null_mask, &return_type)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::function::utils::test::test_scalar_function;
-    use arrow::array::StringArray;
+    use arrow::array::{Array, StringArray};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr::ReturnFieldArgs;

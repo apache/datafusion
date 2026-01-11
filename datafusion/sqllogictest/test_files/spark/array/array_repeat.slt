@@ -15,13 +15,70 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT array_repeat('123', 2);
-## PySpark 3.5.5 Result: {'array_repeat(123, 2)': ['123', '123'], 'typeof(array_repeat(123, 2))': 'array<string>', 'typeof(123)': 'string', 'typeof(2)': 'int'}
-#query
-#SELECT array_repeat('123'::string, 2::int);
+query ?
+SELECT array_repeat('123', 2);
+----
+[123, 123]
+
+query ?
+SELECT array_repeat('123', 0);
+----
+[]
+
+query ?
+SELECT array_repeat('123', -1);
+----
+[]
+
+query ?
+SELECT array_repeat(['123'], 2);
+----
+[[123], [123]]
+
+query ?
+SELECT array_repeat(NULL, 2);
+----
+NULL
+
+query ?
+SELECT array_repeat([NULL], 2);
+----
+[[NULL], [NULL]]
+
+query ?
+SELECT array_repeat(['123', NULL], 2);
+----
+[[123, NULL], [123, NULL]]
+
+query ?
+SELECT array_repeat('123', CAST(NULL AS INT));
+----
+NULL
+
+query ?
+SELECT array_repeat(column1, column2)
+FROM VALUES
+('123', 2),
+('123', 0),
+('123', -1),
+(NULL, 1),
+('123', NULL);
+----
+[123, 123]
+[]
+[]
+NULL
+NULL
+
+
+query ?
+SELECT array_repeat(column1, column2)
+FROM VALUES
+(['123'], 2),
+([], 2),
+([NULL], 2);
+----
+[[123], [123]]
+[[], []]
+[[NULL], [NULL]]

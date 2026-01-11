@@ -449,6 +449,57 @@ impl FileFormat for ParquetFormat {
             .await
     }
 
+    async fn infer_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<Option<LexOrdering>> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
+    }
+
+    async fn infer_stats_and_ordering(
+        &self,
+        state: &dyn Session,
+        store: &Arc<dyn ObjectStore>,
+        table_schema: SchemaRef,
+        object: &ObjectMeta,
+    ) -> Result<datafusion_datasource::file_format::FileMeta> {
+        let file_decryption_properties =
+            get_file_decryption_properties(state, &self.options, &object.location)
+                .await?;
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let metadata = DFParquetMetadata::new(store, object)
+            .with_metadata_size_hint(self.metadata_size_hint())
+            .with_decryption_properties(file_decryption_properties)
+            .with_file_metadata_cache(Some(file_metadata_cache))
+            .fetch_metadata()
+            .await?;
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            &table_schema,
+        )?;
+        let ordering =
+            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
+        Ok(
+            datafusion_datasource::file_format::FileMeta::new(statistics)
+                .with_ordering(ordering),
+        )
+    }
+
     async fn create_physical_plan(
         &self,
         state: &dyn Session,
