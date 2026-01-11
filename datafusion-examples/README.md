@@ -53,6 +53,38 @@ cargo run --example dataframe -- all
 cargo run --example dataframe -- dataframe
 ```
 
+## Example Metadata (`examples.toml`)
+
+The list of examples and their documentation is generated automatically from
+the filesystem and the `examples.toml` file located in this crate.
+
+### What is `examples.toml`?
+
+`examples.toml` defines **human-readable metadata** for examples, including:
+
+- the subcommand name used with `cargo run --example <group> -- <subcommand>`
+- a short description explaining what the example demonstrates
+- the Rust source file that implements the example
+
+The actual source files under `examples/<group>/*.rs` remain the source of truth
+for which examples exist.
+
+### Important notes
+
+- the subcommand name does not have to match the filename
+- subcommands are a stable CLI interface; filenames are free to change
+- all files referenced in examples.toml must exist on disk (validated by CI)
+
+### Format
+
+Each section corresponds to an example group and maps subcommands to files:
+
+```toml
+[dataframe]
+dataframe = { file = "dataframe.rs", desc = "Query DataFrames from various sources" }
+cache_factory = { file = "cache_factory.rs", desc = "Custom lazy caching for DataFrames" }
+```
+
 ## Builtin Functions Examples
 
 ### Group: `builtin_functions`
@@ -73,15 +105,15 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand            | File Path                                                                                             | Description                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
 | csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON    |
+| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
 | custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                  |
 | custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                |
 | custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                 |
 | default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata          |
 | file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams |
 
-## Data IO Examples
+## Data Io Examples
 
 ### Group: `data_io`
 
@@ -100,7 +132,7 @@ cargo run --example dataframe -- dataframe
 | query_http_csv       | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                               |
 | remote_catalog       | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                         |
 
-## DataFrame Examples
+## Dataframe Examples
 
 ### Group: `dataframe`
 
@@ -143,8 +175,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand | File Path                                               | Description                                            |
 | ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | client     | [`flight/client.rs`](examples/flight/client.rs)         | Execute SQL queries via Arrow Flight protocol          |
+| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | sql_server | [`flight/sql_server.rs`](examples/flight/sql_server.rs) | Standalone SQL server for JDBC clients                 |
 
 ## Proto Examples
@@ -186,7 +218,7 @@ cargo run --example dataframe -- dataframe
 | pivot_unpivot   | [`relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs)     | Implement PIVOT / UNPIVOT                  |
 | table_sample    | [`relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs)       | Implement TABLESAMPLE                      |
 
-## SQL Ops Examples
+## Sql Ops Examples
 
 ### Group: `sql_ops`
 
@@ -199,7 +231,7 @@ cargo run --example dataframe -- dataframe
 | frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
 | query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
 
-## UDF Examples
+## Udf Examples
 
 ### Group: `udf`
 
