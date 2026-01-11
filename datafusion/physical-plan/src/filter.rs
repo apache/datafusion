@@ -1557,13 +1557,14 @@ mod tests {
     #[test]
     fn test_equivalence_properties_union_type() -> Result<()> {
         let union_type = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("f1", DataType::Int32, true),
                     Field::new("f2", DataType::Utf8, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
 
