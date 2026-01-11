@@ -1116,7 +1116,15 @@ impl DisplayAs for AggregateExec {
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
-                    .map(|agg| agg.name().to_string())
+                    .map(|agg| {
+                        let expr = agg.human_display().to_string();
+                        let alias = agg.name();
+                        if expr != alias {
+                            format!("{expr} as {alias}")
+                        } else {
+                            expr
+                        }
+                    })
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(limit) = self.limit {
