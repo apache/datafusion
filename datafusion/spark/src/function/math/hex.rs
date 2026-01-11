@@ -146,7 +146,7 @@ where
     T: AsRef<[u8]> + 'a,
 {
     let mut builder = StringBuilder::with_capacity(len, len * 64);
-    let mut buffer = Vec::with_capacity(16);
+    let mut buffer = Vec::with_capacity(64);
     let hex_chars = if lowercase {
         HEX_CHARS_LOWER
     } else {
@@ -177,7 +177,7 @@ fn hex_encode_int64<I>(iter: I, len: usize) -> Result<ColumnarValue, DataFusionE
 where
     I: Iterator<Item = Option<i64>>,
 {
-    let mut builder = StringBuilder::with_capacity(len, len * 64);
+    let mut builder = StringBuilder::with_capacity(len, len * 16);
     let mut buffer = Vec::with_capacity(16);
 
     for v in iter {
@@ -248,7 +248,6 @@ pub fn compute_hex(
                 let dict = as_dictionary_array::<Int32Type>(&array);
                 let keys = dict.keys();
                 let values = dict.values();
-                // let mut buffer = Vec::with_capacity(16);
 
                 match **value_type {
                     DataType::Int64 => {
