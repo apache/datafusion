@@ -17,7 +17,6 @@
 
 extern crate criterion;
 
-use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field, Float64Type};
 use arrow::util::bench_util::create_primitive_array;
 use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
@@ -84,8 +83,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
 
         // Scalar benchmark (the optimization we added)
-        let scalar_args =
-            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(3.14159)))];
+        let scalar_args = vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(
+            std::f64::consts::PI,
+        )))];
 
         group.bench_function("floor_f64_scalar", |b| {
             b.iter(|| {
