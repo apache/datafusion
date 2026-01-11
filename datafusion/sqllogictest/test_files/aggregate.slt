@@ -386,6 +386,23 @@ FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
 ----
 [1, 2]
 
+# Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
+# This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  array_sort(ARRAY_AGG(y IGNORE NULLS)) as y_agg
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30),
+  (3, NULL),
+  (3, 40),
+  (NULL, 50)
+) AS t(x, y)
+----
+3 [10, 20, 30, 40, 50]
+
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 

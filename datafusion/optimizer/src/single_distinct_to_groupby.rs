@@ -221,9 +221,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         Arc::clone(&func),
                                         args,
                                         false,
-                                        None,
-                                        vec![],
-                                        None,
+                                        filter,
+                                        order_by,
+                                        null_treatment,
                                     ))
                                     .alias(&alias_str),
                                 );
