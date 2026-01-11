@@ -660,5 +660,38 @@ logical_plan
 
 # unknown mode
 
+# Test that aliased aggregate expressions are visible in physical explain output
+# Issue: https://github.com/apache/datafusion/issues/19685
+statement ok
+create table agg_alias_test (column1 int, column2 int) as values (1, 100), (2, 200), (3, 300);
+
+query TT
+EXPLAIN SELECT sum(column1) AS my_sum FROM agg_alias_test;
+----
+logical_plan
+01)Projection: sum(agg_alias_test.column1) AS my_sum
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(agg_alias_test.column1 AS Int64))]]
+03)----TableScan: agg_alias_test projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[sum(agg_alias_test.column1)@0 as my_sum]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(agg_alias_test.column1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Test with filter clause on aggregate
+query TT
+EXPLAIN SELECT sum(column1) FILTER (WHERE column2 <= 200) AS filtered_sum FROM agg_alias_test;
+----
+logical_plan
+01)Projection: sum(agg_alias_test.column1) FILTER (WHERE agg_alias_test.column2 <= Int64(200)) AS filtered_sum
+02)--Aggregate: groupBy=[[]], aggr=[[sum(CAST(agg_alias_test.column1 AS Int64)) FILTER (WHERE agg_alias_test.column2 <= Int32(200)) AS sum(agg_alias_test.column1) FILTER (WHERE agg_alias_test.column2 <= Int64(200))]]
+03)----TableScan: agg_alias_test projection=[column1, column2]
+physical_plan
+01)ProjectionExec: expr=[sum(agg_alias_test.column1) FILTER (WHERE agg_alias_test.column2 <= Int64(200))@0 as filtered_sum]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(agg_alias_test.column1) FILTER (WHERE agg_alias_test.column2 <= Int32(200)) as sum(agg_alias_test.column1) FILTER (WHERE agg_alias_test.column2 <= Int64(200))]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table agg_alias_test;
+
 statement ok
 drop table foo;
