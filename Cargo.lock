@@ -1760,7 +1760,7 @@ dependencies = [
  "liblzma",
  "log",
  "nix",
- "object_store",
+ "object_store 0.13.0",
  "parking_lot",
  "parquet",
  "paste",
@@ -1794,7 +1794,7 @@ dependencies = [
  "libmimalloc-sys",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.13.0",
  "parquet",
  "rand 0.9.2",
  "regex",
@@ -1823,7 +1823,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "parking_lot",
  "tokio",
 ]
@@ -1847,7 +1847,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.0",
 ]
 
 [[package]]
@@ -1870,7 +1870,7 @@ dependencies = [
  "insta-cmd",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.13.0",
  "parking_lot",
  "parquet",
  "regex",
@@ -1898,7 +1898,7 @@ dependencies = [
  "insta",
  "libc",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "parquet",
  "paste",
  "rand 0.9.2",
@@ -1943,7 +1943,7 @@ dependencies = [
  "itertools 0.14.0",
  "liblzma",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "rand 0.9.2",
  "tempfile",
  "tokio",
@@ -1971,7 +1971,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.13.0",
  "tokio",
 ]
 
@@ -1990,7 +1990,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "num-traits",
- "object_store",
+ "object_store 0.13.0",
  "serde_json",
 ]
 
@@ -2010,7 +2010,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.13.0",
  "regex",
  "tokio",
 ]
@@ -2031,7 +2031,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.13.0",
  "tokio",
 ]
 
@@ -2060,7 +2060,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "parking_lot",
  "parquet",
  "tempfile",
@@ -2094,7 +2094,7 @@ dependencies = [
  "log",
  "mimalloc",
  "nix",
- "object_store",
+ "object_store 0.13.0",
  "prost",
  "rand 0.9.2",
  "serde_json",
@@ -2124,7 +2124,7 @@ dependencies = [
  "futures",
  "insta",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "parking_lot",
  "parquet",
  "rand 0.9.2",
@@ -2506,7 +2506,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "doc-comment",
- "object_store",
+ "object_store 0.13.0",
  "pbjson",
  "pretty_assertions",
  "prost",
@@ -2625,7 +2625,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.0",
  "postgres-types",
  "regex",
  "sqllogictest",
@@ -2649,7 +2649,7 @@ dependencies = [
  "half",
  "insta",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.13.0",
  "pbjson-types",
  "prost",
  "serde_json",
@@ -2673,7 +2673,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-sql",
  "getrandom 0.3.4",
- "object_store",
+ "object_store 0.13.0",
  "tokio",
  "url",
  "wasm-bindgen",
@@ -4210,6 +4210,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c1be0c6c22ec0817cdc77d3842f721a17fd30ab6965001415b5402a74e6b740"
 dependencies = [
  "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http 1.4.0",
+ "humantime",
+ "itertools 0.14.0",
+ "parking_lot",
+ "percent-encoding",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
+name = "object_store"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d180d5469872facb82dec7e233ff850d615330ea3044a7813550b22ffa4f05ce"
+dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "bytes",
  "chrono",
@@ -4227,7 +4250,7 @@ dependencies = [
  "rand 0.9.2",
  "reqwest",
  "ring",
- "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -4350,7 +4373,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "object_store",
+ "object_store 0.12.4",
  "paste",
  "ring",
  "seq-macro",
