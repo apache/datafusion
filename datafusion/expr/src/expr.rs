@@ -42,7 +42,7 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 #[cfg(feature = "sql")]
 use sqlparser::ast::{
     ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement, display_comma_separated,
+    ReplaceSelectElement,
 };
 
 // Moved in 51.0.0 to datafusion_common
@@ -1268,7 +1268,6 @@ impl Display for ExceptSelectItem {
     }
 }
 
-#[cfg(not(feature = "sql"))]
 pub fn display_comma_separated<T>(slice: &[T]) -> String
 where
     T: Display,

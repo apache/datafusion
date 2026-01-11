@@ -369,9 +369,9 @@ impl PlannedRelation {
 #[derive(Debug)]
 pub enum RelationPlanning {
     /// The relation was successfully planned by an extension planner
-    Planned(PlannedRelation),
+    Planned(Box<PlannedRelation>),
     /// No extension planner handled the relation, return it for default processing
-    Original(TableFactor),
+    Original(Box<TableFactor>),
 }
 
 /// Customize planning SQL table factors to [`LogicalPlan`]s.

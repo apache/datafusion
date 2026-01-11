@@ -339,7 +339,7 @@ impl RelationPlanner for PivotUnpivotPlanner {
                 alias,
             ),
 
-            other => Ok(RelationPlanning::Original(other)),
+            other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
 }
@@ -459,7 +459,9 @@ fn plan_pivot(
         .aggregate(group_by_cols, pivot_exprs)?
         .build()?;
 
-    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+    Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+        plan, alias,
+    ))))
 }
 
 // ============================================================================
@@ -540,7 +542,9 @@ fn plan_unpivot(
             .build()?;
     }
 
-    Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+    Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+        plan, alias,
+    ))))
 }
 
 // ============================================================================

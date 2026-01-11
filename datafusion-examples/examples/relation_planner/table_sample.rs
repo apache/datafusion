@@ -331,7 +331,7 @@ impl RelationPlanner for TableSamplePlanner {
             index_hints,
         } = relation
         else {
-            return Ok(RelationPlanning::Original(relation));
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         };
 
         // Extract sample spec (handles both before/after alias positions)
@@ -401,7 +401,9 @@ impl RelationPlanner for TableSamplePlanner {
 
             let fraction = bucket_num as f64 / total as f64;
             let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
-            return Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)));
+            return Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                plan, alias,
+            ))));
         }
 
         // Handle quantity-based sampling
@@ -422,7 +424,9 @@ impl RelationPlanner for TableSamplePlanner {
                 let plan = LogicalPlanBuilder::from(input)
                     .limit(0, Some(rows as usize))?
                     .build()?;
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
@@ -430,7 +434,9 @@ impl RelationPlanner for TableSamplePlanner {
                 let percent: f64 = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
 
             // TABLESAMPLE (N) - fraction if <1.0, row limit if >=1.0
@@ -448,7 +454,9 @@ impl RelationPlanner for TableSamplePlanner {
                     // Interpret as fraction
                     TableSamplePlanNode::new(input, value, seed).into_plan()
                 };
-                Ok(RelationPlanning::Planned(PlannedRelation::new(plan, alias)))
+                Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))))
             }
         }
     }
