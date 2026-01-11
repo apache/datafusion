@@ -3633,7 +3633,6 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         proto.try_into_physical_plan(ctx, codec, self)
     }
 
-    // TODO(tsaucer) original variant had these as &mut self instead of &self
     fn execution_plan_to_proto(
         &self,
         plan: &Arc<dyn ExecutionPlan>,
