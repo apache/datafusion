@@ -19,46 +19,40 @@
 
 set -euo pipefail
 
-EXAMPLES_DIR="datafusion-examples/examples"
-README="datafusion-examples/README.md"
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+EXAMPLES_DIR="$ROOT_DIR/datafusion-examples"
+README="$EXAMPLES_DIR/README.md"
+README_NEW="$EXAMPLES_DIR/README-NEW.md"
 
-# ffi examples are skipped because they were not part of the recent example
-# consolidation work and do not follow the new grouping and execution pattern.
-# They are not documented in the README using the new structure, so including
-# them here would cause false CI failures.
-SKIP_LIST=("ffi")
+echo "▶ Generating examples README…"
+bash "$ROOT_DIR/ci/scripts/generate_examples_docs.sh" > "$README_NEW"
 
-missing=0
+echo "▶ Formatting generated README with DataFusion's Prettier…"
+bash "$ROOT_DIR/ci/scripts/doc_prettier_check.sh" --write "$README_NEW"
 
-skip() {
-    local value="$1"
-    for item in "${SKIP_LIST[@]}"; do
-        if [[ "$item" == "$value" ]]; then
-            return 0
-        fi
-    done
-    return 1
-}
+echo "▶ Comparing generated README with committed version…"
 
-# collect folder names
-folders=$(find "$EXAMPLES_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-
-# collect group names from README headers
-groups=$(grep "^### Group:" "$README" | sed -E 's/^### Group: `([^`]+)`.*/\1/')
-
-for folder in $folders; do
-    if skip "$folder"; then
-        echo "Skipped group: $folder"
-        continue
-    fi
-
-    if ! echo "$groups" | grep -qx "$folder"; then
-        echo "Missing README entry for example group: $folder"
-        missing=1
-    fi
-done
-
-if [[ $missing -eq 1 ]]; then
-    echo "README is out of sync with examples"
-    exit 1
+if ! diff -u "$README" "$README_NEW" > /tmp/examples-readme.diff; then
+  echo ""
+  echo "❌ Examples README is out of date."
+  echo ""
+  echo "The documentation for examples is generated automatically from:"
+  echo "  - examples/<group>/*.rs"
+  echo "  - datafusion-examples/examples.toml"
+  echo ""
+  echo "💡 Note: If the README is out of date, please make sure examples.toml is up-to-date first, then regenerate the README."
+  echo ""
+  echo "To update locally (after fixing examples.toml):"
+  echo ""
+  echo "  bash ci/scripts/generate_examples_docs.sh \\"
+  echo "    | bash ci/scripts/doc_prettier_check.sh --write \\"
+  echo "    > datafusion-examples/README.md"
+  echo ""
+  echo "Diff:"
+  echo "------------------------------------------------------------"
+  cat /tmp/examples-readme.diff
+  echo "------------------------------------------------------------"
+  exit 1
 fi
+
+echo "✅ Examples README is up-to-date."
