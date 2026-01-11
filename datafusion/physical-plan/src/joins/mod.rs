@@ -27,6 +27,7 @@ use parking_lot::Mutex;
 pub use piecewise_merge_join::PiecewiseMergeJoinExec;
 pub use sort_merge_join::SortMergeJoinExec;
 pub use symmetric_hash_join::SymmetricHashJoinExec;
+pub mod chain;
 mod cross_join;
 mod hash_join;
 mod nested_loop_join;
@@ -36,12 +37,38 @@ mod stream_join_utils;
 mod symmetric_hash_join;
 pub mod utils;
 
+mod array_map;
 mod join_filter;
 /// Hash map implementations for join operations.
 ///
 /// Note: This module is public for internal testing purposes only
 /// and is not guaranteed to be stable across versions.
 pub mod join_hash_map;
+
+use array_map::ArrayMap;
+use utils::JoinHashMapType;
+
+pub enum Map {
+    HashMap(Box<dyn JoinHashMapType>),
+    ArrayMap(ArrayMap),
+}
+
+impl Map {
+    /// Returns the number of elements in the map.
+    pub fn num_of_distinct_key(&self) -> usize {
+        match self {
+            Map::HashMap(map) => map.len(),
+            Map::ArrayMap(array_map) => array_map.num_of_distinct_key(),
+        }
+    }
+
+    /// Returns `true` if the map contains no elements.
+    pub fn is_empty(&self) -> bool {
+        self.num_of_distinct_key() == 0
+    }
+}
+
+pub(crate) type MapOffset = (usize, Option<u64>);
 
 #[cfg(test)]
 pub mod test_utils;
