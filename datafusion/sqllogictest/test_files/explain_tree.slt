@@ -554,29 +554,14 @@ explain SELECT int_col FROM table2 WHERE string_col != 'foo';
 ----
 physical_plan
 01)┌───────────────────────────┐
-02)│         FilterExec        │
+02)│       DataSourceExec      │
 03)│    --------------------   │
-04)│         predicate:        │
-05)│     string_col != foo     │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│      RepartitionExec      │
-09)│    --------------------   │
-10)│ partition_count(in->out): │
-11)│           1 -> 4          │
-12)│                           │
-13)│    partitioning_scheme:   │
-14)│     RoundRobinBatch(4)    │
-15)└─────────────┬─────────────┘
-16)┌─────────────┴─────────────┐
-17)│       DataSourceExec      │
-18)│    --------------------   │
-19)│          files: 1         │
-20)│      format: parquet      │
-21)│                           │
-22)│         predicate:        │
-23)│     string_col != foo     │
-24)└───────────────────────────┘
+04)│          files: 1         │
+05)│      format: parquet      │
+06)│                           │
+07)│         predicate:        │
+08)│     string_col != foo     │
+09)└───────────────────────────┘
 
 # Query with filter on memory
 query TT
