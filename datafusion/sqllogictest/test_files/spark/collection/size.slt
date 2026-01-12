@@ -24,86 +24,17 @@
 ## Original Query: SELECT size(array(1, 2, 3));
 ## PySpark 3.5.5 Result: {'size(array(1, 2, 3))': 3}
 
-# Basic array size tests
+# Basic array
 query I
 SELECT size(make_array(1, 2, 3));
 ----
 3
 
-query I
-SELECT size(make_array(1, 2, 3, 4, 5));
-----
-5
-
-query I
-SELECT size(make_array(1));
-----
-1
-
-# Empty array
-query I
-SELECT size(arrow_cast(make_array(), 'List(Int32)'));
-----
-0
-
-# Nested arrays
+# Nested array
 query I
 SELECT size(make_array(make_array(1, 2), make_array(3, 4, 5)));
 ----
 2
-
-# Array with NULL elements (size counts elements including NULLs)
-query I
-SELECT size(make_array(1, NULL, 3));
-----
-3
-
-# NULL array returns -1 (Spark behavior)
-query I
-SELECT size(NULL::int[]);
-----
--1
-
-# Map size tests
-query I
-SELECT size(map(make_array('a', 'b', 'c'), make_array(1, 2, 3)));
-----
-3
-
-query I
-SELECT size(map(make_array('a'), make_array(1)));
-----
-1
-
-# Empty map
-query I
-SELECT size(map(arrow_cast(make_array(), 'List(Utf8)'), arrow_cast(make_array(), 'List(Int32)')));
-----
-0
-
-# Map with multiple entries
-query I
-SELECT size(map(make_array('x', 'y', 'z', 'w'), make_array(10, 20, 30, 40)));
-----
-4
-
-# String array
-query I
-SELECT size(make_array('hello', 'world'));
-----
-2
-
-# Boolean array
-query I
-SELECT size(make_array(true, false, true));
-----
-3
-
-# Float array
-query I
-SELECT size(make_array(1.5, 2.5, 3.5, 4.5));
-----
-4
 
 # LargeList tests
 query I
@@ -126,4 +57,76 @@ query I
 SELECT size(arrow_cast(make_array(1, 2, 3, 4), 'FixedSizeList(4, Int32)'));
 ----
 4
+
+# Map size tests
+query I
+SELECT size(map(make_array('a', 'b', 'c'), make_array(1, 2, 3)));
+----
+3
+
+query I
+SELECT size(map(make_array('a'), make_array(1)));
+----
+1
+
+# Empty array
+query I
+SELECT size(arrow_cast(make_array(), 'List(Int32)'));
+----
+0
+
+
+# Array with NULL elements (size counts elements including NULLs)
+query I
+SELECT size(make_array(1, NULL, 3));
+----
+3
+
+# NULL array returns -1 (Spark behavior)
+query I
+SELECT size(NULL::int[]);
+----
+-1
+
+
+# Empty map
+query I
+SELECT size(map(arrow_cast(make_array(), 'List(Utf8)'), arrow_cast(make_array(), 'List(Int32)')));
+----
+0
+
+# String array
+query I
+SELECT size(make_array('hello', 'world'));
+----
+2
+
+# Boolean array
+query I
+SELECT size(make_array(true, false, true));
+----
+3
+
+# Float array
+query I
+SELECT size(make_array(1.5, 2.5, 3.5, 4.5));
+----
+4
+
+# Array column tests (with NULL values)
+query I
+SELECT size(column1) FROM VALUES ([1]), ([1,2]), ([]), (NULL);
+----
+1
+2
+0
+-1
+
+# Map column tests (with NULL values)
+query I
+SELECT size(column1) FROM VALUES (map(['a'], [1])), (map(['a','b'], [1,2])), (NULL);
+----
+1
+2
+-1
 
