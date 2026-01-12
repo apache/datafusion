@@ -40,9 +40,9 @@ use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
 
-mod pruning;
+mod statistics_vectorized;
 
-pub use pruning::{
+pub use statistics_vectorized::{
     ColumnStats, NullPresence, NullStats, PropagatedIntermediate, PruningContext,
     PruningOutcome, PruningResults, RangeStats,
 };
@@ -440,7 +440,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
 
     /// Evaluates statistics propagation in a vectorized way.
     ///
-    /// This is mainly used for predicate pruning now. See the pruning module docs
+    /// This is mainly used for predicate pruning now. See the statistics_vectorized module docs
     /// for backgrounds.
     ///
     /// This default implementation is for `PhysicalExpr`s that have not yet
