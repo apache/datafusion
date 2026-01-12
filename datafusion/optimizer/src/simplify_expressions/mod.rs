@@ -28,7 +28,7 @@ mod unwrap_cast;
 mod utils;
 
 // backwards compatibility
-pub use datafusion_expr::simplify::{SimplifyContext, SimplifyInfo};
+pub use datafusion_expr::simplify::SimplifyContext;
 
 pub use expr_simplifier::*;
 pub use simplify_exprs::*;

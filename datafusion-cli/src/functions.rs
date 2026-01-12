@@ -703,6 +703,23 @@ impl TableFunctionImpl for StatisticsCacheFunc {
     }
 }
 
+// Implementation of the `list_files_cache` table function in datafusion-cli.
+///
+/// This function returns the cached results of running a LIST command on a particular object store path for a table. The object metadata is returned as a List of Structs, with one Struct for each object.
+/// DataFusion uses these cached results to plan queries against external tables.
+/// # Schema
+/// ```sql
+/// > describe select * from list_files_cache();
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | column_name         | data_type                                                                                                                                                                | is_nullable |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// | table               | Utf8                                                                                                                                                                     | NO          |
+/// | path                | Utf8                                                                                                                                                                     | NO          |
+/// | metadata_size_bytes | UInt64                                                                                                                                                                   | NO          |
+/// | expires_in          | Duration(ms)                                                                                                                                                             | YES         |
+/// | metadata_list       | List(Struct("file_path": non-null Utf8, "file_modified": non-null Timestamp(ms), "file_size_bytes": non-null UInt64, "e_tag": Utf8, "version": Utf8), field: 'metadata') | YES         |
+/// +---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+
+/// ```
 #[derive(Debug)]
 struct ListFilesCacheTable {
     schema: SchemaRef,
@@ -771,6 +788,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             Field::new("metadata", DataType::Struct(nested_fields.clone()), true);
 
         let schema = Arc::new(Schema::new(vec![
+            Field::new("table", DataType::Utf8, false),
             Field::new("path", DataType::Utf8, false),
             Field::new("metadata_size_bytes", DataType::UInt64, false),
             // expires field in ListFilesEntry has type Instant when set, from which we cannot get "the number of seconds", hence using Duration instead of Timestamp as data type.
@@ -786,6 +804,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             ),
         ]));
 
+        let mut table_arr = vec![];
         let mut path_arr = vec![];
         let mut metadata_size_bytes_arr = vec![];
         let mut expires_arr = vec![];
@@ -802,7 +821,8 @@ impl TableFunctionImpl for ListFilesCacheFunc {
             let mut current_offset: i32 = 0;
 
             for (path, entry) in list_files_cache.list_entries() {
-                path_arr.push(path.to_string());
+                table_arr.push(path.table.map_or("NULL".to_string(), |t| t.to_string()));
+                path_arr.push(path.path.to_string());
                 metadata_size_bytes_arr.push(entry.size_bytes as u64);
                 // calculates time left before entry expires
                 expires_arr.push(
@@ -811,14 +831,14 @@ impl TableFunctionImpl for ListFilesCacheFunc {
                         .map(|t| t.duration_since(now).as_millis() as i64),
                 );
 
-                for meta in entry.metas.iter() {
+                for meta in entry.metas.files.iter() {
                     file_path_arr.push(meta.location.to_string());
                     file_modified_arr.push(meta.last_modified.timestamp_millis());
                     file_size_bytes_arr.push(meta.size);
                     etag_arr.push(meta.e_tag.clone());
                     version_arr.push(meta.version.clone());
                 }
-                current_offset += entry.metas.len() as i32;
+                current_offset += entry.metas.files.len() as i32;
                 offsets.push(current_offset);
             }
         }
@@ -841,6 +861,7 @@ impl TableFunctionImpl for ListFilesCacheFunc {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
+                Arc::new(StringArray::from(table_arr)),
                 Arc::new(StringArray::from(path_arr)),
                 Arc::new(UInt64Array::from(metadata_size_bytes_arr)),
                 Arc::new(DurationMillisecondArray::from(expires_arr)),
