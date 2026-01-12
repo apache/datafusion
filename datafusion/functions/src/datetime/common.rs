@@ -35,10 +35,39 @@ use datafusion_common::{
     internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use std::ops::Add;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
+static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
+
+/// Converts a string representation of a date‑time into a timestamp expressed in
+/// nanoseconds since the Unix epoch.
+///
+/// This helper is a thin wrapper around the more general `string_to_datetime`
+/// function. It accepts an optional `timezone` which, if `None`, defaults to
+/// Coordinated Universal Time (UTC). The string `s` must contain a valid
+/// date‑time format that can be parsed by the underlying chrono parser.
+///
+/// # Return Value
+///
+/// * `Ok(i64)` – The number of nanoseconds since `1970‑01‑01T00:00:00Z`.
+/// * `Err(DataFusionError)` – If the string cannot be parsed, the parsed
+///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
+///   or the parsed value does not correspond to an unambiguous time.
+pub(crate) fn string_to_timestamp_nanos_with_timezone(
+    timezone: &Option<Tz>,
+    s: &str,
+) -> Result<i64> {
+    let tz = timezone.as_ref().unwrap_or(&UTC);
+    let dt = string_to_datetime(tz, s)?;
+    let parsed = dt
+        .timestamp_nanos_opt()
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
+
+    Ok(parsed)
+}
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
 
 /// Converts a string representation of a date‑time into a timestamp expressed in
@@ -453,7 +482,7 @@ where
             }
             other => exec_err!(
                 "Unsupported data type {other:?} for function substr,\
-                    expected Utf8View, Utf8 or LargeUtf8."
+                   expected Utf8View, Utf8 or LargeUtf8."
             ),
         },
         other => exec_err!(
