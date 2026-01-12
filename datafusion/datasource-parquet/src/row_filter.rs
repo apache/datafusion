@@ -307,9 +307,8 @@ impl<'schema> PushdownChecker<'schema> {
             }
         };
 
-        if !self.required_columns.contains(&idx) {
-            self.required_columns.push(idx);
-        }
+        // Duplicates are handled by dedup() in into_sorted_columns()
+        self.required_columns.push(idx);
         let data_type = self.file_schema.field(idx).data_type();
 
         if DataType::is_nested(data_type) {
@@ -357,6 +356,21 @@ impl<'schema> PushdownChecker<'schema> {
     fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns
     }
+
+    /// Consumes the checker and returns sorted, deduplicated column indices
+    /// wrapped in a `PushdownColumns` struct.
+    ///
+    /// This method sorts the column indices and removes duplicates. The sort
+    /// is required because downstream code relies on column indices being in
+    /// ascending order for correct schema projection.
+    fn into_sorted_columns(mut self) -> PushdownColumns {
+        self.required_columns.sort_unstable();
+        self.required_columns.dedup();
+        PushdownColumns {
+            required_columns: self.required_columns,
+            nested: self.nested_behavior,
+        }
+    }
 }
 
 impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
@@ -392,6 +406,7 @@ enum NestedColumnSupport {
     Unsupported,
 }
 
+#[derive(Debug)]
 struct PushdownColumns {
     required_columns: Vec<usize>,
     nested: NestedColumnSupport,
@@ -412,14 +427,7 @@ fn pushdown_columns(
     let allow_list_columns = supports_list_predicates(expr);
     let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
     expr.visit(&mut checker)?;
-    let prevents_pushdown = checker.prevents_pushdown();
-    let nested = checker.nested_behavior;
-    let mut required_columns = checker.required_columns;
-    required_columns.sort_unstable();
-    Ok((!prevents_pushdown).then_some(PushdownColumns {
-        required_columns,
-        nested,
-    }))
+    Ok((!checker.prevents_pushdown()).then(|| checker.into_sorted_columns()))
 }
 
 fn leaf_indices_for_roots(
