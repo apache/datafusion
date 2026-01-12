@@ -31,6 +31,7 @@ pub mod from_unixtime;
 pub mod make_date;
 pub mod make_time;
 pub mod now;
+pub mod parser;
 pub mod planner;
 pub mod to_char;
 pub mod to_date;
@@ -49,7 +50,7 @@ make_udf_function!(make_date::MakeDateFunc, make_date);
 make_udf_function!(make_time::MakeTimeFunc, make_time);
 make_udf_function!(from_unixtime::FromUnixtimeFunc, from_unixtime);
 make_udf_function!(to_char::ToCharFunc, to_char);
-make_udf_function!(to_date::ToDateFunc, to_date);
+make_udf_function_with_config!(to_date::ToDateFunc, to_date);
 make_udf_function!(to_local_time::ToLocalTimeFunc, to_local_time);
 make_udf_function!(to_time::ToTimeFunc, to_time);
 make_udf_function!(to_unixtime::ToUnixtimeFunc, to_unixtime);
@@ -69,6 +70,7 @@ make_udf_function_with_config!(now::NowFunc, now);
 // functions with varargs currently
 
 pub mod expr_fn {
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::Expr;
 
     export_functions!((
@@ -267,7 +269,8 @@ pub mod expr_fn {
     /// # }
     /// ```
     pub fn to_date(args: Vec<Expr>) -> Expr {
-        super::to_date().call(args)
+        let config = ConfigOptions::default();
+        super::to_date(&config).call(args)
     }
 }
 
@@ -286,7 +289,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_time(),
         now(&config),
         to_char(),
-        to_date(),
+        to_date(&config),
         to_local_time(),
         to_time(),
         to_unixtime(),

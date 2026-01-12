@@ -16,11 +16,13 @@
 // under the License.
 
 use crate::datetime::common::*;
+use crate::datetime::parser::DateTimeParser;
 use arrow::compute::cast_with_options;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
@@ -67,19 +69,37 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToDateFunc {
     signature: Signature,
+    parser: Box<dyn DateTimeParser>,
 }
 
 impl Default for ToDateFunc {
     fn default() -> Self {
-        Self::new()
+        Self::new_with_config(&ConfigOptions::default())
     }
 }
 
 impl ToDateFunc {
+    #[deprecated(since = "52.0.0", note = "use `new_with_config` instead")]
+    /// Deprecated constructor retained for backwards compatibility.
+    ///
+    /// Prefer [`ToDateFunc::new_with_config`] which allows specifying the
+    /// date time parser via [`ConfigOptions`].
     pub fn new() -> Self {
+        Self::new_with_config(&ConfigOptions::default())
+    }
+
+    pub fn new_with_config(config: &ConfigOptions) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
+            parser: crate::datetime::parser::get_date_time_parser(config),
         }
+    }
+
+    /// Set a custom date time parser.
+    pub fn with_datetime_parser(&mut self, parser: Box<dyn DateTimeParser>) -> &Self {
+        self.parser = parser;
+
+        self
     }
 
     fn to_date(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -98,8 +118,8 @@ impl ToDateFunc {
             ),
             2.. => handle_multiple::<Date32Type, _, _>(
                 args,
-                |s, format| {
-                    string_to_timestamp_millis_formatted(s, format)
+                |s, formats| {
+                    self.parser.string_to_timestamp_millis_formatted("UTC", s, formats)
                         .map(|n| n / (24 * 60 * 60 * 1_000))
                         .and_then(|v| {
                             v.try_into().map_err(|_| {
@@ -223,7 +243,7 @@ mod tests {
             return_field: Field::new("f", DataType::Date32, true).into(),
             config_options: Arc::new(ConfigOptions::default()),
         };
-        ToDateFunc::new().invoke_with_args(args)
+        ToDateFunc::new_with_config(&ConfigOptions::default()).invoke_with_args(args)
     }
 
     #[test]
@@ -394,10 +414,13 @@ mod tests {
                         tc.name, tc.formatted_date, tc.format_str
                     );
                 }
-                _ => panic!(
-                    "Could not convert '{}' with format string '{}'to Date",
-                    tc.date_str, tc.format_str
-                ),
+                e => {
+                    println!("e was {e:?}");
+                    panic!(
+                        "Could not convert '{}' with format string '{}' to Date",
+                        tc.formatted_date, tc.format_str
+                    )
+                }
             }
         }
 
@@ -435,7 +458,7 @@ mod tests {
                     );
                 }
                 _ => panic!(
-                    "Could not convert '{}' with format string '{}'to Date: {:?}",
+                    "Could not convert '{}' with format string '{}' to Date: {:?}",
                     tc.formatted_date, tc.format_str, to_date_result
                 ),
             }
