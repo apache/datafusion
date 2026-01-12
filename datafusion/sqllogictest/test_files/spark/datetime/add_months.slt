@@ -31,6 +31,11 @@ SELECT add_months('2016-07-30'::date, 10000::int);
 2849-11-30
 
 query D
+SELECT add_months('2016-07-30'::date, 2147483647::int);
+----
+NULL
+
+query D
 SELECT add_months('2016-07-30'::date, -5::int);
 ----
 2016-02-29

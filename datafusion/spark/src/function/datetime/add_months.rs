@@ -69,11 +69,7 @@ impl ScalarUDFImpl for SparkAddMonths {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
         Ok(Arc::new(Field::new(
             self.name(),
