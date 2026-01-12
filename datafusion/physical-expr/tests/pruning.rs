@@ -1053,6 +1053,165 @@ mod test {
         }
     }
 
+    // Test missing stats at different level for cmp expr:
+    // - column stat missing entirely
+    // - range stat inside column stat missing
+    // - either min/max bound inside range stat missing
+    #[test]
+    fn compare_pruning_expr_cmp_expr_missing_stats() {
+        let num_containers = 1;
+        let a_mins: ArrayRef = Arc::new(Int32Array::from(vec![Some(0)]));
+        let a_maxs: ArrayRef = Arc::new(Int32Array::from(vec![Some(10)]));
+        let b_mins: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
+        let b_maxs: ArrayRef = Arc::new(Int32Array::from(vec![Some(11)]));
+
+        let make_ctx = |a_mins: Option<ArrayRef>,
+                        a_maxs: Option<ArrayRef>,
+                        b_mins: Option<ArrayRef>,
+                        b_maxs: Option<ArrayRef>| {
+            let stats = MultiColumnPruningStatistics::new(num_containers)
+                .with_column(ColumnPruningStatistics::new("a").with_range(a_mins, a_maxs))
+                .with_column(
+                    ColumnPruningStatistics::new("b").with_range(b_mins, b_maxs),
+                );
+            Arc::new(PruningContext::new(Arc::new(stats)))
+        };
+
+        let ctx_full = make_ctx(
+            Some(Arc::clone(&a_mins)),
+            Some(Arc::clone(&a_maxs)),
+            Some(Arc::clone(&b_mins)),
+            Some(Arc::clone(&b_maxs)),
+        );
+        let ctx_left_range_missing = make_ctx(
+            None,
+            None,
+            Some(Arc::clone(&b_mins)),
+            Some(Arc::clone(&b_maxs)),
+        );
+        let ctx_right_range_missing = make_ctx(
+            Some(Arc::clone(&a_mins)),
+            Some(Arc::clone(&a_maxs)),
+            None,
+            None,
+        );
+        let ctx_left_min_missing = make_ctx(
+            None,
+            Some(Arc::clone(&a_maxs)),
+            Some(Arc::clone(&b_mins)),
+            Some(Arc::clone(&b_maxs)),
+        );
+        let ctx_right_min_missing = make_ctx(
+            Some(Arc::clone(&a_mins)),
+            Some(Arc::clone(&a_maxs)),
+            None,
+            Some(Arc::clone(&b_maxs)),
+        );
+        let ctx_left_max_missing = make_ctx(
+            Some(Arc::clone(&a_mins)),
+            None,
+            Some(Arc::clone(&b_mins)),
+            Some(Arc::clone(&b_maxs)),
+        );
+        let ctx_right_max_missing = make_ctx(
+            Some(Arc::clone(&a_mins)),
+            Some(Arc::clone(&a_maxs)),
+            Some(Arc::clone(&b_mins)),
+            None,
+        );
+
+        let col_a = || Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let col_b = || Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let neg_a = || Arc::new(NegativeExpr::new(col_a())) as Arc<dyn PhysicalExpr>;
+        let neg_b = || Arc::new(NegativeExpr::new(col_b())) as Arc<dyn PhysicalExpr>;
+
+        enum Expected {
+            NoPruning,
+            EmptyResults,
+        }
+
+        let cases = vec![
+            (
+                "lhs_pruning_none",
+                neg_a(),
+                col_b(),
+                Arc::clone(&ctx_full),
+                Expected::NoPruning,
+            ),
+            (
+                "rhs_pruning_none",
+                col_a(),
+                neg_b(),
+                Arc::clone(&ctx_full),
+                Expected::NoPruning,
+            ),
+            (
+                "lhs_range_stats_none",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_left_range_missing),
+                Expected::EmptyResults,
+            ),
+            (
+                "rhs_range_stats_none",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_right_range_missing),
+                Expected::EmptyResults,
+            ),
+            (
+                "lhs_range_min_missing",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_left_min_missing),
+                Expected::EmptyResults,
+            ),
+            (
+                "rhs_range_min_missing",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_right_min_missing),
+                Expected::EmptyResults,
+            ),
+            (
+                "lhs_range_max_missing",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_left_max_missing),
+                Expected::EmptyResults,
+            ),
+            (
+                "rhs_range_max_missing",
+                col_a(),
+                col_b(),
+                Arc::clone(&ctx_right_max_missing),
+                Expected::EmptyResults,
+            ),
+        ];
+
+        for (case, lhs, rhs, ctx, expected) in cases {
+            let expr = BinaryExpr::new(lhs, Operator::Gt, rhs);
+            let res = expr.evaluate_pruning(ctx).unwrap();
+            match expected {
+                Expected::NoPruning => {
+                    assert!(res.is_none(), "case {case}: expected None, got {res:?}");
+                }
+                Expected::EmptyResults => match res {
+                    Some(PruningIntermediate::IntermediateResult(results)) => {
+                        assert!(
+                            results.as_ref().is_none(),
+                            "case {case}: expected empty pruning results, got {results:?}"
+                        );
+                    }
+                    Some(other) => {
+                        panic!("case {case}: expected pruning results, got {other:?}")
+                    }
+                    None => panic!("case {case}: expected pruning results, got None"),
+                },
+            }
+        }
+    }
+
     #[test]
     fn compare_pruning_column_to_column_null_combinations() {
         let num_containers = 5;
