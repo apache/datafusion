@@ -24,6 +24,22 @@
 ## in the test harness as there is no way to define schema
 ## with metadata in SQL.
 
+query ITTPT
+select * from table_with_metadata;
+----
+1 NULL NULL 2020-09-08T13:42:29.190855123 no_foo
+NULL bar l_bar 2020-09-08T13:42:29.190855123 no_bar
+3 baz l_baz 2020-09-08T13:42:29.190855123 no_baz
+
+query TTT
+describe table_with_metadata;
+----
+id Int32 YES
+name Utf8 YES
+l_name Utf8 YES
+ts Timestamp(ns) NO
+nonnull_name Utf8 NO
+
 query IT
 select id, name from table_with_metadata;
 ----
@@ -235,23 +251,45 @@ order by 1 asc nulls last;
 3 1
 NULL 1
 
+# Reproducer for https://github.com/apache/datafusion/issues/18337
+# this query should not get an internal error
+query TI
+SELECT
+  'foo' AS name,
+  COUNT(
+    CASE
+      WHEN prev_value = 'no_bar' AND value = 'no_baz' THEN 1
+      ELSE NULL
+      END
+     ) AS count_rises
+FROM
+  (
+    SELECT
+      nonnull_name as value,
+      LAG(nonnull_name) OVER (ORDER BY ts) AS prev_value
+    FROM
+      table_with_metadata
+);
+----
+foo 1
+
 # Regression test: first_value should preserve metadata
 query IT
-select first_value(id order by id asc nulls last), get_metadata(first_value(id order by id asc nulls last), 'metadata_key')
+select first_value(id order by id asc nulls last), arrow_metadata(first_value(id order by id asc nulls last), 'metadata_key')
 from table_with_metadata;
 ----
 1 the id field
 
 # Regression test: last_value should preserve metadata
 query IT
-select last_value(id order by id asc nulls first), get_metadata(last_value(id order by id asc nulls first), 'metadata_key')
+select last_value(id order by id asc nulls first), arrow_metadata(last_value(id order by id asc nulls first), 'metadata_key')
 from table_with_metadata;
 ----
 3 the id field
 
 # Regression test: DISTINCT ON should preserve metadata (uses first_value internally)
 query ITTT
-select distinct on (id) id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select distinct on (id) id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from table_with_metadata order by id asc nulls last;
 ----
 1 the id field NULL the name field
@@ -263,7 +301,7 @@ query ITTT
 with res AS (
   select distinct id, name from table_with_metadata
 )
-select id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from res
 order by id asc nulls last;
 ----
@@ -278,13 +316,19 @@ with res AS (
   from table_with_metadata
   group by id, name
 )
-select id, get_metadata(id, 'metadata_key'), name, get_metadata(name, 'metadata_key')
+select id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
 from res
 order by id asc nulls last, name asc nulls last
 ----
 1 the id field NULL the name field
 3 the id field baz the name field
 NULL the id field bar the name field
+
+# Test arrow_metadata with single argument (returns Map)
+query ?
+select arrow_metadata(id) from table_with_metadata limit 1;
+----
+{metadata_key: the id field}
 
 statement ok
 drop table table_with_metadata;

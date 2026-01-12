@@ -27,7 +27,6 @@ mod tests {
     use arrow::array::{ArrayRef, create_array};
     use datafusion::catalog::TableFunctionImpl;
     use datafusion::error::{DataFusionError, Result};
-
     use datafusion_ffi::tests::utils::get_module;
 
     /// This test validates that we can load an external module and use a scalar

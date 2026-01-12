@@ -19,7 +19,7 @@ use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray}
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
-use datafusion_common::{DataFusionError, Result, ScalarValue, not_impl_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::function::Hint;
 use std::sync::Arc;
@@ -189,16 +189,12 @@ where
     R::Native: TryFrom<ScalarValue>,
 {
     let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
-    if scale < 0 {
-        not_impl_err!("Negative scale is not supported for power for decimal types")
-    } else {
-        Ok(Arc::new(
-            result_array
-                .as_ref()
-                .clone()
-                .with_precision_and_scale(precision, scale)?,
-        ))
-    }
+    Ok(Arc::new(
+        result_array
+            .as_ref()
+            .clone()
+            .with_precision_and_scale(precision, scale)?,
+    ))
 }
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128

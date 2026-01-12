@@ -4508,7 +4508,10 @@ fn test_parse_escaped_string_literal_value() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation: rows=1"
+        @r#"
+    Projection: character_length(Utf8("%")) AS len, Utf8("K") AS hex, Utf8("") AS unicode
+      EmptyRelation: rows=1
+    "#
     );
 
     let sql = r"SELECT character_length(E'\000') AS len";
@@ -4516,6 +4519,43 @@ fn test_parse_escaped_string_literal_value() {
     assert_snapshot!(
         logical_plan(sql).unwrap_err(),
         @r#"SQL error: TokenizerError("Unterminated encoded string literal at Line: 1, Column: 25")"#
+    );
+}
+
+#[test]
+fn test_parse_quoted_column_name_with_at_sign() {
+    let sql = r"SELECT `@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+
+    let sql = r"SELECT `@quoted_identifier_names_table`.`@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+}
+
+#[test]
+fn test_variable_identifier() {
+    let sql = r"SELECT t_date32 FROM test WHERE t_date32 = @variable";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: test.t_date32
+      Filter: test.t_date32 = @variable
+        TableScan: test
+    "#
     );
 }
 

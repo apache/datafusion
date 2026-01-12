@@ -23,6 +23,7 @@ updates:
       interval: weekly
     target-branch: main
     labels: [auto-dependencies]
+    open-pull-requests-limit: 15
     ignore:
       # major version bumps of arrow* and parquet are handled manually
       - dependency-name: "arrow*"

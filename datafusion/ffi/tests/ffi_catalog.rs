@@ -21,10 +21,11 @@ mod utils;
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion::catalog::{CatalogProvider, CatalogProviderList};
     use datafusion_common::DataFusionError;
     use datafusion_ffi::tests::utils::get_module;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_catalog() -> datafusion_common::Result<()> {
