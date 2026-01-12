@@ -304,16 +304,15 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 };
                 let union_fields = parse_proto_fields_to_fields(&union.union_types)?;
 
-                // Default to index based type ids if not provided
-                let type_ids: Vec<_> = match union.type_ids.is_empty() {
-                    true => (0..union_fields.len() as i8).collect(),
-                    false => union.type_ids.iter().map(|i| *i as i8).collect(),
-                };
-
-                let union_fields =
+                // Default to index based type ids if not explicitly provided
+                let union_fields = if union.type_ids.is_empty() {
+                    UnionFields::from_fields(union_fields)
+                } else {
+                    let type_ids = union.type_ids.iter().map(|i| *i as i8);
                     UnionFields::try_new(type_ids, union_fields).map_err(|e| {
                         DataFusionError::from(e).context("Deserializing Union DataType")
-                    })?;
+                    })?
+                };
                 DataType::Union(union_fields, union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
