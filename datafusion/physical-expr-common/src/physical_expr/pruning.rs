@@ -50,13 +50,13 @@
 //! There are several existing APIs similar to the statistical pruning API:
 //!
 //! - [`super::PhysicalExpr::evaluate_bounds`]: forward propagation of value ranges
-//!    using `Interval`.
+//!   using `Interval`.
 //! - [`super::PhysicalExpr::propagate_constraints`]: inverse propagation on
-//!    `Interval` to refine child ranges.
+//!   `Interval` to refine child ranges.
 //! - [`super::PhysicalExpr::evaluate_statistics`]: forward propagation using richer
-//!    statistical distributions on `Distribution`.
+//!   statistical distributions on `Distribution`.
 //! - [`super::PhysicalExpr::propagate_statistics`]: inverse propagation on
-//!    statistical distributions.
+//!   statistical distributions.
 //!
 //! It is planned to unify the statistical pruning API with `evaluate_bounds()`. They
 //! share the same functionality; the major difference is vectorized evaluation.
@@ -65,7 +65,7 @@
 //! propagation is not needed, and the statistics information it needs has no
 //! overlap with `Distribution` in `evaluate_statistics()` or `propagate_statistics()`.
 //!
-//! See https://github.com/apache/datafusion/pull/19609 for further API discussions.
+//! See <https://github.com/apache/datafusion/pull/19609> for further API discussions.
 //!
 //!
 //!
@@ -548,8 +548,7 @@ mod tests {
     fn pruning_outcome_semantics_round_trip() {
         let arr = BooleanArray::from(vec![Some(true), Some(false), None]);
 
-        let decoded: Vec<PruningOutcome> =
-            arr.iter().map(PruningOutcome::from).collect();
+        let decoded: Vec<PruningOutcome> = arr.iter().map(PruningOutcome::from).collect();
         assert_eq!(
             decoded,
             vec![
