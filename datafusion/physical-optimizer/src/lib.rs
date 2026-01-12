@@ -28,7 +28,6 @@
 #![deny(clippy::allow_attributes)]
 
 pub mod aggregate_statistics;
-pub mod coalesce_batches;
 pub mod combine_partial_final_agg;
 pub mod enforce_distribution;
 pub mod enforce_sorting;
@@ -42,6 +41,7 @@ pub mod optimizer;
 pub mod output_requirements;
 pub mod projection_pushdown;
 pub use datafusion_pruning as pruning;
+pub mod pushdown_sort;
 pub mod sanity_checker;
 pub mod topk_aggregation;
 pub mod update_aggr_exprs;

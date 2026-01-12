@@ -25,11 +25,11 @@ use arrow::datatypes::Field;
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{internal_datafusion_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -45,9 +45,10 @@ use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    in_list, BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
+    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
+use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
@@ -399,6 +400,20 @@ pub fn parse_physical_expr(
                 codec,
             )?,
         )),
+        ExprType::HashExpr(hash_expr) => {
+            let on_columns =
+                parse_physical_exprs(&hash_expr.on_columns, ctx, input_schema, codec)?;
+            Arc::new(HashExpr::new(
+                on_columns,
+                SeededRandomState::with_seeds(
+                    hash_expr.seed0,
+                    hash_expr.seed1,
+                    hash_expr.seed2,
+                    hash_expr.seed3,
+                ),
+                hash_expr.description.clone(),
+            ))
+        }
         ExprType::Extension(extension) => {
             let inputs: Vec<Arc<dyn PhysicalExpr>> = extension
                 .inputs
@@ -601,30 +616,28 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
     type Error = DataFusionError;
 
     fn try_from(val: &protobuf::PartitionedFile) -> Result<Self, Self::Error> {
-        Ok(PartitionedFile {
-            object_meta: ObjectMeta {
-                location: Path::parse(val.path.as_str()).map_err(|e| {
-                    proto_error(format!("Invalid object_store path: {e}"))
-                })?,
-                last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
-                size: val.size,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: val
-                .partition_values
+        let mut pf = PartitionedFile::new_from_meta(ObjectMeta {
+            location: Path::parse(val.path.as_str())
+                .map_err(|e| proto_error(format!("Invalid object_store path: {e}")))?,
+            last_modified: Utc.timestamp_nanos(val.last_modified_ns as i64),
+            size: val.size,
+            e_tag: None,
+            version: None,
+        })
+        .with_partition_values(
+            val.partition_values
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
-            statistics: val
-                .statistics
-                .as_ref()
-                .map(|v| v.try_into().map(Arc::new))
-                .transpose()?,
-            extensions: None,
-            metadata_size_hint: None,
-        })
+        );
+        if let Some(range) = val.range.as_ref() {
+            let file_range: FileRange = range.try_into()?;
+            pf = pf.with_range(file_range.start, file_range.end);
+        }
+        if let Some(proto_stats) = val.statistics.as_ref() {
+            pf = pf.with_statistics(Arc::new(proto_stats.try_into()?));
+        }
+        Ok(pf)
     }
 }
 
@@ -733,26 +746,19 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::PartitionedFile;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {
         let path_str = "foo/foo%2Fbar/baz%252Fqux";
-        let pf = PartitionedFile {
-            object_meta: ObjectMeta {
-                location: Path::parse(path_str).unwrap(),
-                last_modified: Utc.timestamp_nanos(1_000),
-                size: 42,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let pf = PartitionedFile::new_from_meta(ObjectMeta {
+            location: Path::parse(path_str).unwrap(),
+            last_modified: Utc.timestamp_nanos(1_000),
+            size: 42,
+            e_tag: None,
+            version: None,
+        });
 
         let proto = protobuf::PartitionedFile::try_from(&pf).unwrap();
         assert_eq!(proto.path, path_str);

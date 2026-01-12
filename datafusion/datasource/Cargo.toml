@@ -20,7 +20,7 @@ name = "datafusion-datasource"
 description = "datafusion-datasource"
 readme = "README.md"
 authors.workspace = true
-edition = "2024"
+edition.workspace = true
 homepage.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -36,7 +36,7 @@ default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
-async-compression = { version = "0.4.35", features = [
+async-compression = { version = "0.4.37", features = [
     "bzip2",
     "gzip",
     "xz",

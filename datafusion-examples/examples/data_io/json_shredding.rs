@@ -27,7 +27,7 @@ use datafusion::assert_batches_eq;
 use datafusion::common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion::common::{assert_contains, exec_datafusion_err, Result};
+use datafusion::common::{Result, assert_contains, exec_datafusion_err};
 use datafusion::datasource::listing::{
     ListingTable, ListingTableConfig, ListingTableConfigExt, ListingTableUrl,
 };
@@ -39,7 +39,7 @@ use datafusion::logical_expr::{
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_expr::{expressions, ScalarFunctionExpr};
+use datafusion::physical_expr::{ScalarFunctionExpr, expressions};
 use datafusion::prelude::SessionConfig;
 use datafusion::scalar::ScalarValue;
 use datafusion_physical_expr_adapter::{
@@ -233,7 +233,7 @@ impl ScalarUDFImpl for JsonGetStr {
             _ => {
                 return Err(exec_datafusion_err!(
                     "json_get_str first argument must be a string"
-                ))
+                ));
             }
         };
         // We expect a string array that contains JSON strings
@@ -249,7 +249,7 @@ impl ScalarUDFImpl for JsonGetStr {
             _ => {
                 return Err(exec_datafusion_err!(
                     "json_get_str second argument must be a string array"
-                ))
+                ));
             }
         };
         let values = json_array
@@ -316,44 +316,43 @@ impl ShreddedJsonRewriter {
         expr: Arc<dyn PhysicalExpr>,
         physical_file_schema: &Schema,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
-            if func.name() == "json_get_str" && func.args().len() == 2 {
-                // Get the key from the first argument
-                if let Some(literal) = func.args()[0]
+        if let Some(func) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            && func.name() == "json_get_str"
+            && func.args().len() == 2
+        {
+            // Get the key from the first argument
+            if let Some(literal) = func.args()[0]
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                && let ScalarValue::Utf8(Some(field_name)) = literal.value()
+            {
+                // Get the column from the second argument
+                if let Some(column) = func.args()[1]
                     .as_any()
-                    .downcast_ref::<expressions::Literal>()
+                    .downcast_ref::<expressions::Column>()
                 {
-                    if let ScalarValue::Utf8(Some(field_name)) = literal.value() {
-                        // Get the column from the second argument
-                        if let Some(column) = func.args()[1]
-                            .as_any()
-                            .downcast_ref::<expressions::Column>()
-                        {
-                            let column_name = column.name();
-                            // Check if there's a flat column with underscore prefix
-                            let flat_column_name = format!("_{column_name}.{field_name}");
+                    let column_name = column.name();
+                    // Check if there's a flat column with underscore prefix
+                    let flat_column_name = format!("_{column_name}.{field_name}");
 
-                            if let Ok(flat_field_index) =
-                                physical_file_schema.index_of(&flat_column_name)
-                            {
-                                let flat_field =
-                                    physical_file_schema.field(flat_field_index);
+                    if let Ok(flat_field_index) =
+                        physical_file_schema.index_of(&flat_column_name)
+                    {
+                        let flat_field = physical_file_schema.field(flat_field_index);
 
-                                if flat_field.data_type() == &DataType::Utf8 {
-                                    // Replace the whole expression with a direct column reference
-                                    let new_expr = Arc::new(expressions::Column::new(
-                                        &flat_column_name,
-                                        flat_field_index,
-                                    ))
-                                        as Arc<dyn PhysicalExpr>;
+                        if flat_field.data_type() == &DataType::Utf8 {
+                            // Replace the whole expression with a direct column reference
+                            let new_expr = Arc::new(expressions::Column::new(
+                                &flat_column_name,
+                                flat_field_index,
+                            ))
+                                as Arc<dyn PhysicalExpr>;
 
-                                    return Ok(Transformed {
-                                        data: new_expr,
-                                        tnr: TreeNodeRecursion::Stop,
-                                        transformed: true,
-                                    });
-                                }
-                            }
+                            return Ok(Transformed {
+                                data: new_expr,
+                                tnr: TreeNodeRecursion::Stop,
+                                transformed: true,
+                            });
                         }
                     }
                 }

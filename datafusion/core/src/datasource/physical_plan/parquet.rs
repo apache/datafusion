@@ -54,7 +54,7 @@ mod tests {
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::file::FileSource;
-    use datafusion_datasource::{FileRange, PartitionedFile, TableSchema};
+    use datafusion_datasource::{PartitionedFile, TableSchema};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
@@ -306,7 +306,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit(1_i32));
@@ -337,13 +337,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+
         | c1 | c2 |
         +----+----+
         | 1  |    |
         +----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -364,7 +364,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -395,13 +395,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+
         | c1 | c2 |
         +----+----+
         | 1  |    |
         +----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -426,7 +426,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(file_schema.clone(), vec![c1, c3]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -457,13 +457,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         | 1  |    | 7  |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -488,7 +488,7 @@ mod tests {
         let batch =
             RecordBatch::try_new(file_schema.clone(), vec![c3.clone(), c3]).unwrap();
 
-        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // Since c2 is missing from the file and we didn't supply a custom `PhysicalExprAdapterFactory`,
         // the default behavior is to fill in missing columns with nulls.
         // Thus this predicate will come back as false.
         let filter = col("c2").eq(lit("abc"));
@@ -519,13 +519,13 @@ mod tests {
             .await;
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         |    |    | 7  |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -568,13 +568,13 @@ mod tests {
 
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
         | 1  |    | 10 |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -598,7 +598,7 @@ mod tests {
 
         let batches = rt.batches.unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&batches),@r###"
+        insta::assert_snapshot!(batches_to_sort_string(&batches),@r"
         +----+----+----+
         | c1 | c2 | c3 |
         +----+----+----+
@@ -606,7 +606,7 @@ mod tests {
         | 4  |    | 40 |
         | 5  |    | 50 |
         +----+----+----+
-        "###);
+        ");
 
         let metrics = rt.parquet_exec.metrics().unwrap();
         let metric = get_value(&metrics, "pushdown_rows_pruned");
@@ -635,7 +635,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r"
         +-----+----+----+
         | c1  | c2 | c3 |
         +-----+----+----+
@@ -649,7 +649,7 @@ mod tests {
         | bar |    |    |
         | bar |    |    |
         +-----+----+----+
-        "###);
+        ");
     }
 
     #[tokio::test]
@@ -750,18 +750,18 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+----+
-            | c1  | c3 | c2 |
-            +-----+----+----+
-            |     |    |    |
-            |     | 10 | 1  |
-            |     | 20 |    |
-            |     | 20 | 2  |
-            | Foo | 10 |    |
-            | bar |    |    |
-            +-----+----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+----+
+        | c1  | c3 | c2 |
+        +-----+----+----+
+        |     |    |    |
+        |     | 10 | 1  |
+        |     | 20 |    |
+        |     | 20 | 2  |
+        | Foo | 10 |    |
+        | bar |    |    |
+        +-----+----+----+
+        ");
     }
 
     #[tokio::test]
@@ -782,14 +782,14 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +----+----+----+
         | c1 | c3 | c2 |
         +----+----+----+
         |    | 10 | 1  |
         |    | 20 | 2  |
         +----+----+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 4);
@@ -825,7 +825,7 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&read), @r"
         +-----+-----+
         | c1  | c4  |
         +-----+-----+
@@ -836,7 +836,7 @@ mod tests {
         | bar |     |
         | bar |     |
         +-----+-----+
-        "###);
+        ");
     }
 
     #[tokio::test]
@@ -1049,18 +1049,18 @@ mod tests {
         // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `DataSourceExec`,
         // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            |     |    |
-            |     |    |
-            |     | 1  |
-            |     | 2  |
-            | Foo |    |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        |     |    |
+        |     |    |
+        |     | 1  |
+        |     | 2  |
+        | Foo |    |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1085,13 +1085,13 @@ mod tests {
             .round_trip(vec![batch1, batch2])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +----+----+
         | c1 | c2 |
         +----+----+
         |    | 1  |
         +----+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
         // Note there are were 6 rows in total (across three batches)
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 5);
@@ -1145,7 +1145,7 @@ mod tests {
             .round_trip(vec![batch1, batch2, batch3, batch4])
             .await;
 
-        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r###"
+        insta::assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()), @r"
         +------+----+
         | c1   | c2 |
         +------+----+
@@ -1162,7 +1162,7 @@ mod tests {
         | Foo2 |    |
         | Foo3 |    |
         +------+----+
-        "###);
+        ");
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // There are 4 rows pruned in each of batch2, batch3, and
@@ -1194,14 +1194,14 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            | Foo | 1  |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        | Foo | 1  |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1224,15 +1224,15 @@ mod tests {
             .await
             .unwrap();
 
-        insta::assert_snapshot!(batches_to_sort_string(&read),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            |     | 2  |
-            | Foo | 1  |
-            | bar |    |
-            +-----+----+
-        "###);
+        insta::assert_snapshot!(batches_to_sort_string(&read),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        |     | 2  |
+        | Foo | 1  |
+        | bar |    |
+        +-----+----+
+        ");
     }
 
     #[tokio::test]
@@ -1324,7 +1324,7 @@ mod tests {
     async fn parquet_exec_with_int96_from_spark() -> Result<()> {
         // arrow-rs relies on the chrono library to convert between timestamps and strings, so
         // instead compare as Int64. The underlying type should be a PrimitiveArray of Int64
-        // anyway, so this should be a zero-copy non-modifying cast at the SchemaAdapter.
+        // anyway, so this should be a zero-copy non-modifying cast.
 
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
         let testdata = datafusion_common::test_util::parquet_test_data();
@@ -1527,14 +1527,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_exec_with_range() -> Result<()> {
         fn file_range(meta: &ObjectMeta, start: i64, end: i64) -> PartitionedFile {
-            PartitionedFile {
-                object_meta: meta.clone(),
-                partition_values: vec![],
-                range: Some(FileRange { start, end }),
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            }
+            PartitionedFile::new_from_meta(meta.clone()).with_range(start, end)
         }
 
         async fn assert_parquet_read(
@@ -1616,21 +1609,15 @@ mod tests {
             .await
             .unwrap();
 
-        let partitioned_file = PartitionedFile {
-            object_meta: meta,
-            partition_values: vec![
+        let partitioned_file = PartitionedFile::new_from_meta(meta)
+            .with_partition_values(vec![
                 ScalarValue::from("2021"),
                 ScalarValue::UInt8(Some(10)),
                 ScalarValue::Dictionary(
                     Box::new(DataType::UInt16),
                     Box::new(ScalarValue::from("26")),
                 ),
-            ],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+            ]);
 
         let expected_schema = Schema::new(vec![
             Field::new("id", DataType::Int32, true),
@@ -1682,20 +1669,20 @@ mod tests {
         let batch = results.next().await.unwrap()?;
         assert_eq!(batch.schema().as_ref(), &expected_schema);
 
-        assert_snapshot!(batches_to_string(&[batch]),@r###"
-            +----+----------+-------------+-------+-----+
-            | id | bool_col | tinyint_col | month | day |
-            +----+----------+-------------+-------+-----+
-            | 4  | true     | 0           | 10    | 26  |
-            | 5  | false    | 1           | 10    | 26  |
-            | 6  | true     | 0           | 10    | 26  |
-            | 7  | false    | 1           | 10    | 26  |
-            | 2  | true     | 0           | 10    | 26  |
-            | 3  | false    | 1           | 10    | 26  |
-            | 0  | true     | 0           | 10    | 26  |
-            | 1  | false    | 1           | 10    | 26  |
-            +----+----------+-------------+-------+-----+
-        "###);
+        assert_snapshot!(batches_to_string(&[batch]),@r"
+        +----+----------+-------------+-------+-----+
+        | id | bool_col | tinyint_col | month | day |
+        +----+----------+-------------+-------+-----+
+        | 4  | true     | 0           | 10    | 26  |
+        | 5  | false    | 1           | 10    | 26  |
+        | 6  | true     | 0           | 10    | 26  |
+        | 7  | false    | 1           | 10    | 26  |
+        | 2  | true     | 0           | 10    | 26  |
+        | 3  | false    | 1           | 10    | 26  |
+        | 0  | true     | 0           | 10    | 26  |
+        | 1  | false    | 1           | 10    | 26  |
+        +----+----------+-------------+-------+-----+
+        ");
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -1711,20 +1698,13 @@ mod tests {
             .unwrap()
             .child("invalid.parquet");
 
-        let partitioned_file = PartitionedFile {
-            object_meta: ObjectMeta {
-                location,
-                last_modified: Utc.timestamp_nanos(0),
-                size: 1337,
-                e_tag: None,
-                version: None,
-            },
-            partition_values: vec![],
-            range: None,
-            statistics: None,
-            extensions: None,
-            metadata_size_hint: None,
-        };
+        let partitioned_file = PartitionedFile::new_from_meta(ObjectMeta {
+            location,
+            last_modified: Utc.timestamp_nanos(0),
+            size: 1337,
+            e_tag: None,
+            version: None,
+        });
 
         let file_schema = Arc::new(Schema::empty());
         let config = FileScanConfigBuilder::new(
@@ -1767,14 +1747,14 @@ mod tests {
 
         let metrics = rt.parquet_exec.metrics().unwrap();
 
-        assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()),@r###"
-            +-----+
-            | int |
-            +-----+
-            | 4   |
-            | 5   |
-            +-----+
-        "###);
+        assert_snapshot!(batches_to_sort_string(&rt.batches.unwrap()),@r"
+        +-----+
+        | int |
+        +-----+
+        | 4   |
+        | 5   |
+        +-----+
+        ");
         let (page_index_pruned, page_index_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
         assert_eq!(page_index_pruned, 4);
@@ -1820,14 +1800,14 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // assert the batches and some metrics
-        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r###"
-            +-----+
-            | c1  |
-            +-----+
-            | Foo |
-            | zzz |
-            +-----+
-        "###);
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r"
+        +-----+
+        | c1  |
+        +-----+
+        | Foo |
+        | zzz |
+        +-----+
+        ");
 
         // pushdown predicates have eliminated all 4 bar rows and the
         // null row for 5 rows total
@@ -1938,16 +1918,16 @@ mod tests {
         let metrics = rt.parquet_exec.metrics().unwrap();
 
         // Verify the result rows
-        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r###"
-            +-----+----+
-            | c1  | c2 |
-            +-----+----+
-            | baz | 20 |
-            | foo | 12 |
-            | baz | 25 |
-            | qux | 30 |
-            +-----+----+
-        "###);
+        assert_snapshot!(batches_to_string(&rt.batches.unwrap()),@r"
+        +-----+----+
+        | c1  | c2 |
+        +-----+----+
+        | baz | 20 |
+        | foo | 12 |
+        | baz | 25 |
+        | qux | 30 |
+        +-----+----+
+        ");
 
         // Verify metrics - this is the key test
         let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
@@ -2210,13 +2190,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r###"
-            +---------------------+----+--------+
-            | struct              | id | name   |
-            +---------------------+----+--------+
-            | {id: 4, name: aaa2} | 2  | test02 |
-            +---------------------+----+--------+
-        "###);
+        insta::assert_snapshot!(batches_to_string(&batch),@r"
+        +---------------------+----+--------+
+        | struct              | id | name   |
+        +---------------------+----+--------+
+        | {id: 4, name: aaa2} | 2  | test02 |
+        +---------------------+----+--------+
+        ");
         Ok(())
     }
 
@@ -2239,13 +2219,13 @@ mod tests {
         let sql = "select * from base_table where name='test02'";
         let batch = ctx.sql(sql).await.unwrap().collect().await.unwrap();
         assert_eq!(batch.len(), 1);
-        insta::assert_snapshot!(batches_to_string(&batch),@r###"
-            +---------------------+----+--------+
-            | struct              | id | name   |
-            +---------------------+----+--------+
-            | {id: 4, name: aaa2} | 2  | test02 |
-            +---------------------+----+--------+
-        "###);
+        insta::assert_snapshot!(batches_to_string(&batch),@r"
+        +---------------------+----+--------+
+        | struct              | id | name   |
+        +---------------------+----+--------+
+        | {id: 4, name: aaa2} | 2  | test02 |
+        +---------------------+----+--------+
+        ");
         Ok(())
     }
 
@@ -2376,36 +2356,22 @@ mod tests {
         );
         let config = FileScanConfigBuilder::new(store_url, source)
             .with_file(
-                PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(name_1),
-                        last_modified: Utc::now(),
-                        size: total_size_1,
-                        e_tag: None,
-                        version: None,
-                    },
-                    partition_values: vec![],
-                    range: None,
-                    statistics: None,
-                    extensions: None,
-                    metadata_size_hint: None,
-                }
-                .with_metadata_size_hint(123),
-            )
-            .with_file(PartitionedFile {
-                object_meta: ObjectMeta {
-                    location: Path::from(name_2),
+                PartitionedFile::new_from_meta(ObjectMeta {
+                    location: Path::from(name_1),
                     last_modified: Utc::now(),
-                    size: total_size_2,
+                    size: total_size_1,
                     e_tag: None,
                     version: None,
-                },
-                partition_values: vec![],
-                range: None,
-                statistics: None,
-                extensions: None,
-                metadata_size_hint: None,
-            })
+                })
+                .with_metadata_size_hint(123),
+            )
+            .with_file(PartitionedFile::new_from_meta(ObjectMeta {
+                location: Path::from(name_2),
+                last_modified: Utc::now(),
+                size: total_size_2,
+                e_tag: None,
+                version: None,
+            }))
             .build();
 
         let exec = DataSourceExec::from_data_source(config);

@@ -19,14 +19,15 @@
 /// when the feature integration-tests is built
 #[cfg(feature = "integration-tests")]
 mod tests {
-    use arrow::array::{create_array, ArrayRef};
+    use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, create_array};
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::expr::Sort;
-    use datafusion::logical_expr::{col, ExprFunctionExt, WindowUDF, WindowUDFImpl};
+    use datafusion::logical_expr::{ExprFunctionExt, WindowUDF, WindowUDFImpl, col};
     use datafusion::prelude::SessionContext;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_rank_udwf() -> Result<()> {

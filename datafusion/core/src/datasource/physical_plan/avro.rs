@@ -105,20 +105,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+-------------+
-            | id | bool_col | tinyint_col |
-            +----+----------+-------------+
-            | 4  | true     | 0           |
-            | 5  | false    | 1           |
-            | 6  | true     | 0           |
-            | 7  | false    | 1           |
-            | 2  | true     | 0           |
-            | 3  | false    | 1           |
-            | 0  | true     | 0           |
-            | 1  | false    | 1           |
-            +----+----------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+-------------+
+        | id | bool_col | tinyint_col |
+        +----+----------+-------------+
+        | 4  | true     | 0           |
+        | 5  | false    | 1           |
+        | 6  | true     | 0           |
+        | 7  | false    | 1           |
+        | 2  | true     | 0           |
+        | 3  | false    | 1           |
+        | 0  | true     | 0           |
+        | 1  | false    | 1           |
+        +----+----------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -178,20 +178,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+-------------+-------------+
-            | id | bool_col | tinyint_col | missing_col |
-            +----+----------+-------------+-------------+
-            | 4  | true     | 0           |             |
-            | 5  | false    | 1           |             |
-            | 6  | true     | 0           |             |
-            | 7  | false    | 1           |             |
-            | 2  | true     | 0           |             |
-            | 3  | false    | 1           |             |
-            | 0  | true     | 0           |             |
-            | 1  | false    | 1           |             |
-            +----+----------+-------------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+-------------+-------------+
+        | id | bool_col | tinyint_col | missing_col |
+        +----+----------+-------------+-------------+
+        | 4  | true     | 0           |             |
+        | 5  | false    | 1           |             |
+        | 6  | true     | 0           |             |
+        | 7  | false    | 1           |             |
+        | 2  | true     | 0           |             |
+        | 3  | false    | 1           |             |
+        | 0  | true     | 0           |             |
+        | 1  | false    | 1           |             |
+        +----+----------+-------------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());
@@ -255,20 +255,20 @@ mod tests {
             .expect("plan iterator empty")
             .expect("plan iterator returned an error");
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----------+------------+-------------+
-            | id | bool_col | date       | tinyint_col |
-            +----+----------+------------+-------------+
-            | 4  | true     | 2021-10-26 | 0           |
-            | 5  | false    | 2021-10-26 | 1           |
-            | 6  | true     | 2021-10-26 | 0           |
-            | 7  | false    | 2021-10-26 | 1           |
-            | 2  | true     | 2021-10-26 | 0           |
-            | 3  | false    | 2021-10-26 | 1           |
-            | 0  | true     | 2021-10-26 | 0           |
-            | 1  | false    | 2021-10-26 | 1           |
-            +----+----------+------------+-------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----------+------------+-------------+
+        | id | bool_col | date       | tinyint_col |
+        +----+----------+------------+-------------+
+        | 4  | true     | 2021-10-26 | 0           |
+        | 5  | false    | 2021-10-26 | 1           |
+        | 6  | true     | 2021-10-26 | 0           |
+        | 7  | false    | 2021-10-26 | 1           |
+        | 2  | true     | 2021-10-26 | 0           |
+        | 3  | false    | 2021-10-26 | 1           |
+        | 0  | true     | 2021-10-26 | 0           |
+        | 1  | false    | 2021-10-26 | 1           |
+        +----+----------+------------+-------------+
+        ");}
 
         let batch = results.next().await;
         assert!(batch.is_none());

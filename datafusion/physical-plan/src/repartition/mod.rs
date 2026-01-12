@@ -61,6 +61,9 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::SeededRandomState;
+use crate::sort_pushdown::SortOrderPushdownResult;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt, ready};
@@ -427,37 +430,94 @@ enum BatchPartitionerState {
 
 /// Fixed RandomState used for hash repartitioning to ensure consistent behavior across
 /// executions and runs.
-pub const REPARTITION_RANDOM_STATE: ahash::RandomState =
-    ahash::RandomState::with_seeds(0, 0, 0, 0);
+pub const REPARTITION_RANDOM_STATE: SeededRandomState =
+    SeededRandomState::with_seeds(0, 0, 0, 0);
 
 impl BatchPartitioner {
-    /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
+    /// Create a new [`BatchPartitioner`] for hash-based repartitioning.
     ///
-    /// The time spent repartitioning will be recorded to `timer`
+    /// # Parameters
+    /// - `exprs`: Expressions used to compute the hash for each input row.
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    ///
+    /// # Notes
+    /// This constructor cannot fail and performs no validation.
+    pub fn new_hash_partitioner(
+        exprs: Vec<Arc<dyn PhysicalExpr>>,
+        num_partitions: usize,
+        timer: metrics::Time,
+    ) -> Self {
+        Self {
+            state: BatchPartitionerState::Hash {
+                exprs,
+                num_partitions,
+                hash_buffer: vec![],
+            },
+            timer,
+        }
+    }
+
+    /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
+    ///
+    /// # Parameters
+    /// - `num_partitions`: Total number of output partitions.
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    /// - `input_partition`: Index of the current input partition.
+    /// - `num_input_partitions`: Total number of input partitions.
+    ///
+    /// # Notes
+    /// The starting output partition is derived from the input partition
+    /// to avoid skew when multiple input partitions are used.
+    pub fn new_round_robin_partitioner(
+        num_partitions: usize,
+        timer: metrics::Time,
+        input_partition: usize,
+        num_input_partitions: usize,
+    ) -> Self {
+        Self {
+            state: BatchPartitionerState::RoundRobin {
+                num_partitions,
+                next_idx: (input_partition * num_partitions) / num_input_partitions,
+            },
+            timer,
+        }
+    }
+    /// Create a new [`BatchPartitioner`] based on the provided [`Partitioning`] scheme.
+    ///
+    /// This is a convenience constructor that delegates to the specialized
+    /// hash or round-robin constructors depending on the partitioning variant.
+    ///
+    /// # Parameters
+    /// - `partitioning`: Partitioning scheme to apply (hash or round-robin).
+    /// - `timer`: Metric used to record time spent during repartitioning.
+    /// - `input_partition`: Index of the current input partition.
+    /// - `num_input_partitions`: Total number of input partitions.
+    ///
+    /// # Errors
+    /// Returns an error if the provided partitioning scheme is not supported.
     pub fn try_new(
         partitioning: Partitioning,
         timer: metrics::Time,
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<Self> {
-        let state = match partitioning {
-            Partitioning::RoundRobinBatch(num_partitions) => {
-                BatchPartitionerState::RoundRobin {
-                    num_partitions,
-                    // Distribute starting index evenly based on input partition, number of input partitions and number of partitions
-                    // to avoid they all start at partition 0 and heavily skew on the lower partitions
-                    next_idx: ((input_partition * num_partitions) / num_input_partitions),
-                }
+        match partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                Ok(Self::new_hash_partitioner(exprs, num_partitions, timer))
             }
-            Partitioning::Hash(exprs, num_partitions) => BatchPartitionerState::Hash {
-                exprs,
-                num_partitions,
-                hash_buffer: vec![],
-            },
-            other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
-        };
-
-        Ok(Self { state, timer })
+            Partitioning::RoundRobinBatch(num_partitions) => {
+                Ok(Self::new_round_robin_partitioner(
+                    num_partitions,
+                    timer,
+                    input_partition,
+                    num_input_partitions,
+                ))
+            }
+            other => {
+                not_impl_err!("Unsupported repartitioning scheme {other:?}")
+            }
+        }
     }
 
     /// Partition the provided [`RecordBatch`] into one or more partitioned [`RecordBatch`]
@@ -512,7 +572,11 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(&arrays, &REPARTITION_RANDOM_STATE, hash_buffer)?;
+                    create_hashes(
+                        &arrays,
+                        REPARTITION_RANDOM_STATE.random_state(),
+                        hash_buffer,
+                    )?;
 
                     let mut indices: Vec<_> = (0..*partitions)
                         .map(|_| Vec::with_capacity(batch.num_rows()))
@@ -1094,6 +1158,27 @@ impl ExecutionPlan for RepartitionExec {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // RepartitionExec only maintains input order if preserve_order is set
+        // or if there's only one partition
+        if !self.maintains_input_order()[0] {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
+        // Delegate to the child and wrap with a new RepartitionExec
+        self.input.try_pushdown_sort(order)?.try_map(|new_input| {
+            let mut new_repartition =
+                RepartitionExec::try_new(new_input, self.partitioning().clone())?;
+            if self.preserve_order {
+                new_repartition = new_repartition.with_preserve_order();
+            }
+            Ok(Arc::new(new_repartition) as Arc<dyn ExecutionPlan>)
+        })
+    }
+
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -1217,12 +1302,26 @@ impl RepartitionExec {
         input_partition: usize,
         num_input_partitions: usize,
     ) -> Result<()> {
-        let mut partitioner = BatchPartitioner::try_new(
-            partitioning,
-            metrics.repartition_time.clone(),
-            input_partition,
-            num_input_partitions,
-        )?;
+        let mut partitioner = match &partitioning {
+            Partitioning::Hash(exprs, num_partitions) => {
+                BatchPartitioner::new_hash_partitioner(
+                    exprs.clone(),
+                    *num_partitions,
+                    metrics.repartition_time.clone(),
+                )
+            }
+            Partitioning::RoundRobinBatch(num_partitions) => {
+                BatchPartitioner::new_round_robin_partitioner(
+                    *num_partitions,
+                    metrics.repartition_time.clone(),
+                    input_partition,
+                    num_input_partitions,
+                )
+            }
+            other => {
+                return not_impl_err!("Unsupported repartitioning scheme {other:?}");
+            }
+        };
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();

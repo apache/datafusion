@@ -19,9 +19,13 @@
 
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use crate::type_coercion::aggregates::NUMERICS;
-use arrow::datatypes::{DataType, Decimal128Type, DecimalType, IntervalUnit, TimeUnit};
+use arrow::datatypes::{
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+    Decimal128Type, DecimalType, Field, IntervalUnit, TimeUnit,
+};
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{Result, internal_err, plan_err};
@@ -328,14 +332,25 @@ impl TypeSignature {
 /// arguments that can be coerced to a particular class of types.
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
+    /// Allows an arbitrary type argument without coercing the argument.
+    Any,
+    /// Timestamps, allowing arbitrary (or no) timezones
     Timestamp,
+    /// All time types
     Time,
+    /// All interval types
     Interval,
+    /// All duration types
     Duration,
+    /// A specific native type
     Native(LogicalTypeRef),
+    /// Signed and unsigned integers
     Integer,
+    /// All float types
     Float,
+    /// All decimal types, allowing arbitrary precision & scale
     Decimal,
+    /// Integers, floats and decimals
     Numeric,
     /// Encompasses both the native Binary/LargeBinary types as well as arbitrarily sized FixedSizeBinary types
     Binary,
@@ -354,6 +369,9 @@ impl TypeSignatureClass {
     /// documentation or error messages.
     fn get_example_types(&self) -> Vec<DataType> {
         match self {
+            // TODO: might be too much info to return every single type here
+            //       maybe https://github.com/apache/datafusion/issues/14761 will help here?
+            TypeSignatureClass::Any => vec![],
             TypeSignatureClass::Native(l) => get_data_types(l.native()),
             TypeSignatureClass::Timestamp => {
                 vec![
@@ -396,6 +414,7 @@ impl TypeSignatureClass {
         }
 
         match self {
+            TypeSignatureClass::Any => true,
             TypeSignatureClass::Native(t) if t.native() == logical_type => true,
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
             TypeSignatureClass::Time if logical_type.is_time() => true,
@@ -417,6 +436,7 @@ impl TypeSignatureClass {
         origin_type: &DataType,
     ) -> Result<DataType> {
         match self {
+            TypeSignatureClass::Any => Ok(origin_type.to_owned()),
             TypeSignatureClass::Native(logical_type) => {
                 logical_type.native().default_cast_for(origin_type)
             }
@@ -888,8 +908,56 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
         NativeType::String => {
             vec![DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View]
         }
-        // TODO: support other native types
-        _ => vec![],
+        NativeType::Decimal(precision, scale) => {
+            // We assume incoming NativeType is valid already, in terms of precision & scale
+            let mut types = vec![DataType::Decimal256(*precision, *scale)];
+            if *precision <= DECIMAL32_MAX_PRECISION {
+                types.push(DataType::Decimal32(*precision, *scale));
+            }
+            if *precision <= DECIMAL64_MAX_PRECISION {
+                types.push(DataType::Decimal64(*precision, *scale));
+            }
+            if *precision <= DECIMAL128_MAX_PRECISION {
+                types.push(DataType::Decimal128(*precision, *scale));
+            }
+            types
+        }
+        NativeType::Timestamp(time_unit, timezone) => {
+            vec![DataType::Timestamp(*time_unit, timezone.to_owned())]
+        }
+        NativeType::Time(TimeUnit::Second) => vec![DataType::Time32(TimeUnit::Second)],
+        NativeType::Time(TimeUnit::Millisecond) => {
+            vec![DataType::Time32(TimeUnit::Millisecond)]
+        }
+        NativeType::Time(TimeUnit::Microsecond) => {
+            vec![DataType::Time64(TimeUnit::Microsecond)]
+        }
+        NativeType::Time(TimeUnit::Nanosecond) => {
+            vec![DataType::Time64(TimeUnit::Nanosecond)]
+        }
+        NativeType::Duration(time_unit) => vec![DataType::Duration(*time_unit)],
+        NativeType::Interval(interval_unit) => vec![DataType::Interval(*interval_unit)],
+        NativeType::FixedSizeBinary(size) => vec![DataType::FixedSizeBinary(*size)],
+        NativeType::FixedSizeList(logical_field, size) => {
+            get_data_types(logical_field.logical_type.native())
+                .iter()
+                .map(|child_dt| {
+                    let field = Field::new(
+                        logical_field.name.clone(),
+                        child_dt.clone(),
+                        logical_field.nullable,
+                    );
+                    DataType::FixedSizeList(Arc::new(field), *size)
+                })
+                .collect()
+        }
+        // TODO: implement for nested types
+        NativeType::List(_)
+        | NativeType::Struct(_)
+        | NativeType::Union(_)
+        | NativeType::Map(_) => {
+            vec![]
+        }
     }
 }
 
