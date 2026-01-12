@@ -120,10 +120,6 @@ See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/dat
 
 ## DataFusion `52.0.0`
 
-**Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-
-You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
-
 ### Changes to DFSchema API
 
 To permit more efficient planning, several methods on `DFSchema` have been
