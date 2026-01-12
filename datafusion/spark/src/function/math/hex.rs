@@ -116,23 +116,19 @@ const HEX_CHARS_LOWER: &[u8; 16] = b"0123456789abcdef";
 const HEX_CHARS_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
 #[inline]
-fn hex_int64(num: i64, buffer: &mut Vec<u8>) {
+fn hex_int64(num: i64, buffer: &mut [u8; 16]) -> &[u8] {
     if num == 0 {
-        buffer.push(HEX_CHARS_UPPER[0]);
-        return;
+        return b"0";
     }
 
     let mut n = num as u64;
-    let mut temp = [0u8; 16];
     let mut i = 16;
     while n != 0 {
         i -= 1;
-        let digest = (n & 0xF) as u8;
-        temp[i] = HEX_CHARS_UPPER[digest as usize];
+        buffer[i] = HEX_CHARS_UPPER[(n & 0xF) as usize];
         n >>= 4;
     }
-
-    buffer.extend_from_slice(&temp[i..]);
+    &buffer[i..]
 }
 
 /// Generic hex encoding for byte array types
@@ -161,6 +157,7 @@ where
                 buffer.push(hex_chars[(byte >> 4) as usize]);
                 buffer.push(hex_chars[(byte & 0x0f) as usize]);
             }
+            // SAFETY: buffer contains only ASCII hex digests, which are valid UTF-8
             unsafe {
                 builder.append_value(from_utf8_unchecked(&buffer));
             }
@@ -178,14 +175,14 @@ where
     I: Iterator<Item = Option<i64>>,
 {
     let mut builder = StringBuilder::with_capacity(len, len * 16);
-    let mut buffer = Vec::with_capacity(16);
 
     for v in iter {
         if let Some(num) = v {
-            buffer.clear();
-            hex_int64(num, &mut buffer);
+            let mut temp = [0u8; 16];
+            let slice = hex_int64(num, &mut temp);
+            // SAFETY: slice contains only ASCII hex digests, which are valid UTF-8
             unsafe {
-                builder.append_value(from_utf8_unchecked(&buffer));
+                builder.append_value(from_utf8_unchecked(&slice));
             }
         } else {
             builder.append_null();
@@ -395,18 +392,16 @@ mod test {
 
     #[test]
     fn test_hex_int64() {
-        let num = 1234;
-        let mut cache = Vec::with_capacity(16);
-        super::hex_int64(num, &mut cache);
-        unsafe {
-            assert_eq!(from_utf8_unchecked(&cache), "4D2".to_string());
-        }
+        let test_cases = vec![(1234, "4D2"), (-1, "FFFFFFFFFFFFFFFF")];
 
-        let num = -1;
-        cache.clear();
-        super::hex_int64(num, &mut cache);
-        unsafe {
-            assert_eq!(from_utf8_unchecked(&cache), "FFFFFFFFFFFFFFFF".to_string());
+        for (num, expected) in test_cases {
+            let mut cache = [0u8; 16];
+            let slice = super::hex_int64(num, &mut cache);
+
+            unsafe {
+                let result = from_utf8_unchecked(&slice);
+                assert_eq!(expected, result);
+            }
         }
     }
 
