@@ -41,7 +41,7 @@ use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
+use arrow::array::{Array, PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take;
 use arrow;
 use arrow::datatypes::{SchemaRef, UInt32Type};
@@ -240,6 +240,26 @@ impl Debug for RepartitionExecState {
             }
         }
     }
+}
+
+/// Perform the take operation on a RecordBatch
+fn take_batch(
+    batch: &RecordBatch,
+    indices: &PrimitiveArray<UInt32Type>,
+) -> Result<RecordBatch> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|array| take(array.as_ref(), indices, None))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut options = RecordBatchOptions::new();
+    options = options.with_row_count(Some(indices.len()));
+    Ok(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?)
 }
 
 impl RepartitionExecState {
@@ -495,6 +515,65 @@ impl BatchPartitioner {
         })
     }
 
+    /// Partition the provided [`RecordBatch`] into a set of indices for each partition
+    /// based on the [`Partitioning`] specified on construction
+    ///
+    /// The time spent repartitioning, will be recorded
+    /// to the [`metrics::Time`] provided on construction
+    pub fn partition_indices(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<impl Iterator<Item = Result<(usize, PrimitiveArray<UInt32Type>)>> + Send + '_> {
+        let it: Box<dyn Iterator<Item = Result<(usize, PrimitiveArray<UInt32Type>)>> + Send> = match &mut self.state {
+            BatchPartitionerState::RoundRobin { .. } => {
+                return not_impl_err!(
+                    "partition_indices not supported for RoundRobin partitioning"
+                );
+            }
+            BatchPartitionerState::Hash {
+                exprs,
+                num_partitions: partitions,
+                hash_buffer,
+            } => {
+                // Tracking time required for distributing indexes across output partitions
+                let timer = self.timer.timer();
+
+                let arrays =
+                    evaluate_expressions_to_arrays(exprs.as_slice(), batch)?;
+
+                hash_buffer.clear();
+                hash_buffer.resize(batch.num_rows(), 0);
+                create_hashes(
+                    &arrays,
+                    REPARTITION_RANDOM_STATE.random_state(),
+                    hash_buffer,
+                )?;
+
+                let mut indices: Vec<_> = (0..*partitions)
+                    .map(|_| Vec::with_capacity(batch.num_rows()))
+                    .collect();
+
+                for (index, hash) in hash_buffer.iter().enumerate() {
+                    indices[(*hash % *partitions as u64) as usize]
+                        .push(index as u32);
+                }
+
+                timer.done();
+
+                Box::new(
+                    indices
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(|(partition, indices)| {
+                            let indices: PrimitiveArray<UInt32Type> = indices.into();
+                            (!indices.is_empty()).then_some(Ok((partition, indices)))
+                        }),
+                )
+            }
+        };
+        Ok(it)
+    }
+
     /// Actual implementation of [`partition`](Self::partition).
     ///
     /// The reason this was pulled out is that we need to have a variant of `partition` that works w/ sync functions,
@@ -514,66 +593,10 @@ impl BatchPartitioner {
                     *next_idx = (*next_idx + 1) % *num_partitions;
                     Box::new(std::iter::once(Ok((idx, batch))))
                 }
-                BatchPartitionerState::Hash {
-                    exprs,
-                    num_partitions: partitions,
-                    hash_buffer,
-                } => {
-                    // Tracking time required for distributing indexes across output partitions
-                    let timer = self.timer.timer();
-
-                    let arrays =
-                        evaluate_expressions_to_arrays(exprs.as_slice(), &batch)?;
-
-                    hash_buffer.clear();
-                    hash_buffer.resize(batch.num_rows(), 0);
-
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
-
-                    let mut indices: Vec<_> = (0..*partitions)
-                        .map(|_| Vec::with_capacity(batch.num_rows()))
-                        .collect();
-
-                    for (index, hash) in hash_buffer.iter().enumerate() {
-                        indices[(*hash % *partitions as u64) as usize].push(index as u32);
-                    }
-
-                    // Finished building index-arrays for output partitions
-                    timer.done();
-
-                    // Borrowing partitioner timer to prevent moving `self` to closure
-                    let partitioner_timer = &self.timer;
-                    let it = indices
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(partition, indices)| {
-                            let indices: PrimitiveArray<UInt32Type> = indices.into();
-                            (!indices.is_empty()).then_some((partition, indices))
-                        })
-                        .map(move |(partition, indices)| {
-                            // Tracking time required for repartitioned batches construction
-                            let _timer = partitioner_timer.timer();
-
-                            // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
-
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
-                            let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
-                                columns,
-                                &options,
-                            )
-                            .unwrap();
-
-                            Ok((partition, batch))
-                        });
-
-                    Box::new(it)
+                BatchPartitionerState::Hash { .. } => {
+                    // For hash partitioning, we are not using this method anymore.
+                    // Instead, we use `partition_indices` and `take_batch` directly.
+                    unimplemented!()
                 }
             };
 
@@ -1259,7 +1282,7 @@ impl RepartitionExec {
         num_input_partitions: usize,
     ) -> Result<()> {
         let mut partitioner = BatchPartitioner::try_new(
-            partitioning,
+            partitioning.clone(),
             metrics.repartition_time.clone(),
             input_partition,
             num_input_partitions,
@@ -1284,38 +1307,87 @@ impl RepartitionExec {
                 continue;
             }
 
-            for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
-                let size = batch.get_array_memory_size();
+            // The optimization of deferring `take` is only applicable to hash partitioning.
+            // For other partitioning schemes, we can just partition the batch and send the
+            // resulting batches.
+            if !matches!(partitioning, Partitioning::Hash(_, _)) {
+                for res in partitioner.partition_iter(batch)? {
+                    let (partition, batch) = res?;
+                    let size = batch.get_array_memory_size();
 
-                let timer = metrics.send_time[partition].timer();
-                // if there is still a receiver, send to it
-                if let Some(channel) = output_channels.get_mut(&partition) {
-                    let (batch_to_send, is_memory_batch) =
-                        match channel.reservation.lock().try_grow(size) {
-                            Ok(_) => {
-                                // Memory available - send in-memory batch
-                                (RepartitionBatch::Memory(batch), true)
-                            }
-                            Err(_) => {
-                                // We're memory limited - spill to SpillPool
-                                // SpillPool handles file handle reuse and rotation
-                                channel.spill_writer.push_batch(&batch)?;
-                                // Send marker indicating batch was spilled
-                                (RepartitionBatch::Spilled, false)
-                            }
-                        };
+                    let timer = metrics.send_time[partition].timer();
+                    // if there is still a receiver, send to it
+                    if let Some(channel) = output_channels.get_mut(&partition) {
+                        let (batch_to_send, is_memory_batch) =
+                            match channel.reservation.lock().try_grow(size) {
+                                Ok(_) => {
+                                    // Memory available - send in-memory batch
+                                    (RepartitionBatch::Memory(batch), true)
+                                }
+                                Err(_) => {
+                                    // We're memory limited - spill to SpillPool
+                                    // SpillPool handles file handle reuse and rotation
+                                    channel.spill_writer.push_batch(&batch)?;
+                                    // Send marker indicating batch was spilled
+                                    (RepartitionBatch::Spilled, false)
+                                }
+                            };
 
-                    if channel.sender.send(Some(Ok(batch_to_send))).await.is_err() {
-                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        // Only shrink memory if it was a memory batch
-                        if is_memory_batch {
-                            channel.reservation.lock().shrink(size);
+                        if channel
+                            .sender
+                            .send(Some(Ok(batch_to_send)))
+                            .await
+                            .is_err()
+                        {
+                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                            // Only shrink memory if it was a memory batch
+                            if is_memory_batch {
+                                channel.reservation.lock().shrink(size);
+                            }
+                            output_channels.remove(&partition);
                         }
-                        output_channels.remove(&partition);
                     }
+                    timer.done();
                 }
-                timer.done();
+            } else {
+                let batch = Arc::new(batch);
+                for res in partitioner.partition_indices(&batch)? {
+                    let (partition, indices) = res?;
+                    let size = indices.get_array_memory_size();
+
+                    let timer = metrics.send_time[partition].timer();
+
+                    if let Some(channel) = output_channels.get_mut(&partition) {
+                        let (batch_to_send, is_memory_batch) =
+                            match channel.reservation.lock().try_grow(size) {
+                                Ok(_) => {
+                                    let payload = PartitionedPayload {
+                                        batch: Arc::clone(&batch),
+                                        indices,
+                                    };
+                                    (RepartitionBatch::Indices(payload), true)
+                                }
+                                Err(_) => {
+                                    let batch = take_batch(&batch, &indices)?;
+                                    channel.spill_writer.push_batch(&batch)?;
+                                    (RepartitionBatch::Spilled, false)
+                                }
+                            };
+
+                        if channel
+                            .sender
+                            .send(Some(Ok(batch_to_send)))
+                            .await
+                            .is_err()
+                        {
+                            if is_memory_batch {
+                                channel.reservation.lock().shrink(size);
+                            }
+                            output_channels.remove(&partition);
+                        }
+                    }
+                    timer.done();
+                }
             }
 
             // If the input stream is endless, we may spin forever and
@@ -1505,6 +1577,7 @@ impl PerPartitionStream {
         }
     }
 
+
     fn poll_next_inner(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1526,25 +1599,35 @@ impl PerPartitionStream {
                     };
 
                     match value {
-                        Some(Some(v)) => match v {
-                            Ok(RepartitionBatch::Memory(batch)) => {
-                                // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
-                                return Poll::Ready(Some(Ok(batch)));
+                        Some(Some(v)) => {
+                            match v {
+                                Ok(RepartitionBatch::Memory(batch)) => {
+                                    // Release memory and return batch
+                                    self.reservation
+                                        .lock()
+                                        .shrink(batch.get_array_memory_size());
+                                    return Poll::Ready(Some(Ok(batch)));
+                                }
+                                Ok(RepartitionBatch::Indices(payload)) => {
+                                    self.reservation.lock().shrink(
+                                        payload.indices.get_array_memory_size(),
+                                    );
+                                    let batch =
+                                        take_batch(&payload.batch, &payload.indices)?;
+                                    return Poll::Ready(Some(Ok(batch)));
+                                }
+                                Ok(RepartitionBatch::Spilled) => {
+                                    // Batch was spilled, transition to reading from spill stream
+                                    // We must block on spill stream until we get the batch
+                                    // to preserve ordering
+                                    self.state = StreamState::ReadingSpilled;
+                                    continue;
+                                }
+                                Err(e) => {
+                                    return Poll::Ready(Some(Err(e)));
+                                }
                             }
-                            Ok(RepartitionBatch::Spilled) => {
-                                // Batch was spilled, transition to reading from spill stream
-                                // We must block on spill stream until we get the batch
-                                // to preserve ordering
-                                self.state = StreamState::ReadingSpilled;
-                                continue;
-                            }
-                            Err(e) => {
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        },
+                        }
                         Some(None) => {
                             // One input partition finished
                             self.remaining_partitions -= 1;
