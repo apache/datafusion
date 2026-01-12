@@ -42,7 +42,8 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::compute::take;
+use arrow;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
@@ -121,12 +122,24 @@ use distributor_channels::{
 ///                    (FIFO order preserved)
 /// ```
 ///
+/// A batch that has been partitioned, but not yet taken
+#[derive(Debug)]
+pub struct PartitionedPayload {
+    /// The batch that was partitioned
+    batch: Arc<RecordBatch>,
+    /// The indices for a particular output partition
+    indices: PrimitiveArray<UInt32Type>,
+}
+
 /// See [`RepartitionExec`] for overall architecture and [`StreamState`] for
 /// the state machine that handles reading these batches.
 #[derive(Debug)]
 enum RepartitionBatch {
     /// Batch held in memory (counts against memory reservation)
     Memory(RecordBatch),
+    /// Indices for a batch held in memory.
+    /// The `take` operation will be performed downstream.
+    Indices(PartitionedPayload),
     /// Marker indicating a batch was spilled to the partition's SpillPool.
     /// The actual batch can be retrieved by reading from the SpillPoolStream.
     /// This variant contains no data itself - it's just a signal to the reader
