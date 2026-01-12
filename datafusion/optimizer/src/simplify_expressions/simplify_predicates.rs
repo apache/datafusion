@@ -300,7 +300,7 @@ mod tests {
 
         // Test that it still extracts from direct column references
         let col_expr = col("a");
-        assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from("a")));
+        assert_eq!(extract_column_from_expr(&col_expr), Some(Column::from_qualified_name("a")));
     }
 
     #[test]
