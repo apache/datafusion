@@ -35,7 +35,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullPresence, NullStats, PruningContext, PruningIntermediate, RangeStats,
+    ColumnStats, NullPresence, NullStats, PruningContext, PropagatedIntermediate, RangeStats,
 };
 
 /// Represents a literal value
@@ -115,10 +115,10 @@ impl PhysicalExpr for Literal {
         Ok(ColumnarValue::Scalar(self.value.clone()))
     }
 
-    fn evaluate_pruning(
+    fn evaluate_statistics_vectorized(
         &self,
         ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
+    ) -> Result<Option<PropagatedIntermediate>> {
         let length = ctx.statistics().num_containers();
         let range = RangeStats::new_constant(self.value.clone(), length)?;
 
@@ -127,7 +127,7 @@ impl PhysicalExpr for Literal {
             false => NullStats::from_uniform_presence(NullPresence::NoNull, length),
         };
 
-        Ok(Some(PruningIntermediate::IntermediateStats(
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
             ColumnStats::new(Some(range), Some(null), length),
         )))
     }

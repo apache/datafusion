@@ -43,7 +43,7 @@ use itertools::izip;
 mod pruning;
 
 pub use pruning::{
-    ColumnStats, NullPresence, NullStats, PruningContext, PruningIntermediate,
+    ColumnStats, NullPresence, NullStats, PropagatedIntermediate, PruningContext,
     PruningOutcome, PruningResults, RangeStats,
 };
 
@@ -438,33 +438,25 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
         false
     }
 
-    /// Evaluates pruning statistics via propagation. See the pruning module
-    /// docs for background.
+    /// Evaluates statistics propagation in a vectorized way.
+    ///
+    /// This is mainly used for predicate pruning now. See the pruning module docs
+    /// for backgrouds.
     ///
     /// This default implementation is for `PhysicalExpr`s that have not yet
     /// implemented pruning; returning `None` signals that no pruning statistics
     /// are available.
     ///
-    /// In the future, propagation may expose dedicated APIs such as:
-    /// ```text
-    /// trait PhysicalExpr {
-    ///     fn propagate_range_stats()...
-    ///     fn propagate_set_stats()...
-    ///     fn propagate_null_stats()...
-    /// }
-    /// ```
-    /// with `evaluate_pruning` combining the individual statistic types.
-    ///
     /// # Returns
     /// - `None` if the `PhysicalExpr` has not implemented the statistics propagation
     /// - For predicate expressions (boolean outputs), implementations should return
-    ///   `Some(PruningIntermediate::PruningResults)`
+    ///   `Some(PropagatedIntermediate::IntermediateResult)`
     /// - For arithmetic expressions, implementations should propagate stats and
-    ///   return `Some(PruningIntermediate::IntermediateStats)`
-    fn evaluate_pruning(
+    ///   return `Some(PropagatedIntermediate::IntermediateStats)`
+    fn evaluate_statistics_vectorized(
         &self,
         _ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
+    ) -> Result<Option<PropagatedIntermediate>> {
         Ok(None)
     }
 }

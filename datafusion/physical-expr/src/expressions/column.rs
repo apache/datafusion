@@ -32,7 +32,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column as DFColumn, Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullStats, PruningContext, PruningIntermediate, RangeStats,
+    ColumnStats, NullStats, PruningContext, PropagatedIntermediate, RangeStats,
 };
 
 /// Represents the column at a given index in a RecordBatch
@@ -148,15 +148,15 @@ impl PhysicalExpr for Column {
     }
 
     /// Read the column statistics from `PruningContext`, transform the input stat
-    /// to the stats in the internal representation (`PruningIntermediate`)
+    /// to the stats in the internal representation (`PropagatedIntermediate`)
     ///
     /// The implemented statistics types are:
     /// - Range stat (min/max)
     /// - Null stat
-    fn evaluate_pruning(
+    fn evaluate_statistics_vectorized(
         &self,
         ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
+    ) -> Result<Option<PropagatedIntermediate>> {
         let pruning_column = DFColumn::from_name(self.name());
         let stats = ctx.statistics();
         let num_containers = stats.num_containers();
@@ -181,7 +181,7 @@ impl PhysicalExpr for Column {
             .and_then(|arr| arr.as_any().downcast_ref::<UInt64Array>());
         let null_stats = NullStats::new(null_counts, row_counts)?;
 
-        Ok(Some(PruningIntermediate::IntermediateStats(
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
             ColumnStats::new(range_stats, null_stats, num_containers),
         )))
     }

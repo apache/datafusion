@@ -43,7 +43,7 @@ use datafusion_expr::statistics::{
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullStats, PruningContext, PruningIntermediate, PruningOutcome,
+    ColumnStats, NullStats, PropagatedIntermediate, PruningContext, PruningOutcome,
     PruningResults,
 };
 use std::cmp::Ordering;
@@ -304,10 +304,10 @@ impl PhysicalExpr for BinaryExpr {
             .map(ColumnarValue::Array)
     }
 
-    fn evaluate_pruning(
+    fn evaluate_statistics_vectorized(
         &self,
         ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
+    ) -> Result<Option<PropagatedIntermediate>> {
         use Operator::*;
 
         let is_cmp = matches!(self.op, Eq | NotEq | Lt | LtEq | Gt | GtEq);
@@ -315,7 +315,7 @@ impl PhysicalExpr for BinaryExpr {
             return self.evaluate_cmp_pruning(ctx);
         }
 
-        self.evaluate_pruning_binary_op_default(&ctx)
+        self.evaluate_statistics_vectorized_binary_op_default(&ctx)
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -660,19 +660,19 @@ impl BinaryExpr {
     fn evaluate_cmp_pruning(
         &self,
         ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
-        let left = self.left.evaluate_pruning(Arc::clone(&ctx))?;
-        let right = self.right.evaluate_pruning(ctx)?;
+    ) -> Result<Option<PropagatedIntermediate>> {
+        let left = self.left.evaluate_statistics_vectorized(Arc::clone(&ctx))?;
+        let right = self.right.evaluate_statistics_vectorized(ctx)?;
 
         let (left_stats, right_stats) = match (left, right) {
             (
-                Some(PruningIntermediate::IntermediateStats(ls)),
-                Some(PruningIntermediate::IntermediateStats(rs)),
+                Some(PropagatedIntermediate::IntermediateStats(ls)),
+                Some(PropagatedIntermediate::IntermediateStats(rs)),
             ) => (ls, rs),
             (None, _) | (_, None) => return Ok(None),
             (left_child, right_child) => {
                 return internal_err!(
-                    "For cmp operators (e.g. >), both of its child must be `PruningIntermediate::intermediateStats`, got left child {:?}, right child {:?}",
+                    "For cmp operators (e.g. >), both of its child must be `PropagatedIntermediate::IntermediateStats`, got left child {:?}, right child {:?}",
                     left_child,
                     right_child
                 );
@@ -697,12 +697,12 @@ impl BinaryExpr {
         // If either side has missing range stats, the result stat should also be
         // missing for all containers
         let Some(left_range) = left_stats.range_stats() else {
-            return Ok(Some(PruningIntermediate::IntermediateResult(
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
                 PruningResults::unknown(num_containers),
             )));
         };
         let Some(right_range) = right_stats.range_stats() else {
-            return Ok(Some(PruningIntermediate::IntermediateResult(
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
                 PruningResults::unknown(num_containers),
             )));
         };
@@ -715,7 +715,7 @@ impl BinaryExpr {
         let (Some(l_mins), Some(l_maxs), Some(r_mins), Some(r_maxs)) =
             (l_mins, l_maxs, r_mins, r_maxs)
         else {
-            return Ok(Some(PruningIntermediate::IntermediateResult(
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
                 PruningResults::unknown(num_containers),
             )));
         };
@@ -805,17 +805,17 @@ impl BinaryExpr {
             and_kleene(&range_results, &unknown_nulls)?
         };
 
-        Ok(Some(PruningIntermediate::IntermediateResult(
+        Ok(Some(PropagatedIntermediate::IntermediateResult(
             PruningResults::new(combined_results),
         )))
     }
 
     /// For all not-yet supported operators, return the default result (Unknown stat
     /// for all containers)
-    fn evaluate_pruning_binary_op_default(
+    fn evaluate_statistics_vectorized_binary_op_default(
         &self,
         ctx: &Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
+    ) -> Result<Option<PropagatedIntermediate>> {
         use Operator::*;
 
         let num_containers = ctx.statistics().num_containers();
@@ -840,12 +840,12 @@ impl BinaryExpr {
         }
 
         if is_predicate {
-            return Ok(Some(PruningIntermediate::IntermediateResult(
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
                 PruningResults::unknown(num_containers),
             )));
         }
 
-        Ok(Some(PruningIntermediate::IntermediateStats(
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
             ColumnStats::new(None, None, num_containers),
         )))
     }

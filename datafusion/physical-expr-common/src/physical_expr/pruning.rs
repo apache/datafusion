@@ -73,7 +73,7 @@
 //!
 //! The key structures involved in pruning are:
 //! - [`PruningStatistics`]: the input source statistics for all containers
-//! - [`super::PhysicalExpr::evaluate_pruning()`]: evaluates pruning behavior for predicates
+//! - [`super::PhysicalExpr::evaluate_statistics_vectorized()`]: evaluates pruning behavior for predicates
 //! - [`PruningIntermediate`]: the intermediate result produced during statistics propagation for pruning. Its internal representation uses Arrow Arrays, enabling vectorized evaluation for performance.
 
 use std::{iter::repeat_n, sync::Arc};
@@ -509,16 +509,17 @@ impl ColumnStats {
     }
 }
 
-/// Pruning intermediate type propagated through `PhysicalExpr` nodes.
+/// Intermediate result used in `PhysicalExpr::evaluate_statistics_vectorized()`
+///
 /// Holds intermediate results for multiple input micro-partitions/containers,
 /// stored in a vectorized Arrow array form.
 #[derive(Debug, Clone)]
-pub enum PruningIntermediate {
+pub enum PropagatedIntermediate {
     IntermediateStats(ColumnStats),
     IntermediateResult(PruningResults),
 }
 
-impl PruningIntermediate {
+impl PropagatedIntermediate {
     /// Create an `IntermediateStats` variant with no range or null statistics.
     pub fn empty_stats() -> Self {
         Self::IntermediateStats(ColumnStats::new(None, None, 0))
@@ -527,8 +528,8 @@ impl PruningIntermediate {
     /// Returns the number of containers inside the current `PruningIntermediate`
     pub fn len(&self) -> usize {
         match self {
-            PruningIntermediate::IntermediateStats(column_stats) => column_stats.len(),
-            PruningIntermediate::IntermediateResult(pruning_results) => {
+            PropagatedIntermediate::IntermediateStats(column_stats) => column_stats.len(),
+            PropagatedIntermediate::IntermediateResult(pruning_results) => {
                 pruning_results.len()
             }
         }

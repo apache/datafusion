@@ -34,7 +34,7 @@ mod test {
         BinaryExpr, Column, NegativeExpr, NotExpr, lit,
     };
     use datafusion_physical_expr_common::physical_expr::{
-        ColumnStats, NullPresence, PruningContext, PruningIntermediate, PruningOutcome,
+        ColumnStats, NullPresence, PruningContext, PropagatedIntermediate, PruningOutcome,
     };
 
     use crate::pruning_utils::{
@@ -63,11 +63,11 @@ mod test {
 
         // Asserting the above stats are correctly propagated through the column reference
         match column_expr
-            .evaluate_pruning(context)
+            .evaluate_statistics_vectorized(context)
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), 3);
 
@@ -156,11 +156,11 @@ mod test {
 
         // Column a has full stats coverage for range and nulls.
         match Column::new("a", 0)
-            .evaluate_pruning(Arc::clone(&ctx))
+            .evaluate_statistics_vectorized(Arc::clone(&ctx))
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
                 let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
@@ -181,11 +181,11 @@ mod test {
 
         // Column b has partial range stats and missing row counts, so null stats are absent.
         match Column::new("b", 1)
-            .evaluate_pruning(Arc::clone(&ctx))
+            .evaluate_statistics_vectorized(Arc::clone(&ctx))
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
                 let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
@@ -203,11 +203,11 @@ mod test {
 
         // Column c has min/max arrays with some containers missing both.
         match Column::new("c", 2)
-            .evaluate_pruning(Arc::clone(&ctx))
+            .evaluate_statistics_vectorized(Arc::clone(&ctx))
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
                 let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
@@ -227,11 +227,11 @@ mod test {
 
         // Column d has max stats only and missing row counts, so null stats are absent.
         match Column::new("d", 3)
-            .evaluate_pruning(Arc::clone(&ctx))
+            .evaluate_statistics_vectorized(Arc::clone(&ctx))
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 let range_stats = stats.range_stats().expect("range stats");
                 assert_eq!(range_stats.len(), num_containers);
                 let (mins, maxs) = range_stats.normalize_to_arrays().unwrap();
@@ -246,11 +246,11 @@ mod test {
 
         // Column e has no stats at all; expect empty stats.
         match Column::new("e", 4)
-            .evaluate_pruning(ctx)
+            .evaluate_statistics_vectorized(ctx)
             .unwrap()
             .expect("pruning result")
         {
-            PruningIntermediate::IntermediateStats(stats) => {
+            PropagatedIntermediate::IntermediateStats(stats) => {
                 assert!(stats.range_stats().is_none());
                 assert!(stats.null_stats().is_none());
             }
@@ -275,12 +275,12 @@ mod test {
                 num_containers,
             ))));
             let stat = lit_expr
-                .evaluate_pruning(ctx)
+                .evaluate_statistics_vectorized(ctx)
                 .expect("pruning ok")
                 .expect("pruning result");
 
             match stat {
-                PruningIntermediate::IntermediateStats(ColumnStats {
+                PropagatedIntermediate::IntermediateStats(ColumnStats {
                     range_stats: Some(range_stats),
                     null_stats,
                     num_containers: stats_num_containers,
@@ -329,12 +329,12 @@ mod test {
                 num_containers,
             ))));
             let stat = lit_expr
-                .evaluate_pruning(ctx)
+                .evaluate_statistics_vectorized(ctx)
                 .expect("pruning ok")
                 .expect("pruning result");
 
             match stat {
-                PruningIntermediate::IntermediateStats(ColumnStats {
+                PropagatedIntermediate::IntermediateStats(ColumnStats {
                     range_stats: Some(range_stats),
                     null_stats,
                     num_containers: stats_num_containers,
@@ -520,11 +520,11 @@ mod test {
             let rhs_dbg = rhs.clone();
             let expr = BinaryExpr::new(lit(lhs), op, lit(rhs));
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateResult(results) => {
+                PropagatedIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
                         arr.iter().map(PruningOutcome::from).collect();
@@ -565,11 +565,11 @@ mod test {
             let rhs_dbg = rhs.clone();
             let expr = BinaryExpr::new(lit(lhs), op, lit(rhs));
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateResult(results) => {
+                PropagatedIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
                         arr.iter().map(PruningOutcome::from).collect();
@@ -601,11 +601,11 @@ mod test {
                 lit(ScalarValue::Int32(Some(2))),
             );
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateResult(results) => {
+                PropagatedIntermediate::IntermediateResult(results) => {
                     assert!(
                         results.as_ref().is_none(),
                         "op {op:?} should return empty pruning result"
@@ -644,11 +644,11 @@ mod test {
             let rhs_dbg = rhs.clone();
             let expr = BinaryExpr::new(lit(lhs), op, lit(rhs));
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateStats(stats) => {
+                PropagatedIntermediate::IntermediateStats(stats) => {
                     assert!(
                         stats.range_stats().is_none() && stats.null_stats().is_none(),
                         "op {op:?} with lhs={lhs_dbg:?} rhs={rhs_dbg:?} should return empty stats, got {stats:?}"
@@ -806,11 +806,11 @@ mod test {
         for (lhs, op, rhs, expected) in cases {
             let expr = BinaryExpr::new(lhs.clone(), op, rhs.clone());
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateResult(results) => {
+                PropagatedIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
                         arr.iter().map(PruningOutcome::from).collect();
@@ -925,11 +925,11 @@ mod test {
         for (lhs, op, rhs, expected) in cases {
             let expr = BinaryExpr::new(lhs.clone(), op, rhs.clone());
             let res = expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .unwrap()
                 .expect("pruning result");
             match res {
-                PruningIntermediate::IntermediateResult(results) => {
+                PropagatedIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
                         arr.iter().map(PruningOutcome::from).collect();
@@ -991,9 +991,12 @@ mod test {
             lit(ScalarValue::Int32(Some(0))),
         );
 
-        let res = expr.evaluate_pruning(ctx).unwrap().expect("pruning result");
+        let res = expr
+            .evaluate_statistics_vectorized(ctx)
+            .unwrap()
+            .expect("pruning result");
         match res {
-            PruningIntermediate::IntermediateResult(results) => {
+            PropagatedIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
                     arr.iter().map(PruningOutcome::from).collect();
@@ -1034,9 +1037,12 @@ mod test {
             lit(ScalarValue::Int32(Some(0))),
         );
 
-        let res = expr.evaluate_pruning(ctx).unwrap().expect("pruning result");
+        let res = expr
+            .evaluate_statistics_vectorized(ctx)
+            .unwrap()
+            .expect("pruning result");
         match res {
-            PruningIntermediate::IntermediateResult(results) => {
+            PropagatedIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
                     arr.iter().map(PruningOutcome::from).collect();
@@ -1191,13 +1197,13 @@ mod test {
 
         for (case, lhs, rhs, ctx, expected) in cases {
             let expr = BinaryExpr::new(lhs, Operator::Gt, rhs);
-            let res = expr.evaluate_pruning(ctx).unwrap();
+            let res = expr.evaluate_statistics_vectorized(ctx).unwrap();
             match expected {
                 Expected::NoPruning => {
                     assert!(res.is_none(), "case {case}: expected None, got {res:?}");
                 }
                 Expected::EmptyResults => match res {
-                    Some(PruningIntermediate::IntermediateResult(results)) => {
+                    Some(PropagatedIntermediate::IntermediateResult(results)) => {
                         assert!(
                             results.as_ref().is_none(),
                             "case {case}: expected empty pruning results, got {results:?}"
@@ -1274,9 +1280,12 @@ mod test {
             Arc::new(Column::new("b", 0)),
         );
 
-        let res = expr.evaluate_pruning(ctx).unwrap().expect("pruning result");
+        let res = expr
+            .evaluate_statistics_vectorized(ctx)
+            .unwrap()
+            .expect("pruning result");
         match res {
-            PruningIntermediate::IntermediateResult(results) => {
+            PropagatedIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
                     arr.iter().map(PruningOutcome::from).collect();
@@ -1296,7 +1305,7 @@ mod test {
     }
 
     /// Testing `PhysicalExpr`s that has not implemented the statistics propagation
-    /// with `PhysicalExpr::evaluate_pruning` API. They should return `None` from
+    /// with `PhysicalExpr::evaluate_statistics_vectorized` API. They should return `None` from
     /// the default implementation, implementation output pruning statistics not
     /// available.
     #[test]
@@ -1305,19 +1314,21 @@ mod test {
 
         // Predicate expression (NotExpr) should surface lack of pruning info.
         let res_bool = NotExpr::new(lit(true))
-            .evaluate_pruning(Arc::clone(&ctx))
+            .evaluate_statistics_vectorized(Arc::clone(&ctx))
             .expect("pruning");
         assert!(res_bool.is_none());
 
         // Non-predicate expression (NegativeExpr) should surface lack of pruning info.
         let res_int = NegativeExpr::new(lit(1i32))
-            .evaluate_pruning(ctx)
+            .evaluate_statistics_vectorized(ctx)
             .expect("pruning");
         assert!(res_int.is_none());
         // Logical binary operator pruning is unimplemented; expect no pruning info.
         let binary_expr = BinaryExpr::new(lit(true), Operator::And, lit(false));
         let res_bin = binary_expr
-            .evaluate_pruning(Arc::new(PruningContext::new(Arc::new(DummyStats::new(2)))))
+            .evaluate_statistics_vectorized(Arc::new(PruningContext::new(Arc::new(
+                DummyStats::new(2),
+            ))))
             .expect("pruning");
         assert!(res_bin.is_none());
 
@@ -1342,7 +1353,7 @@ mod test {
         .expect("bool udf");
         assert!(
             bool_expr
-                .evaluate_pruning(Arc::clone(&ctx))
+                .evaluate_statistics_vectorized(Arc::clone(&ctx))
                 .expect("pruning")
                 .is_none()
         );
@@ -1358,6 +1369,11 @@ mod test {
             Arc::new(datafusion_common::config::ConfigOptions::new()),
         )
         .expect("int udf");
-        assert!(int_expr.evaluate_pruning(ctx).expect("pruning").is_none());
+        assert!(
+            int_expr
+                .evaluate_statistics_vectorized(ctx)
+                .expect("pruning")
+                .is_none()
+        );
     }
 }
