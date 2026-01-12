@@ -96,42 +96,6 @@ impl PhysicalExpr for IsNullExpr {
         }
     }
 
-    fn evaluate_pruning(
-        &self,
-        ctx: Arc<PruningContext>,
-    ) -> Result<Option<PruningIntermediate>> {
-        let Some(child) = self.arg.evaluate_pruning(ctx)? else {
-            return Ok(None);
-        };
-        match child {
-            PruningIntermediate::IntermediateStats(stats) => {
-                if let Some(null_stats) = stats.null_stats() {
-                    let presence = null_stats.presence();
-                    // presence encoding: true = NoNull, false = AllNull, null = Unknown
-                    let mut builder = BooleanArray::builder(presence.len());
-                    for i in 0..presence.len() {
-                        if presence.is_null(i) {
-                            builder.append_null();
-                        } else if presence.value(i) {
-                            builder.append_value(false); // NoNull -> SkipAll
-                        } else {
-                            builder.append_value(true); // AllNull -> KeepAll
-                        }
-                    }
-                    let results = builder.finish();
-
-                    return Ok(Some(PruningIntermediate::IntermediateResult(
-                        results.into(),
-                    )));
-                }
-                Ok(Some(PruningIntermediate::IntermediateResult(
-                    BooleanArray::from(vec![None]).into(),
-                )))
-            }
-            other => Ok(Some(other)),
-        }
-    }
-
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.arg]
     }

@@ -132,7 +132,7 @@ pub enum PruningOutcome {
 }
 
 impl PruningResults {
-    pub fn new(array: Option<BooleanArray>, num_containers: usize) -> Self {
+    fn new_with_len(array: Option<BooleanArray>, num_containers: usize) -> Self {
         debug_assert_eq!(
             array.as_ref().map(|a| a.len()).unwrap_or(num_containers),
             num_containers
@@ -143,8 +143,20 @@ impl PruningResults {
         }
     }
 
-    pub fn none(num_containers: usize) -> Self {
-        Self::new(None, num_containers)
+    /// Create a `PruningResults` directly from an encoded inner `BooleanArray`; see
+    /// comments in `PruningResults` for the encoding.
+    ///
+    /// This constructor is intended for vectorized implementations that build
+    /// `BooleanArray` directly. Otherwise, we can add a constructor like
+    /// `FromIterator<PruningOutcome>` for simplicity.
+    pub fn new(array: BooleanArray) -> Self {
+        let num_containers = array.len();
+        Self::new_with_len(Some(array), num_containers)
+    }
+
+    /// Construct a [`PruningResults`] with all containers' results are Unknown
+    pub fn unknown(num_containers: usize) -> Self {
+        Self::new_with_len(None, num_containers)
     }
 
     pub fn as_ref(&self) -> Option<&BooleanArray> {
@@ -167,32 +179,27 @@ impl PruningResults {
     }
 }
 
-impl PruningOutcome {
-    /// Convert to/from the tri-state boolean encoding stored in `PruningResults`.
-    /// - Some(true)=KeepAll
-    /// - Some(false)=SkipAll
-    /// - None=(Unknown/mixed)
-    pub fn from_result_item(result_item: Option<bool>) -> Self {
+/// Convert to/from the tri-state boolean encoding stored in `PruningResults`.
+/// - Some(true)=KeepAll
+/// - Some(false)=SkipAll
+/// - None=(Unknown/mixed)
+impl From<Option<bool>> for PruningOutcome {
+    fn from(result_item: Option<bool>) -> Self {
         match result_item {
             Some(true) => PruningOutcome::KeepAll,
             Some(false) => PruningOutcome::SkipAll,
             None => PruningOutcome::Unknown,
         }
     }
+}
 
-    pub fn to_result_item(&self) -> Option<bool> {
-        match self {
+impl From<PruningOutcome> for Option<bool> {
+    fn from(outcome: PruningOutcome) -> Self {
+        match outcome {
             PruningOutcome::KeepAll => Some(true),
             PruningOutcome::SkipAll => Some(false),
             PruningOutcome::Unknown => None,
         }
-    }
-}
-
-impl From<BooleanArray> for PruningResults {
-    fn from(array: BooleanArray) -> Self {
-        let len = array.len();
-        PruningResults::new(Some(array), len)
     }
 }
 
@@ -542,7 +549,7 @@ mod tests {
         let arr = BooleanArray::from(vec![Some(true), Some(false), None]);
 
         let decoded: Vec<PruningOutcome> =
-            arr.iter().map(PruningOutcome::from_result_item).collect();
+            arr.iter().map(PruningOutcome::from).collect();
         assert_eq!(
             decoded,
             vec![
@@ -553,7 +560,7 @@ mod tests {
         );
 
         let encoded: Vec<Option<bool>> =
-            decoded.iter().map(PruningOutcome::to_result_item).collect();
+            decoded.iter().copied().map(Option::<bool>::from).collect();
         assert_eq!(encoded, vec![Some(true), Some(false), None]);
     }
 }

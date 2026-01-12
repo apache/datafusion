@@ -527,7 +527,7 @@ mod test {
                 PruningIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
-                        arr.iter().map(PruningOutcome::from_result_item).collect();
+                        arr.iter().map(PruningOutcome::from).collect();
                     assert_eq!(
                         outcomes,
                         vec![expected],
@@ -572,7 +572,7 @@ mod test {
                 PruningIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
-                        arr.iter().map(PruningOutcome::from_result_item).collect();
+                        arr.iter().map(PruningOutcome::from).collect();
                     assert_eq!(
                         outcomes,
                         vec![expected],
@@ -813,7 +813,7 @@ mod test {
                 PruningIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
-                        arr.iter().map(PruningOutcome::from_result_item).collect();
+                        arr.iter().map(PruningOutcome::from).collect();
                     assert_eq!(outcomes, expected);
                 }
                 other => panic!("unexpected pruning result: {other:?}"),
@@ -932,7 +932,7 @@ mod test {
                 PruningIntermediate::IntermediateResult(results) => {
                     let arr = results.as_ref().expect("results");
                     let outcomes: Vec<PruningOutcome> =
-                        arr.iter().map(PruningOutcome::from_result_item).collect();
+                        arr.iter().map(PruningOutcome::from).collect();
                     assert_eq!(outcomes, expected);
                 }
                 other => panic!("unexpected pruning result: {other:?}"),
@@ -996,7 +996,7 @@ mod test {
             PruningIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
-                    arr.iter().map(PruningOutcome::from_result_item).collect();
+                    arr.iter().map(PruningOutcome::from).collect();
                 assert_eq!(
                     outcomes,
                     vec![
@@ -1039,7 +1039,7 @@ mod test {
             PruningIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
-                    arr.iter().map(PruningOutcome::from_result_item).collect();
+                    arr.iter().map(PruningOutcome::from).collect();
                 assert_eq!(
                     outcomes,
                     vec![
@@ -1279,7 +1279,7 @@ mod test {
             PruningIntermediate::IntermediateResult(results) => {
                 let arr = results.as_ref().expect("results");
                 let outcomes: Vec<PruningOutcome> =
-                    arr.iter().map(PruningOutcome::from_result_item).collect();
+                    arr.iter().map(PruningOutcome::from).collect();
                 assert_eq!(
                     outcomes,
                     vec![

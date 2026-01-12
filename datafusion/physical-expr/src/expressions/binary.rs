@@ -698,12 +698,12 @@ impl BinaryExpr {
         // missing for all containers
         let Some(left_range) = left_stats.range_stats() else {
             return Ok(Some(PruningIntermediate::IntermediateResult(
-                PruningResults::new(None, num_containers),
+                PruningResults::unknown(num_containers),
             )));
         };
         let Some(right_range) = right_stats.range_stats() else {
             return Ok(Some(PruningIntermediate::IntermediateResult(
-                PruningResults::new(None, num_containers),
+                PruningResults::unknown(num_containers),
             )));
         };
 
@@ -716,7 +716,7 @@ impl BinaryExpr {
             (l_mins, l_maxs, r_mins, r_maxs)
         else {
             return Ok(Some(PruningIntermediate::IntermediateResult(
-                PruningResults::new(None, num_containers),
+                PruningResults::unknown(num_containers),
             )));
         };
 
@@ -739,7 +739,7 @@ impl BinaryExpr {
         // switch to the vectorized implementation.
         let len = l_mins.len();
         // Encode pruning outcome into the `BooleanArray` stored in `PruningResults`
-        let mut results = Vec::with_capacity(len);
+        let mut results: Vec<Option<bool>> = Vec::with_capacity(len);
         for idx in 0..len {
             let lmin = ScalarValue::try_from_array(l_mins.as_ref(), idx)?;
             let lmax = ScalarValue::try_from_array(l_maxs.as_ref(), idx)?;
@@ -759,7 +759,7 @@ impl BinaryExpr {
                 rmin.as_ref(),
                 rmax.as_ref(),
             )?;
-            results.push(res.to_result_item());
+            results.push(res.into());
         }
 
         // --------------------------------------------------------------------------
@@ -806,7 +806,7 @@ impl BinaryExpr {
         };
 
         Ok(Some(PruningIntermediate::IntermediateResult(
-            PruningResults::new(Some(combined_results), num_containers),
+            PruningResults::new(combined_results),
         )))
     }
 
@@ -841,7 +841,7 @@ impl BinaryExpr {
 
         if is_predicate {
             return Ok(Some(PruningIntermediate::IntermediateResult(
-                PruningResults::new(None, num_containers),
+                PruningResults::unknown(num_containers),
             )));
         }
 
