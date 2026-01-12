@@ -23,12 +23,14 @@ use arrow::array::{
     StringArrayType, StringViewArray,
 };
 use arrow::compute::DecimalCast;
-use arrow::compute::kernels::cast_utils::string_to_datetime;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::compute::kernels::cast_utils::{
+    string_to_datetime, string_to_timestamp_nanos,
+};
+use arrow::datatypes::{ArrowTimestampType, DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
 use chrono::format::{Parsed, StrftimeItems, parse};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
@@ -481,8 +483,7 @@ where
                 )
             }
             other => exec_err!(
-                "Unsupported data type {other:?} for function substr,\
-                   expected Utf8View, Utf8 or LargeUtf8."
+                "Unsupported data type {other:?} for function substr, expected Utf8View, Utf8 or LargeUtf8."
             ),
         },
         other => exec_err!(
@@ -516,12 +517,14 @@ where
                             DataType::Utf8View => Ok(a.as_string_view().value(pos)),
                             DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
                             DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
-                            other => exec_err!("Unexpected type encountered '{other}'"),
+                            other => exec_err!("Unexpected type encountered '{}'", other),
                         },
                         ColumnarValue::Scalar(s) => match s.try_as_str() {
                             Some(Some(v)) => Ok(v),
                             Some(None) => continue, // null string
-                            None => exec_err!("Unexpected scalar type encountered '{s}'"),
+                            None => {
+                                exec_err!("Unexpected scalar type encountered '{}'", s)
+                            }
                         },
                     }?;
 
@@ -569,6 +572,6 @@ fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
             TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(r, tz.clone())),
             TimeUnit::Nanosecond => Ok(ScalarValue::TimestampNanosecond(r, tz.clone())),
         },
-        t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
+        t => Err(internal_datafusion_err!("Unsupported data type: {:?}", t)),
     }
 }
