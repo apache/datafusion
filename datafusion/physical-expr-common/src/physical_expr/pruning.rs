@@ -19,8 +19,11 @@
 
 //! This is the top-level comment for pruning via statistics propagation.
 //!
-//! TODO: This is a concise draft; it should be polished for readers with less
-//! prior background.
+//! # Background for Predicate Pruning
+//!
+//! See comments in [`PruningPredicate`] for details.
+//!
+//! [`PruningPredicate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
 //!
 //! # Introduction
 //!
@@ -42,14 +45,27 @@
 //!
 //!
 //!
-//! # Difference from [`super::PhysicalExpr::evaluate_bounds`]
+//! # Difference from existing bounds propagation APIs
 //!
-//! `evaluate_bounds()` derives per-column statistics for a single plan, aimed at
-//! tasks like cardinality estimation and other planner fast paths. It reasons
-//! about one container and may track richer distribution details.
-//! Pruning must reason about *all* containers (potentially thousands) to decide
-//! which to skip, so it favors a vectorized, array-backed representation with
-//! lighter-weight stats. These are intentionally separate interfaces.
+//! There are several existing APIs similar to the statistical pruning API:
+//!
+//! - [`super::PhysicalExpr::evaluate_bounds`]: forward propagation of value ranges
+//!    using `Interval`.
+//! - [`super::PhysicalExpr::propagate_constraints`]: inverse propagation on
+//!    `Interval` to refine child ranges.
+//! - [`super::PhysicalExpr::evaluate_statistics`]: forward propagation using richer
+//!    statistical distributions on `Distribution`.
+//! - [`super::PhysicalExpr::propagate_statistics`]: inverse propagation on
+//!    statistical distributions.
+//!
+//! It is planned to unify the statistical pruning API with `evaluate_bounds()`. They
+//! share the same functionality; the major difference is vectorized evaluation.
+//!
+//! The remaining APIs are intended to coexist because, for pruning, the backward
+//! propagation is not needed, and the statistics information it needs has no
+//! overlap with `Distribution` in `evaluate_statistics()` or `propagate_statistics()`.
+//!
+//! See https://github.com/apache/datafusion/pull/19609 for further API discussions.
 //!
 //!
 //!
@@ -79,7 +95,7 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 ///   partition. Future filter evaluation can be skipped for that partition.
 /// - SkipAll: The pruning predicate evaluates to false for all rows within a micro
 ///   partition. The partition can be skipped at scan time.
-/// - UnknownOrMixed: The statistics are insufficient to prove KeepAll/SkipAll, or
+/// - Unknown: The statistics are insufficient to prove KeepAll/SkipAll, or
 ///   the predicate is mixed. The predicate must be evaluated row-wise.
 ///
 /// Example (`SELECT * FROM t WHERE x >= 0`):
@@ -101,17 +117,18 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 /// pruning effectiveness.
 #[derive(Debug, Clone)]
 pub struct PruningResults {
+    /// For physical encoding and its semantic mapping, see comments in [`PruningResults`].
     results: Option<BooleanArray>,
     /// Number of containers. Needed to infer result if all stats types are `None`.
     pub num_containers: usize,
 }
 
-/// Semantic representation for items inside `PruningResults::results`.
+/// See comments in [`PruningResults`] for its semantic meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PruningOutcome {
     KeepAll,
     SkipAll,
-    UnknownOrMixed,
+    Unknown,
 }
 
 impl PruningResults {
@@ -159,7 +176,7 @@ impl PruningOutcome {
         match result_item {
             Some(true) => PruningOutcome::KeepAll,
             Some(false) => PruningOutcome::SkipAll,
-            None => PruningOutcome::UnknownOrMixed,
+            None => PruningOutcome::Unknown,
         }
     }
 
@@ -167,7 +184,7 @@ impl PruningOutcome {
         match self {
             PruningOutcome::KeepAll => Some(true),
             PruningOutcome::SkipAll => Some(false),
-            PruningOutcome::UnknownOrMixed => None,
+            PruningOutcome::Unknown => None,
         }
     }
 }
@@ -210,7 +227,7 @@ pub struct NullStats {
 pub enum NullPresence {
     NoNull,
     AllNull,
-    UnknownOrMixed,
+    Unknown,
 }
 
 impl NullPresence {
@@ -222,7 +239,7 @@ impl NullPresence {
         match presence_item {
             Some(true) => NullPresence::NoNull,
             Some(false) => NullPresence::AllNull,
-            None => NullPresence::UnknownOrMixed,
+            None => NullPresence::Unknown,
         }
     }
 
@@ -230,7 +247,7 @@ impl NullPresence {
         match self {
             NullPresence::NoNull => Some(true),
             NullPresence::AllNull => Some(false),
-            NullPresence::UnknownOrMixed => None,
+            NullPresence::Unknown => None,
         }
     }
 }
@@ -385,7 +402,7 @@ impl NullStats {
         let presence_item = match presence {
             NullPresence::NoNull => Some(true),
             NullPresence::AllNull => Some(false),
-            NullPresence::UnknownOrMixed => None,
+            NullPresence::Unknown => None,
         };
         NullStats {
             presence: BooleanArray::from_iter(repeat_n(presence_item, num_containers)),
@@ -397,7 +414,7 @@ impl NullStats {
     /// None means all containers' null stats are missing, otherwise for each container:
     /// - If either side is `AllNull` → result is `AllNull` (all comparisons are null).
     /// - If both sides are `NoNull`   → result is `NoNull`.
-    /// - Otherwise                    → result is `UnknownOrMixed`.
+    /// - Otherwise                    → result is `Unknown`.
     ///
     /// # Errors
     /// Returns internal error if left and right side has inconsistent container length
@@ -531,7 +548,7 @@ mod tests {
             vec![
                 PruningOutcome::KeepAll,
                 PruningOutcome::SkipAll,
-                PruningOutcome::UnknownOrMixed
+                PruningOutcome::Unknown
             ]
         );
 

@@ -979,7 +979,7 @@ fn check_short_circuit<'a>(
 /// <https://github.com/apache/datafusion/issues/19579>
 ///
 /// Type compatibility: if all bound data types are not equal, return
-/// `PruningOutcome::UnknownOrMixed` as a safe fallback. For different but
+/// `PruningOutcome::Unknown` as a safe fallback. For different but
 /// compatible types (e.g., lhs is Int32, rhs is Int64), the type coercion
 /// optimizer rule should already handle them before evaluating pruning.
 ///
@@ -1004,7 +1004,7 @@ fn compare_ranges(
             } else if matches!(ord_lmax_rmin, Some(Ordering::Less | Ordering::Equal)) {
                 Ok(PruningOutcome::SkipAll)
             } else {
-                Ok(PruningOutcome::UnknownOrMixed)
+                Ok(PruningOutcome::Unknown)
             }
         }
         GtEq => {
@@ -1013,7 +1013,7 @@ fn compare_ranges(
             } else if matches!(ord_lmax_rmin, Some(Ordering::Less)) {
                 Ok(PruningOutcome::SkipAll)
             } else {
-                Ok(PruningOutcome::UnknownOrMixed)
+                Ok(PruningOutcome::Unknown)
             }
         }
         Lt => {
@@ -1022,7 +1022,7 @@ fn compare_ranges(
             } else if matches!(ord_lmin_rmax, Some(Ordering::Greater | Ordering::Equal)) {
                 Ok(PruningOutcome::SkipAll)
             } else {
-                Ok(PruningOutcome::UnknownOrMixed)
+                Ok(PruningOutcome::Unknown)
             }
         }
         LtEq => {
@@ -1031,7 +1031,7 @@ fn compare_ranges(
             } else if matches!(ord_lmin_rmax, Some(Ordering::Greater)) {
                 Ok(PruningOutcome::SkipAll)
             } else {
-                Ok(PruningOutcome::UnknownOrMixed)
+                Ok(PruningOutcome::Unknown)
             }
         }
         Eq => {
@@ -1047,7 +1047,7 @@ fn compare_ranges(
                     return Ok(PruningOutcome::SkipAll);
                 }
             }
-            Ok(PruningOutcome::UnknownOrMixed)
+            Ok(PruningOutcome::Unknown)
         }
         NotEq => {
             if let (Some(lmin), Some(lmax), Some(rmin), Some(rmax)) =
@@ -1062,7 +1062,7 @@ fn compare_ranges(
                     return Ok(PruningOutcome::KeepAll);
                 }
             }
-            Ok(PruningOutcome::UnknownOrMixed)
+            Ok(PruningOutcome::Unknown)
         }
         _ => internal_err!("Unsupported operator for range pruning: {op:?}"),
     }

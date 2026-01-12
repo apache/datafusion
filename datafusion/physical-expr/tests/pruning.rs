@@ -549,14 +549,14 @@ mod test {
                 ScalarValue::Int32(Some(5)),
                 Operator::Gt,
                 ScalarValue::Int64(Some(3)),
-                PruningOutcome::UnknownOrMixed,
+                PruningOutcome::Unknown,
             ),
             // Incompatible types are treated as unknown for pruning
             (
                 ScalarValue::Int32(Some(1)),
                 Operator::Gt,
                 ScalarValue::Utf8(Some("abc".to_string())),
-                PruningOutcome::UnknownOrMixed,
+                PruningOutcome::Unknown,
             ),
         ];
 
@@ -712,9 +712,9 @@ mod test {
                 vec![
                     PruningOutcome::KeepAll,
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -725,8 +725,8 @@ mod test {
                     PruningOutcome::SkipAll,
                     PruningOutcome::SkipAll,
                     PruningOutcome::SkipAll,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -734,11 +734,11 @@ mod test {
                 Operator::GtEq,
                 lit(10),
                 vec![
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -747,10 +747,10 @@ mod test {
                 lit(20),
                 vec![
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -758,11 +758,11 @@ mod test {
                 Operator::Eq,
                 lit(10),
                 vec![
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -770,11 +770,11 @@ mod test {
                 Operator::NotEq,
                 lit(10),
                 vec![
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -784,9 +784,9 @@ mod test {
                 vec![
                     PruningOutcome::KeepAll,
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
                     PruningOutcome::KeepAll,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
                 ],
             ),
             (
@@ -797,8 +797,8 @@ mod test {
                     PruningOutcome::SkipAll,
                     PruningOutcome::SkipAll,
                     PruningOutcome::SkipAll,
-                    PruningOutcome::UnknownOrMixed,
-                    PruningOutcome::UnknownOrMixed,
+                    PruningOutcome::Unknown,
+                    PruningOutcome::Unknown,
                 ],
             ),
         ];
@@ -918,7 +918,7 @@ mod test {
                 Arc::new(Column::new("s", 0)) as Arc<dyn PhysicalExpr>,
                 Operator::Eq,
                 lit(ScalarValue::Utf8(Some("banana".to_string()))),
-                vec![PruningOutcome::UnknownOrMixed, PruningOutcome::SkipAll],
+                vec![PruningOutcome::Unknown, PruningOutcome::SkipAll],
             ),
         ];
 
@@ -1000,15 +1000,15 @@ mod test {
                 assert_eq!(
                     outcomes,
                     vec![
-                        PruningOutcome::KeepAll,        // KeepAll + NoNull -> KeepAll
-                        PruningOutcome::SkipAll,        // SkipAll + NoNull -> SkipAll
-                        PruningOutcome::UnknownOrMixed, // Unknown + NoNull -> Unknown
-                        PruningOutcome::UnknownOrMixed, // KeepAll + Unknown -> Unknown
-                        PruningOutcome::SkipAll,        // SkipAll + Unknown -> SkipAll
-                        PruningOutcome::UnknownOrMixed, // Unknown + Unknown -> Unknown
-                        PruningOutcome::SkipAll,        // KeepAll + AllNull -> SkipAll
-                        PruningOutcome::SkipAll,        // SkipAll + AllNull -> SkipAll
-                        PruningOutcome::SkipAll,        // Unknown + AllNull -> SkipAll
+                        PruningOutcome::KeepAll, // KeepAll + NoNull -> KeepAll
+                        PruningOutcome::SkipAll, // SkipAll + NoNull -> SkipAll
+                        PruningOutcome::Unknown, // Unknown + NoNull -> Unknown
+                        PruningOutcome::Unknown, // KeepAll + Unknown -> Unknown
+                        PruningOutcome::SkipAll, // SkipAll + Unknown -> SkipAll
+                        PruningOutcome::Unknown, // Unknown + Unknown -> Unknown
+                        PruningOutcome::SkipAll, // KeepAll + AllNull -> SkipAll
+                        PruningOutcome::SkipAll, // SkipAll + AllNull -> SkipAll
+                        PruningOutcome::SkipAll, // Unknown + AllNull -> SkipAll
                     ]
                 );
             }
@@ -1043,9 +1043,9 @@ mod test {
                 assert_eq!(
                     outcomes,
                     vec![
-                        PruningOutcome::UnknownOrMixed, // KeepAll range + missing nulls -> Unknown
-                        PruningOutcome::SkipAll,        // SkipAll range dominates
-                        PruningOutcome::UnknownOrMixed, // Unknown range + missing nulls -> Unknown
+                        PruningOutcome::Unknown, // KeepAll range + missing nulls -> Unknown
+                        PruningOutcome::SkipAll, // SkipAll range dominates
+                        PruningOutcome::Unknown, // Unknown range + missing nulls -> Unknown
                     ]
                 );
             }
@@ -1283,11 +1283,11 @@ mod test {
                 assert_eq!(
                     outcomes,
                     vec![
-                        PruningOutcome::KeepAll,        // KeepAll range + NoNull
-                        PruningOutcome::KeepAll,        // KeepAll range + NoNull
-                        PruningOutcome::KeepAll,        // KeepAll range + NoNull
-                        PruningOutcome::SkipAll,        // SkipAll range dominates
-                        PruningOutcome::UnknownOrMixed, // Unknown range
+                        PruningOutcome::KeepAll, // KeepAll range + NoNull
+                        PruningOutcome::KeepAll, // KeepAll range + NoNull
+                        PruningOutcome::KeepAll, // KeepAll range + NoNull
+                        PruningOutcome::SkipAll, // SkipAll range dominates
+                        PruningOutcome::Unknown, // Unknown range
                     ]
                 );
             }
