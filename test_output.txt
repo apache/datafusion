@@ -1,0 +1,18 @@
+   Compiling windows-sys v0.60.2
+   Compiling serde v1.0.228
+   Compiling futures-util v0.3.31
+   Compiling socket2 v0.6.1
+   Compiling tokio v1.49.0
+   Compiling tracing-core v0.1.36
+   Compiling tracing v0.1.44
+   Compiling serde_json v1.0.149
+   Compiling either v1.15.0
+   Compiling tokio-util v0.7.18
+   Compiling h2 v0.4.13
+error: failed to build archive at `C:\datafusion\target\debug\deps\libtokio-03112c2e055d6f1a.rlib`: There is not enough space on the disk. (os error 112)
+
+error: could not compile `tokio` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: failed to build archive at `C:\datafusion\target\debug\deps\libh2-3b58a865a5bc5ba1.rlib`: There is not enough space on the disk. (os error 112)
+
+error: could not compile `h2` (lib) due to 1 previous error

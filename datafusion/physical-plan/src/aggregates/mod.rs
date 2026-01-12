@@ -16,7 +16,6 @@
 // under the License.
 
 //! Aggregates functionalities
-
 use std::any::Any;
 use std::sync::Arc;
 
@@ -1071,12 +1070,15 @@ impl DisplayAs for AggregateExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let format_expr_with_alias =
-                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
+                    |(expr, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let display = expr.to_string();
+
+                        if display.is_empty() {
+                            alias.clone()
+                        } else if display == *alias {
+                            display
                         } else {
-                            e
+                            format!("{display} as {alias}")
                         }
                     };
 
@@ -1118,14 +1120,12 @@ impl DisplayAs for AggregateExec {
                     .iter()
                     .map(|agg| {
                         let expr = agg.human_display().to_string();
-                        let alias = agg.name();
-                        if expr != alias {
-                            format!("{expr} as {alias}")
-                        } else {
-                            expr
-                        }
+                        let alias = agg.name().to_string();
+
+                        if expr.is_empty() { alias.clone() } else { expr }
                     })
                     .collect();
+
                 write!(f, ", aggr=[{}]", a.join(", "))?;
                 if let Some(limit) = self.limit {
                     write!(f, ", lim=[{limit}]")?;
