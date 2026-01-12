@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::vec;
 
 use super::Unparser;
-use super::dialect::IntervalStyle;
+use super::dialect::{DistinctFromStyle, IntervalStyle};
 use arrow::array::{
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
     types::{
@@ -156,10 +156,24 @@ impl Unparser<'_> {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
 
-                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsDistinctFrom(
-                    Box::new(l),
-                    Box::new(r),
-                ))))
+                match self.dialect.distinct_from_style() {
+                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
+                        ast::Expr::IsDistinctFrom(Box::new(l), Box::new(r)),
+                    ))),
+                    DistinctFromStyle::DiamondOperators => {
+                        Ok(ast::Expr::Nested(Box::new(ast::Expr::UnaryOp {
+                            op: UnaryOperator::Not,
+                            expr: Box::new(ast::Expr::BinaryOp {
+                                left: Box::new(l),
+                                right: Box::new(r),
+                                op: BinaryOperator::Spaceship,
+                            }),
+                        })))
+                    }
+                    DistinctFromStyle::Unsupported => {
+                        not_impl_err!("dialect does not support expression: {expr:?}")
+                    }
+                }
             }
             Expr::BinaryExpr(BinaryExpr {
                 left,
@@ -169,10 +183,21 @@ impl Unparser<'_> {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
                 let r = self.expr_to_sql_inner(right.as_ref())?;
 
-                Ok(ast::Expr::Nested(Box::new(ast::Expr::IsNotDistinctFrom(
-                    Box::new(l),
-                    Box::new(r),
-                ))))
+                match self.dialect.distinct_from_style() {
+                    DistinctFromStyle::FullText => Ok(ast::Expr::Nested(Box::new(
+                        ast::Expr::IsNotDistinctFrom(Box::new(l), Box::new(r)),
+                    ))),
+                    DistinctFromStyle::DiamondOperators => {
+                        Ok(ast::Expr::Nested(Box::new(ast::Expr::BinaryOp {
+                            left: Box::new(l),
+                            right: Box::new(r),
+                            op: BinaryOperator::Spaceship,
+                        })))
+                    }
+                    DistinctFromStyle::Unsupported => {
+                        not_impl_err!("dialect does not support expression: {expr:?}")
+                    }
+                }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let l = self.expr_to_sql_inner(left.as_ref())?;
@@ -1900,7 +1925,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::SqliteDialect;
+    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -3706,6 +3731,8 @@ mod tests {
 
     #[test]
     fn test_is_distinct_from() {
+        let mysql_unparser = Unparser::new(&MySqlDialect {});
+
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(col("c1")),
             Operator::IsDistinctFrom,
@@ -3714,6 +3741,8 @@ mod tests {
 
         let sql = expr_to_sql(&expr).unwrap().to_string();
         assert_eq!(sql, "(c1 IS DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(NOT `c1` <=> true)");
 
         let expr = Expr::BinaryExpr(BinaryExpr::new(
             Box::new(col("c1")),
@@ -3723,5 +3752,7 @@ mod tests {
 
         let sql = expr_to_sql(&expr).unwrap().to_string();
         assert_eq!(sql, "(c1 IS NOT DISTINCT FROM true)");
+        let sql = mysql_unparser.expr_to_sql(&expr).unwrap().to_string();
+        assert_eq!(sql, "(`c1` <=> true)");
     }
 }
