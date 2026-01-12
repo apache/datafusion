@@ -182,7 +182,7 @@ where
             let slice = hex_int64(num, &mut temp);
             // SAFETY: slice contains only ASCII hex digests, which are valid UTF-8
             unsafe {
-                builder.append_value(from_utf8_unchecked(&slice));
+                builder.append_value(from_utf8_unchecked(slice));
             }
         } else {
             builder.append_null();
@@ -250,8 +250,15 @@ pub fn compute_hex(
                     DataType::Int64 => {
                         let int_values = as_int64_array(values)?;
                         hex_encode_int64(
-                            keys.iter()
-                                .map(|k| k.map(|idx| int_values.value(idx as usize))),
+                            keys.iter().map(|k| {
+                                k.and_then(|idx| {
+                                    if int_values.is_valid(idx as usize) {
+                                        Some(int_values.value(idx as usize))
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }),
                             dict.len(),
                         )
                     }
@@ -259,7 +266,13 @@ pub fn compute_hex(
                         let str_values = as_string_array(values);
                         hex_encode_bytes(
                             keys.iter().map(|k| {
-                                k.map(|idx| str_values.value(idx as usize).as_bytes())
+                                k.and_then(|idx| {
+                                    if str_values.is_valid(idx as usize) {
+                                        Some(str_values.value(idx as usize).as_bytes())
+                                    } else {
+                                        None
+                                    }
+                                })
                             }),
                             lowercase,
                             dict.len(),
@@ -268,8 +281,15 @@ pub fn compute_hex(
                     DataType::Binary => {
                         let bin_values = as_binary_array(values)?;
                         hex_encode_bytes(
-                            keys.iter()
-                                .map(|k| k.map(|idx| bin_values.value(idx as usize))),
+                            keys.iter().map(|k| {
+                                k.and_then(|idx| {
+                                    if bin_values.is_valid(idx as usize) {
+                                        Some(bin_values.value(idx as usize))
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }),
                             lowercase,
                             dict.len(),
                         )
@@ -293,7 +313,7 @@ mod test {
     use std::str::from_utf8_unchecked;
     use std::sync::Arc;
 
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
     use arrow::{
         array::{
             BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringBuilder,
@@ -399,7 +419,7 @@ mod test {
             let slice = super::hex_int64(num, &mut cache);
 
             unsafe {
-                let result = from_utf8_unchecked(&slice);
+                let result = from_utf8_unchecked(slice);
                 assert_eq!(expected, result);
             }
         }
@@ -425,5 +445,26 @@ mod test {
         ]);
 
         assert_eq!(string_array, &expected_array);
+    }
+
+    #[test]
+    fn test_dict_values_null() {
+        let keys = Int32Array::from(vec![Some(0), None, Some(1)]);
+        let vals = Int64Array::from(vec![Some(32), None]);
+        // [32, null, null]
+        let dict = DictionaryArray::new(keys, Arc::new(vals));
+
+        let columnar_value = ColumnarValue::Array(Arc::new(dict));
+        let result = super::spark_hex(&[columnar_value]).unwrap();
+
+        let result = match result {
+            ColumnarValue::Array(array) => array,
+            _ => panic!("Expected array"),
+        };
+
+        let result = as_string_array(&result);
+        let expected = StringArray::from(vec![Some("20"), None, None]);
+
+        assert_eq!(&expected, result);
     }
 }
