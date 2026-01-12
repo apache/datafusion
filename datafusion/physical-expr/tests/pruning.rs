@@ -34,7 +34,7 @@ mod test {
         BinaryExpr, Column, NegativeExpr, NotExpr, lit,
     };
     use datafusion_physical_expr_common::physical_expr::{
-        ColumnStats, NullPresence, PruningContext, PropagatedIntermediate, PruningOutcome,
+        ColumnStats, NullPresence, PropagatedIntermediate, PruningContext, PruningOutcome,
     };
 
     use crate::pruning_utils::{

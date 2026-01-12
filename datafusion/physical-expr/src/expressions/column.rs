@@ -32,7 +32,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column as DFColumn, Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullStats, PruningContext, PropagatedIntermediate, RangeStats,
+    ColumnStats, NullStats, PropagatedIntermediate, PruningContext, RangeStats,
 };
 
 /// Represents the column at a given index in a RecordBatch

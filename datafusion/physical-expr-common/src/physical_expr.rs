@@ -441,7 +441,7 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Evaluates statistics propagation in a vectorized way.
     ///
     /// This is mainly used for predicate pruning now. See the pruning module docs
-    /// for backgrouds.
+    /// for backgrounds.
     ///
     /// This default implementation is for `PhysicalExpr`s that have not yet
     /// implemented pruning; returning `None` signals that no pruning statistics

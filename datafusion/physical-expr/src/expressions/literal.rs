@@ -35,7 +35,8 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::{
-    ColumnStats, NullPresence, NullStats, PruningContext, PropagatedIntermediate, RangeStats,
+    ColumnStats, NullPresence, NullStats, PropagatedIntermediate, PruningContext,
+    RangeStats,
 };
 
 /// Represents a literal value
