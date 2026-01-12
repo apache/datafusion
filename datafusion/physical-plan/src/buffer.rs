@@ -92,8 +92,15 @@ impl BufferExec {
 }
 
 impl DisplayAs for BufferExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}: queue_size_bytes={}", self.name(), self.capacity)
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "BufferExec: capacity={}", self.capacity)
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "target_batch_size={}", self.capacity)
+            }
+        }
     }
 }
 
