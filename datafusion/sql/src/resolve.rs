@@ -93,9 +93,7 @@ impl Visitor for RelationVisitor {
                 if !with.recursive {
                     // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
                     // but thankfully `insert_relation` is idempotent.
-                    if let Some(err) = cte.visit(self).break_value() {
-                        return ControlFlow::Break(err);
-                    }
+                    cte.visit(self)?;
                 }
                 let cte_name = ObjectName::from(vec![cte.alias.name.clone()]);
                 match object_name_to_table_reference(
@@ -126,9 +124,7 @@ impl Visitor for RelationVisitor {
             obj_name,
         } = statement
         {
-            if let Some(err) = self.insert_relation(obj_name).break_value() {
-                return ControlFlow::Break(err);
-            }
+            self.insert_relation(obj_name)?;
         }
 
         // SHOW statements will later be rewritten into a SELECT from the information_schema
