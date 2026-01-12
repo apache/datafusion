@@ -310,22 +310,24 @@ physical_plan
 04)------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-08)------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-09)--------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-10)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------------DataSourceExec: partitions=1, partition_sizes=[1]
-12)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
-13)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1], NullsEqual: true
-14)------CoalescePartitionsExec
-15)--------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-16)----------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
-17)------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-18)--------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-19)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-20)------------------DataSourceExec: partitions=1, partition_sizes=[1]
-21)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-22)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+09)--------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+10)----------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+11)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+13)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
+14)----HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(CAST(t2.id AS Int32)@2, id@0), (name@1, name@1)], projection=[id@0, name@1], NullsEqual: true
+15)------CoalescePartitionsExec
+16)--------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
+17)----------AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
+18)------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
+19)--------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
+20)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+21)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+22)------BufferExec: capacity=1048576
+23)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+24)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query IT rowsort
@@ -378,17 +380,19 @@ physical_plan
 06)----------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------DataSourceExec: partitions=1, partition_sizes=[1]
-11)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)], NullsEqual: true
-12)----CoalescePartitionsExec
-13)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
-14)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-15)----------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-16)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-17)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-18)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-19)------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----BufferExec: capacity=1048576
+10)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------DataSourceExec: partitions=1, partition_sizes=[1]
+12)--HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(name@0, name@0)], NullsEqual: true
+13)----CoalescePartitionsExec
+14)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
+15)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
+16)----------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
+17)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+18)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+19)----BufferExec: capacity=1048576
+20)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+21)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # union_upcast_types
 query TT

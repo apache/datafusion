@@ -2967,8 +2967,9 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     | physical_plan | HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |   ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |     PlaceholderRowExec                                                                                               |
-    |               |   ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
-    |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
+    |               |   BufferExec: capacity=1048576                                                                                       |
+    |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                             |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                              |
     |               |                                                                                                                      |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
     "
@@ -3011,8 +3012,9 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     | physical_plan | HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
     |               |   ProjectionExec: expr=[4 as count(*)]                                                                               |
     |               |     PlaceholderRowExec                                                                                               |
-    |               |   ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |
-    |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
+    |               |   BufferExec: capacity=1048576                                                                                       |
+    |               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                             |
+    |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                              |
     |               |                                                                                                                      |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
     "
@@ -3351,7 +3353,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
     |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                        |
     |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
+    |               |         BufferExec: capacity=1048576                                                                                       |
+    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                            |
     +---------------+----------------------------------------------------------------------------------------------------------------------------+
     "
@@ -3407,7 +3410,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |               RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1                                             |
     |               |                 AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                               |
     |               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                                        |
-    |               |         DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
+    |               |         BufferExec: capacity=1048576                                                                                       |
+    |               |           DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                            |
     +---------------+----------------------------------------------------------------------------------------------------------------------------+
     "
