@@ -24,6 +24,22 @@
 ## in the test harness as there is no way to define schema
 ## with metadata in SQL.
 
+query ITTPT
+select * from table_with_metadata;
+----
+1 NULL NULL 2020-09-08T13:42:29.190855123 no_foo
+NULL bar l_bar 2020-09-08T13:42:29.190855123 no_bar
+3 baz l_baz 2020-09-08T13:42:29.190855123 no_baz
+
+query TTT
+describe table_with_metadata;
+----
+id Int32 YES
+name Utf8 YES
+l_name Utf8 YES
+ts Timestamp(ns) NO
+nonnull_name Utf8 NO
+
 query IT
 select id, name from table_with_metadata;
 ----
@@ -234,6 +250,28 @@ order by 1 asc nulls last;
 1 1
 3 1
 NULL 1
+
+# Reproducer for https://github.com/apache/datafusion/issues/18337
+# this query should not get an internal error
+query TI
+SELECT
+  'foo' AS name,
+  COUNT(
+    CASE
+      WHEN prev_value = 'no_bar' AND value = 'no_baz' THEN 1
+      ELSE NULL
+      END
+     ) AS count_rises
+FROM
+  (
+    SELECT
+      nonnull_name as value,
+      LAG(nonnull_name) OVER (ORDER BY ts) AS prev_value
+    FROM
+      table_with_metadata
+);
+----
+foo 1
 
 # Regression test: first_value should preserve metadata
 query IT

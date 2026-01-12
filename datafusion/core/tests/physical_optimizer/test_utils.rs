@@ -53,7 +53,6 @@ use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinct
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::filter::FilterExec;
@@ -358,13 +357,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         )
         .unwrap(),
     )
-}
-
-pub fn coalesce_batches_exec(
-    input: Arc<dyn ExecutionPlan>,
-    batch_size: usize,
-) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, batch_size))
 }
 
 pub fn sort_exec(

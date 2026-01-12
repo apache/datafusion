@@ -18,12 +18,13 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::datatypes::DataType::{Boolean, Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray};
+use arrow::datatypes::DataType::{Boolean, Float16, Float32, Float64};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 
-use datafusion_common::{Result, exec_err};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_common::types::NativeType;
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{Coercion, TypeSignatureClass};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -59,12 +60,14 @@ impl Default for IsZeroFunc {
 
 impl IsZeroFunc {
     pub fn new() -> Self {
-        use DataType::*;
+        // Accept any numeric type and coerce to float
+        let float = Coercion::new_implicit(
+            TypeSignatureClass::Float,
+            vec![TypeSignatureClass::Numeric],
+            NativeType::Float64,
+        );
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
-                Volatility::Immutable,
-            ),
+            signature: Signature::coercible(vec![float], Volatility::Immutable),
         }
     }
 }
@@ -87,6 +90,10 @@ impl ScalarUDFImpl for IsZeroFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // Handle NULL input
+        if args.args[0].data_type().is_null() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+        }
         make_scalar_function(iszero, vec![])(&args.args)
     }
 
@@ -106,6 +113,11 @@ fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
         Float32 => Ok(Arc::new(BooleanArray::from_unary(
             args[0].as_primitive::<Float32Type>(),
             |x| x == 0.0,
+        )) as ArrayRef),
+
+        Float16 => Ok(Arc::new(BooleanArray::from_unary(
+            args[0].as_primitive::<Float16Type>(),
+            |x| x.is_zero(),
         )) as ArrayRef),
 
         other => exec_err!("Unsupported data type {other:?} for function iszero"),

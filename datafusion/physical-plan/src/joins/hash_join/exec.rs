@@ -27,6 +27,8 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::joins::Map;
+use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -40,6 +42,7 @@ use crate::joins::utils::{
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
+use crate::metrics::{Count, MetricBuilder};
 use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join,
@@ -67,8 +70,8 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, plan_err,
-    project_schema,
+    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
+    plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -92,11 +95,96 @@ use super::partitioned_hash_eval::SeededRandomState;
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
 
+const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+
+#[expect(clippy::too_many_arguments)]
+fn try_create_array_map(
+    bounds: &Option<PartitionBounds>,
+    schema: &SchemaRef,
+    batches: &[RecordBatch],
+    on_left: &[PhysicalExprRef],
+    reservation: &mut MemoryReservation,
+    perfect_hash_join_small_build_threshold: usize,
+    perfect_hash_join_min_key_density: f64,
+    null_equality: NullEquality,
+) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
+    if on_left.len() != 1 {
+        return Ok(None);
+    }
+
+    if null_equality == NullEquality::NullEqualsNull {
+        for batch in batches.iter() {
+            let arrays = evaluate_expressions_to_arrays(on_left, batch)?;
+            if arrays[0].null_count() > 0 {
+                return Ok(None);
+            }
+        }
+    }
+
+    let (min_val, max_val) = if let Some(bounds) = bounds {
+        let (min_val, max_val) = if let Some(cb) = bounds.get_column_bounds(0) {
+            (cb.min.clone(), cb.max.clone())
+        } else {
+            return Ok(None);
+        };
+
+        if min_val.is_null() || max_val.is_null() {
+            return Ok(None);
+        }
+
+        if min_val > max_val {
+            return internal_err!("min_val>max_val");
+        }
+
+        if let Some((mi, ma)) =
+            ArrayMap::key_to_u64(&min_val).zip(ArrayMap::key_to_u64(&max_val))
+        {
+            (mi, ma)
+        } else {
+            return Ok(None);
+        }
+    } else {
+        return Ok(None);
+    };
+
+    let range = ArrayMap::calculate_range(min_val, max_val);
+    let num_row: usize = batches.iter().map(|x| x.num_rows()).sum();
+    let dense_ratio = (num_row as f64) / ((range + 1) as f64);
+
+    // TODO: support create ArrayMap<u64>
+    if num_row >= u32::MAX as usize {
+        return Ok(None);
+    }
+
+    if range >= perfect_hash_join_small_build_threshold as u64
+        && dense_ratio <= perfect_hash_join_min_key_density
+    {
+        return Ok(None);
+    }
+
+    // If range equals usize::MAX, then range + 1 would overflow to 0, which would cause
+    // ArrayMap to allocate an invalid zero-sized array or cause indexing issues.
+    // This check prevents such overflow and ensures valid array allocation.
+    if range == usize::MAX as u64 {
+        return Ok(None);
+    }
+
+    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
+    reservation.try_grow(mem_size)?;
+
+    let batch = concat_batches(schema, batches)?;
+    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
+
+    let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
+
+    Ok(Some((array_map, batch, left_values)))
+}
+
 /// HashTable and input data for the left (build side) of a join
 pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
     /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
-    pub(super) hash_map: Arc<dyn JoinHashMapType>,
+    pub(super) map: Arc<Map>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -121,9 +209,9 @@ pub(super) struct JoinLeftData {
 }
 
 impl JoinLeftData {
-    /// return a reference to the hash map
-    pub(super) fn hash_map(&self) -> &dyn JoinHashMapType {
-        &*self.hash_map
+    /// return a reference to the map
+    pub(super) fn map(&self) -> &Map {
+        &self.map
     }
 
     /// returns a reference to the build side batch
@@ -168,6 +256,36 @@ impl JoinLeftData {
 /// `<col1> != <col2>`) are known as "filter expressions" and are evaluated
 /// after the equijoin predicates.
 ///
+/// # ArrayMap Optimization
+///
+/// For joins with a single integer-based join key, `HashJoinExec` may use an [`ArrayMap`]
+/// (also known as a "perfect hash join") instead of a general-purpose hash map.
+/// This optimization is used when:
+/// 1. There is exactly one join key.
+/// 2. The join key is an integer type up to 64 bits wide that can be losslessly converted
+///    to `u64` (128-bit integer types such as `i128` and `u128` are not supported).
+/// 3. The range of keys is small enough (controlled by `perfect_hash_join_small_build_threshold`)
+///    OR the keys are sufficiently dense (controlled by `perfect_hash_join_min_key_density`).
+/// 4. build_side.num_rows() < u32::MAX
+/// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
+///
+/// See [`try_create_array_map`] for more details.
+///
+/// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
+/// partitions. This can cause a dense build side to become sparse within each partition,
+/// potentially disabling this optimization.
+///
+/// For example, consider:
+/// ```sql
+/// SELECT t1.value, t2.value
+/// FROM range(10000) AS t1
+/// JOIN range(10000) AS t2
+///   ON t1.value = t2.value;
+/// ```
+/// With 24 partitions, each partition will only receive a subset of the 10,000 rows.
+/// The first partition might contain values like `3, 10, 18, 39, 43`, which are sparse
+/// relative to the original range, even though the overall data set is dense.
+///
 /// # "Build Side" vs "Probe Side"
 ///
 /// HashJoin takes two inputs, which are referred to as the "build" and the
@@ -201,9 +319,9 @@ impl JoinLeftData {
 ///    Resulting hash table stores hashed join-key fields for each row as a key, and
 ///    indices of corresponding rows in concatenated batch.
 ///
-/// Hash join uses LIFO data structure as a hash table, and in order to retain
-/// original build-side input order while obtaining data during probe phase, hash
-/// table is updated by iterating batch sequence in reverse order -- it allows to
+/// When using the standard `JoinHashMap`, hash join uses LIFO data structure as a hash table,
+/// and in order to retain original build-side input order while obtaining data during probe phase,
+/// hash table is updated by iterating batch sequence in reverse order -- it allows to
 /// keep rows with smaller indices "on the top" of hash table, and still maintain
 /// correct indexing for concatenated build-side data batch.
 ///
@@ -513,10 +631,8 @@ impl HashJoinExec {
     ///
     /// This method is intended for testing only and should not be used in production code.
     #[doc(hidden)]
-    pub fn dynamic_filter_for_test(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
-        self.dynamic_filter
-            .as_ref()
-            .map(|df| Arc::clone(&df.filter))
+    pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
 
     /// Calculate order preservation flags for this hash join.
@@ -949,6 +1065,10 @@ impl ExecutionPlan for HashJoinExec {
                 .unwrap_or(false);
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
+
+        let array_map_created_count = MetricBuilder::new(&self.metrics)
+            .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -965,16 +1085,9 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     self.right().output_partitioning().partition_count(),
                     enable_dynamic_filter_pushdown,
-                    context
-                        .session_config()
-                        .options()
-                        .optimizer
-                        .hash_join_inlist_pushdown_max_size,
-                    context
-                        .session_config()
-                        .options()
-                        .optimizer
-                        .hash_join_inlist_pushdown_max_distinct_values,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    array_map_created_count,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -993,16 +1106,9 @@ impl ExecutionPlan for HashJoinExec {
                     need_produce_result_in_final(self.join_type),
                     1,
                     enable_dynamic_filter_pushdown,
-                    context
-                        .session_config()
-                        .options()
-                        .optimizer
-                        .hash_join_inlist_pushdown_max_size,
-                    context
-                        .session_config()
-                        .options()
-                        .optimizer
-                        .hash_join_inlist_pushdown_max_distinct_values,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    array_map_created_count,
                 ))
             }
             PartitionMode::Auto => {
@@ -1364,6 +1470,19 @@ impl BuildSideState {
     }
 }
 
+fn should_collect_min_max_for_perfect_hash(
+    on_left: &[PhysicalExprRef],
+    schema: &SchemaRef,
+) -> Result<bool> {
+    if on_left.len() != 1 {
+        return Ok(false);
+    }
+
+    let expr = &on_left[0];
+    let data_type = expr.data_type(schema)?;
+    Ok(ArrayMap::is_supported_type(&data_type))
+}
+
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
 /// This function is responsible for:
@@ -1402,20 +1521,21 @@ async fn collect_left_input(
     with_visited_indices_bitmap: bool,
     probe_threads_count: usize,
     should_compute_dynamic_filters: bool,
-    max_inlist_size: usize,
-    max_inlist_distinct_values: usize,
+    config: Arc<ConfigOptions>,
+    null_equality: NullEquality,
+    array_map_created_count: Count,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
-    // This operation performs 2 steps at once:
-    // 1. creates a [JoinHashMap] of all batches from the stream
-    // 2. stores the batches in a vector.
+    let should_collect_min_max_for_phj =
+        should_collect_min_max_for_perfect_hash(&on_left, &schema)?;
+
     let initial = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
         &schema,
-        should_compute_dynamic_filters,
+        should_compute_dynamic_filters || should_collect_min_max_for_phj,
     )?;
 
     let state = left_stream
@@ -1452,50 +1572,85 @@ async fn collect_left_input(
         bounds_accumulators,
     } = state;
 
-    // Estimation of memory size, required for hashtable, prior to allocation.
-    // Final result can be verified using `RawTable.allocation_info()`
-    let fixed_size_u32 = size_of::<JoinHashMapU32>();
-    let fixed_size_u64 = size_of::<JoinHashMapU64>();
-
-    // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
-    // `u64` indice variant
-    // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-    let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Box::new(JoinHashMapU64::with_capacity(num_rows))
-    } else {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Box::new(JoinHashMapU32::with_capacity(num_rows))
+    // Compute bounds
+    let mut bounds = match bounds_accumulators {
+        Some(accumulators) if num_rows > 0 => {
+            let bounds = accumulators
+                .into_iter()
+                .map(CollectLeftAccumulator::evaluate)
+                .collect::<Result<Vec<_>>>()?;
+            Some(PartitionBounds::new(bounds))
+        }
+        _ => None,
     };
 
-    let mut hashes_buffer = Vec::new();
-    let mut offset = 0;
-
-    // Updating hashmap starting from the last batch
-    let batches_iter = batches.iter().rev();
-    for batch in batches_iter.clone() {
-        hashes_buffer.clear();
-        hashes_buffer.resize(batch.num_rows(), 0);
-        update_hash(
+    let (join_hash_map, batch, left_values) =
+        if let Some((array_map, batch, left_value)) = try_create_array_map(
+            &bounds,
+            &schema,
+            &batches,
             &on_left,
-            batch,
-            &mut *hashmap,
-            offset,
-            &random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-        )?;
-        offset += batch.num_rows();
-    }
-    // Merge all batches into a single batch, so we can directly index into the arrays
-    let batch = concat_batches(&schema, batches_iter)?;
+            &mut reservation,
+            config.execution.perfect_hash_join_small_build_threshold,
+            config.execution.perfect_hash_join_min_key_density,
+            null_equality,
+        )? {
+            array_map_created_count.add(1);
+            metrics.build_mem_used.add(array_map.size());
+
+            (Map::ArrayMap(array_map), batch, left_value)
+        } else {
+            // Estimation of memory size, required for hashtable, prior to allocation.
+            // Final result can be verified using `RawTable.allocation_info()`
+            let fixed_size_u32 = size_of::<JoinHashMapU32>();
+            let fixed_size_u64 = size_of::<JoinHashMapU64>();
+
+            // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
+            // `u64` indice variant
+            // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
+            let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
+                let estimated_hashtable_size =
+                    estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
+                reservation.try_grow(estimated_hashtable_size)?;
+                metrics.build_mem_used.add(estimated_hashtable_size);
+                Box::new(JoinHashMapU64::with_capacity(num_rows))
+            } else {
+                let estimated_hashtable_size =
+                    estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
+                reservation.try_grow(estimated_hashtable_size)?;
+                metrics.build_mem_used.add(estimated_hashtable_size);
+                Box::new(JoinHashMapU32::with_capacity(num_rows))
+            };
+
+            let mut hashes_buffer = Vec::new();
+            let mut offset = 0;
+
+            let batches_iter = batches.iter().rev();
+
+            // Updating hashmap starting from the last batch
+            for batch in batches_iter.clone() {
+                hashes_buffer.clear();
+                hashes_buffer.resize(batch.num_rows(), 0);
+                update_hash(
+                    &on_left,
+                    batch,
+                    &mut *hashmap,
+                    offset,
+                    &random_state,
+                    &mut hashes_buffer,
+                    0,
+                    true,
+                )?;
+                offset += batch.num_rows();
+            }
+
+            // Merge all batches into a single batch, so we can directly index into the arrays
+            let batch = concat_batches(&schema, batches_iter.clone())?;
+
+            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+
+            (Map::HashMap(hashmap), batch, left_values)
+        };
 
     // Reserve additional memory for visited indices bitmap and create shared builder
     let visited_indices_bitmap = if with_visited_indices_bitmap {
@@ -1510,22 +1665,7 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
-
-    // Compute bounds for dynamic filter if enabled
-    let bounds = match bounds_accumulators {
-        Some(accumulators) if num_rows > 0 => {
-            let bounds = accumulators
-                .into_iter()
-                .map(CollectLeftAccumulator::evaluate)
-                .collect::<Result<Vec<_>>>()?;
-            Some(PartitionBounds::new(bounds))
-        }
-        _ => None,
-    };
-
-    // Convert Box to Arc for sharing with SharedBuildAccumulator
-    let hash_map: Arc<dyn JoinHashMapType> = hashmap.into();
+    let map = Arc::new(join_hash_map);
 
     let membership = if num_rows == 0 {
         PushdownStrategy::Empty
@@ -1539,19 +1679,26 @@ async fn collect_left_input(
             .sum::<usize>();
         if left_values.is_empty()
             || left_values[0].is_empty()
-            || estimated_size > max_inlist_size
-            || hash_map.len() > max_inlist_distinct_values
+            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
+            || map.num_of_distinct_key()
+                > config
+                    .optimizer
+                    .hash_join_inlist_pushdown_max_distinct_values
         {
-            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+            PushdownStrategy::Map(Arc::clone(&map))
         } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::HashTable(Arc::clone(&hash_map))
+            PushdownStrategy::Map(Arc::clone(&map))
         }
     };
 
+    if should_collect_min_max_for_phj && !should_compute_dynamic_filters {
+        bounds = None;
+    }
+
     let data = JoinLeftData {
-        hash_map,
+        map,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
@@ -1567,6 +1714,43 @@ async fn collect_left_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
+        if use_phj {
+            assert!(
+                metrics
+                    .sum_by_name(ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+                    .expect("should have array_map_created_count metrics")
+                    .as_usize()
+                    >= 1
+            );
+        } else {
+            assert_eq!(
+                metrics
+                    .sum_by_name(ARRAY_MAP_CREATED_COUNT_METRIC_NAME)
+                    .map(|v| v.as_usize())
+                    .unwrap_or(0),
+                0
+            )
+        }
+    }
+
+    fn build_schema_and_on() -> Result<(SchemaRef, SchemaRef, JoinOn)> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("b1", DataType::Int32, true),
+        ]));
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, true),
+            Field::new("b1", DataType::Int32, true),
+        ]));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b1", &right_schema)?) as _,
+        )];
+        Ok((left_schema, right_schema, on))
+    }
+
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::joins::hash_join::stream::lookup_join_hashmap;
     use crate::test::{TestMemoryExec, assert_join_metrics};
@@ -1601,10 +1785,37 @@ mod tests {
 
     #[template]
     #[rstest]
-    fn batch_sizes(#[values(8192, 10, 5, 2, 1)] batch_size: usize) {}
+    fn hash_join_exec_configs(
+        #[values(8192, 10, 5, 2, 1)] batch_size: usize,
+        #[values(true, false)] use_perfect_hash_join_as_possible: bool,
+    ) {
+    }
 
-    fn prepare_task_ctx(batch_size: usize) -> Arc<TaskContext> {
-        let session_config = SessionConfig::default().with_batch_size(batch_size);
+    fn prepare_task_ctx(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Arc<TaskContext> {
+        let mut session_config = SessionConfig::default().with_batch_size(batch_size);
+
+        if use_perfect_hash_join_as_possible {
+            session_config
+                .options_mut()
+                .execution
+                .perfect_hash_join_small_build_threshold = 819200;
+            session_config
+                .options_mut()
+                .execution
+                .perfect_hash_join_min_key_density = 0.0;
+        } else {
+            session_config
+                .options_mut()
+                .execution
+                .perfect_hash_join_small_build_threshold = 0;
+            session_config
+                .options_mut()
+                .execution
+                .perfect_hash_join_min_key_density = f64::INFINITY;
+        }
         Arc::new(TaskContext::default().with_session_config(session_config))
     }
 
@@ -1772,10 +1983,13 @@ mod tests {
         Ok((columns, batches, metrics))
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_inner_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1818,14 +2032,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn partitioned_join_inner_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn partitioned_join_inner_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1866,6 +2084,7 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
@@ -1967,10 +2186,13 @@ mod tests {
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_two(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_inner_two(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b2", &vec![1, 2, 2]),
@@ -2044,10 +2266,13 @@ mod tests {
     }
 
     /// Test where the left has 2 parts, the right with 1 part => 1 part
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_one_two_parts_left(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_inner_one_two_parts_left(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -2189,10 +2414,13 @@ mod tests {
     }
 
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_one_two_parts_right(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_inner_one_two_parts_right(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -2293,6 +2521,9 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
@@ -2306,10 +2537,13 @@ mod tests {
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_multi_batch(batch_size: usize) {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_multi_batch(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2326,9 +2560,9 @@ mod tests {
         )];
 
         let join = join(
-            left,
-            right,
-            on,
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
             &JoinType::Left,
             NullEquality::NullEqualsNothing,
         )
@@ -2337,8 +2571,15 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0, task_ctx).unwrap();
-        let batches = common::collect(stream).await.unwrap();
+        let (_, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Left,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -2353,12 +2594,18 @@ mod tests {
             +----+----+----+----+----+----+
             ");
         }
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+        return Ok(());
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_full_multi_batch(batch_size: usize) {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_full_multi_batch(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2389,6 +2636,7 @@ mod tests {
 
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
+        let metrics = join.metrics().unwrap();
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -2405,12 +2653,17 @@ mod tests {
             +----+----+----+----+----+----+
             ");
         }
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_empty_right(batch_size: usize) {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_empty_right(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2437,6 +2690,7 @@ mod tests {
 
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
+        let metrics = join.metrics().unwrap();
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -2449,12 +2703,17 @@ mod tests {
             +----+----+----+----+----+----+
             ");
         }
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_full_empty_right(batch_size: usize) {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_full_empty_right(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -2481,6 +2740,7 @@ mod tests {
 
         let stream = join.execute(0, task_ctx).unwrap();
         let batches = common::collect(stream).await.unwrap();
+        let metrics = join.metrics().unwrap();
 
         allow_duplicates! {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
@@ -2493,12 +2753,17 @@ mod tests {
             +----+----+----+----+----+----+
             ");
         }
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2539,14 +2804,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn partitioned_join_left_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn partitioned_join_left_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -2587,6 +2856,7 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
@@ -2611,10 +2881,13 @@ mod tests {
         )
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_semi(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_semi(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left semi join right_table on left_table.b1 = right_table.b2
@@ -2650,13 +2923,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_semi_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_semi_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2712,6 +2991,9 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         // left_table left semi join right_table on left_table.b1 = right_table.b2 and right_table.a2 > 10
         let filter_expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 0)),
@@ -2749,13 +3031,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_semi(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_semi(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2792,13 +3080,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_semi_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_semi_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
 
@@ -2855,6 +3149,9 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         // left_table right semi join right_table on left_table.b1 = right_table.b2 on left_table.a1!=9
         let filter_expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 0)),
@@ -2891,13 +3188,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_anti(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_anti(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2
@@ -2932,13 +3235,20 @@ mod tests {
             +----+----+----+
             ");
         }
+
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_anti_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_anti_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2!=8
@@ -2995,6 +3305,9 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         // left_table left anti join right_table on left_table.b1 = right_table.b2 and right_table.a2 != 13
         let filter_expression = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("x", 0)),
@@ -3038,13 +3351,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_anti(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_anti(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         let on = vec![(
@@ -3078,13 +3397,20 @@ mod tests {
             +----+----+-----+
             ");
         }
+
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_anti_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_anti_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_semi_anti_left_table();
         let right = build_semi_anti_right_table();
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and left_table.a1!=13
@@ -3142,6 +3468,9 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         // left_table right anti join right_table on left_table.b1 = right_table.b2 and right_table.b2!=8
         let column_indices = vec![ColumnIndex {
             index: 1,
@@ -3188,13 +3517,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -3235,14 +3570,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn partitioned_join_right_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn partitioned_join_right_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -3283,14 +3622,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_full_one(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_full_one(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -3333,13 +3676,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_mark(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_mark(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -3380,14 +3729,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn partitioned_join_left_mark(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn partitioned_join_left_mark(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -3428,14 +3781,18 @@ mod tests {
         }
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_mark(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_mark(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -3475,14 +3832,18 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
 
         assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn partitioned_join_right_mark(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn partitioned_join_right_mark(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -3523,6 +3884,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
 
         assert_join_metrics!(metrics, 4);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         Ok(())
     }
@@ -3729,10 +4091,13 @@ mod tests {
         )
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_inner_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_inner_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3775,13 +4140,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_left_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_left_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3827,13 +4198,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_right_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_right_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3878,13 +4255,19 @@ mod tests {
             ");
         }
 
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
         Ok(())
     }
 
-    #[apply(batch_sizes)]
+    #[apply(hash_join_exec_configs)]
     #[tokio::test]
-    async fn join_full_with_filter(batch_size: usize) -> Result<()> {
-        let task_ctx = prepare_task_ctx(batch_size);
+    async fn join_full_with_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
         let left = build_table(
             ("a", &vec![0, 1, 2, 2]),
             ("b", &vec![4, 5, 7, 8]),
@@ -3930,6 +4313,9 @@ mod tests {
             "+---+---+---+----+---+---+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        let metrics = join.metrics().unwrap();
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
 
         // THIS MIGRATION HALTED DUE TO ISSUE #15312
         //allow_duplicates! {
@@ -4280,7 +4666,7 @@ mod tests {
         // validation of partial join results output for different batch_size setting
         for join_type in join_types {
             for batch_size in (1..21).rev() {
-                let task_ctx = prepare_task_ctx(batch_size);
+                let task_ctx = prepare_task_ctx(batch_size, true);
 
                 let join = join(
                     Arc::clone(&left),
@@ -4716,6 +5102,221 @@ mod tests {
         // Even with empty build side, the dynamic filter should be marked as complete
         // wait_complete() should return immediately
         dynamic_filter_clone.wait_complete().await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_perfect_hash_join_with_negative_numbers() -> Result<()> {
+        let task_ctx = prepare_task_ctx(8192, true);
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![-1, 0, 1])) as ArrayRef,
+            ],
+        )?;
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema, None)?;
+
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1, -1, 0, 2])) as ArrayRef,
+            ],
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![right_batch]], right_schema, None)?;
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "a2", "b1"]);
+
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+----+----+",
+                "| a1 | b1 | a2 | b1 |",
+                "+----+----+----+----+",
+                "| 1  | -1 | 20 | -1 |",
+                "| 2  | 0  | 30 | 0  |",
+                "| 3  | 1  | 10 | 1  |",
+                "+----+----+----+----+",
+            ],
+            &batches
+        );
+
+        assert_phj_used(&metrics, true);
+
+        Ok(())
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_phj_null_equals_null_build_no_nulls_probe_has_nulls(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
+            ],
+        )?;
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema, None)?;
+
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(10), None])) as ArrayRef,
+            ],
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![right_batch]], right_schema, None)?;
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNull,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "a2", "b1"]);
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+----+----+",
+                "| a1 | b1 | a2 | b1 |",
+                "+----+----+----+----+",
+                "| 1  | 10 | 3  | 10 |",
+                "+----+----+----+----+",
+            ],
+            &batches
+        );
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_phj_null_equals_nothing_build_probe_all_have_nulls(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(10), None])) as ArrayRef,
+            ],
+        )?;
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema, None)?;
+
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(3), Some(4)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(10), None])) as ArrayRef,
+            ],
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![right_batch]], right_schema, None)?;
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "a2", "b1"]);
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+----+----+",
+                "| a1 | b1 | a2 | b1 |",
+                "+----+----+----+----+",
+                "| 1  | 10 | 3  | 10 |",
+                "+----+----+----+----+",
+            ],
+            &batches
+        );
+
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_phj_null_equals_null_build_have_nulls() -> Result<()> {
+        let task_ctx = prepare_task_ctx(8192, true);
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left_batch = RecordBatch::try_new(
+            Arc::clone(&left_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(10), Some(20), None])) as ArrayRef,
+            ],
+        )?;
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], left_schema, None)?;
+
+        let right_batch = RecordBatch::try_new(
+            Arc::clone(&right_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(3), Some(4)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(10), Some(30)])) as ArrayRef,
+            ],
+        )?;
+        let right =
+            TestMemoryExec::try_new_exec(&[vec![right_batch]], right_schema, None)?;
+
+        let (columns, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNull,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "a2", "b1"]);
+        assert_batches_sorted_eq!(
+            [
+                "+----+----+----+----+",
+                "| a1 | b1 | a2 | b1 |",
+                "+----+----+----+----+",
+                "| 1  | 10 | 3  | 10 |",
+                "+----+----+----+----+",
+            ],
+            &batches
+        );
+
+        assert_phj_used(&metrics, false);
 
         Ok(())
     }
