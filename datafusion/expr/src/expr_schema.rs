@@ -1083,7 +1083,7 @@ mod tests {
         let outer_ref = out_ref_col_with_metadata(
             DataType::Int32,
             meta.to_hashmap(),
-            Column::from_name("foo"),
+            "foo",
         );
         assert_eq!(meta, outer_ref.metadata(&schema).unwrap());
     }

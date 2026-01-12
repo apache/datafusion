@@ -447,6 +447,7 @@ mod tests {
     use crate::optimizer::OptimizerContext;
     use crate::test::*;
 
+    use datafusion_common::Column;
     use datafusion_expr::{
         Operator::{And, Or},
         binary_expr, col, lit,
@@ -652,10 +653,10 @@ mod tests {
             .join(
                 t3,
                 JoinType::Inner,
-                (vec!["t1.a"], vec!["t3.a"]),
+                (vec![Column::from_qualified_name("t1.a")], vec![Column::from_qualified_name("t3.a")]),
                 Some(col("t1.a").gt(lit(20u32))),
             )?
-            .join(t2, JoinType::Inner, (vec!["t1.a"], vec!["t2.a"]), None)?
+            .join(t2, JoinType::Inner, (vec![Column::from_qualified_name("t1.a")], vec![Column::from_qualified_name("t2.a")]), None)?
             .filter(col("t1.a").gt(lit(15u32)))?
             .build()?;
 

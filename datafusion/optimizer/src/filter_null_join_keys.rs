@@ -308,7 +308,7 @@ mod tests {
             .join(
                 t2,
                 JoinType::Inner,
-                (vec!["optional_id"], vec!["t2.optional_id"]),
+                (vec![Column::from_qualified_name("optional_id")], vec![Column::from_qualified_name("t2.optional_id")]),
                 None,
             )?
             .build()?;

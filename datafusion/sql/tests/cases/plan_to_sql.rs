@@ -1773,7 +1773,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         .join(
             right_plan.clone(),
             datafusion_expr::JoinType::Inner,
-            (vec!["left.id"], vec!["right_table.id"]),
+            (vec![Column::from_qualified_name("left.id")], vec![Column::from_qualified_name("right_table.id")]),
             Some(col("left.id").gt(lit(5))),
         )?
         .build()?;
@@ -1788,7 +1788,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         .join(
             right_plan,
             datafusion_expr::JoinType::Inner,
-            (vec!["left.id"], vec!["right_table.id"]),
+            (vec![Column::from_qualified_name("left.id")], vec![Column::from_qualified_name("right_table.id")]),
             None,
         )?
         .build()?;
@@ -1812,7 +1812,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         .join(
             right_plan_with_filter,
             datafusion_expr::JoinType::Inner,
-            (vec!["left.id"], vec!["right_table.id"]),
+            (vec![Column::from_qualified_name("left.id")], vec![Column::from_qualified_name("right_table.id")]),
             Some(col("left.id").gt(lit(5))),
         )?
         .filter(col("left.name").eq(lit("after_join_filter_val")))?
@@ -1843,7 +1843,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
         .join(
             right_plan_with_duplicated_filter,
             datafusion_expr::JoinType::Inner,
-            (vec!["left.id"], vec!["right_table.id"]),
+            (vec![Column::from_qualified_name("left.id")], vec![Column::from_qualified_name("right_table.id")]),
             Some(col("left.id").gt(lit(5))),
         )?
         .build()?;
