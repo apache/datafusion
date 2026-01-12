@@ -631,10 +631,8 @@ impl HashJoinExec {
     ///
     /// This method is intended for testing only and should not be used in production code.
     #[doc(hidden)]
-    pub fn dynamic_filter_for_test(&self) -> Option<Arc<DynamicFilterPhysicalExpr>> {
-        self.dynamic_filter
-            .as_ref()
-            .map(|df| Arc::clone(&df.filter))
+    pub fn dynamic_filter_for_test(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
+        self.dynamic_filter.as_ref().map(|df| &df.filter)
     }
 
     /// Calculate order preservation flags for this hash join.
