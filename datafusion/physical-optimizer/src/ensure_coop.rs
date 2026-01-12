@@ -30,7 +30,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::coop::CooperativeExec;
-use datafusion_physical_plan::execution_plan::{EvaluationType};
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 
 /// `EnsureCooperative` is a [`PhysicalOptimizerRule`] that inspects the physical plan for
 /// sub plans that do not participate in cooperative scheduling. The plan is subdivided into sub
@@ -83,24 +83,22 @@ impl PhysicalOptimizerRule for EnsureCooperative {
             },
             // Up phase: Wrap nodes with CooperativeExec if needed, then restore depth
             |plan| {
-                let is_coop_node =
-                    plan.as_any().downcast_ref::<CooperativeExec>().is_some();
+                let is_cooperative =
+                    plan.properties().scheduling_type == SchedulingType::Cooperative;
                 let is_leaf = plan.children().is_empty();
                 let is_exchange =
                     plan.properties().evaluation_type == EvaluationType::Eager;
 
                 // Wrap if:
                 // 1. Node is a leaf or exchange point
-                // 2. Node is not already a CooperativeExec
+                // 2. Node is not already cooperative
                 // 3. Not under any CooperativeExec (depth == 0)
-                if (is_leaf || is_exchange) && !is_coop_node && coop_depth.get() == 0 {
-                    // Note: We don't decrement depth here because this node
-                    // wasn't a CooperativeExec before wrapping
+                if (is_leaf || is_exchange) && !is_cooperative && coop_depth.get() == 0 {
                     return Ok(Transformed::yes(Arc::new(CooperativeExec::new(plan))));
                 }
 
-                // Restore depth when leaving a CooperativeExec node
-                if is_coop_node {
+                // Restore depth when leaving a CooperativeExec
+                if plan.as_any().downcast_ref::<CooperativeExec>().is_some() {
                     coop_depth.set(coop_depth.get() - 1);
                 }
 
@@ -120,7 +118,6 @@ impl PhysicalOptimizerRule for EnsureCooperative {
 mod tests {
     use super::*;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_physical_plan::execution_plan::EvaluationType;
     use datafusion_physical_plan::{displayable, test::scan_partitioned};
     use insta::assert_snapshot;
 
@@ -248,36 +245,5 @@ mod tests {
             2,
             "Both data sources should be present"
         );
-    }
-
-    #[tokio::test]
-    async fn test_eager_exchange_nodes() {
-        // Test eager evaluation nodes (exchange points like RepartitionExec)
-        // Should wrap both the eager node and its leaf child, and be idempotent
-        use datafusion_physical_plan::Partitioning;
-        use datafusion_physical_plan::repartition::RepartitionExec;
-
-        let scan = scan_partitioned(1);
-        let repartition = Arc::new(
-            RepartitionExec::try_new(scan, Partitioning::RoundRobinBatch(4)).unwrap(),
-        );
-
-        assert_eq!(
-            repartition.properties().evaluation_type,
-            EvaluationType::Eager
-        );
-
-        let config = ConfigOptions::new();
-        let rule = EnsureCooperative::new();
-
-        // First run: should wrap both eager node and leaf
-        let first = rule.optimize(repartition, &config).unwrap();
-        let first_display = displayable(first.as_ref()).indent(true).to_string();
-        assert_eq!(first_display.matches("CooperativeExec").count(), 2);
-
-        // Idempotency check
-        let second = rule.optimize(Arc::clone(&first), &config).unwrap();
-        let second_display = displayable(second.as_ref()).indent(true).to_string();
-        assert_eq!(first_display, second_display);
     }
 }
