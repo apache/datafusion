@@ -69,8 +69,14 @@ pub struct ParquetFileMetrics {
     pub metadata_load_time: Time,
     /// Scan Efficiency Ratio, calculated as bytes_scanned / total_file_size
     pub scan_efficiency_ratio: RatioMetrics,
-    /// Predicate Cache: number of records read directly from the inner reader.
-    /// This is the number of rows decoded while evaluating predicates
+    /// Predicate Cache: Total number of rows physically read and decoded from the Parquet file.
+    ///
+    /// This metric tracks "cache misses" in the predicate pushdown optimization.
+    /// When the specialized predicate reader cannot find the requested data in its cache,
+    /// it must fall back to the "inner reader" to physically decode the data from the
+    /// Parquet.
+    ///
+    /// This is the expensive path (IO + Decompression + Decoding).
     pub predicate_cache_inner_records: Count,
     /// Predicate Cache: number of records read from the cache. This is the
     /// number of rows that were stored in the cache after evaluating predicates
