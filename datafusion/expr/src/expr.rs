@@ -1852,7 +1852,7 @@ impl Expr {
     /// # use datafusion_common::Column;
     /// use datafusion_expr::{col, Expr};
     /// let expr = col("foo");
-    /// assert_eq!(expr.try_as_col(), Some(&Column::from("foo")));
+    /// assert_eq!(expr.try_as_col(), Some(&Column::from_qualified_name("foo")));
     ///
     /// let expr = col("foo").alias("bar");
     /// assert_eq!(expr.try_as_col(), None);

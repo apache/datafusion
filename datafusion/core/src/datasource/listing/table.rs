@@ -129,7 +129,7 @@ mod tests {
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
     };
     use datafusion_common::{
-        DataFusionError, Result, ScalarValue, assert_contains,
+        Column, DataFusionError, Result, ScalarValue, assert_contains,
         stats::Precision,
         test_util::{batches_to_string, datafusion_test_data},
     };
@@ -776,7 +776,7 @@ mod tests {
         )]));
 
         let filter_predicate = Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(Expr::Column("column1".into())),
+            Box::new(Expr::Column(Column::from_qualified_name("column1"))),
             Operator::GtEq,
             Box::new(Expr::Literal(ScalarValue::Int32(Some(0)), None)),
         ));
