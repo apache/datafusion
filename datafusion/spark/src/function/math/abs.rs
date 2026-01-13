@@ -679,12 +679,16 @@ mod tests {
         );
 
         // decimal: arithmetic overflow
-        eval_array_ansi_mode!(Decimal128Array::from(vec![Some(i128::MIN), None])
-            .with_precision_and_scale(38, 37)
-            .unwrap());
-        eval_array_ansi_mode!(Decimal256Array::from(vec![Some(i256::MIN), None])
-            .with_precision_and_scale(5, 2)
-            .unwrap());
+        eval_array_ansi_mode!(
+            Decimal128Array::from(vec![Some(i128::MIN), None])
+                .with_precision_and_scale(38, 37)
+                .unwrap()
+        );
+        eval_array_ansi_mode!(
+            Decimal256Array::from(vec![Some(i256::MIN), None])
+                .with_precision_and_scale(5, 2)
+                .unwrap()
+        );
     }
 
     #[test]
