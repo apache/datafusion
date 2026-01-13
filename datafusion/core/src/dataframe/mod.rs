@@ -107,6 +107,8 @@ impl DataFrameWriteOptions {
     }
 
     /// Set the single_file_output value to true or false
+    ///
+    /// When set to true, an output file will always be created even if the DataFrame is empty
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
         self.single_file_output = single_file_output;
         self

@@ -23,6 +23,7 @@ use arrow::compute::kernels::comparison::ends_with as arrow_ends_with;
 use arrow::datatypes::DataType;
 
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
@@ -95,12 +96,7 @@ impl ScalarUDFImpl for EndsWithFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [str_arg, suffix_arg] = args.args.as_slice() else {
-            return exec_err!(
-                "ends_with was called with {} arguments, expected 2",
-                args.args.len()
-            );
-        };
+        let [str_arg, suffix_arg] = take_function_args(self.name(), &args.args)?;
 
         // Determine the common type for coercion
         let coercion_type = string_coercion(

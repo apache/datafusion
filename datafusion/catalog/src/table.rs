@@ -328,6 +328,31 @@ pub trait TableProvider: Debug + Sync + Send {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Insert into not implemented for this table")
     }
+
+    /// Delete rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` deletes all rows.
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("DELETE not supported for {} table", self.table_type())
+    }
+
+    /// Update rows matching the filter predicates.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    /// Empty `filters` updates all rows.
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        _assignments: Vec<(String, Expr)>,
+        _filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        not_impl_err!("UPDATE not supported for {} table", self.table_type())
+    }
 }
 
 /// Arguments for scanning a table with [`TableProvider::scan_with_args`].

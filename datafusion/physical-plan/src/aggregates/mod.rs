@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -64,6 +64,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use topk::hash_table::is_supported_hash_key_type;
+use topk::heap::is_supported_heap_type;
 
 pub mod group_values;
 mod no_grouping;
@@ -71,6 +73,17 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Returns true if TopK aggregation data structures support the provided key and value types.
+///
+/// This function checks whether both the key type (used for grouping) and value type
+/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
+/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
+/// ```text
+pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
+}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -546,6 +559,26 @@ impl AggregateExec {
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit: self.limit,
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        }
+    }
+
+    /// Clone this exec, overriding only the limit hint.
+    pub fn with_new_limit(&self, limit: Option<usize>) -> Self {
+        Self {
+            limit,
+            // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
@@ -1803,7 +1836,6 @@ mod tests {
 
     use super::*;
     use crate::RecordBatchStream;
-    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
@@ -2601,17 +2633,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_first_last_multi_partitions() -> Result<()> {
-        for use_coalesce_batches in [false, true] {
-            for is_first_acc in [false, true] {
-                for spill in [false, true] {
-                    first_last_multi_partitions(
-                        use_coalesce_batches,
-                        is_first_acc,
-                        spill,
-                        4200,
-                    )
-                    .await?
-                }
+        for is_first_acc in [false, true] {
+            for spill in [false, true] {
+                first_last_multi_partitions(is_first_acc, spill, 4200).await?
             }
         }
         Ok(())
@@ -2654,15 +2678,7 @@ mod tests {
             .map(Arc::new)
     }
 
-    // This function either constructs the physical plan below,
-    //
-    // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
-    // "  CoalesceBatchesExec: target_batch_size=1024",
-    // "    CoalescePartitionsExec",
-    // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
-    // "        DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
-    //
-    // or
+    // This function constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
@@ -2672,7 +2688,6 @@ mod tests {
     // and checks whether the function `merge_batch` works correctly for
     // FIRST_VALUE and LAST_VALUE functions.
     async fn first_last_multi_partitions(
-        use_coalesce_batches: bool,
         is_first_acc: bool,
         spill: bool,
         max_memory: usize,
@@ -2720,13 +2735,8 @@ mod tests {
             memory_exec,
             Arc::clone(&schema),
         )?);
-        let coalesce = if use_coalesce_batches {
-            let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
-            Arc::new(CoalesceBatchesExec::new(coalesce, 1024)) as Arc<dyn ExecutionPlan>
-        } else {
-            Arc::new(CoalescePartitionsExec::new(aggregate_exec))
-                as Arc<dyn ExecutionPlan>
-        };
+        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec))
+            as Arc<dyn ExecutionPlan>;
         let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,
