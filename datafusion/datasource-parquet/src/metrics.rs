@@ -77,6 +77,11 @@ pub struct ParquetFileMetrics {
     /// Parquet.
     ///
     /// This is the expensive path (IO + Decompression + Decoding).
+    ///
+    /// We use a Gauge here as arrow-rs reports absolute numbers rather
+    /// than incremental readings, we want a `set` operation here rather
+    /// than `add`. Earlier it was `Count`, which led to this issue:
+    /// github.com/apache/datafusion/issues/19334
     pub predicate_cache_inner_records: Gauge,
     /// Predicate Cache: number of records read from the cache. This is the
     /// number of rows that were stored in the cache after evaluating predicates
