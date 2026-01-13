@@ -658,14 +658,14 @@ impl<'a> ConstEvaluator<'a> {
             // as these can cause optimizer hang
             Expr::Cast(Cast { expr, data_type })
             | Expr::TryCast(TryCast { expr, data_type }) => {
-                if let (Ok(source_type), DataType::Struct(target_fields)) =
-                    (expr.get_type(&DFSchema::empty()), data_type)
+                if let (
+                    Ok(DataType::Struct(source_fields)),
+                    DataType::Struct(target_fields),
+                ) = (expr.get_type(&DFSchema::empty()), data_type)
                 {
-                    if let DataType::Struct(source_fields) = source_type {
-                        // Don't const-fold struct casts with different field counts
-                        if source_fields.len() != target_fields.len() {
-                            return false;
-                        }
+                    // Don't const-fold struct casts with different field counts
+                    if source_fields.len() != target_fields.len() {
+                        return false;
                     }
                 }
                 true

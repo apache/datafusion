@@ -56,7 +56,7 @@ fn cast_struct_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if source_col.data_type() == &DataType::Null
-        || (source_col.len() > 0 && source_col.null_count() == source_col.len())
+        || (!source_col.is_empty() && source_col.null_count() == source_col.len())
     {
         return Ok(new_null_array(
             &Struct(target_fields.to_vec().into()),
@@ -190,7 +190,7 @@ pub fn cast_column(
     match target_field.data_type() {
         Struct(target_fields) => {
             if source_col.data_type() == &DataType::Null
-                || (source_col.len() > 0 && source_col.null_count() == source_col.len())
+                || (!source_col.is_empty() && source_col.null_count() == source_col.len())
             {
                 return Ok(new_null_array(
                     &Struct(target_fields.to_vec().into()),

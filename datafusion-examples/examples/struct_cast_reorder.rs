@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .value(0);
     assert_eq!(src_a, 4, "Source field 'a' should be 4");
     assert_eq!(src_b, 3, "Source field 'b' should be 3");
-    println!("✓ Source validation passed: b={}, a={}", src_b, src_a);
+    println!("✓ Source validation passed: b={src_b}, a={src_a}");
 
     // Target: reorder fields to [a, b]
     let target_type = DataType::Struct(Fields::from(vec![
@@ -85,11 +85,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .value(0);
 
     if res_a == 4 && res_b == 3 {
-        println!("✓ Cast result passed: a={}, b={}", res_a, res_b);
+        println!("✓ Cast result passed: a={res_a}, b={res_b}");
     } else {
         println!(
-            "✗ Bug: Cast maps by position, not name. Expected a=4,b=3 but got a={}, b={}",
-            res_a, res_b
+            "✗ Bug: Cast maps by position, not name. Expected a=4,b=3 but got a={res_a}, b={res_b}",
         );
     }
 
