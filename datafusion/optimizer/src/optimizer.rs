@@ -494,10 +494,7 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
-        assert_eq!(
-            "Error during planning: rule failed",
-            err.strip_backtrace()
-        );
+        assert_eq!("Error during planning: rule failed", err.strip_backtrace());
     }
 
     #[test]
