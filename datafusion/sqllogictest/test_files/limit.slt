@@ -872,3 +872,25 @@ DROP TABLE test_limit_with_partitions;
 # Tear down src_table table:
 statement ok
 DROP TABLE src_table;
+
+
+
+# tests with target partition set to 1
+statement ok
+set datafusion.execution.target_partitions = '1';
+
+#  minimize batch size to minimize test data
+statement ok
+set datafusion.execution.batch_size = '1';
+
+statement ok
+CREATE TABLE filter_limit (i INT) as values (1), (2);
+
+query I
+SELECT COUNT(*) FROM (SELECT i FROM filter_limit WHERE i <> 0 LIMIT 1);
+----
+1
+
+statement ok
+DROP TABLE filter_limit;
+
