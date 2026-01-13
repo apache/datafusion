@@ -78,12 +78,9 @@ impl ScalarUDFImpl for SparkSize {
         Ok(DataType::Int32)
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            self.name(),
-            DataType::Int32,
-            args.arg_fields[0].is_nullable(),
-        )))
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        // nullable=false for legacy behavior (NULL -> -1); set to input nullability for null-on-null
+        Ok(Arc::new(Field::new(self.name(), DataType::Int32, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
