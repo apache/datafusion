@@ -67,39 +67,53 @@ impl PhysicalOptimizerRule for EnsureCooperative {
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use std::cell::Cell;
+        use std::cell::RefCell;
 
-        // Track depth: 0 means not under any CooperativeExec
-        // Using Cell to allow interior mutability from multiple closures
-        let coop_depth = Cell::new(0usize);
+        let ancestry_stack = RefCell::new(Vec::<(SchedulingType, EvaluationType)>::new());
 
         plan.transform_down_up(
-            // Down phase: Track when entering CooperativeExec subtrees
+            // Down phase: Push parent properties <SchedulingType, EvaluationType> into the stack
             |plan| {
-                if plan.as_any().downcast_ref::<CooperativeExec>().is_some() {
-                    coop_depth.set(coop_depth.get() + 1);
-                }
+                let props = plan.properties();
+                ancestry_stack
+                    .borrow_mut()
+                    .push((props.scheduling_type, props.evaluation_type));
                 Ok(Transformed::no(plan))
             },
-            // Up phase: Wrap nodes with CooperativeExec if needed, then restore depth
+            // Up phase: Wrap nodes with CooperativeExec if needed
             |plan| {
-                let is_cooperative =
-                    plan.properties().scheduling_type == SchedulingType::Cooperative;
+ 
+                ancestry_stack.borrow_mut().pop();
+
+                let props = plan.properties();
+                let is_cooperative = props.scheduling_type == SchedulingType::Cooperative;
                 let is_leaf = plan.children().is_empty();
-                let is_exchange =
-                    plan.properties().evaluation_type == EvaluationType::Eager;
+                let is_exchange = props.evaluation_type == EvaluationType::Eager;
+
+                let mut is_under_cooperative_context = false;
+                for (scheduling_type, evaluation_type) in
+                    ancestry_stack.borrow().iter().rev()
+                {
+                    // If nearest ancestor is cooperative, we are under a cooperative context
+                    if *scheduling_type == SchedulingType::Cooperative {
+                        is_under_cooperative_context = true;
+                        break;
+                    // If nearest ancestor is eager, the cooperative context will be reset
+                    } else if *evaluation_type == EvaluationType::Eager {
+                        is_under_cooperative_context = false;
+                        break;
+                    }
+                }
 
                 // Wrap if:
                 // 1. Node is a leaf or exchange point
                 // 2. Node is not already cooperative
-                // 3. Not under any CooperativeExec (depth == 0)
-                if (is_leaf || is_exchange) && !is_cooperative && coop_depth.get() == 0 {
+                // 3. Not under any Cooperative context
+                if (is_leaf || is_exchange)
+                    && !is_cooperative
+                    && !is_under_cooperative_context
+                {
                     return Ok(Transformed::yes(Arc::new(CooperativeExec::new(plan))));
-                }
-
-                // Restore depth when leaving a CooperativeExec
-                if plan.as_any().downcast_ref::<CooperativeExec>().is_some() {
-                    coop_depth.set(coop_depth.get() - 1);
                 }
 
                 Ok(Transformed::no(plan))
@@ -245,5 +259,155 @@ mod tests {
             2,
             "Both data sources should be present"
         );
+    }
+
+    #[tokio::test]
+    async fn test_eager_evaluation_resets_cooperative_context() {
+        // Test that cooperative context is reset when encountering an eager evaluation boundary.
+        use arrow::datatypes::Schema;
+        use datafusion_common::{Result, internal_err};
+        use datafusion_execution::TaskContext;
+        use datafusion_physical_expr::EquivalenceProperties;
+        use datafusion_physical_plan::{
+            DisplayAs, DisplayFormatType, Partitioning, PlanProperties,
+            SendableRecordBatchStream,
+            execution_plan::{Boundedness, EmissionType},
+        };
+        use std::any::Any;
+        use std::fmt::Formatter;
+
+        #[derive(Debug)]
+        struct DummyExec {
+            name: String,
+            input: Arc<dyn ExecutionPlan>,
+            scheduling_type: SchedulingType,
+            evaluation_type: EvaluationType,
+            properties: PlanProperties,
+        }
+
+        impl DummyExec {
+            fn new(
+                name: &str,
+                input: Arc<dyn ExecutionPlan>,
+                scheduling_type: SchedulingType,
+                evaluation_type: EvaluationType,
+            ) -> Self {
+                let properties = PlanProperties::new(
+                    EquivalenceProperties::new(Arc::new(Schema::empty())),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )
+                .with_scheduling_type(scheduling_type)
+                .with_evaluation_type(evaluation_type);
+
+                Self {
+                    name: name.to_string(),
+                    input,
+                    scheduling_type,
+                    evaluation_type,
+                    properties,
+                }
+            }
+        }
+
+        impl DisplayAs for DummyExec {
+            fn fmt_as(
+                &self,
+                _: DisplayFormatType,
+                f: &mut Formatter,
+            ) -> std::fmt::Result {
+                write!(f, "{}", self.name)
+            }
+        }
+
+        impl ExecutionPlan for DummyExec {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+            fn properties(&self) -> &PlanProperties {
+                &self.properties
+            }
+            fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+                vec![&self.input]
+            }
+            fn with_new_children(
+                self: Arc<Self>,
+                children: Vec<Arc<dyn ExecutionPlan>>,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                Ok(Arc::new(DummyExec::new(
+                    &self.name,
+                    Arc::clone(&children[0]),
+                    self.scheduling_type,
+                    self.evaluation_type,
+                )))
+            }
+            fn execute(
+                &self,
+                _: usize,
+                _: Arc<TaskContext>,
+            ) -> Result<SendableRecordBatchStream> {
+                internal_err!("DummyExec does not support execution")
+            }
+        }
+
+        // Build a plan similar to the original test:
+        // scan -> exch1(NonCoop,Eager) -> CoopExec -> filter -> exch2(Coop,Eager) -> filter
+        let scan = scan_partitioned(1);
+        let exch1 = Arc::new(DummyExec::new(
+            "exch1",
+            scan,
+            SchedulingType::NonCooperative,
+            EvaluationType::Eager,
+        ));
+        let coop = Arc::new(CooperativeExec::new(exch1));
+        let filter1 = Arc::new(DummyExec::new(
+            "filter1",
+            coop,
+            SchedulingType::NonCooperative,
+            EvaluationType::Lazy,
+        ));
+        let exch2 = Arc::new(DummyExec::new(
+            "exch2",
+            filter1,
+            SchedulingType::Cooperative,
+            EvaluationType::Eager,
+        ));
+        let filter2 = Arc::new(DummyExec::new(
+            "filter2",
+            exch2,
+            SchedulingType::NonCooperative,
+            EvaluationType::Lazy,
+        ));
+
+        let config = ConfigOptions::new();
+        let optimized = EnsureCooperative::new().optimize(filter2, &config).unwrap();
+
+        let display = displayable(optimized.as_ref()).indent(true).to_string();
+
+        // Expected wrapping:
+        // - Scan (leaf) gets wrapped
+        // - exch1 (eager+noncoop) keeps its manual CooperativeExec wrapper
+        // - filter1 is protected by exch2's cooperative context, no extra wrap
+        // - exch2 (already Cooperative) does NOT get wrapped
+        // - filter2 (not leaf or eager) does NOT get wrapped
+        assert_eq!(
+            display.matches("CooperativeExec").count(),
+            2,
+            "Should have 2 CooperativeExec: one wrapping scan, one wrapping exch1"
+        );
+
+        assert_snapshot!(display, @r"
+        filter2
+          exch2
+            filter1
+              CooperativeExec
+                exch1
+                  CooperativeExec
+                    DataSourceExec: partitions=1, partition_sizes=[1]
+        ");
     }
 }
