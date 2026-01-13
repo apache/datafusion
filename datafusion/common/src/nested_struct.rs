@@ -211,7 +211,7 @@ pub fn cast_column(
 /// Cast a struct array to another struct type by aligning child arrays using
 /// field names instead of their physical order.
 ///
-/// This is a convenience wrapper around [`cast_struct_column`] that accepts
+/// This is a convenience wrapper around the internal function `cast_struct_column` that accepts
 /// `Fields` directly instead of requiring a `Field` wrapper.
 ///
 /// See [`cast_column`] for detailed documentation on the casting behavior.
