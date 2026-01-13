@@ -59,7 +59,7 @@ fn cast_struct_column(
         || (source_col.len() > 0 && source_col.null_count() == source_col.len())
     {
         return Ok(new_null_array(
-            Struct(target_fields.to_vec().into()),
+            &Struct(target_fields.to_vec().into()),
             source_col.len(),
         ));
     }
@@ -78,18 +78,24 @@ fn cast_struct_column(
                 fields.push(Arc::clone(target_child_field));
                 match source_struct.column_by_name(target_child_field.name()) {
                     Some(source_child_col) => {
-                        let adapted_child =
-                            cast_column(source_child_col, target_child_field, cast_options)
-                                .map_err(|e| {
-                                e.context(format!(
-                                    "While casting struct field '{}'",
-                                    target_child_field.name()
-                                ))
-                            })?;
+                        let adapted_child = cast_column(
+                            source_child_col,
+                            target_child_field,
+                            cast_options,
+                        )
+                        .map_err(|e| {
+                            e.context(format!(
+                                "While casting struct field '{}'",
+                                target_child_field.name()
+                            ))
+                        })?;
                         arrays.push(adapted_child);
                     }
                     None => {
-                        arrays.push(new_null_array(target_child_field.data_type(), num_rows));
+                        arrays.push(new_null_array(
+                            target_child_field.data_type(),
+                            num_rows,
+                        ));
                     }
                 }
             }
@@ -100,11 +106,11 @@ fn cast_struct_column(
                 let adapted_child =
                     cast_column(source_child_col, target_child_field, cast_options)
                         .map_err(|e| {
-                        e.context(format!(
-                            "While casting struct field '{}'",
-                            target_child_field.name()
-                        ))
-                    })?;
+                            e.context(format!(
+                                "While casting struct field '{}'",
+                                target_child_field.name()
+                            ))
+                        })?;
                 arrays.push(adapted_child);
             }
         }
@@ -187,7 +193,7 @@ pub fn cast_column(
                 || (source_col.len() > 0 && source_col.null_count() == source_col.len())
             {
                 return Ok(new_null_array(
-                    Struct(target_fields.to_vec().into()),
+                    &Struct(target_fields.to_vec().into()),
                     source_col.len(),
                 ));
             }
@@ -277,8 +283,7 @@ pub fn validate_struct_compatibility(
             );
         }
 
-        for (source_field, target_field) in
-            source_fields.iter().zip(target_fields.iter())
+        for (source_field, target_field) in source_fields.iter().zip(target_fields.iter())
         {
             validate_field_compatibility(source_field, target_field)?;
         }
@@ -349,8 +354,10 @@ fn fields_have_name_overlap(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> bool {
-    let source_names: HashSet<&str> =
-        source_fields.iter().map(|field| field.name().as_str()).collect();
+    let source_names: HashSet<&str> = source_fields
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
     target_fields
         .iter()
         .any(|field| source_names.contains(field.name().as_str()))
@@ -567,8 +574,10 @@ mod tests {
 
     #[test]
     fn test_validate_struct_compatibility_positional_no_overlap_mismatch_len() {
-        let source_fields =
-            vec![arc_field("left", DataType::Int32), arc_field("right", DataType::Int32)];
+        let source_fields = vec![
+            arc_field("left", DataType::Int32),
+            arc_field("right", DataType::Int32),
+        ];
         let target_fields = vec![arc_field("alpha", DataType::Int32)];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
