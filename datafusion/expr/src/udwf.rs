@@ -362,7 +362,7 @@ pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyInfo]
+    /// * 'info': [crate::simplify::SimplifyContext]
     ///
     /// # Notes
     /// The returned expression must have the same schema as the original

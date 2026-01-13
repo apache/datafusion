@@ -41,8 +41,8 @@ use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
+use clap::Args;
 use log::info;
-use structopt::StructOpt;
 
 // hack to avoid `default_value is meaningless for bool` errors
 type BoolDefaultTrue = bool;
@@ -57,40 +57,40 @@ type BoolDefaultTrue = bool;
 /// [2]: https://event.cwi.nl/da/job/imdb.tgz
 /// [3]: https://db.in.tum.de/~leis/qo/job.tgz
 
-#[derive(Debug, StructOpt, Clone)]
-#[structopt(verbatim_doc_comment)]
+#[derive(Debug, Args, Clone)]
+#[command(verbatim_doc_comment)]
 pub struct RunOpt {
     /// Query number. If not specified, runs all queries
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub query: Option<usize>,
 
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
-    #[structopt(short = "f", long = "format", default_value = "csv")]
+    #[arg(short = 'f', long = "format", default_value = "csv")]
     file_format: String,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Path to machine readable output file
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[structopt(short = "S", long = "disable-statistics")]
+    #[arg(short = 'S', long = "disable-statistics")]
     disable_statistics: bool,
 
     /// If true then hash join used, if false then sort merge join
     /// True by default.
-    #[structopt(short = "j", long = "prefer_hash_join", default_value = "true")]
+    #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
     prefer_hash_join: BoolDefaultTrue,
 }
 

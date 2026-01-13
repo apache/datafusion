@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
+use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -165,17 +165,25 @@ fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_string_view_array(&args[1])?;
     let to_array = as_string_view_array(&args[2])?;
 
-    let result = string_array
+    let mut builder = GenericStringBuilder::<i32>::new();
+    let mut buffer = String::new();
+
+    for ((string, from), to) in string_array
         .iter()
         .zip(from_array.iter())
         .zip(to_array.iter())
-        .map(|((string, from), to)| match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => Some(string.replace(from, to)),
-            _ => None,
-        })
-        .collect::<StringArray>();
+    {
+        match (string, from, to) {
+            (Some(string), Some(from), Some(to)) => {
+                buffer.clear();
+                replace_into_string(&mut buffer, string, from, to);
+                builder.append_value(&buffer);
+            }
+            _ => builder.append_null(),
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
@@ -185,17 +193,64 @@ fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let from_array = as_generic_string_array::<T>(&args[1])?;
     let to_array = as_generic_string_array::<T>(&args[2])?;
 
-    let result = string_array
+    let mut builder = GenericStringBuilder::<T>::new();
+    let mut buffer = String::new();
+
+    for ((string, from), to) in string_array
         .iter()
         .zip(from_array.iter())
         .zip(to_array.iter())
-        .map(|((string, from), to)| match (string, from, to) {
-            (Some(string), Some(from), Some(to)) => Some(string.replace(from, to)),
-            _ => None,
-        })
-        .collect::<GenericStringArray<T>>();
+    {
+        match (string, from, to) {
+            (Some(string), Some(from), Some(to)) => {
+                buffer.clear();
+                replace_into_string(&mut buffer, string, from, to);
+                builder.append_value(&buffer);
+            }
+            _ => builder.append_null(),
+        }
+    }
 
-    Ok(Arc::new(result) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+/// Helper function to perform string replacement into a reusable String buffer
+#[inline]
+fn replace_into_string(buffer: &mut String, string: &str, from: &str, to: &str) {
+    if from.is_empty() {
+        // When from is empty, insert 'to' at the beginning, between each character, and at the end
+        // This matches the behavior of str::replace()
+        buffer.push_str(to);
+        for ch in string.chars() {
+            buffer.push(ch);
+            buffer.push_str(to);
+        }
+        return;
+    }
+
+    // Fast path for replacing a single ASCII character with another single ASCII character
+    // This matches Rust's str::replace() optimization and enables vectorization
+    if let ([from_byte], [to_byte]) = (from.as_bytes(), to.as_bytes())
+        && from_byte.is_ascii()
+        && to_byte.is_ascii()
+    {
+        // SAFETY: We're replacing ASCII with ASCII, which preserves UTF-8 validity
+        let replaced: Vec<u8> = string
+            .as_bytes()
+            .iter()
+            .map(|b| if *b == *from_byte { *to_byte } else { *b })
+            .collect();
+        buffer.push_str(unsafe { std::str::from_utf8_unchecked(&replaced) });
+        return;
+    }
+
+    let mut last_end = 0;
+    for (start, _part) in string.match_indices(from) {
+        buffer.push_str(&string[last_end..start]);
+        buffer.push_str(to);
+        last_end = start + from.len();
+    }
+    buffer.push_str(&string[last_end..]);
 }
 
 #[cfg(test)]
