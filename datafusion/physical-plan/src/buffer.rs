@@ -18,7 +18,7 @@
 //! [`BufferExec`] decouples production and consumption on messages by buffering the input in the
 //! background up to a certain capacity.
 
-use crate::execution_plan::CardinalityEffect;
+use crate::execution_plan::{CardinalityEffect, SchedulingType};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -37,7 +37,9 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{
+    PhysicalExpr, is_dynamic_physical_expr,
+};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -45,6 +47,7 @@ use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -86,6 +89,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 #[derive(Debug, Clone)]
 pub struct BufferExec {
     input: Arc<dyn ExecutionPlan>,
+    properties: PlanProperties,
     capacity: usize,
     metrics: ExecutionPlanMetricsSet,
 }
@@ -93,8 +97,14 @@ pub struct BufferExec {
 impl BufferExec {
     /// Builds a new [BufferExec] with the provided capacity in bytes.
     pub fn new(input: Arc<dyn ExecutionPlan>, capacity: usize) -> Self {
+        let properties = input
+            .properties()
+            .clone()
+            .with_scheduling_type(SchedulingType::Cooperative);
+
         Self {
             input,
+            properties,
             capacity,
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -134,7 +144,7 @@ impl ExecutionPlan for BufferExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        self.input.properties()
+        &self.properties
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -169,15 +179,29 @@ impl ExecutionPlan for BufferExec {
         let in_stream = self.input.execute(partition, context)?;
 
         // Set up the metrics for the stream.
-        let curr_mem_in = MetricBuilder::new(&self.metrics).mem_used(partition);
-        let curr_mem_out = curr_mem_in.clone();
+        let curr_mem_in = Arc::new(AtomicUsize::new(0));
+        let curr_mem_out = Arc::clone(&curr_mem_in);
+        let mut max_mem_in = 0;
         let max_mem = MetricBuilder::new(&self.metrics).gauge("max_mem_used", partition);
+
+        let curr_queued_in = Arc::new(AtomicUsize::new(0));
+        let curr_queued_out = Arc::clone(&curr_queued_in);
+        let mut max_queued_in = 0;
+        let max_queued = MetricBuilder::new(&self.metrics).gauge("max_queued", partition);
 
         // Capture metrics when an element is queued on the stream.
         let in_stream = in_stream.inspect_ok(move |v| {
-            curr_mem_in.add(v.get_array_memory_size());
-            if curr_mem_in.value() > max_mem.value() {
-                max_mem.set(curr_mem_in.value());
+            let size = v.get_array_memory_size();
+            let curr_size = curr_mem_in.fetch_add(size, Ordering::Relaxed) + size;
+            if curr_size > max_mem_in {
+                max_mem_in = curr_size;
+                max_mem.set(max_mem_in);
+            }
+
+            let curr_queued = curr_queued_in.fetch_add(1, Ordering::Relaxed) + 1;
+            if curr_queued > max_queued_in {
+                max_queued_in = curr_queued;
+                max_queued.set(max_queued_in);
             }
         });
         // Buffer the input.
@@ -185,7 +209,8 @@ impl ExecutionPlan for BufferExec {
             MemoryBufferedStream::new(in_stream, self.capacity, mem_reservation);
         // Update in the metrics that when an element gets out, some memory gets freed.
         let out_stream = out_stream.inspect_ok(move |v| {
-            curr_mem_out.sub(v.get_array_memory_size());
+            curr_mem_out.fetch_sub(v.get_array_memory_size(), Ordering::Relaxed);
+            curr_queued_out.fetch_sub(1, Ordering::Relaxed);
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -195,7 +220,7 @@ impl ExecutionPlan for BufferExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        self.input.metrics()
+        Some(self.metrics.clone_inner())
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
@@ -204,12 +229,6 @@ impl ExecutionPlan for BufferExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         self.input.supports_limit_pushdown()
-    }
-
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_fetch(limit)
-            .map(|input| Arc::new(Self::new(input, self.capacity)) as _)
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
