@@ -1322,7 +1322,7 @@ impl SessionContext {
         let table = table_ref.table().to_owned();
         let maybe_schema = {
             let state = self.state.read();
-            let resolved = state.resolve_table_ref(table_ref);
+            let resolved = state.resolve_table_ref(table_ref.clone());
             state
                 .catalog_list()
                 .catalog(&resolved.catalog)
@@ -1334,6 +1334,11 @@ impl SessionContext {
             && table_provider.table_type() == table_type
         {
             schema.deregister_table(&table)?;
+            if table_type == TableType::Base
+                && let Some(lfc) = self.runtime_env().cache_manager.get_list_files_cache()
+            {
+                lfc.drop_table_entries(&Some(table_ref))?;
+            }
             return Ok(true);
         }
 

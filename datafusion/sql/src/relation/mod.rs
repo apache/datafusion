@@ -93,7 +93,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             match self.create_extension_relation(relation, planner_context)? {
                 RelationPlanning::Planned(planned) => planned,
                 RelationPlanning::Original(original) => {
-                    self.create_default_relation(original, planner_context)?
+                    Box::new(self.create_default_relation(*original, planner_context)?)
                 }
             };
 
@@ -112,7 +112,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<RelationPlanning> {
         let planners = self.context_provider.get_relation_planners();
         if planners.is_empty() {
-            return Ok(RelationPlanning::Original(relation));
+            return Ok(RelationPlanning::Original(Box::new(relation)));
         }
 
         let mut current_relation = relation;
@@ -127,12 +127,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return Ok(RelationPlanning::Planned(planned));
                 }
                 RelationPlanning::Original(original) => {
-                    current_relation = original;
+                    current_relation = *original;
                 }
             }
         }
 
-        Ok(RelationPlanning::Original(current_relation))
+        Ok(RelationPlanning::Original(Box::new(current_relation)))
     }
 
     fn create_default_relation(
