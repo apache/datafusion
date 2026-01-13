@@ -1,0 +1,6 @@
+env,value,category
+prod,100,A
+dev,200,B
+test,150,A
+prod,300,C
+dev,250,B

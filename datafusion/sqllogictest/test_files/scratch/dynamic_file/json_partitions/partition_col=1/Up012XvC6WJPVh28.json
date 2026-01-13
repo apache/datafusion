@@ -1,0 +1,4 @@
+{"int_col":1,"string_col":"aaa","bigint_col":100}
+{"int_col":2,"string_col":"bbb","bigint_col":200}
+{"int_col":3,"string_col":"ccc","bigint_col":300}
+{"int_col":4,"string_col":"ddd","bigint_col":400}
