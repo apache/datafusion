@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{i256, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType, i256};
 use bigdecimal::BigDecimal;
 use half::f16;
-use rust_decimal::prelude::*;
+use std::str::FromStr;
 
 /// Represents a constant for NULL string in your database.
 pub const NULL_STR: &str = "NULL";
@@ -115,13 +115,14 @@ pub(crate) fn decimal_256_to_str(value: i256, scale: i8) -> String {
 }
 
 #[cfg(feature = "postgres")]
-pub(crate) fn decimal_to_str(value: Decimal) -> String {
-    big_decimal_to_str(BigDecimal::from_str(&value.to_string()).unwrap(), None)
+pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
+    big_decimal_to_str(value, None)
 }
 
 /// Converts a `BigDecimal` to its plain string representation, optionally rounding to a specified number of decimal places.
 ///
 /// If `round_digits` is `None`, the value is rounded to 12 decimal places by default.
+#[expect(clippy::needless_pass_by_value)]
 pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -> String {
     // Round the value to limit the number of decimal places
     let value = value.round(round_digits.unwrap_or(12)).normalized();
@@ -132,7 +133,7 @@ pub(crate) fn big_decimal_to_str(value: BigDecimal, round_digits: Option<i64>) -
 #[cfg(test)]
 mod tests {
     use super::big_decimal_to_str;
-    use bigdecimal::{num_bigint::BigInt, BigDecimal};
+    use bigdecimal::{BigDecimal, num_bigint::BigInt};
 
     macro_rules! assert_decimal_str_eq {
         ($integer:expr, $scale:expr, $round_digits:expr, $expected:expr) => {

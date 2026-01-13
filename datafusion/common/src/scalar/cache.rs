@@ -20,10 +20,10 @@
 use std::iter::repeat_n;
 use std::sync::{Arc, LazyLock, Mutex};
 
-use arrow::array::{new_null_array, Array, ArrayRef, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, PrimitiveArray, new_null_array};
 use arrow::datatypes::{
-    ArrowDictionaryKeyType, DataType, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, DataType, Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 
 /// Maximum number of rows to cache to be conservative on memory usage

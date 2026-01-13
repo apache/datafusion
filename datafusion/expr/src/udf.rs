@@ -19,16 +19,15 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
-use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+#[cfg(debug_assertions)]
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{
-    assert_or_internal_err, not_impl_err, DataFusionError, ExprSchema, Result,
-    ScalarValue,
-};
+use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -57,8 +56,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -92,7 +91,8 @@ impl PartialOrd for ScalarUDF {
             "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
             The functions compare as equal, but they are not equal based on general properties that \
             the PartialOrd implementation observes,",
-            self.name(), other.name()
+            self.name(),
+            other.name()
         );
         Some(cmp)
     }
@@ -221,14 +221,14 @@ impl ScalarUDF {
     pub fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
     }
 
     #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -413,7 +413,7 @@ pub struct ReturnFieldArgs<'a> {
 /// See [`advanced_udf.rs`] for a full example with complete implementation and
 /// [`ScalarUDF`] for other available options.
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 ///
 /// # Basic Example
 /// ```
@@ -610,7 +610,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
     ///     // report output is only nullable if any one of the arguments are nullable
     ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, nullable));
     ///     Ok(field)
     /// }
     /// # }
@@ -691,7 +691,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
     }
@@ -902,7 +902,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -921,7 +921,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
     }

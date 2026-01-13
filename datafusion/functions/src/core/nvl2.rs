@@ -16,13 +16,13 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, FieldRef};
-use datafusion_common::{internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, internal_err, utils::take_function_args};
 use datafusion_expr::{
-    conditional_expressions::CaseBuilder,
-    simplify::{ExprSimplifyResult, SimplifyInfo},
-    type_coercion::binary::comparison_coercion,
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, Volatility,
+    conditional_expressions::CaseBuilder,
+    simplify::{ExprSimplifyResult, SimplifyContext},
+    type_coercion::binary::comparison_coercion,
 };
 use datafusion_macros::user_doc;
 
@@ -108,7 +108,7 @@ impl ScalarUDFImpl for NVL2Func {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [test, if_non_null, if_null] = take_function_args(self.name(), args)?;
 

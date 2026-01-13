@@ -32,7 +32,8 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-You can find how to setup build and testing environment [here](https://datafusion.apache.org/contributor-guide/development_environment.html)
+Setup your development environment [here](development_environment.md), and learn
+how to test the code [here](testing.md).
 
 ## Finding and Creating Issues to Work On
 

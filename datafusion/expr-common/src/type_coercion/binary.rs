@@ -22,18 +22,20 @@ use std::sync::Arc;
 
 use crate::operator::Operator;
 
-use arrow::array::{new_empty_array, Array};
+use arrow::array::{Array, new_empty_array};
 use arrow::compute::can_cast_types;
+use arrow::datatypes::IntervalUnit::MonthDayNano;
+use arrow::datatypes::TimeUnit::*;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
-    DECIMAL64_MAX_SCALE,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
+    TimeUnit,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic,
-    Result, Span, Spans,
+    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use itertools::Itertools;
 
@@ -184,8 +186,8 @@ impl<'a> BinaryTypeCoercer<'a> {
     }
 
     fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
-        use arrow::datatypes::DataType::*;
         use Operator::*;
+        use arrow::datatypes::DataType::*;
         let result = match self.op {
         Eq |
         NotEq |
@@ -258,15 +260,36 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
+        Minus if is_date_minus_date(lhs, rhs) => {
+            return Ok(Signature {
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+                ret: Int64,
+            });
+        }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {
+
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
                     rhs: rhs.clone(),
                     ret,
                 })
+            } else if let Some((lhs, rhs)) = temporal_math_coercion(lhs, rhs) {
+                // Temporal arithmetic, e.g. Date32 + int64, Timestamp + duration, etc
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                    )
+                })?;
+                Ok(Signature {
+                    lhs,
+                    rhs,
+                    ret,
+                })
             } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
+
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
@@ -334,6 +357,15 @@ fn is_decimal(data_type: &DataType) -> bool {
             | DataType::Decimal64(..)
             | DataType::Decimal128(..)
             | DataType::Decimal256(..)
+    )
+}
+
+/// Returns true if both operands are Date types (Date32 or Date64)
+/// Used to detect Date - Date operations which should return Int64 (days difference)
+fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
 }
 
@@ -751,7 +783,11 @@ pub fn try_type_union_resolution_with_struct(
             let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
-                    return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
+                    return exec_err!(
+                        "Expect same keys for struct type but got mismatched pair {} and {}",
+                        *k,
+                        keys
+                    );
                 }
             } else {
                 keys_string = Some(keys);
@@ -765,7 +801,9 @@ pub fn try_type_union_resolution_with_struct(
     {
         fields.iter().map(|f| f.data_type().to_owned()).collect()
     } else {
-        return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
+        return internal_err!(
+            "Struct type is checked is the previous function, so this should be unreachable"
+        );
     };
 
     for data_type in data_types.iter().skip(1) {
@@ -939,7 +977,7 @@ fn string_temporal_coercion(
                             None
                         }
                     }
-                    Timestamp(_, tz) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+                    Timestamp(_, tz) => Some(Timestamp(Nanosecond, tz.clone())),
                     _ => None,
                 }
             }
@@ -1706,10 +1744,10 @@ pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 fn is_time_with_valid_unit(datatype: &DataType) -> bool {
     matches!(
         datatype,
-        &DataType::Time32(TimeUnit::Second)
-            | &DataType::Time32(TimeUnit::Millisecond)
-            | &DataType::Time64(TimeUnit::Microsecond)
-            | &DataType::Time64(TimeUnit::Nanosecond)
+        &DataType::Time32(Second)
+            | &DataType::Time32(Millisecond)
+            | &DataType::Time64(Microsecond)
+            | &DataType::Time64(Nanosecond)
     )
 }
 
@@ -1795,6 +1833,73 @@ fn temporal_coercion_strict_timezone(
     }
 }
 
+fn temporal_math_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<(DataType, DataType)> {
+    use DataType::*;
+
+    match (lhs_type, rhs_type) {
+        // Coerce Date + int -> Date + Interval
+        (Date32, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some((Date32, Interval(MonthDayNano)))
+        }
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date32) => {
+            Some((Interval(MonthDayNano), Date32))
+        }
+        (Date64, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some((Date64, Interval(MonthDayNano)))
+        }
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date64) => {
+            Some((Interval(MonthDayNano), Date64))
+        }
+        // Coerce Date + time -> timestamp + Duration
+        (Date32, Time32(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time32(_), Date32) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date32, Time64(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time64(_), Date32) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date64, Time32(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time32(_), Date64) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date64, Time64(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time64(_), Date64) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        // Coerce Duration to match Timestamp's unit,
+        // e.g. Timestamp(ms) + Duration(s) → Timestamp(ms) + Duration(ms)
+        (Timestamp(ts_unit, tz), Duration(_)) => {
+            Some((Timestamp(*ts_unit, tz.clone()), Duration(*ts_unit)))
+        }
+        (Duration(_), Timestamp(ts_unit, tz)) => {
+            Some((Duration(*ts_unit), Timestamp(*ts_unit, tz.clone())))
+        }
+        // time - time -> Interval
+        (Time32(_) | Time64(_), Time32(_) | Time64(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        // time + interval -> Interval
+        (Time32(_) | Time64(_), Interval(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        (Interval(_), Time32(_) | Time64(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        // Interval * number => Interval
+        (
+            Interval(_),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
+            | Float32 | Float64,
+        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
+            | Float32 | Float64,
+            Interval(_),
+        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        _ => None,
+    }
+}
+
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
@@ -1804,7 +1909,19 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Interval(_) | Duration(_), Interval(_) | Duration(_)) => {
             Some(Interval(MonthDayNano))
         }
+        (Date32, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
+        | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date32) => {
+            Some(Date32)
+        }
+        (Date64, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
+        | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date64) => {
+            Some(Date64)
+        }
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Date32, Time32(_)) | (Time32(_), Date32) => Some(Timestamp(Nanosecond, None)),
+        (Date32, Time64(_)) | (Time64(_), Date32) => Some(Timestamp(Nanosecond, None)),
+        (Date64, Time32(_)) | (Time32(_), Date64) => Some(Timestamp(Nanosecond, None)),
+        (Date64, Time64(_)) | (Time64(_), Date64) => Some(Timestamp(Nanosecond, None)),
         (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }

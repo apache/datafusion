@@ -28,14 +28,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Evaluates a window function by instantiating a
-/// `[PartitionEvaluator]` for calculating the function's output in
+/// [`PartitionEvaluator`] for calculating the function's output in
 /// that partition.
 ///
 /// Note that unlike aggregation based window functions, some window
 /// functions such as `rank` ignore the values in the window frame,
 /// but others such as `first_value`, `last_value`, and
 /// `nth_value` need the value.
-#[allow(rustdoc::private_intra_doc_links)]
 pub trait StandardWindowFunctionExpr: Send + Sync + std::fmt::Debug {
     /// Returns the aggregate expression as [`Any`] so that it can be
     /// downcast to a specific implementation.

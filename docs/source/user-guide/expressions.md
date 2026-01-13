@@ -313,7 +313,7 @@ select log(-1), log(0), sqrt(-1);
 
 You can also use the `ExprFunctionExt` trait to more easily build Aggregate arguments `Expr`.
 
-See `datafusion-examples/examples/expr_api.rs` for example usage.
+See `datafusion-examples/examples/query_planning/expr_api.rs` for example usage.
 
 | Syntax                                                                  | Equivalent to                       |
 | ----------------------------------------------------------------------- | ----------------------------------- |

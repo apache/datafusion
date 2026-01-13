@@ -18,7 +18,7 @@
 //! Partition evaluation module
 
 use arrow::array::ArrayRef;
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, not_impl_err};
 use std::fmt::Debug;
 use std::ops::Range;
 
@@ -175,7 +175,7 @@ pub trait PartitionEvaluator: Debug + Send {
     }
 
     /// Evaluate window function on a range of rows in an input
-    /// partition.x
+    /// partition.
     ///
     /// This is the simplest and most general function to implement
     /// but also the least performant as it creates output one row at
@@ -210,7 +210,7 @@ pub trait PartitionEvaluator: Debug + Send {
     ///  A  | 1
     ///  C  | 3
     ///  D  | 4
-    ///  D  | 5
+    ///  D  | 4
     /// ```
     ///
     /// For this case, `num_rows` would be `5` and the

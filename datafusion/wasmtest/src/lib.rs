@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
@@ -26,14 +24,12 @@
 
 extern crate wasm_bindgen;
 
-use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_common::ScalarValue;
 use datafusion_expr::lit;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
-use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -65,10 +61,7 @@ pub fn basic_exprs() {
     log(&format!("Expr: {expr:?}"));
 
     // Simplify Expr (using datafusion-phys-expr and datafusion-optimizer)
-    let schema = Arc::new(DFSchema::empty());
-    let execution_props = ExecutionProps::new();
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::new(&execution_props).with_schema(schema));
+    let simplifier = ExprSimplifier::new(SimplifyContext::default());
     let simplified_expr = simplifier.simplify(expr).unwrap();
     log(&format!("Simplified Expr: {simplified_expr:?}"));
 }
@@ -84,6 +77,8 @@ pub fn basic_parse() {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use super::*;
     use datafusion::{
         arrow::{
@@ -101,7 +96,7 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use object_store::{ObjectStore, memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 

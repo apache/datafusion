@@ -34,10 +34,10 @@ pub use crate::execution::options::{
 
 pub use datafusion_common::Column;
 pub use datafusion_expr::{
+    Expr,
     expr_fn::*,
     lit, lit_timestamp_nano,
     logical_plan::{JoinType, Partitioning},
-    Expr,
 };
 pub use datafusion_functions::expr_fn::*;
 #[cfg(feature = "nested_expressions")]

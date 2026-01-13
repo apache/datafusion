@@ -95,8 +95,11 @@ SELECT arrow_cast('1', 'Int16')
 query error
 SELECT arrow_cast('1')
 
-query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
 SELECT arrow_cast('1', 43)
+
+query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string
+SELECT arrow_cast('1', arrow_cast('Utf8', 'Utf8'))
 
 query error DataFusion error: Execution error: Unsupported type 'unknown'\. Must be a supported arrow type name such as 'Int32' or 'Timestamp\(ns\)'\. Error unknown token: unknown
 SELECT arrow_cast('1', 'unknown')
@@ -357,12 +360,12 @@ select arrow_cast(make_array(1, 2, 3), 'List(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'List(Int64)'));
 ----
-List(nullable Int64)
+List(Int64)
 
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'), 'List(List(Int64))'));
 ----
-List(nullable List(nullable Int64))
+List(List(Int64))
 
 ## LargeList
 
@@ -380,12 +383,12 @@ select arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)');
 query T
 select arrow_typeof(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'));
 ----
-LargeList(nullable Int64)
+LargeList(Int64)
 
 query T
 select arrow_typeof(arrow_cast(make_array([1, 2, 3]), 'LargeList(LargeList(Int64))'));
 ----
-LargeList(nullable LargeList(nullable Int64))
+LargeList(LargeList(Int64))
 
 ## FixedSizeList
 
@@ -417,7 +420,7 @@ select arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)');
 query T
 select arrow_typeof(arrow_cast(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), 'FixedSizeList(3, Int64)'));
 ----
-FixedSizeList(3 x nullable Int64)
+FixedSizeList(3 x Int64)
 
 query ?
 select arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)');

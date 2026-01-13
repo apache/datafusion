@@ -24,11 +24,11 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    in_list, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility, in_list,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArrayHas {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+        _info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [haystack, needle] = take_function_args(self.name(), &mut args)?;
 
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for ArrayHas {
                 return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::Boolean(None),
                     None,
-                )))
+                )));
             }
             Expr::Literal(
                 // FixedSizeList gets coerced to List
@@ -239,6 +239,7 @@ fn array_has_inner_for_array(haystack: &ArrayRef, needle: &ArrayRef) -> Result<A
     array_has_dispatch_for_array(haystack, needle)
 }
 
+#[derive(Copy, Clone)]
 enum ArrayWrapper<'a> {
     FixedSizeList(&'a arrow::array::FixedSizeListArray),
     List(&'a arrow::array::GenericListArray<i32>),
@@ -317,8 +318,8 @@ impl<'a> ArrayWrapper<'a> {
     }
 }
 
-fn array_has_dispatch_for_array(
-    haystack: ArrayWrapper<'_>,
+fn array_has_dispatch_for_array<'a>(
+    haystack: ArrayWrapper<'a>,
     needle: &ArrayRef,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -365,11 +366,11 @@ fn array_has_dispatch_for_scalar(
         let length = end - start;
 
         // Check if the array at this position is null
-        if let Some(validity_buffer) = validity {
-            if !validity_buffer.is_valid(i) {
-                final_contained[i] = None; // null array -> null result
-                continue;
-            }
+        if let Some(validity_buffer) = validity
+            && !validity_buffer.is_valid(i)
+        {
+            final_contained[i] = None; // null array -> null result
+            continue;
         }
 
         // For non-null arrays: length is 0 for empty arrays
@@ -390,8 +391,8 @@ fn array_has_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 // General row comparison for array_has_all and array_has_any
 fn general_array_has_for_all_and_any<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -402,8 +403,8 @@ fn general_array_has_for_all_and_any<'a>(
             let arr_values = converter.convert_columns(&[arr])?;
             let sub_arr_values = converter.convert_columns(&[sub_arr])?;
             boolean_builder.append_value(general_array_has_all_and_any_kernel(
-                arr_values,
-                sub_arr_values,
+                &arr_values,
+                &sub_arr_values,
                 comparison_type,
             ));
         } else {
@@ -416,8 +417,8 @@ fn general_array_has_for_all_and_any<'a>(
 
 // String comparison for array_has_all and array_has_any
 fn array_has_all_and_any_string_internal<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     let mut boolean_builder = BooleanArray::builder(haystack.len());
@@ -427,8 +428,8 @@ fn array_has_all_and_any_string_internal<'a>(
                 let haystack_array = string_array_to_vec(&arr);
                 let needle_array = string_array_to_vec(&sub_arr);
                 boolean_builder.append_value(array_has_string_kernel(
-                    haystack_array,
-                    needle_array,
+                    &haystack_array,
+                    &needle_array,
                     comparison_type,
                 ));
             }
@@ -442,8 +443,8 @@ fn array_has_all_and_any_string_internal<'a>(
 }
 
 fn array_has_all_and_any_dispatch<'a>(
-    haystack: &ArrayWrapper<'a>,
-    needle: &ArrayWrapper<'a>,
+    haystack: ArrayWrapper<'a>,
+    needle: ArrayWrapper<'a>,
     comparison_type: ComparisonType,
 ) -> Result<ArrayRef> {
     if needle.values().is_empty() {
@@ -468,7 +469,7 @@ fn array_has_all_and_any_inner(
 ) -> Result<ArrayRef> {
     let haystack: ArrayWrapper = args[0].as_ref().try_into()?;
     let needle: ArrayWrapper = args[1].as_ref().try_into()?;
-    array_has_all_and_any_dispatch(&haystack, &needle, comparison_type)
+    array_has_all_and_any_dispatch(haystack, needle, comparison_type)
 }
 
 fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
@@ -633,8 +634,8 @@ enum ComparisonType {
 }
 
 fn array_has_string_kernel(
-    haystack: Vec<Option<&str>>,
-    needle: Vec<Option<&str>>,
+    haystack: &[Option<&str>],
+    needle: &[Option<&str>],
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
@@ -650,8 +651,8 @@ fn array_has_string_kernel(
 }
 
 fn general_array_has_all_and_any_kernel(
-    haystack_rows: Rows,
-    needle_rows: Rows,
+    haystack_rows: &Rows,
+    needle_rows: &Rows,
     comparison_type: ComparisonType,
 ) -> bool {
     match comparison_type {
@@ -674,17 +675,17 @@ mod tests {
 
     use arrow::datatypes::Int32Type;
     use arrow::{
-        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
+        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, create_array},
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
     use datafusion_common::{
-        config::ConfigOptions, utils::SingleRowListArrayBuilder, DataFusionError,
-        ScalarValue,
+        DataFusionError, ScalarValue, config::ConfigOptions,
+        utils::SingleRowListArrayBuilder,
     };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
-        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
+        simplify::ExprSimplifyResult,
     };
 
     use crate::expr_fn::make_array;
@@ -700,8 +701,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -724,8 +724,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -748,8 +747,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -766,8 +764,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -782,8 +779,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

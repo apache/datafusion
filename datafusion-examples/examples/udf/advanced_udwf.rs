@@ -17,6 +17,8 @@
 
 //! See `main.rs` for how to run it.
 
+use std::{any::Any, sync::Arc};
+
 use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
@@ -30,7 +32,7 @@ use datafusion::logical_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion::logical_expr::function::{
     PartitionEvaluatorArgs, WindowFunctionSimplification, WindowUDFFieldArgs,
 };
-use datafusion::logical_expr::simplify::SimplifyInfo;
+use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
     Expr, LimitEffect, PartitionEvaluator, Signature, WindowFrame,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl,
@@ -38,8 +40,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::*;
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
-use std::any::Any;
-use std::sync::Arc;
+use datafusion_examples::utils::datasets::ExampleDataset;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -197,7 +198,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     /// this function will simplify `SimplifySmoothItUdf` to `AggregateUDF` for `Avg`
     /// default implementation will not be called (left as `todo!()`)
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
-        let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
+        let simplify = |window_function: WindowFunction, _: &SimplifyContext| {
             Ok(Expr::from(WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 params: WindowFunctionParams {
@@ -229,12 +230,11 @@ async fn create_context() -> Result<SessionContext> {
     // declare a new context. In spark API, this corresponds to a new spark SQL session
     let ctx = SessionContext::new();
 
-    // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
-    println!("pwd: {}", std::env::current_dir().unwrap().display());
-    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
-    let read_options = CsvReadOptions::default().has_header(true);
+    let dataset = ExampleDataset::Cars;
 
-    ctx.register_csv("cars", &csv_path, read_options).await?;
+    ctx.register_csv("cars", dataset.path_str()?, CsvReadOptions::new())
+        .await?;
+
     Ok(ctx)
 }
 

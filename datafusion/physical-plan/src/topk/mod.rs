@@ -19,7 +19,7 @@
 
 use arrow::{
     array::{Array, AsArray},
-    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
+    compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -30,20 +30,20 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
 };
 use crate::spill::get_record_batch_memory_size;
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
+    HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::{
-    expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, DynamicFilterPhysicalExpr, is_not_null, is_null, lit},
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use parking_lot::RwLock;
@@ -178,7 +178,8 @@ impl TopK {
     /// Create a new [`TopK`] that stores the top `k` values, as
     /// defined by the sort expressions in `expr`.
     // TODO: make a builder or some other nicer API
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn try_new(
         partition_id: usize,
         schema: SchemaRef,
@@ -226,6 +227,7 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
         let baseline = self.metrics.baseline.clone();
@@ -377,7 +379,7 @@ impl TopK {
         };
 
         // Build the filter expression OUTSIDE any synchronization
-        let predicate = Self::build_filter_expression(&self.expr, thresholds)?;
+        let predicate = Self::build_filter_expression(&self.expr, &thresholds)?;
         let new_threshold = new_threshold_row.to_vec();
 
         // update the threshold. Since there was a lock gap, we must check if it is still the best
@@ -407,10 +409,10 @@ impl TopK {
         };
 
         // Update the filter expression
-        if let Some(pred) = predicate {
-            if !pred.eq(&lit(true)) {
-                filter.expr.update(pred)?;
-            }
+        if let Some(pred) = predicate
+            && !pred.eq(&lit(true))
+        {
+            filter.expr.update(pred)?;
         }
 
         Ok(())
@@ -420,7 +422,7 @@ impl TopK {
     /// This is now called outside of any locks to reduce critical section time.
     fn build_filter_expression(
         sort_exprs: &[PhysicalSortExpr],
-        thresholds: Vec<ScalarValue>,
+        thresholds: &[ScalarValue],
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         // Create filter expressions for each threshold
         let mut filters: Vec<Arc<dyn PhysicalExpr>> =
@@ -868,7 +870,7 @@ impl TopKHeap {
                     ScalarValue::try_from_array(&array, 0)?
                 }
                 array => {
-                    return internal_err!("Expected a scalar value, got {:?}", array)
+                    return internal_err!("Expected a scalar value, got {:?}", array);
                 }
             };
 

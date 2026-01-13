@@ -31,7 +31,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::instant::Instant;
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -206,8 +206,8 @@ impl ExecutionPlan for AnalyzeExec {
                 show_statistics,
                 total_rows,
                 duration,
-                captured_input,
-                captured_schema,
+                &captured_input,
+                &captured_schema,
                 &metric_types,
             )
         };
@@ -225,8 +225,8 @@ fn create_output_batch(
     show_statistics: bool,
     total_rows: usize,
     duration: std::time::Duration,
-    input: Arc<dyn ExecutionPlan>,
-    schema: SchemaRef,
+    input: &Arc<dyn ExecutionPlan>,
+    schema: &SchemaRef,
     metric_types: &[MetricType],
 ) -> Result<RecordBatch> {
     let mut type_builder = StringBuilder::with_capacity(1, 1024);
@@ -262,7 +262,7 @@ fn create_output_batch(
     }
 
     RecordBatch::try_new(
-        schema,
+        Arc::clone(schema),
         vec![
             Arc::new(type_builder.finish()),
             Arc::new(plan_builder.finish()),
@@ -278,7 +278,7 @@ mod tests {
         collect,
         test::{
             assert_is_pending,
-            exec::{assert_strong_count_converges_to_zero, BlockingExec},
+            exec::{BlockingExec, assert_strong_count_converges_to_zero},
         },
     };
 

@@ -79,17 +79,19 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, SortOrderPushdownResult,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{Result, Statistics, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};
 
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
@@ -207,7 +209,7 @@ where
 /// An execution plan decorator that enables cooperative multitasking.
 /// It wraps the streams produced by its input execution plan using the [`make_cooperative`] function,
 /// which makes the stream participate in Tokio cooperative scheduling.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CooperativeExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
@@ -298,6 +300,18 @@ impl ExecutionPlan for CooperativeExec {
         Equal
     }
 
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -314,6 +328,27 @@ impl ExecutionPlan for CooperativeExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        let child = self.input();
+
+        match child.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Exact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
     }
 }
 
@@ -347,7 +382,7 @@ mod tests {
 
     use arrow_schema::SchemaRef;
 
-    use futures::{stream, StreamExt};
+    use futures::{StreamExt, stream};
 
     // This is the hardcoded value Tokio uses
     const TASK_BUDGET: usize = 128;

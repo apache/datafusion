@@ -51,9 +51,11 @@ sql = []
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }
 datafusion-expr = { workspace = true, default-features = false }
+datafusion-physical-expr-common = { workspace = true, default-features = false }
 futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true, features = ["fs"] }
@@ -64,5 +66,4 @@ tempfile = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-chrono = { workspace = true }
 insta = { workspace = true }

@@ -21,18 +21,19 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
-    ArrowNativeType, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, FieldRef, Float64Type, Int64Type, UInt64Type,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION,
-    DECIMAL64_MAX_PRECISION,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
+    Float64Type, Int64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::types::{
-    logical_float64, logical_int16, logical_int32, logical_int64, logical_int8,
-    logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
+    NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
+    logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
-use datafusion_common::{exec_err, not_impl_err, HashMap, Result, ScalarValue};
+use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
     ReversedUDAF, SetMonotonicity, Signature, TypeSignature, TypeSignatureClass,
@@ -92,6 +93,27 @@ macro_rules! downcast_sum {
             }
             DataType::Decimal256(_, _) => {
                 $helper!(Decimal256Type, $args.return_field.data_type().clone())
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                $helper!(DurationSecondType, $args.return_field.data_type().clone())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                $helper!(
+                    DurationMillisecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                $helper!(
+                    DurationMicrosecondType,
+                    $args.return_field.data_type().clone()
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                $helper!(
+                    DurationNanosecondType,
+                    $args.return_field.data_type().clone()
+                )
             }
             _ => {
                 not_impl_err!(
@@ -159,6 +181,9 @@ impl Sum {
                         vec![TypeSignatureClass::Float],
                         NativeType::Float64,
                     )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Duration,
+                    )]),
                 ],
                 Volatility::Immutable,
             ),
@@ -208,6 +233,7 @@ impl AggregateUDFImpl for Sum {
                 let new_precision = DECIMAL256_MAX_PRECISION.min(*precision + 10);
                 Ok(DataType::Decimal256(new_precision, *scale))
             }
+            DataType::Duration(time_unit) => Ok(DataType::Duration(*time_unit)),
             other => {
                 exec_err!("[return_type] SUM not supported for {}", other)
             }
@@ -234,20 +260,24 @@ impl AggregateUDFImpl for Sum {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            Ok(vec![Field::new_list(
-                format_state_name(args.name, "sum distinct"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.return_type().clone(), true),
-                false,
-            )
-            .into()])
+            Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "sum distinct"),
+                    // See COMMENTS.md to understand why nullable is set to true
+                    Field::new_list_field(args.return_type().clone(), true),
+                    false,
+                )
+                .into(),
+            ])
         } else {
-            Ok(vec![Field::new(
-                format_state_name(args.name, "sum"),
-                args.return_type().clone(),
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "sum"),
+                    args.return_type().clone(),
+                    true,
+                )
+                .into(),
+            ])
         }
     }
 
