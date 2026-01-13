@@ -192,7 +192,7 @@ impl TableProvider for CustomDataSource {
 struct CustomExec {
     db: CustomDataSource,
     projected_schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomExec {
@@ -202,12 +202,13 @@ impl CustomExec {
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
-        let projected_schema = project_schema(&schema, projections).unwrap();
+        let projected_schema =
+            project_schema(&schema, projections.map(AsRef::as_ref)).unwrap();
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
             projected_schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -238,7 +239,7 @@ impl ExecutionPlan for CustomExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

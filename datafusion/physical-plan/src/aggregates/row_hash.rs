@@ -466,7 +466,7 @@ impl GroupedHashAggregateStream {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
         let agg_group_by = agg.group_by.clone();
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -475,7 +475,7 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
+        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
@@ -494,7 +494,7 @@ impl GroupedHashAggregateStream {
         let filter_expressions = match agg.mode {
             AggregateMode::Partial
             | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
+            | AggregateMode::SinglePartitioned => agg_filter_expr.to_vec(),
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }

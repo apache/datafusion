@@ -588,8 +588,8 @@ impl protobuf::PhysicalPlanNode {
             None
         };
 
-        let filter =
-            FilterExec::try_new(predicate, input)?.with_projection(projection)?;
+        let filter = FilterExec::try_new(predicate, input)?
+            .with_projection(projection.map(Into::into))?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
                 filter.with_default_selectivity(filter_selectivity)?,

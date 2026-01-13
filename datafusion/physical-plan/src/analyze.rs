@@ -51,7 +51,7 @@ pub struct AnalyzeExec {
     pub(crate) input: Arc<dyn ExecutionPlan>,
     /// The output schema for RecordBatches of this exec node
     schema: SchemaRef,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl AnalyzeExec {
@@ -70,7 +70,7 @@ impl AnalyzeExec {
             metric_types,
             input,
             schema,
-            cache,
+            cache: Arc::new(cache),
         }
     }
 
@@ -131,7 +131,7 @@ impl ExecutionPlan for AnalyzeExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 

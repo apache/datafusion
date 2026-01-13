@@ -482,7 +482,7 @@ fn test_filter_with_projection() {
     let plan = Arc::new(
         FilterExec::try_new(predicate, Arc::clone(&scan))
             .unwrap()
-            .with_projection(Some(projection))
+            .with_projection(Some(projection.into()))
             .unwrap(),
     );
 
@@ -507,7 +507,7 @@ fn test_filter_with_projection() {
     let plan = Arc::new(
         FilterExec::try_new(predicate, scan)
             .unwrap()
-            .with_projection(Some(projection))
+            .with_projection(Some(projection.into()))
             .unwrap(),
     );
     insta::assert_snapshot!(

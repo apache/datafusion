@@ -108,7 +108,7 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                     input.equivalence_properties(),
                 )?;
 
-                let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_exprs);
+                let aggr_exec = aggr_exec.with_new_aggr_exprs(aggr_exprs.into());
 
                 Ok(Transformed::yes(Arc::new(aggr_exec) as _))
             } else {

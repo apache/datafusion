@@ -276,7 +276,7 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -285,7 +285,7 @@ impl AggregateStream {
         let filter_expressions = match agg.mode {
             AggregateMode::Partial
             | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
+            | AggregateMode::SinglePartitioned => agg_filter_expr.to_vec(),
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 vec![None; agg.aggr_expr.len()]
             }

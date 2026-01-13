@@ -29,7 +29,9 @@ use super::utils::{
     reorder_output_after_swap, swap_join_projection,
 };
 use crate::common::can_project;
-use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::execution_plan::{
+    EmissionType, boundedness_from_children, has_same_children_properties,
+};
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
@@ -46,6 +48,7 @@ use crate::projection::{
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    check_if_same_properties,
 };
 
 use arrow::array::{
@@ -197,7 +200,7 @@ pub struct NestedLoopJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl NestedLoopJoinExec {
@@ -233,7 +236,7 @@ impl NestedLoopJoinExec {
             column_indices,
             projection,
             metrics: Default::default(),
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -335,7 +338,7 @@ impl NestedLoopJoinExec {
 
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         // check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
+        can_project(&self.schema(), projection.as_deref())?;
         let projection = match projection {
             Some(projection) => match &self.projection {
                 Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
@@ -371,7 +374,7 @@ impl NestedLoopJoinExec {
             swap_join_projection(
                 left.schema().fields().len(),
                 right.schema().fields().len(),
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.join_type(),
             ),
         )?;
@@ -398,6 +401,27 @@ impl NestedLoopJoinExec {
         };
 
         Ok(plan)
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        let left = children.swap_remove(0);
+        let right = children.swap_remove(0);
+
+        Self {
+            left,
+            right,
+            metrics: ExecutionPlanMetricsSet::new(),
+            build_side_data: Default::default(),
+            cache: Arc::clone(&self.cache),
+            filter: self.filter.clone(),
+            join_type: self.join_type,
+            join_schema: Arc::clone(&self.join_schema),
+            column_indices: self.column_indices.clone(),
+            projection: self.projection.clone(),
+        }
     }
 }
 
@@ -453,7 +477,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -476,6 +500,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         Ok(Arc::new(NestedLoopJoinExec::try_new(
             Arc::clone(&children[0]),
             Arc::clone(&children[1]),
@@ -577,7 +602,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_schema,
         )?;
 
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(stats.project(self.projection.as_deref()))
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the

@@ -312,7 +312,7 @@ pub fn adjust_input_keys_ordering(
                         filter.clone(),
                         join_type,
                         // TODO: although projection is not used in the join here, because projection pushdown is after enforce_distribution. Maybe we need to handle it later. Same as filter.
-                        projection.clone(),
+                        projection.clone().map(|p| p.to_vec()),
                         PartitionMode::Partitioned,
                         *null_equality,
                         *null_aware,
@@ -644,7 +644,7 @@ pub fn reorder_join_keys_to_inputs(
                     new_join_on,
                     filter.clone(),
                     join_type,
-                    projection.clone(),
+                    projection.clone().map(|p| p.to_vec()),
                     PartitionMode::Partitioned,
                     *null_equality,
                     *null_aware,

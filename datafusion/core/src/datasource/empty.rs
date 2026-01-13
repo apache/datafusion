@@ -77,7 +77,8 @@ impl TableProvider for EmptyTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // even though there is no data, projections apply
-        let projected_schema = project_schema(&self.schema, projection)?;
+        let projected_schema =
+            project_schema(&self.schema, projection.map(AsRef::as_ref))?;
         Ok(Arc::new(
             EmptyExec::new(projected_schema).with_partitions(self.partitions),
         ))

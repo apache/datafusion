@@ -22,7 +22,9 @@ use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
 use crate::ExecutionPlanProperties;
-use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::execution_plan::{
+    EmissionType, boundedness_from_children, has_same_children_properties,
+};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -466,7 +468,7 @@ pub struct HashJoinExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// The projection indices of the columns in the output schema of join
-    pub projection: Option<Vec<usize>>,
+    pub projection: Option<Arc<[usize]>>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// The equality null-handling behavior of the join algorithm.
@@ -474,7 +476,7 @@ pub struct HashJoinExec {
     /// Flag to indicate if this is a null-aware anti join
     pub null_aware: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// Dynamic filter for pushing down to the probe side
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
@@ -566,7 +568,7 @@ impl HashJoinExec {
         let join_schema = Arc::new(join_schema);
 
         //  check if the projection is valid
-        can_project(&join_schema, projection.as_ref())?;
+        can_project(&join_schema, projection.as_deref())?;
 
         let cache = Self::compute_properties(
             &left,
@@ -575,7 +577,7 @@ impl HashJoinExec {
             *join_type,
             &on,
             partition_mode,
-            projection.as_ref(),
+            projection.as_deref(),
         )?;
 
         // Initialize both dynamic filter and bounds accumulator to None
@@ -592,11 +594,11 @@ impl HashJoinExec {
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
-            projection,
+            projection: projection.map(Into::into),
             column_indices,
             null_equality,
             null_aware,
-            cache,
+            cache: Arc::new(cache),
             dynamic_filter: None,
         })
     }
@@ -688,7 +690,7 @@ impl HashJoinExec {
     /// Return new instance of [HashJoinExec] with the given projection.
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         //  check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
+        can_project(&self.schema(), projection.as_deref())?;
         let projection = match projection {
             Some(projection) => match &self.projection {
                 Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
@@ -717,7 +719,7 @@ impl HashJoinExec {
         join_type: JoinType,
         on: JoinOnRef,
         mode: PartitionMode,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -824,7 +826,7 @@ impl HashJoinExec {
             swap_join_projection(
                 left.schema().fields().len(),
                 right.schema().fields().len(),
-                self.projection.as_ref(),
+                self.projection.as_deref(),
                 self.join_type(),
             ),
             partition_mode,
@@ -937,7 +939,7 @@ impl ExecutionPlan for HashJoinExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -998,6 +1000,20 @@ impl ExecutionPlan for HashJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let cache = if has_same_children_properties(&self, &children)? {
+            Arc::clone(&self.cache)
+        } else {
+            Arc::new(Self::compute_properties(
+                &children[0],
+                &children[1],
+                &self.join_schema,
+                self.join_type,
+                &self.on,
+                self.mode,
+                self.projection.as_deref(),
+            )?)
+        };
+
         Ok(Arc::new(HashJoinExec {
             left: Arc::clone(&children[0]),
             right: Arc::clone(&children[1]),
@@ -1013,15 +1029,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             null_aware: self.null_aware,
-            cache: Self::compute_properties(
-                &children[0],
-                &children[1],
-                &self.join_schema,
-                self.join_type,
-                &self.on,
-                self.mode,
-                self.projection.as_ref(),
-            )?,
+            cache,
             // Keep the dynamic filter, bounds accumulator will be reset
             dynamic_filter: self.dynamic_filter.clone(),
         }))
@@ -1044,7 +1052,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             null_aware: self.null_aware,
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
         }))
@@ -1240,7 +1248,7 @@ impl ExecutionPlan for HashJoinExec {
             &self.join_schema,
         )?;
         // Project statistics if there is a projection
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(stats.project(self.projection.as_deref()))
     }
 
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
@@ -1373,7 +1381,7 @@ impl ExecutionPlan for HashJoinExec {
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     null_aware: self.null_aware,
-                    cache: self.cache.clone(),
+                    cache: Arc::clone(&self.cache),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
                         build_accumulator: OnceLock::new(),

@@ -108,7 +108,7 @@ impl ExecutionPlan for CustomExec {
     }
 
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         unreachable!()
     }
 
@@ -232,7 +232,7 @@ The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #
@@ -291,7 +291,7 @@ impl CustomExec {
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
-        let projected_schema = project_schema(&schema, projections).unwrap();
+        let projected_schema = project_schema(&schema, projections.map(AsRef::as_ref)).unwrap();
         Self {
             db,
             projected_schema,
@@ -424,7 +424,7 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #     }
 #
 #
-#     fn properties(&self) -> &PlanProperties {
+#     fn properties(&self) -> &Arc<PlanProperties> {
 #         unreachable!()
 #     }
 #
@@ -483,7 +483,7 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #         schema: SchemaRef,
 #         db: CustomDataSource,
 #     ) -> Self {
-#         let projected_schema = project_schema(&schema, projections).unwrap();
+#         let projected_schema = project_schema(&schema, projections.map(AsRef::as_ref)).unwrap();
 #         Self {
 #             db,
 #             projected_schema,

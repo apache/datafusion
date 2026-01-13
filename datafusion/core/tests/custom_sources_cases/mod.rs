@@ -79,16 +79,19 @@ struct CustomTableProvider;
 #[derive(Debug, Clone)]
 struct CustomExecutionPlan {
     projection: Option<Vec<usize>>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomExecutionPlan {
     fn new(projection: Option<Vec<usize>>) -> Self {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
         let schema =
-            project_schema(&schema, projection.as_ref()).expect("projected schema");
+            project_schema(&schema, projection.as_deref()).expect("projected schema");
         let cache = Self::compute_properties(schema);
-        Self { projection, cache }
+        Self {
+            projection,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -157,7 +160,7 @@ impl ExecutionPlan for CustomExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
