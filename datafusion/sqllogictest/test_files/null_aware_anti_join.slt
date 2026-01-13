@@ -60,7 +60,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 #############
 ## Test 2: NOT IN with NULL in subquery - should return 0 rows (null-aware semantics)
@@ -200,7 +201,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 #############
 ## Test 12: Correlated NOT IN subquery with NULL
@@ -291,7 +293,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 #############
 ## Test 15: NOT EXISTS - No NULLs
