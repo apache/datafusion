@@ -31,6 +31,7 @@ use datafusion::datasource::listing::{
 use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
+use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -464,7 +465,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
-    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
     parquet_format.global.write_batch_size = 111;
     parquet_format.global.data_pagesize_limit = 222;
     parquet_format.global.data_page_row_count_limit = 333;
