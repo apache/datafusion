@@ -23,6 +23,7 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+use crate::coop::cooperative;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
@@ -497,7 +498,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             .register(context.memory_pool());
 
         // create join stream
-        Ok(Box::pin(SortMergeJoinStream::try_new(
+        Ok(Box::pin(cooperative(SortMergeJoinStream::try_new(
             context.session_config().spill_compression(),
             Arc::clone(&self.schema),
             self.sort_options.clone(),
@@ -512,7 +513,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             SortMergeJoinMetrics::new(partition, &self.metrics),
             reservation,
             context.runtime_env(),
-        )?))
+        )?)))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
