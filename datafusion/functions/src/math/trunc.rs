@@ -24,7 +24,7 @@ use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
 use datafusion_common::ScalarValue::Int64;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -110,6 +110,51 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let value = &args.args[0];
+
+        // Scalar fast path for float types with scalar or default precision
+        if let ColumnarValue::Scalar(scalar) = value {
+            // Get precision: default 0 or from second scalar arg
+            let precision = if args.args.len() >= 2 {
+                match &args.args[1] {
+                    ColumnarValue::Scalar(Int64(Some(p))) => *p,
+                    ColumnarValue::Scalar(Int64(None)) => {
+                        return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                    }
+                    _ => {
+                        // Precision is an array - fall through to array path
+                        return make_scalar_function(trunc, vec![])(&args.args);
+                    }
+                }
+            } else {
+                0 // default precision
+            };
+
+            match scalar {
+                ScalarValue::Float64(v) => {
+                    let result = v.map(|x| {
+                        if precision == 0 {
+                            if x == 0.0 { 0.0 } else { x.trunc() }
+                        } else {
+                            compute_truncate64(x, precision)
+                        }
+                    });
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)));
+                }
+                ScalarValue::Float32(v) => {
+                    let result = v.map(|x| {
+                        if precision == 0 {
+                            if x == 0.0 { 0.0 } else { x.trunc() }
+                        } else {
+                            compute_truncate32(x, precision)
+                        }
+                    });
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(result)));
+                }
+                _ => {}
+            }
+        }
+
         make_scalar_function(trunc, vec![])(&args.args)
     }
 
