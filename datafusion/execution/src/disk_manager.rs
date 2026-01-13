@@ -22,7 +22,7 @@ use datafusion_common::{
 };
 use log::debug;
 use parking_lot::Mutex;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

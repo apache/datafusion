@@ -685,13 +685,13 @@ mod tests {
                 Arc::new(StringArray::from(vec!["d", "e", "f"])),
             ],
         )?;
-        // After appending each batch, spilled_rows should increase, while spill_file_count and
-        // spilled_bytes remain the same (spilled_bytes is updated only after finish() is called)
+        // After appending each batch, spilled_rows and spilled_bytes should increase incrementally,
+        // while spill_file_count remains 1 (since we're writing to the same file)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 0, 3)?;
+        verify_metrics(&in_progress_file, 1, 440, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 0, 6)?;
+        verify_metrics(&in_progress_file, 1, 704, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(progress.current_bytes, bytes_after_batch2 as u64);
 
         // Finish the file
-        let _spilled_file = in_progress_file.finish()?;
+        let spilled_file = in_progress_file.finish()?;
         let final_bytes = metrics.spilled_bytes.value();
         assert!(final_bytes > bytes_after_batch2);
 
@@ -859,7 +859,7 @@ mod tests {
         assert!(progress.current_bytes > 0);
         assert_eq!(progress.active_files_count, 1);
 
-        drop(_spilled_file);
+        drop(spilled_file);
         assert_eq!(env.spilling_progress().active_files_count, 0);
         assert_eq!(env.spilling_progress().current_bytes, 0);
 
