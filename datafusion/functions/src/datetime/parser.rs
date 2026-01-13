@@ -74,7 +74,7 @@ pub fn get_date_time_parser(config_options: &ConfigOptions) -> Box<dyn DateTimeP
             }
             #[cfg(not(feature = "jiff"))]
             "jiff" => {
-                return exec_err!(
+                return datafusion_common::exec_err!(
                     "jiff parser requested but 'jiff' feature is not enabled. Enable with --features jiff"
                 );
             }
