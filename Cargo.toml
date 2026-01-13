@@ -271,3 +271,16 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+parquet = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-array = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-buffer = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-cast = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-data = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-ipc = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-ord = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-schema = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-select = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }
+arrow-string = { git = "https://github.com/pydantic/arrow-rs.git", branch = "57-1-0-9066" }

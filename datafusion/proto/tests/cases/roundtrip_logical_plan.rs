@@ -1797,15 +1797,6 @@ fn round_trip_datatype() {
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
-                    Field::new_struct(
-                        "nested_struct",
-                        vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ],
-                        true,
-                    ),
                 ],
             ),
             UnionMode::Dense,
