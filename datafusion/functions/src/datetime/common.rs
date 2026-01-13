@@ -42,34 +42,70 @@ use std::ops::Add;
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
-static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
+pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
+    where
+        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
+    {
+        match converter(ts) {
+            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
+                "Ambiguous timestamp. Do you mean {:?} or {:?}",
+                earliest,
+                latest
+            ),
+            MappedLocalTime::None => exec_err!(
+                "The local time does not exist because there is a gap in the local time."
+            ),
+            Single(date_time) => Ok(date_time),
+        }
+    }
 
-/// Converts a string representation of a date‑time into a timestamp expressed in
-/// nanoseconds since the Unix epoch.
-///
-/// This helper is a thin wrapper around the more general `string_to_datetime`
-/// function. It accepts an optional `timezone` which, if `None`, defaults to
-/// Coordinated Universal Time (UTC). The string `s` must contain a valid
-/// date‑time format that can be parsed by the underlying chrono parser.
-///
-/// # Return Value
-///
-/// * `Ok(i64)` – The number of nanoseconds since `1970‑01‑01T00:00:00Z`.
-/// * `Err(DataFusionError)` – If the string cannot be parsed, the parsed
-///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
-///   or the parsed value does not correspond to an unambiguous time.
-pub(crate) fn string_to_timestamp_nanos_with_timezone(
-    timezone: &Option<Tz>,
-    s: &str,
-) -> Result<i64> {
-    let tz = timezone.as_ref().unwrap_or(&UTC);
-    let dt = string_to_datetime(tz, s)?;
-    let parsed = dt
-        .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
+    let date_time = match T::UNIT {
+        TimeUnit::Nanosecond => Utc.timestamp_nanos(ts),
+        TimeUnit::Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
+        TimeUnit::Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
+        TimeUnit::Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
+    };
 
-    Ok(parsed)
+    // Get the timezone offset for this datetime
+    let tz_offset = tz.offset_from_utc_datetime(&date_time.naive_utc());
+    // Convert offset to seconds - offset is formatted like "+01:00" or "-05:00"
+    let offset_str = format!("{tz_offset}");
+    let offset_seconds: i64 = if let Some(stripped) = offset_str.strip_prefix('-') {
+        let parts: Vec<&str> = stripped.split(':').collect();
+        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        -((hours * 3600) + (mins * 60))
+    } else {
+        let parts: Vec<&str> = offset_str.split(':').collect();
+        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (hours * 3600) + (mins * 60)
+    };
+
+    let adjusted_date_time = date_time.add(
+        TimeDelta::try_seconds(offset_seconds)
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+    );
+
+    // convert back to i64
+    match T::UNIT {
+        TimeUnit::Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
+        }),
+        TimeUnit::Microsecond => Ok(adjusted_date_time.timestamp_micros()),
+        TimeUnit::Millisecond => Ok(adjusted_date_time.timestamp_millis()),
+        TimeUnit::Second => Ok(adjusted_date_time.timestamp()),
+    }
 }
+
+/// Calls string_to_timestamp_nanos and converts the error type
+pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
+    string_to_timestamp_nanos(s).map_err(|e| e.into())
+}
+
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
 
 /// Converts a string representation of a date‑time into a timestamp expressed in

@@ -29,7 +29,7 @@ use arrow::datatypes::{
 
 use crate::datetime::adjust_to_local_time;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, utils::take_function_args};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -188,7 +188,7 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
         dt => {
             return internal_err!(
                 "to_local_time function requires timestamp argument, got {dt}"
-            )
+            );
         }
     };
 
@@ -326,12 +326,12 @@ mod tests {
 
     use super::ToLocalTimeFunc;
     use crate::datetime::adjust_to_local_time;
-    use arrow::array::{types::TimestampNanosecondType, Array, TimestampNanosecondArray};
+    use arrow::array::{Array, TimestampNanosecondArray, types::TimestampNanosecondType};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use chrono::NaiveDateTime;
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     #[test]

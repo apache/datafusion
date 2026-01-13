@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array, PrimitiveBuilder};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{binary, date_part, DatePart};
+use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
@@ -37,6 +37,7 @@ use datafusion_common::types::{NativeType, logical_date};
 
 use super::adjust_to_local_time;
 use datafusion_common::{
+    Result, ScalarValue,
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
@@ -46,7 +47,6 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
-    Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
