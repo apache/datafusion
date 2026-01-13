@@ -32,12 +32,13 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let trunc = trunc();
+    let config_options = Arc::new(ConfigOptions::default());
+
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
         let return_field = Field::new("f", DataType::Float32, true).into();
-        let config_options = Arc::new(ConfigOptions::default());
 
         c.bench_function(&format!("trunc f32 array: {size}"), |b| {
             b.iter(|| {
@@ -77,11 +78,10 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     // Scalar benchmarks - to measure optimized performance
     let scalar_f64_args = vec![ColumnarValue::Scalar(
-        datafusion_common::ScalarValue::Float64(Some(3.14159265)),
+        datafusion_common::ScalarValue::Float64(Some(std::f64::consts::PI)),
     )];
     let scalar_arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
     let scalar_return_field = Field::new("f", DataType::Float64, false).into();
-    let config_options = Arc::new(ConfigOptions::default());
 
     c.bench_function("trunc f64 scalar", |b| {
         b.iter(|| {
@@ -100,7 +100,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let scalar_f32_args = vec![ColumnarValue::Scalar(
-        datafusion_common::ScalarValue::Float32(Some(3.14159)),
+        datafusion_common::ScalarValue::Float32(Some(std::f32::consts::PI)),
     )];
     let scalar_f32_arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
     let scalar_f32_return_field = Field::new("f", DataType::Float32, false).into();

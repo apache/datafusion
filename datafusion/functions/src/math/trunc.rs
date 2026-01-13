@@ -119,7 +119,13 @@ impl ScalarUDFImpl for TruncFunc {
                 match &args.args[1] {
                     ColumnarValue::Scalar(Int64(Some(p))) => *p,
                     ColumnarValue::Scalar(Int64(None)) => {
-                        return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                        // Return null with the same type as the input
+                        return match scalar {
+                            ScalarValue::Float32(_) => {
+                                Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+                            }
+                            _ => Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
+                        };
                     }
                     _ => {
                         // Precision is an array - fall through to array path
@@ -134,7 +140,7 @@ impl ScalarUDFImpl for TruncFunc {
                 ScalarValue::Float64(v) => {
                     let result = v.map(|x| {
                         if precision == 0 {
-                            if x == 0.0 { 0.0 } else { x.trunc() }
+                            x.trunc()
                         } else {
                             compute_truncate64(x, precision)
                         }
@@ -144,12 +150,15 @@ impl ScalarUDFImpl for TruncFunc {
                 ScalarValue::Float32(v) => {
                     let result = v.map(|x| {
                         if precision == 0 {
-                            if x == 0.0 { 0.0 } else { x.trunc() }
+                            x.trunc()
                         } else {
                             compute_truncate32(x, precision)
                         }
                     });
                     return Ok(ColumnarValue::Scalar(ScalarValue::Float32(result)));
+                }
+                ScalarValue::Null => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
                 }
                 _ => {}
             }
