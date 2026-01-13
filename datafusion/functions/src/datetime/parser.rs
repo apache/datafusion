@@ -567,12 +567,19 @@ pub mod jiff {
                             return Ok(zoned.with_time_zone(timezone.to_owned()));
                         }
 
-                        let result = bdt.to_datetime();
-                        let datetime = match result {
-                            Ok(datetime) => datetime,
-                            Err(e) => {
-                                err = Some(e.to_string());
-                                continue;
+                        // %s just sets the timestamp and the .to_datetime() call will error
+                        // since the other fields like year are not set. Handle this case
+                        // directly.
+                        let datetime = if let Some(ts) = bdt.timestamp() {
+                            timezone.to_datetime(ts)
+                        } else {
+                            let result = bdt.to_datetime();
+                            match result {
+                                Ok(datetime) => datetime,
+                                Err(e) => {
+                                    err = Some(e.to_string());
+                                    continue;
+                                }
                             }
                         };
 
@@ -597,10 +604,12 @@ pub mod jiff {
             }
 
             match err {
-                Some(e) => exec_err!("{e}"),
-                None => {
-                    exec_err!("Unable to parse timestamp: {s} with formats: {formats:?}")
-                }
+                Some(e) => exec_err!(
+                    "Error parsing timestamp from '{s}' using formats: {formats:?}: {e}"
+                ),
+                None => exec_err!(
+                    "Error parsing timestamp from '{s}' using formats: {formats:?}"
+                ),
             }
         }
     }
