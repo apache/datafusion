@@ -661,6 +661,7 @@ impl LogicalPlan {
                 on,
                 schema: _,
                 null_equality,
+                null_aware,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -682,6 +683,7 @@ impl LogicalPlan {
                     filter,
                     schema: DFSchemaRef::new(schema),
                     null_equality,
+                    null_aware,
                 }))
             }
             LogicalPlan::Subquery(_) => Ok(self),
@@ -901,6 +903,7 @@ impl LogicalPlan {
                 join_constraint,
                 on,
                 null_equality,
+                null_aware,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -942,6 +945,7 @@ impl LogicalPlan {
                     filter: filter_expr,
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
+                    null_aware: *null_aware,
                 }))
             }
             LogicalPlan::Subquery(Subquery {
@@ -3781,6 +3785,14 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// Defines the null equality for the join.
     pub null_equality: NullEquality,
+    /// Whether this is a null-aware anti join (for NOT IN semantics).
+    ///
+    /// Only applies to LeftAnti joins. When true, implements SQL NOT IN semantics where:
+    /// - If the right side (subquery) contains any NULL in join keys, no rows are output
+    /// - Left side rows with NULL in join keys are not output
+    ///
+    /// This is required for correct NOT IN subquery behavior with three-valued logic.
+    pub null_aware: bool,
 }
 
 impl Join {
@@ -3798,10 +3810,12 @@ impl Join {
     /// * `join_type` - Type of join (Inner, Left, Right, etc.)
     /// * `join_constraint` - Join constraint (On, Using)
     /// * `null_equality` - How to handle nulls in join comparisons
+    /// * `null_aware` - Whether this is a null-aware anti join (for NOT IN semantics)
     ///
     /// # Returns
     ///
     /// A new Join operator with the computed schema
+    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<LogicalPlan>,
         right: Arc<LogicalPlan>,
@@ -3810,6 +3824,7 @@ impl Join {
         join_type: JoinType,
         join_constraint: JoinConstraint,
         null_equality: NullEquality,
+        null_aware: bool,
     ) -> Result<Self> {
         let join_schema = build_join_schema(left.schema(), right.schema(), &join_type)?;
 
@@ -3822,6 +3837,7 @@ impl Join {
             join_constraint,
             schema: Arc::new(join_schema),
             null_equality,
+            null_aware,
         })
     }
 
@@ -3877,6 +3893,7 @@ impl Join {
                 join_constraint: original_join.join_constraint,
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
+                null_aware: original_join.null_aware,
             },
             requalified,
         ))
@@ -5329,6 +5346,7 @@ mod tests {
                 join_constraint: JoinConstraint::On,
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
+                null_aware: false,
             }))
         }
 
@@ -5440,6 +5458,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             match join_type {
@@ -5585,6 +5604,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::Using,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5636,6 +5656,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5685,6 +5706,7 @@ mod tests {
                 JoinType::Inner,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNull,
+                false,
             )?;
 
             assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
@@ -5727,6 +5749,7 @@ mod tests {
                 join_type,
                 JoinConstraint::On,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let fields = join.schema.fields();
@@ -5766,6 +5789,7 @@ mod tests {
             JoinType::Inner,
             JoinConstraint::Using,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
 
         assert_eq!(
