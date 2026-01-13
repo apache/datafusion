@@ -19,7 +19,7 @@ use crate::error::{_plan_err, Result};
 use arrow::{
     array::{Array, ArrayRef, StructArray, new_null_array},
     compute::{CastOptions, cast_with_options},
-    datatypes::{DataType::Struct, Field, FieldRef},
+    datatypes::{DataType, DataType::Struct, Field, FieldRef},
 };
 use std::{collections::HashSet, sync::Arc};
 
@@ -55,6 +55,15 @@ fn cast_struct_column(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    if source_col.data_type() == &DataType::Null
+        || (source_col.len() > 0 && source_col.null_count() == source_col.len())
+    {
+        return Ok(new_null_array(
+            Struct(target_fields.to_vec().into()),
+            source_col.len(),
+        ));
+    }
+
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
         let has_overlap = fields_have_name_overlap(source_fields, target_fields);
@@ -174,6 +183,15 @@ pub fn cast_column(
 ) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => {
+            if source_col.data_type() == &DataType::Null
+                || (source_col.len() > 0 && source_col.null_count() == source_col.len())
+            {
+                return Ok(new_null_array(
+                    Struct(target_fields.to_vec().into()),
+                    source_col.len(),
+                ));
+            }
+
             cast_struct_column(source_col, target_fields, cast_options)
         }
         _ => Ok(cast_with_options(
@@ -288,6 +306,10 @@ fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
 ) -> Result<()> {
+    if source_field.data_type() == &DataType::Null {
+        return Ok(());
+    }
+
     // Ensure nullability is compatible. It is invalid to cast a nullable
     // source field to a non-nullable target field as this may discard
     // null values.
@@ -342,7 +364,7 @@ mod tests {
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
-            MapBuilder, StringArray, StringBuilder,
+            MapBuilder, NullArray, StringArray, StringBuilder,
         },
         buffer::NullBuffer,
         datatypes::{DataType, Field, FieldRef, Int32Type},
@@ -683,6 +705,33 @@ mod tests {
         let missing = get_column_as!(inner, "missing", Int32Array);
         assert!(missing.is_null(0));
         assert!(missing.is_null(1));
+    }
+
+    #[test]
+    fn test_cast_null_struct_field_to_nested_struct() {
+        let null_inner = Arc::new(NullArray::new(2)) as ArrayRef;
+        let source_struct = StructArray::from(vec![(
+            arc_field("inner", DataType::Null),
+            Arc::clone(&null_inner),
+        )]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = struct_field(
+            "outer",
+            vec![struct_field("inner", vec![field("a", DataType::Int32)])],
+        );
+
+        let result =
+            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let outer = result.as_any().downcast_ref::<StructArray>().unwrap();
+        let inner = get_column_as!(&outer, "inner", StructArray);
+        assert_eq!(inner.len(), 2);
+        assert!(inner.is_null(0));
+        assert!(inner.is_null(1));
+
+        let inner_a = get_column_as!(inner, "a", Int32Array);
+        assert!(inner_a.is_null(0));
+        assert!(inner_a.is_null(1));
     }
 
     #[test]
