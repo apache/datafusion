@@ -84,6 +84,8 @@ mkdir -p "${OUTPUT_DIR}"
     --workspace-only \
     --all-deps \
     --dedup-transitive-deps \
+    # utility crates only used by internal scripts
+    --exclude gen,gen-common \
     | dot \
       -Grankdir=TB \
       -Gconcentrate=true \
