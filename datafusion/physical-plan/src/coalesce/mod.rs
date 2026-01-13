@@ -134,7 +134,7 @@ impl LimitedBatchCoalescer {
         Ok(())
     }
 
-    pub fn is_finished(&self) -> bool {
+    pub(crate) fn is_finished(&self) -> bool {
         self.finished
     }
 

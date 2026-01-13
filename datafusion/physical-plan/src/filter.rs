@@ -26,7 +26,6 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::coalesce::PushBatchStatus::LimitReached;
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
@@ -752,7 +751,7 @@ impl Stream for FilterExecStream {
     ) -> Poll<Option<Self::Item>> {
         let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
         loop {
-            // If there is any completed batch ready, return it
+            // If there is a completed batch ready, return it
             if let Some(batch) = self.batch_coalescer.next_completed_batch() {
                 self.metrics.selectivity.add_part(batch.num_rows());
                 let poll = Poll::Ready(Some(Ok(batch)));
@@ -761,8 +760,7 @@ impl Stream for FilterExecStream {
 
             if self.batch_coalescer.is_finished() {
                 // If input is done and no batches are ready, return None to signal end of stream.
-                let poll = Poll::Ready(None);
-                return self.metrics.baseline_metrics.record_poll(poll);
+                return Poll::Ready(None);
             }
 
             // Attempt to pull the next batch from the input stream.
@@ -806,9 +804,9 @@ impl Stream for FilterExecStream {
                         PushBatchStatus::Continue => {
                             // Keep pushing more batches
                         }
-                        LimitReached => {
+                        PushBatchStatus::LimitReached => {
                             // limit was reached, so stop early
-                            self.batch_coalescer.finish()?
+                            self.batch_coalescer.finish()?;
                             // continue draining the coalescer
                         }
                     }
