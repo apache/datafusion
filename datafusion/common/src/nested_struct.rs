@@ -21,7 +21,7 @@ use arrow::{
     compute::{CastOptions, cast_with_options},
     datatypes::{DataType::Struct, Field, FieldRef},
 };
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 /// Cast a struct column to match target struct fields, handling nested structs recursively.
 ///
@@ -31,6 +31,7 @@ use std::sync::Arc;
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
+/// - **By Position**: When there is no name overlap and the field counts match, fields are cast by index
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -55,29 +56,47 @@ fn cast_struct_column(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
-        validate_struct_compatibility(source_struct.fields(), target_fields)?;
+        let source_fields = source_struct.fields();
+        let has_overlap = fields_have_name_overlap(source_fields, target_fields);
+        validate_struct_compatibility(source_fields, target_fields)?;
 
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        for target_child_field in target_fields {
-            fields.push(Arc::clone(target_child_field));
-            match source_struct.column_by_name(target_child_field.name()) {
-                Some(source_child_col) => {
-                    let adapted_child =
-                        cast_column(source_child_col, target_child_field, cast_options)
-                            .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}'",
-                                target_child_field.name()
-                            ))
-                        })?;
-                    arrays.push(adapted_child);
+        if has_overlap {
+            for target_child_field in target_fields {
+                fields.push(Arc::clone(target_child_field));
+                match source_struct.column_by_name(target_child_field.name()) {
+                    Some(source_child_col) => {
+                        let adapted_child =
+                            cast_column(source_child_col, target_child_field, cast_options)
+                                .map_err(|e| {
+                                e.context(format!(
+                                    "While casting struct field '{}'",
+                                    target_child_field.name()
+                                ))
+                            })?;
+                        arrays.push(adapted_child);
+                    }
+                    None => {
+                        arrays.push(new_null_array(target_child_field.data_type(), num_rows));
+                    }
                 }
-                None => {
-                    arrays.push(new_null_array(target_child_field.data_type(), num_rows));
-                }
+            }
+        } else {
+            for (index, target_child_field) in target_fields.iter().enumerate() {
+                fields.push(Arc::clone(target_child_field));
+                let source_child_col = source_struct.column(index);
+                let adapted_child =
+                    cast_column(source_child_col, target_child_field, cast_options)
+                        .map_err(|e| {
+                        e.context(format!(
+                            "While casting struct field '{}'",
+                            target_child_field.name()
+                        ))
+                    })?;
+                arrays.push(adapted_child);
             }
         }
 
@@ -230,6 +249,25 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
+    let has_overlap = fields_have_name_overlap(source_fields, target_fields);
+    if !has_overlap {
+        if source_fields.len() != target_fields.len() {
+            return _plan_err!(
+                "Cannot cast struct with {} fields to {} fields without name overlap; positional mapping is ambiguous",
+                source_fields.len(),
+                target_fields.len()
+            );
+        }
+
+        for (source_field, target_field) in
+            source_fields.iter().zip(target_fields.iter())
+        {
+            validate_field_compatibility(source_field, target_field)?;
+        }
+
+        return Ok(());
+    }
+
     // Check compatibility for each target field
     for target_field in target_fields {
         // Look for matching field in source by name
@@ -237,42 +275,63 @@ pub fn validate_struct_compatibility(
             .iter()
             .find(|f| f.name() == target_field.name())
         {
-            // Ensure nullability is compatible. It is invalid to cast a nullable
-            // source field to a non-nullable target field as this may discard
-            // null values.
-            if source_field.is_nullable() && !target_field.is_nullable() {
-                return _plan_err!(
-                    "Cannot cast nullable struct field '{}' to non-nullable field",
-                    target_field.name()
-                );
-            }
-            // Check if the matching field types are compatible
-            match (source_field.data_type(), target_field.data_type()) {
-                // Recursively validate nested structs
-                (Struct(source_nested), Struct(target_nested)) => {
-                    validate_struct_compatibility(source_nested, target_nested)?;
-                }
-                // For non-struct types, use the existing castability check
-                _ => {
-                    if !arrow::compute::can_cast_types(
-                        source_field.data_type(),
-                        target_field.data_type(),
-                    ) {
-                        return _plan_err!(
-                            "Cannot cast struct field '{}' from type {} to type {}",
-                            target_field.name(),
-                            source_field.data_type(),
-                            target_field.data_type()
-                        );
-                    }
-                }
-            }
+            validate_field_compatibility(source_field, target_field)?;
         }
         // Missing fields in source are OK - they'll be filled with nulls
     }
 
     // Extra fields in source are OK - they'll be ignored
     Ok(())
+}
+
+fn validate_field_compatibility(
+    source_field: &Field,
+    target_field: &Field,
+) -> Result<()> {
+    // Ensure nullability is compatible. It is invalid to cast a nullable
+    // source field to a non-nullable target field as this may discard
+    // null values.
+    if source_field.is_nullable() && !target_field.is_nullable() {
+        return _plan_err!(
+            "Cannot cast nullable struct field '{}' to non-nullable field",
+            target_field.name()
+        );
+    }
+
+    // Check if the matching field types are compatible
+    match (source_field.data_type(), target_field.data_type()) {
+        // Recursively validate nested structs
+        (Struct(source_nested), Struct(target_nested)) => {
+            validate_struct_compatibility(source_nested, target_nested)?;
+        }
+        // For non-struct types, use the existing castability check
+        _ => {
+            if !arrow::compute::can_cast_types(
+                source_field.data_type(),
+                target_field.data_type(),
+            ) {
+                return _plan_err!(
+                    "Cannot cast struct field '{}' from type {} to type {}",
+                    target_field.name(),
+                    source_field.data_type(),
+                    target_field.data_type()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn fields_have_name_overlap(
+    source_fields: &[FieldRef],
+    target_fields: &[FieldRef],
+) -> bool {
+    let source_names: HashSet<&str> =
+        source_fields.iter().map(|field| field.name().as_str()).collect();
+    target_fields
+        .iter()
+        .any(|field| source_names.contains(field.name().as_str()))
 }
 
 #[cfg(test)]
@@ -454,11 +513,14 @@ mod tests {
 
     #[test]
     fn test_validate_struct_compatibility_missing_field_in_source() {
-        // Source struct: {field2: String} (missing field1)
-        let source_fields = vec![arc_field("field2", DataType::Utf8)];
+        // Source struct: {field1: Int32} (missing field2)
+        let source_fields = vec![arc_field("field1", DataType::Int32)];
 
-        // Target struct: {field1: Int32}
-        let target_fields = vec![arc_field("field1", DataType::Int32)];
+        // Target struct: {field1: Int32, field2: Utf8}
+        let target_fields = vec![
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
+        ];
 
         // Should be OK - missing fields will be filled with nulls
         let result = validate_struct_compatibility(&source_fields, &target_fields);
@@ -479,6 +541,18 @@ mod tests {
         // Should be OK - extra fields in source are ignored
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_positional_no_overlap_mismatch_len() {
+        let source_fields =
+            vec![arc_field("left", DataType::Int32), arc_field("right", DataType::Int32)];
+        let target_fields = vec![arc_field("alpha", DataType::Int32)];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("positional mapping is ambiguous"));
     }
 
     #[test]
@@ -729,5 +803,35 @@ mod tests {
         let a_col = get_column_as!(&struct_array, "a", Int32Array);
         assert_eq!(a_col.value(0), 1);
         assert_eq!(a_col.value(1), 2);
+    }
+
+    #[test]
+    fn test_cast_struct_positional_when_no_overlap() {
+        let first = Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef;
+        let second =
+            Arc::new(StringArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef;
+
+        let source_struct = StructArray::from(vec![
+            (arc_field("left", DataType::Int32), first),
+            (arc_field("right", DataType::Utf8), second),
+        ]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        let target_field = struct_field(
+            "s",
+            vec![field("a", DataType::Int64), field("b", DataType::Utf8)],
+        );
+
+        let result =
+            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let a_col = get_column_as!(&struct_array, "a", Int64Array);
+        assert_eq!(a_col.value(0), 10);
+        assert_eq!(a_col.value(1), 20);
+
+        let b_col = get_column_as!(&struct_array, "b", StringArray);
+        assert_eq!(b_col.value(0), "alpha");
+        assert_eq!(b_col.value(1), "beta");
     }
 }

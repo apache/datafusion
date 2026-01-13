@@ -869,6 +869,12 @@ SELECT CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
 ----
 {a: 4, b: 3}
 
+# Test positional casting when there is no name overlap
+query ?
+SELECT CAST(struct(1, 'x') AS STRUCT(a INT, b VARCHAR));
+----
+{a: 1, b: x}
+
 # Test with missing field - should insert nulls
 query ?
 SELECT CAST({a: 1} AS STRUCT(a INT, b INT));
@@ -880,6 +886,10 @@ query ?
 SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
 ----
 {a: 1, b: 2}
+
+# Test no overlap with mismatched field count
+query error DataFusion error: Plan error: Cannot cast struct with 3 fields to 2 fields without name overlap; positional mapping is ambiguous
+SELECT CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
 
 # Test nested struct with field reordering
 query ?
