@@ -271,10 +271,12 @@ impl ExecutionPlan for BufferExec {
         // If there is a dynamic filter being pushed down through this node, we don't want to buffer,
         // we prefer to give a chance to the dynamic filter to be populated with something rather
         // than eagerly polling data with an empty dynamic filter.
-        let has_dynamic_filter = child_pushdown_result
-            .parent_filters
-            .iter()
-            .any(|v| is_dynamic_physical_expr(&v.filter));
+        let mut has_dynamic_filter = false;
+        for parent_filter in &child_pushdown_result.parent_filters {
+            if is_dynamic_physical_expr(&parent_filter.filter) {
+                has_dynamic_filter = true;
+            }
+        }
         if has_dynamic_filter {
             let mut new_self = self.clone();
             new_self.wait_first_poll = true;
