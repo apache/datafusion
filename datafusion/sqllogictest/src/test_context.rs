@@ -78,8 +78,7 @@ impl TestContext {
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(4)
-            .with_enable_ansi_mode(true);
+            .with_target_partitions(4);
         let runtime = Arc::new(RuntimeEnv::default());
         let mut state = SessionStateBuilder::new()
             .with_config(config)
