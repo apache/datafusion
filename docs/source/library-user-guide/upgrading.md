@@ -23,6 +23,61 @@
 
 **Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
 
+### `ExecutionPlan` properties method return type
+
+Now `ExecutionPlan::properties()` must return `&Arc<PlanProperties>` instead of a reference. This was done to enable the comparison of properties and to determine that they have not changed within the
+`with_new_children` method. To migrate, in all `ExecutionPlan` implementations, you need to wrap stored `PlanProperties` in an `Arc`:
+
+```diff
+-    cache: PlanProperties,
++    cache: Arc<PlanProperties>,
+
+...
+
+-    fn properties(&self) -> &PlanProperties {
++    fn properties(&self) -> &Arc<PlanProperties> {
+         &self.cache
+     }
+```
+
+Note: The optimization for `with_new_children` can be implemented for any `ExecutionPlan`. This can reduce planning time as well as the time for resetting plan states.
+To support it, you can use the macro: `check_if_same_properties`. For it to work, you need to implement the function: `with_new_children_and_same_properties` with semantics
+identical to `with_new_children`, but operating under the assumption that the properties of the children plans have not changed.
+
+An example of supporting this optimization for `ProjectionExec`:
+
+```diff
+     impl ProjectionExec {
++       fn with_new_children_and_same_properties(
++           &self,
++           mut children: Vec<Arc<dyn ExecutionPlan>>,
++       ) -> Self {
++           Self {
++               input: children.swap_remove(0),
++               metrics: ExecutionPlanMetricsSet::new(),
++               ..Self::clone(self)
++           }
++       }
+    }
+
+    impl ExecutionPlan for ProjectionExec {
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
++           check_if_same_properties!(self, children);
+            ProjectionExec::try_new(
+                self.projector.projection().into_iter().cloned(),
+                children.swap_remove(0),
+            )
+            .map(|p| Arc::new(p) as _)
+        }
+    }
+
+...
+
+```
+
 ### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
 
 The `SimplifyInfo` trait has been removed and replaced with the concrete `SimplifyContext` struct. This simplifies the expression simplification API and removes the need for trait objects.
