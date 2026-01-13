@@ -137,7 +137,7 @@ impl RowGroupAccessPlanFilter {
     /// When statistics are truncated to length 6 (e.g., `statistics_truncate_length = 6`),
     /// the min/max values become:
     ///
-    /// ```
+    /// ```text
     /// Row group 3: species_min="Alpine", species_max="Alpine" (truncated from "Alpine Ibex"/"Alpine Sheep")
     ///              s_min=76, s_max=101
     /// ```
