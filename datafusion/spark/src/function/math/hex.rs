@@ -19,7 +19,7 @@ use std::any::Any;
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{Array, StringBuilder};
+use arrow::array::{Array, BinaryArray, Int64Array, StringArray, StringBuilder};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -243,56 +243,19 @@ pub fn compute_hex(
             }
             DataType::Dictionary(_, value_type) => {
                 let dict = as_dictionary_array::<Int32Type>(&array);
-                let keys = dict.keys();
-                let values = dict.values();
 
                 match **value_type {
                     DataType::Int64 => {
-                        let int_values = as_int64_array(values)?;
-                        hex_encode_int64(
-                            keys.iter().map(|k| {
-                                k.and_then(|idx| {
-                                    if int_values.is_valid(idx as usize) {
-                                        Some(int_values.value(idx as usize))
-                                    } else {
-                                        None
-                                    }
-                                })
-                            }),
-                            dict.len(),
-                        )
+                        let arr = dict.downcast_dict::<Int64Array>().unwrap();
+                        hex_encode_int64(arr.into_iter(), dict.len())
                     }
                     DataType::Utf8 => {
-                        let str_values = as_string_array(values);
-                        hex_encode_bytes(
-                            keys.iter().map(|k| {
-                                k.and_then(|idx| {
-                                    if str_values.is_valid(idx as usize) {
-                                        Some(str_values.value(idx as usize).as_bytes())
-                                    } else {
-                                        None
-                                    }
-                                })
-                            }),
-                            lowercase,
-                            dict.len(),
-                        )
+                        let arr = dict.downcast_dict::<StringArray>().unwrap();
+                        hex_encode_bytes(arr.into_iter(), lowercase, dict.len())
                     }
                     DataType::Binary => {
-                        let bin_values = as_binary_array(values)?;
-                        hex_encode_bytes(
-                            keys.iter().map(|k| {
-                                k.and_then(|idx| {
-                                    if bin_values.is_valid(idx as usize) {
-                                        Some(bin_values.value(idx as usize))
-                                    } else {
-                                        None
-                                    }
-                                })
-                            }),
-                            lowercase,
-                            dict.len(),
-                        )
+                        let arr = dict.downcast_dict::<BinaryArray>().unwrap();
+                        hex_encode_bytes(arr.into_iter(), lowercase, dict.len())
                     }
                     _ => {
                         exec_err!(
