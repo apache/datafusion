@@ -1069,18 +1069,32 @@ impl DisplayAs for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let format_expr_with_alias =
-                    |(expr, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
-                        let display = expr.to_string();
+	fn normalize_literal_display(s: &str) -> String {
+                    // already quoted → keep
+                    if s.starts_with('"') || s.starts_with('\'') {
+                        return s.to_string();
+                    }
 
-                        if display.is_empty() {
-                            alias.clone()
-                        } else if display == *alias {
-                            display
-                        } else {
-                            format!("{display} as {alias}")
-                        }
-                    };
+                    // numeric literal → keep unquoted
+                    if s.chars().all(|c| c.is_ascii_digit()) {
+                        return s.to_string();
+                    }
+
+                    // everything else → quote
+                    format!("\"{s}\"")
+                }
+let format_expr_with_alias =
+    |(expr, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+        let display = expr.human_display().to_string();
+
+        if display.is_empty() {
+            alias.clone()
+        } else if display == *alias {
+            display
+        } else {
+            format!("{display} as {alias}")
+        }
+    };
 
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
