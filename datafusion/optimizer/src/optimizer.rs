@@ -401,6 +401,9 @@ impl Optimizer {
                     }
                     // OptimizerRule was unsuccessful, but skipped failed rules is off, return error
                     (Err(e), None) => {
+                        if matches!(e, DataFusionError::Plan(_)) {
+                            return Err(e);
+                        }
                         return Err(e.context(format!(
                             "Optimizer rule '{}' failed",
                             rule.name()
@@ -492,8 +495,7 @@ mod tests {
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert_eq!(
-            "Optimizer rule 'bad rule' failed\ncaused by\n\
-            Error during planning: rule failed",
+            "Error during planning: rule failed",
             err.strip_backtrace()
         );
     }
