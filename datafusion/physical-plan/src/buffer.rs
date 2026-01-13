@@ -262,7 +262,20 @@ impl ExecutionPlan for BufferExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+        // If there is a dynamic filter being pushed down through this node, we don't want to buffer,
+        // we prefer to give a chance to the dynamic filter to be populated with something rather
+        // than eagerly polling data with an empty dynamic filter.
+        let has_dynamic_filter = child_pushdown_result
+            .parent_filters
+            .iter()
+            .any(|v| is_dynamic_physical_expr(&v.filter));
+        if has_dynamic_filter {
+            let mut result = FilterPushdownPropagation::if_all(child_pushdown_result);
+            result.updated_node = Some(Arc::clone(self.input()));
+            Ok(result)
+        } else {
+            Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+        }
     }
 
     fn try_pushdown_sort(
