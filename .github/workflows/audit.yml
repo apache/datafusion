@@ -42,8 +42,10 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
       - name: Install cargo-audit
-        uses: taiki-e/install-action@69e777b377e4ec209ddad9426ae3e0c1008b0ef3  # v2.64.0
+        uses: taiki-e/install-action@03ef6f57d573ca4522fb02950f326083373b85bf  # v2.66.2
         with:
           tool: cargo-audit
       - name: Run audit check
+        # Note: you can ignore specific RUSTSEC issues using the `--ignore` flag ,for example:
+        # run: cargo audit --ignore RUSTSEC-2026-0001
         run: cargo audit

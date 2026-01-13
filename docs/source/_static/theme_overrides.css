@@ -138,3 +138,21 @@ Details: 8rem for search box etc*/
 .bd-content table tbody tr:nth-of-type(odd) {
   background-color: rgba(0, 0, 0, 0.03);
 }
+
+
+/* Ensure the config tables are readable without having to scroll horizontally. */
+
+:is(#configuration-settings, #runtime-configuration-settings) table {
+  display: table;
+  table-layout: fixed;
+}
+
+:is(#configuration-settings, #runtime-configuration-settings) th,
+:is(#configuration-settings, #runtime-configuration-settings) td {
+  word-wrap: break-word;
+}
+
+:is(#configuration-settings, #runtime-configuration-settings) th:nth-child(2),
+:is(#configuration-settings, #runtime-configuration-settings) td:nth-child(2) {
+  width: 15%;
+}

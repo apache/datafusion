@@ -21,7 +21,6 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute;
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
-use arrow::error::ArrowError;
 use datafusion_common::cast::{
     as_date32_array, as_int8_array, as_int16_array, as_int32_array,
 };
@@ -105,38 +104,26 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
     let result = match days_arg.data_type() {
         DataType::Int8 => {
             let days_array = as_int8_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days as i32),
             )?
         }
         DataType::Int16 => {
             let days_array = as_int16_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days as i32).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days as i32),
             )?
         }
         DataType::Int32 => {
             let days_array = as_int32_array(days_arg)?;
-            compute::try_binary::<_, _, _, Date32Type>(
+            compute::binary::<_, _, _, Date32Type>(
                 date_array,
                 days_array,
-                |date, days| {
-                    date.checked_sub(days).ok_or_else(|| {
-                        ArrowError::ArithmeticOverflow("date_sub".to_string())
-                    })
-                },
+                |date, days| date.wrapping_sub(days),
             )?
         }
         _ => {

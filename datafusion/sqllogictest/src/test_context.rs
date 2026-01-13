@@ -30,9 +30,9 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
-    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
-use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err, not_impl_err};
+use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion::logical_expr::{
@@ -96,6 +96,10 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "cte_quoted_reference.slt" => {
+                info!("Registering strict catalog provider for CTE tests");
+                register_strict_orders_catalog(test_ctx.session_ctx());
+            }
             "information_schema_table_types.slt" => {
                 info!("Registering local temporary table");
                 register_temp_table(test_ctx.session_ctx()).await;
@@ -169,6 +173,104 @@ impl TestContext {
     pub fn session_ctx(&self) -> &SessionContext {
         &self.ctx
     }
+}
+
+// ==============================================================================
+// Strict Catalog / Schema Provider (sqllogictest-only)
+// ==============================================================================
+//
+// The goal of `cte_quoted_reference.slt` is to exercise end-to-end query planning
+// while detecting *unexpected* catalog lookups.
+//
+// Specifically, if DataFusion incorrectly treats a CTE reference (e.g. `"barbaz"`)
+// as a real table reference, the planner will attempt to resolve it through the
+// schema provider. The types below deliberately `panic!` on any lookup other than
+// the one table we expect (`orders`).
+//
+// This makes the "extra provider lookup" bug observable in an end-to-end test,
+// rather than being silently ignored by default providers that return `Ok(None)`
+// for unknown tables.
+
+#[derive(Debug)]
+struct StrictOrdersCatalog {
+    schema: Arc<dyn SchemaProvider>,
+}
+
+impl CatalogProvider for StrictOrdersCatalog {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema_names(&self) -> Vec<String> {
+        vec!["public".to_string()]
+    }
+
+    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
+        (name == "public").then(|| Arc::clone(&self.schema))
+    }
+}
+
+#[derive(Debug)]
+struct StrictOrdersSchema {
+    orders: Arc<dyn TableProvider>,
+}
+
+#[async_trait]
+impl SchemaProvider for StrictOrdersSchema {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn table_names(&self) -> Vec<String> {
+        vec!["orders".to_string()]
+    }
+
+    async fn table(
+        &self,
+        name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
+        match name {
+            "orders" => Ok(Some(Arc::clone(&self.orders))),
+            other => panic!(
+                "unexpected table lookup: {other}. This maybe indicates a CTE reference was \
+                 incorrectly treated as a catalog table reference."
+            ),
+        }
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        name == "orders"
+    }
+}
+
+fn register_strict_orders_catalog(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "order_id",
+        DataType::Int32,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )
+    .expect("record batch should be valid");
+
+    let orders =
+        MemTable::try_new(schema, vec![vec![batch]]).expect("memtable should be valid");
+
+    let schema_provider: Arc<dyn SchemaProvider> = Arc::new(StrictOrdersSchema {
+        orders: Arc::new(orders),
+    });
+
+    // Override the default "datafusion" catalog for this test file so that any
+    // unexpected lookup is caught immediately.
+    ctx.register_catalog(
+        "datafusion",
+        Arc::new(StrictOrdersCatalog {
+            schema: schema_provider,
+        }),
+    );
 }
 
 #[cfg(feature = "avro")]
@@ -398,60 +500,6 @@ pub async fn register_metadata_tables(ctx: &SessionContext) {
     .unwrap();
 
     ctx.register_batch("table_with_metadata", batch).unwrap();
-
-    // Register the get_metadata UDF for testing metadata preservation
-    ctx.register_udf(ScalarUDF::from(GetMetadataUdf::new()));
-}
-
-/// UDF to extract metadata from a field for testing purposes
-/// Usage: get_metadata(expr, 'key') -> returns the metadata value or NULL
-#[derive(Debug, PartialEq, Eq, Hash)]
-struct GetMetadataUdf {
-    signature: Signature,
-}
-
-impl GetMetadataUdf {
-    fn new() -> Self {
-        Self {
-            signature: Signature::any(2, Volatility::Immutable),
-        }
-    }
-}
-
-impl ScalarUDFImpl for GetMetadataUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn name(&self) -> &str {
-        "get_metadata"
-    }
-
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Get the metadata key from the second argument (must be a string literal)
-        let key = match &args.args[1] {
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(k))) => k.clone(),
-            _ => {
-                return exec_err!(
-                    "get_metadata second argument must be a string literal"
-                );
-            }
-        };
-
-        // Get metadata from the first argument's field
-        let metadata_value = args.arg_fields[0].metadata().get(&key).cloned();
-
-        // Return as a scalar (same value for all rows)
-        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(metadata_value)))
-    }
 }
 
 /// Create a UDF function named "example". See the `sample_udf.rs` example
@@ -490,14 +538,15 @@ fn create_example_udf() -> ScalarUDF {
 
 fn register_union_table(ctx: &SessionContext) {
     let union = UnionArray::try_new(
-        UnionFields::new(
+        UnionFields::try_new(
             // typeids: 3 for int, 1 for string
             vec![3, 1],
             vec![
                 Field::new("int", DataType::Int32, false),
                 Field::new("string", DataType::Utf8, false),
             ],
-        ),
+        )
+        .unwrap(),
         ScalarBuffer::from(vec![3, 1, 3]),
         None,
         vec![

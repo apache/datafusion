@@ -31,6 +31,7 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
+#[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::metrics::MetricType;
 use datafusion_datasource::TableSchema;
@@ -79,8 +80,8 @@ use datafusion::physical_plan::expressions::{
 };
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
-    HashJoinExec, HashTableLookupExpr, NestedLoopJoinExec, PartitionMode,
-    SortMergeJoinExec, StreamJoinPartitionMode, SymmetricHashJoinExec,
+    HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
@@ -116,7 +117,6 @@ use datafusion_expr::{
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
-use datafusion_physical_plan::joins::join_hash_map::JoinHashMapU32;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
 };
@@ -285,6 +285,7 @@ fn roundtrip_hash_join() -> Result<()> {
                 None,
                 *partition_mode,
                 NullEquality::NullEqualsNothing,
+                false,
             )?))?;
         }
     }
@@ -845,11 +846,13 @@ fn roundtrip_coalesce_batches_with_fetch() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(CoalesceBatchesExec::new(
         Arc::new(EmptyExec::new(schema.clone())),
         8096,
     )))?;
 
+    #[expect(deprecated)]
     roundtrip_test(Arc::new(
         CoalesceBatchesExec::new(Arc::new(EmptyExec::new(schema)), 8096)
             .with_fetch(Some(10)),
@@ -2334,15 +2337,20 @@ async fn roundtrip_async_func_exec() -> Result<()> {
 /// it's a performance optimization filter, not a correctness requirement.
 #[test]
 fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
+    use datafusion::physical_plan::joins::HashTableLookupExpr;
+    use datafusion::physical_plan::joins::Map;
+    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+
     // Create a simple schema and input plan
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
     let input = Arc::new(EmptyExec::new(schema.clone()));
 
     // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
-    let hash_map = Arc::new(JoinHashMapU32::with_capacity(0));
-    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("col", 0));
+    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
+    let on_columns = vec![datafusion::physical_plan::expressions::col("col", &schema)?];
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
-        hash_expr,
+        on_columns,
+        datafusion::physical_plan::joins::SeededRandomState::with_seeds(0, 0, 0, 0),
         hash_map,
         "test_lookup".to_string(),
     ));
@@ -2370,4 +2378,37 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
 
     Ok(())
+}
+
+#[test]
+fn roundtrip_hash_expr() -> Result<()> {
+    use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Utf8, false),
+    ]));
+
+    // Create a HashExpr with test columns and seeds
+    let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+    let hash_expr: Arc<dyn PhysicalExpr> = Arc::new(HashExpr::new(
+        on_columns,
+        SeededRandomState::with_seeds(0, 1, 2, 3), // arbitrary random seeds for testing
+        "test_hash".to_string(),
+    ));
+
+    // Wrap in a filter by comparing hash value to a literal
+    // hash_expr > 0 is always boolean
+    let filter_expr = binary(hash_expr, Operator::Gt, lit(0u64), &schema)?;
+    let filter = Arc::new(FilterExec::try_new(
+        filter_expr,
+        Arc::new(EmptyExec::new(schema)),
+    )?);
+
+    // Confirm that the debug string contains the random state seeds
+    assert!(
+        format!("{filter:?}").contains("test_hash(a@0, b@1, [0,1,2,3])"),
+        "Debug string missing seeds: {filter:?}"
+    );
+    roundtrip_test(filter)
 }

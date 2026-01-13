@@ -40,7 +40,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         args.to_owned()
     };
-    general_trim::<T>(&args, TrimType::Both, use_string_view)
+    general_trim::<T, TrimBoth>(&args, use_string_view)
 }
 
 #[user_doc(
