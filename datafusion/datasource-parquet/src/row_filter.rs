@@ -406,8 +406,12 @@ enum NestedColumnSupport {
     Unsupported,
 }
 
+/// Result of checking which columns are required for filter pushdown.
 #[derive(Debug)]
 struct PushdownColumns {
+    /// Sorted, unique column indices into the file schema required to evaluate
+    /// the filter expression. Must be in ascending order for correct schema
+    /// projection matching.
     required_columns: Vec<usize>,
     nested: NestedColumnSupport,
 }
