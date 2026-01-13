@@ -90,7 +90,7 @@ impl FFI_ExecutionPlan {
 unsafe extern "C" fn properties_fn_wrapper(
     plan: &FFI_ExecutionPlan,
 ) -> FFI_PlanProperties {
-    plan.inner().properties().into()
+    plan.inner().properties().as_ref().into()
 }
 
 unsafe extern "C" fn children_fn_wrapper(
@@ -192,7 +192,7 @@ impl Drop for FFI_ExecutionPlan {
 pub struct ForeignExecutionPlan {
     name: String,
     plan: FFI_ExecutionPlan,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     children: Vec<Arc<dyn ExecutionPlan>>,
 }
 
@@ -244,7 +244,7 @@ impl TryFrom<&FFI_ExecutionPlan> for Arc<dyn ExecutionPlan> {
             let plan = ForeignExecutionPlan {
                 name,
                 plan: plan.clone(),
-                properties,
+                properties: Arc::new(properties),
                 children,
             };
 
@@ -262,7 +262,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -278,7 +278,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
             plan: self.plan.clone(),
             name: self.name.clone(),
             children,
-            properties: self.properties.clone(),
+            properties: Arc::clone(&self.properties),
         }))
     }
 
@@ -305,19 +305,19 @@ pub(crate) mod tests {
 
     #[derive(Debug)]
     pub struct EmptyExec {
-        props: PlanProperties,
+        props: Arc<PlanProperties>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     }
 
     impl EmptyExec {
         pub fn new(schema: arrow::datatypes::SchemaRef) -> Self {
             Self {
-                props: PlanProperties::new(
+                props: Arc::new(PlanProperties::new(
                     datafusion::physical_expr::EquivalenceProperties::new(schema),
                     Partitioning::UnknownPartitioning(3),
                     EmissionType::Incremental,
                     Boundedness::Bounded,
-                ),
+                )),
                 children: Vec::default(),
             }
         }
@@ -342,7 +342,7 @@ pub(crate) mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.props
         }
 
@@ -355,7 +355,7 @@ pub(crate) mod tests {
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Ok(Arc::new(EmptyExec {
-                props: self.props.clone(),
+                props: Arc::clone(&self.props),
                 children,
             }))
         }

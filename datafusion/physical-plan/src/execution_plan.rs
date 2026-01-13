@@ -128,7 +128,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
-    fn properties(&self) -> &PlanProperties;
+    fn properties(&self) -> &Arc<PlanProperties>;
 
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
@@ -1060,12 +1060,17 @@ impl PlanProperties {
         self
     }
 
-    /// Overwrite equivalence properties with its new value.
-    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+    /// Set equivalence properties having mut reference.
+    pub fn set_eq_properties(&mut self, eq_properties: EquivalenceProperties) {
         // Changing equivalence properties also changes output ordering, so
         // make sure to overwrite it:
         self.output_ordering = eq_properties.output_ordering();
         self.eq_properties = eq_properties;
+    }
+
+    /// Overwrite equivalence properties with its new value.
+    pub fn with_eq_properties(mut self, eq_properties: EquivalenceProperties) -> Self {
+        self.set_eq_properties(eq_properties);
         self
     }
 
@@ -1097,9 +1102,14 @@ impl PlanProperties {
         self
     }
 
+    /// Set constraints having mut reference.
+    pub fn set_constraints(&mut self, constraints: Constraints) {
+        self.eq_properties.set_constraints(constraints);
+    }
+
     /// Overwrite constraints with its new value.
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.eq_properties = self.eq_properties.with_constraints(constraints);
+        self.set_constraints(constraints);
         self
     }
 
@@ -1422,6 +1432,41 @@ pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn Executi
     .data()
 }
 
+/// Check if the `plan` children has the same properties as passed `children`.
+/// In this case plan can avoid self properties re-computation when its children
+/// replace is requested.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+pub fn has_same_children_properties(
+    plan: &Arc<impl ExecutionPlan>,
+    children: &[Arc<dyn ExecutionPlan>],
+) -> Result<bool> {
+    let old_children = plan.children();
+    assert_eq_or_internal_err!(
+        children.len(),
+        old_children.len(),
+        "Wrong number of children"
+    );
+    for (lhs, rhs) in plan.children().iter().zip(children.iter()) {
+        if !Arc::ptr_eq(lhs.properties(), rhs.properties()) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Helper macro to avoid properties re-computation if passed children properties
+/// the same as plan already has. Could be used to implement fast-path for method
+/// [`ExecutionPlan::with_new_children`].
+#[macro_export]
+macro_rules! check_if_same_properties {
+    ($plan: expr, $children: expr) => {
+        if has_same_children_properties(&$plan, &$children)? {
+            let plan = $plan.with_new_children_and_same_properties($children);
+            return Ok(Arc::new(plan));
+        }
+    };
+}
+
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
 pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
@@ -1484,7 +1529,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
@@ -1551,7 +1596,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             unimplemented!()
         }
 
