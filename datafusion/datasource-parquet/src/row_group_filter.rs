@@ -132,6 +132,33 @@ impl RowGroupAccessPlanFilter {
     /// |  +-----------------------------------+-----------------------------+  |
     /// +-----------------------------------------------------------------------+
     ///
+    /// # Example with Statistics Truncation and NOT Inversion
+    ///
+    /// When statistics are truncated to length 6 (e.g., `statistics_truncate_length = 6`),
+    /// the min/max values become:
+    ///
+    /// ```
+    /// Row group 3: species_min="Alpine", species_max="Alpine" (truncated from "Alpine Ibex"/"Alpine Sheep")
+    ///              s_min=76, s_max=101
+    /// ```
+    ///
+    /// To identify this as fully matching, the system uses NOT inversion:
+    /// 1. Original predicate: `species LIKE 'Alpine%' AND s >= 50`
+    /// 2. Inverted predicate: `NOT (species LIKE 'Alpine%' AND s >= 50)`
+    ///    Simplified to: `species NOT LIKE 'Alpine%' OR s < 50`
+    /// 3. Pruning predicate generated:
+    ///    `(species_min NOT LIKE 'Alpine%' OR species_max NOT LIKE 'Alpine%') OR s_min < 50`
+    ///
+    /// For row group 3 with truncated stats:
+    /// - Evaluating `species_min NOT LIKE 'Alpine%'`: `"A" NOT LIKE 'Alpine%'` = `false`
+    /// - Evaluating `species_max NOT LIKE 'Alpine%'`: `"A" NOT LIKE 'Alpine%'` = `false`
+    /// - Evaluating `s_min < 50`: `76 < 50` = `false`
+    /// - Final result: `(false OR false) OR false` = `false`
+    ///
+    /// Since the inverted predicate would prune this row group (returns false), it means
+    /// no rows in this group could possibly satisfy the inverted predicate.
+    /// Therefore, all rows in this group must match the original predicate, making it fully matched
+    ///
     /// Without limit pruning: Scan Partition 2 → Partition 3 → Partition 4 (until limit reached)
     /// With limit pruning: If Partition 3 contains enough rows to satisfy the limit,
     /// skip Partitions 2 and 4 entirely and go directly to Partition 3.
