@@ -190,7 +190,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     for (input, format3, jiff_format3) in
                         izip!(inputs.iter(), format3.iter(), jiffformat3.iter())
                     {
-                        black_box(match parser {
+                        let _ = black_box(match parser {
                             "chrono" => {
                                 let t = datetime_parser
                                     .string_to_timestamp_nanos_formatted(
@@ -199,8 +199,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                                         &[format3.unwrap()],
                                     );
                                 if t.is_err() {
-                                    println!("Error: {:?}", t);
+                                    println!("Error: {t:?}");
                                 }
+
+                                t
                             }
                             "jiff" => {
                                 let t = datetime_parser
@@ -210,11 +212,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                                         &[jiff_format3.unwrap()],
                                     );
                                 if t.is_err() {
-                                    println!("Error: {:?}", t);
+                                    println!("Error: {t:?}");
                                 }
+
+                                t
                             }
                             _ => unreachable!(),
-                        })
+                        });
                     }
                 })
             },
@@ -263,7 +267,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         jiff_format2.iter(),
                         jiff_format3.iter()
                     ) {
-                        black_box(match parser {
+                        let _ = black_box(match parser {
                             "chrono" => {
                                 let t = datetime_parser
                                     .string_to_timestamp_nanos_formatted(
@@ -276,8 +280,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                                         ],
                                     );
                                 if t.is_err() {
-                                    println!("Error: {:?}", t);
+                                    println!("Error: {t:?}");
                                 }
+
+                                t
                             }
                             "jiff" => {
                                 let t = datetime_parser
@@ -291,11 +297,13 @@ fn criterion_benchmark(c: &mut Criterion) {
                                         ],
                                     );
                                 if t.is_err() {
-                                    println!("Error: {:?}", t);
+                                    println!("Error: {t:?}");
                                 }
+
+                                t
                             }
                             _ => unreachable!(),
-                        })
+                        });
                     }
                 })
             },

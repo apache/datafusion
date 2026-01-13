@@ -316,11 +316,13 @@ where
                     };
                 }
 
-                let r = op(x, &v);
-                if let Ok(inner) = r {
-                    val = Some(Ok(op2(inner)));
-                } else {
-                    val = Some(r);
+                if !v.is_empty() {
+                    let r = op(x, &v);
+                    if let Ok(inner) = r {
+                        val = Some(Ok(op2(inner)));
+                    } else {
+                        val = Some(r);
+                    }
                 }
             };
 

@@ -508,13 +508,12 @@ config_namespace! {
         /// The date time parser to use when parsing date time values.
         ///
         /// Defaults to 'chrono'. 'jiff' is supported when the 'jiff' feature is enabled.
-        pub date_time_parser: Option<String>, default = Some("chrono".to_string())
+        pub date_time_parser: Option<String>, transform = str::to_lowercase, default = Some("chrono".to_string())
 
         /// The default time zone
         ///
         /// Some functions, e.g. `now` return timestamps in this time zone
         pub time_zone: Option<String>, default = None
-
 
         /// Parquet options
         pub parquet: ParquetOptions, default = Default::default()

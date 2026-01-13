@@ -329,7 +329,7 @@ macro_rules! impl_to_timestamp_constructors {
             pub fn with_datetime_parser(
                 &mut self,
                 parser: Box<dyn DateTimeParser>,
-            ) -> &Self {
+            ) -> &mut Self {
                 self.parser = parser;
 
                 self

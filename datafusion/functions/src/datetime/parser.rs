@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::DataFusionError;
 use datafusion_common::config::ConfigOptions;
 use dyn_eq::DynEq;
 use dyn_hash::DynHash;
@@ -38,24 +37,24 @@ pub trait DateTimeParser: Debug + DynEq + DynHash + Send + Sync {
         &self,
         tz: &str,
         s: &str,
-    ) -> datafusion_common::Result<i64, DataFusionError>;
+    ) -> datafusion_common::Result<i64>;
 
     fn string_to_timestamp_nanos_formatted(
         &self,
         tz: &str,
         s: &str,
         formats: &[&str],
-    ) -> datafusion_common::Result<i64, DataFusionError>;
+    ) -> datafusion_common::Result<i64>;
 
     fn string_to_timestamp_millis_formatted(
         &self,
         tz: &str,
         s: &str,
         formats: &[&str],
-    ) -> datafusion_common::Result<i64, DataFusionError>;
+    ) -> datafusion_common::Result<i64>;
 }
 
-// impl Eq and PartialEaq for dyn DateTimeParser
+// impl Eq and PartialEq for dyn DateTimeParser
 dyn_eq::eq_trait_object!(DateTimeParser);
 
 // Implement std::hash::Hash for dyn DateTimeParser
@@ -72,6 +71,12 @@ pub fn get_date_time_parser(config_options: &ConfigOptions) -> Box<dyn DateTimeP
             #[cfg(feature = "jiff")]
             "jiff" => {
                 Box::new(jiff::JiffDateTimeParser::new()) as Box<dyn DateTimeParser>
+            }
+            #[cfg(not(feature = "jiff"))]
+            "jiff" => {
+                return exec_err!(
+                    "jiff parser requested but 'jiff' feature is not enabled. Enable with --features jiff"
+                );
             }
             _ => panic!("Unknown/unsupported date time parser: {p}"),
         },
@@ -123,7 +128,9 @@ pub mod chrono {
                 //
                 // This code doesn't handle named timezones with no preceding space since that would require
                 // writing a custom parser.
-                let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z") {
+                let tz: Option<chrono_tz::Tz> = if format.ends_with(" %Z")
+                    && datetime_str.contains(' ')
+                {
                     // grab the string after the last space as the named timezone
                     let parts: Vec<&str> = datetime_str.rsplitn(2, ' ').collect();
                     let timezone_name = parts[0];
@@ -369,7 +376,7 @@ pub mod jiff {
 
     const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
-    #[derive(Debug, PartialEq, Eq, Hash)]
+    #[derive(Debug, Default, PartialEq, Eq, Hash)]
     pub struct JiffDateTimeParser {}
 
     impl JiffDateTimeParser {
@@ -503,8 +510,14 @@ pub mod jiff {
                     match parsed.to_datetime_with_timezone(&tz) {
                         Ok(dt) => {
                             let dt = dt.fixed_offset();
-                            let result =
-                                Timestamp::from_nanosecond(dt.timestamp() as i128);
+                            let nanos_opt = dt.timestamp_nanos_opt();
+
+                            let Some(nanos) = nanos_opt else {
+                                err = Some(ERR_NANOSECONDS_NOT_SUPPORTED.to_owned());
+                                continue;
+                            };
+
+                            let result = Timestamp::from_nanosecond(nanos as i128);
                             match result {
                                 Ok(result) => {
                                     return Ok(result.to_zoned(timezone.to_owned()));
@@ -548,10 +561,10 @@ pub mod jiff {
 
                 match result {
                     Ok(bdt) => {
-                        if bdt.iana_time_zone().is_some() || bdt.offset().is_some() {
-                            if let Ok(zoned) = bdt.to_zoned() {
-                                return Ok(zoned.with_time_zone(timezone.to_owned()));
-                            }
+                        if (bdt.iana_time_zone().is_some() || bdt.offset().is_some())
+                            && let Ok(zoned) = bdt.to_zoned()
+                        {
+                            return Ok(zoned.with_time_zone(timezone.to_owned()));
                         }
 
                         let result = bdt.to_datetime();
@@ -616,7 +629,7 @@ pub mod jiff {
             tz: &str,
             s: &str,
         ) -> Result<i64, DataFusionError> {
-            let result = TimeZone::get(tz.as_ref());
+            let result = TimeZone::get(tz);
             let timezone = match result {
                 Ok(tz) => tz,
                 Err(e) => return exec_err!("Invalid timezone {tz}: {e}"),
@@ -655,7 +668,7 @@ pub mod jiff {
             s: &str,
             formats: &[&str],
         ) -> Result<i64, DataFusionError> {
-            let result = TimeZone::get(tz.as_ref());
+            let result = TimeZone::get(tz);
             let timezone = match result {
                 Ok(tz) => tz,
                 Err(e) => return exec_err!("Invalid timezone {tz}: {e}"),
@@ -687,7 +700,7 @@ pub mod jiff {
             s: &str,
             formats: &[&str],
         ) -> Result<i64, DataFusionError> {
-            let result = TimeZone::get(tz.as_ref());
+            let result = TimeZone::get(tz);
             let timezone = match result {
                 Ok(tz) => tz,
                 Err(e) => return exec_err!("Invalid timezone {tz}: {e}"),

@@ -96,7 +96,7 @@ impl ToDateFunc {
     }
 
     /// Set a custom date time parser.
-    pub fn with_datetime_parser(&mut self, parser: Box<dyn DateTimeParser>) -> &Self {
+    pub fn with_datetime_parser(&mut self, parser: Box<dyn DateTimeParser>) -> &mut Self {
         self.parser = parser;
 
         self
