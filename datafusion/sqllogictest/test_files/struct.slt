@@ -810,10 +810,6 @@ NULL
 statement ok
 drop table nullable_parent_test;
 
-#############
-## Struct Casting with Field Reordering Tests (Issue #14396)
-#############
-
 # Test struct casting with field reordering - string fields
 query ?
 SELECT CAST({b: 'b_value', a: 'a_value'} AS STRUCT(a VARCHAR, b VARCHAR));
