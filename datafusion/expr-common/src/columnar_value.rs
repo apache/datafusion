@@ -274,7 +274,7 @@ impl ColumnarValue {
         Ok(args)
     }
 
-    /// Cast's this [ColumnarValue] to the specified `DataType`
+    /// Cast this [ColumnarValue] to the specified `DataType`
     ///
     /// # Struct Casting Behavior
     ///
