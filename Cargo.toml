@@ -99,6 +99,7 @@ arrow-avro = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-re
     "snappy",
     "zstd",
     "bzip2",
+    "xz",
 ] }# fixme
 arrow-buffer = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false }# fixme
 arrow-flight = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", features = [# fixme

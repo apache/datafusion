@@ -268,6 +268,7 @@ dependencies = [
  "crc",
  "flate2",
  "indexmap 2.12.1",
+ "liblzma",
  "rand 0.9.2",
  "serde",
  "serde_json",
@@ -2070,12 +2071,10 @@ dependencies = [
  "bytes",
  "datafusion-common",
  "datafusion-datasource",
- "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
  "object_store",
- "serde_json",
 ]
 
 [[package]]
