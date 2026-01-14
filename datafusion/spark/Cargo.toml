@@ -66,3 +66,7 @@ name = "char"
 [[bench]]
 harness = false
 name = "space"
+
+[[bench]]
+harness = false
+name = "hex"
