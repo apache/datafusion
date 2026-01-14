@@ -804,7 +804,7 @@ async fn test_physical_plan_display_indent_multi_children() {
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c1@0, c2@0)], projection=[c1@0]
       RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=1
         DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
-      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=1
+      RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
         DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1@0 as c2], file_type=csv, has_header=true
     "
     );

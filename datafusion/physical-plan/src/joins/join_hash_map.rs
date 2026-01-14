@@ -401,7 +401,10 @@ where
     match_indices.clear();
     let one = T::try_from(1).unwrap();
 
-    let (start_idx, total_rows) = (offset.0, indices.map(|i| i.len()).unwrap_or(hash_values.len()));
+    let (start_idx, total_rows) = (
+        offset.0,
+        indices.map(|i| i.len()).unwrap_or(hash_values.len()),
+    );
 
     // Check if hashmap consists of unique values
     // If so, we can skip the chain traversal

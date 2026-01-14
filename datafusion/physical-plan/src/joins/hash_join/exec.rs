@@ -1021,7 +1021,13 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            left_futs: self.left_futs.clone(),
+            left_futs: (0..if self.mode == PartitionMode::CollectLeft {
+                1
+            } else {
+                children[0].output_partitioning().partition_count()
+            })
+                .map(|_| Arc::new(OnceAsync::default()))
+                .collect(),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -1029,8 +1035,8 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             null_aware: self.null_aware,
-            probe_side_non_empty: Arc::clone(&self.probe_side_non_empty),
-            probe_side_has_null: Arc::clone(&self.probe_side_has_null),
+            probe_side_non_empty: Arc::new(AtomicBool::new(false)),
+            probe_side_has_null: Arc::new(AtomicBool::new(false)),
             cache: Self::compute_properties(
                 &children[0],
                 &children[1],
@@ -1054,7 +1060,11 @@ impl ExecutionPlan for HashJoinExec {
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
             // Reset the left_futs to allow re-execution
-            left_futs: (0..self.left.output_partitioning().partition_count())
+            left_futs: (0..if self.mode == PartitionMode::CollectLeft {
+                1
+            } else {
+                self.left.output_partitioning().partition_count()
+            })
                 .map(|_| Arc::new(OnceAsync::default()))
                 .collect(),
             random_state: self.random_state.clone(),
@@ -1115,9 +1125,8 @@ impl ExecutionPlan for HashJoinExec {
                 self.left_futs[i].try_once(|| {
                     let left_stream = self.left.execute(i, Arc::clone(&context))?;
 
-                    let reservation =
-                        MemoryConsumer::new(format!("HashJoinInput[{i}]"))
-                            .register(context.memory_pool());
+                    let reservation = MemoryConsumer::new(format!("HashJoinInput[{i}]"))
+                        .register(context.memory_pool());
 
                     Ok(collect_left_input(
                         self.random_state.random_state().clone(),
@@ -1187,7 +1196,6 @@ impl ExecutionPlan for HashJoinExec {
             .collect::<Vec<_>>();
 
         Ok(Box::pin(HashJoinStream::new(
-            partition,
             self.schema(),
             on_right,
             self.filter.clone(),
@@ -1200,8 +1208,6 @@ impl ExecutionPlan for HashJoinExec {
             HashJoinStreamState::WaitBuildSide,
             BuildSide::Initial(BuildSideInitialState { left_futs }),
             batch_size,
-            vec![],
-            self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
             self.null_aware,

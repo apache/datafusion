@@ -31,28 +31,27 @@ use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
+use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, apply_join_filter_to_indices,
-        build_batch_from_indices,
+        StatefulStreamResult, apply_join_filter_to_indices, build_batch_from_indices,
         need_produce_result_in_final,
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array, BooleanBuilder, new_null_array};
+use arrow::array::{
+    Array, ArrayRef, BooleanBuilder, UInt32Array, UInt64Array, new_null_array,
+};
 use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, internal_err,
-};
+use datafusion_common::{JoinSide, JoinType, NullEquality, Result, internal_err};
 use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
@@ -170,8 +169,7 @@ pub(super) struct ProcessProbeBatchState {
     probe_matched: Vec<bool>,
 }
 
-impl ProcessProbeBatchState {
-}
+impl ProcessProbeBatchState {}
 
 /// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
 ///
@@ -183,8 +181,6 @@ impl ProcessProbeBatchState {
 /// - Producing joined [`RecordBatch`]es incrementally
 /// - Emitting unmatched rows for outer/semi/anti joins in the final stage
 pub(super) struct HashJoinStream {
-    /// Partition identifier for debugging and determinism
-    partition: usize,
     /// Input schema
     schema: Arc<Schema>,
     /// equijoin columns from the right (probe side)
@@ -209,14 +205,12 @@ pub(super) struct HashJoinStream {
     build_side: BuildSide,
     /// Maximum output batch size
     batch_size: usize,
-    /// Scratch space for computing hashes
-    hashes_buffer: Vec<u64>,
     /// Scratch space for probe indices during hash lookup
     probe_indices_buffer: Vec<u32>,
     /// Scratch space for build indices during hash lookup
     build_indices_buffer: Vec<u64>,
-    /// Specifies whether the right side has an ordering to potentially preserve
-    right_side_ordered: bool,
+    /// Scratch space for hashes during join
+    hashes_buffer: Vec<u64>,
     /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when build information has been reported by all partitions
@@ -333,36 +327,10 @@ pub(super) fn lookup_join_hashmap(
 /// Counts the number of distinct elements in the input array.
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
-#[inline]
-fn count_distinct_sorted_indices(indices: &UInt32Array) -> usize {
-    if indices.is_empty() {
-        return 0;
-    }
-
-    debug_assert!(indices.null_count() == 0);
-
-    let values_buf = indices.values();
-    let values = values_buf.as_ref();
-    let mut iter = values.iter();
-    let Some(&first) = iter.next() else {
-        return 0;
-    };
-
-    let mut count = 1usize;
-    let mut last = first;
-    for &value in iter {
-        if value != last {
-            last = value;
-            count += 1;
-        }
-    }
-    count
-}
 
 impl HashJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
-        partition: usize,
         schema: Arc<Schema>,
         on_right: Vec<PhysicalExprRef>,
         filter: Option<JoinFilter>,
@@ -375,8 +343,6 @@ impl HashJoinStream {
         state: HashJoinStreamState,
         build_side: BuildSide,
         batch_size: usize,
-        hashes_buffer: Vec<u64>,
-        right_side_ordered: bool,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
         null_aware: bool,
@@ -390,7 +356,6 @@ impl HashJoinStream {
         );
 
         Self {
-            partition,
             schema,
             on_right,
             filter,
@@ -403,10 +368,9 @@ impl HashJoinStream {
             state,
             build_side,
             batch_size,
-            hashes_buffer,
+            hashes_buffer: Vec::with_capacity(batch_size),
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
-            right_side_ordered,
             build_accumulator,
             build_waiter: None,
             mode,
@@ -525,7 +489,7 @@ impl HashJoinStream {
                 };
 
                 // For simplicity, we only set build_waiter once.
-                // In partitioned mode, it's likely we need to wait for all? 
+                // In partitioned mode, it's likely we need to wait for all?
                 // But report_build_data already handles the waiting internally if needed.
                 let build_accumulator_clone = Arc::clone(&build_accumulator);
                 self.build_waiter = Some(OnceFut::new(async move {
@@ -560,23 +524,21 @@ impl HashJoinStream {
                 let build_side = self.build_side.try_as_ready()?;
                 let num_parts = build_side.left_data.len();
 
-                let mut hashes = vec![0u64; batch.num_rows()];
-                create_hashes(
-                    &keys_values,
-                    &self.random_state,
-                    &mut hashes,
-                )?;
+                self.hashes_buffer.resize(batch.num_rows(), 0);
+                create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
+                let hashes = self.hashes_buffer.clone();
 
                 let partition_indices = if num_parts > 1 {
-                    let mut routing_hashes = vec![0u64; batch.num_rows()];
+                    self.hashes_buffer.clear();
+                    self.hashes_buffer.resize(batch.num_rows(), 0);
                     create_hashes(
                         &keys_values,
                         &REPARTITION_RANDOM_STATE.random_state(),
-                        &mut routing_hashes,
+                        &mut self.hashes_buffer,
                     )?;
                     let mut indices =
                         vec![Vec::with_capacity(batch.num_rows() / num_parts); num_parts];
-                    for (i, hash) in routing_hashes.iter().enumerate() {
+                    for (i, hash) in self.hashes_buffer.iter().enumerate() {
                         let p = (hash % num_parts as u64) as usize;
                         indices[p].push(i as u32);
                     }
@@ -805,21 +767,28 @@ impl HashJoinStream {
                         let mut columns = Vec::with_capacity(self.column_indices.len());
                         for column_index in &self.column_indices {
                             let array = match column_index.side {
-                                JoinSide::Right => {
-                                    take(state.batch.column(column_index.index), &r_indices, None)?
-                                }
+                                JoinSide::Right => take(
+                                    state.batch.column(column_index.index),
+                                    &r_indices,
+                                    None,
+                                )?,
                                 JoinSide::Left => {
-                                    // Should not happen for RightMark output columns? 
+                                    // Should not happen for RightMark output columns?
                                     // Actually RightMark only produces Right side and Mark.
                                     new_null_array(
-                                        build_side.left_data[0].batch().column(column_index.index).data_type(),
+                                        build_side.left_data[0]
+                                            .batch()
+                                            .column(column_index.index)
+                                            .data_type(),
                                         r_indices.len(),
                                     )
                                 }
                                 JoinSide::None => {
-                                    let mut mark_builder = BooleanBuilder::with_capacity(r_indices.len());
+                                    let mut mark_builder =
+                                        BooleanBuilder::with_capacity(r_indices.len());
                                     for i in 0..r_indices.len() {
-                                        let matched = state.probe_matched[r_indices.value(i) as usize];
+                                        let matched = state.probe_matched
+                                            [r_indices.value(i) as usize];
                                         mark_builder.append_value(matched);
                                     }
                                     Arc::new(mark_builder.finish()) as ArrayRef
@@ -927,7 +896,7 @@ impl HashJoinStream {
         }
 
         if !produced_any {
-            // Not the last stream or no partitions needed reporting? 
+            // Not the last stream or no partitions needed reporting?
             // Actually, if we are in this state, it's the end of probe side.
         }
 
