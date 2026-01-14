@@ -2989,13 +2989,8 @@ impl ScalarValue {
             },
             ScalarValue::Utf8View(e) => match e {
                 Some(value) => {
-                    let mut builder =
-                        StringViewBuilder::with_capacity(size).with_deduplicate_strings();
-                    // Replace with upstream arrow-rs code when available:
-                    // https://github.com/apache/arrow-rs/issues/9034
-                    for _ in 0..size {
-                        builder.append_value(value);
-                    }
+                    let mut builder = StringViewBuilder::with_capacity(size);
+                    builder.try_append_value_n(value, size)?;
                     let array = builder.finish();
                     Arc::new(array)
                 }
@@ -3013,11 +3008,8 @@ impl ScalarValue {
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => {
-                    let mut builder =
-                        BinaryViewBuilder::with_capacity(size).with_deduplicate_strings();
-                    for _ in 0..size {
-                        builder.append_value(value);
-                    }
+                    let mut builder = BinaryViewBuilder::with_capacity(size);
+                    builder.try_append_value_n(value, size)?;
                     let array = builder.finish();
                     Arc::new(array)
                 }
