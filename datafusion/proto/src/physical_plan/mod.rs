@@ -1218,6 +1218,7 @@ impl protobuf::PhysicalPlanNode {
             protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
+            protobuf::PartitionMode::LazyPartitioned => PartitionMode::LazyPartitioned,
         };
         let projection = if !hashjoin.projection.is_empty() {
             Some(
@@ -2218,6 +2219,7 @@ impl protobuf::PhysicalPlanNode {
             PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
             PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
+            PartitionMode::LazyPartitioned => protobuf::PartitionMode::LazyPartitioned,
         };
 
         Ok(protobuf::PhysicalPlanNode {

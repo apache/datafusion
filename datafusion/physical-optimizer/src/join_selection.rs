@@ -293,7 +293,7 @@ fn statistical_join_selection_subrule(
                         || partitioned_hash_join(hash_join).map(Some),
                         |v| Ok(Some(v)),
                     )?,
-                PartitionMode::Partitioned => {
+                PartitionMode::Partitioned | PartitionMode::LazyPartitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
                     // Don't swap null-aware anti joins as they have specific side requirements
@@ -302,7 +302,7 @@ fn statistical_join_selection_subrule(
                         && should_swap_join_order(&**left, &**right)?
                     {
                         hash_join
-                            .swap_inputs(PartitionMode::Partitioned)
+                            .swap_inputs(*hash_join.partition_mode())
                             .map(Some)?
                     } else {
                         None
@@ -539,6 +539,9 @@ pub(crate) fn swap_join_according_to_unboundedness(
         ) => internal_err!("{join_type} join cannot be swapped for unbounded input."),
         (PartitionMode::Partitioned, _) => {
             hash_join.swap_inputs(PartitionMode::Partitioned)
+        }
+        (PartitionMode::LazyPartitioned, _) => {
+            hash_join.swap_inputs(PartitionMode::LazyPartitioned)
         }
         (PartitionMode::CollectLeft, _) => {
             hash_join.swap_inputs(PartitionMode::CollectLeft)

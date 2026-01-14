@@ -27,6 +27,7 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::hash_utils::create_hashes;
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
@@ -49,6 +50,7 @@ use crate::projection::{
 };
 use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
+use crate::stream::RecordBatchReceiverStream;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream, Statistics,
@@ -61,8 +63,8 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
+use arrow::array::{ArrayRef, BooleanArray, BooleanBufferBuilder};
+use arrow::compute::{concat_batches, filter_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -740,6 +742,12 @@ impl HashJoinExec {
             PartitionMode::Partitioned => {
                 symmetric_join_output_partitioning(left, right, &join_type)?
             }
+            PartitionMode::LazyPartitioned => {
+                // LazyPartitioned: output partitioning is determined by the probe (right) side,
+                // since each partition builds its own hash table from filtered build rows.
+                // This is similar to Partitioned mode but the build side isn't pre-partitioned.
+                symmetric_join_output_partitioning(left, right, &join_type)?
+            }
         };
 
         let emission_type = if left.boundedness().is_unbounded() {
@@ -958,6 +966,16 @@ impl ExecutionPlan for HashJoinExec {
                     Distribution::HashPartitioned(right_expr),
                 ]
             }
+            PartitionMode::LazyPartitioned => {
+                // LazyPartitioned mode: build side IS hash-partitioned as usual,
+                // but probe side is NOT repartitioned (we filter locally during probing).
+                // This saves repartitioning the often-larger probe side.
+                let left_expr = self.on.iter().map(|(l, _)| Arc::clone(l)).collect();
+                vec![
+                    Distribution::HashPartitioned(left_expr),
+                    Distribution::UnspecifiedDistribution,
+                ]
+            }
             PartitionMode::Auto => vec![
                 Distribution::UnspecifiedDistribution,
                 Distribution::UnspecifiedDistribution,
@@ -1116,6 +1134,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    None, // No partition filtering for CollectLeft mode
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -1137,6 +1156,32 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    None, // No partition filtering - already pre-partitioned by RepartitionExec
+                ))
+            }
+            PartitionMode::LazyPartitioned => {
+                // LazyPartitioned mode: build side IS hash-partitioned (same as Partitioned),
+                // but probe side is NOT repartitioned - we merge all partitions and filter
+                // lazily during probing. This saves repartitioning the often-larger probe side.
+                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+
+                let reservation =
+                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
+                        .register(context.memory_pool());
+
+                OnceFut::new(collect_left_input(
+                    self.random_state.random_state().clone(),
+                    left_stream,
+                    on_left.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                    need_produce_result_in_final(self.join_type),
+                    1, // Each partition has its own hash table (same as Partitioned)
+                    enable_dynamic_filter_pushdown,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    array_map_created_count,
+                    None, // No partition filtering on build side - already hash-partitioned
                 ))
             }
             PartitionMode::Auto => {
@@ -1176,9 +1221,41 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
-        // we have the batches and the hash map with their keys. We can how create a stream
+        // we have the batches and the hash map with their keys. We can now create a stream
         // over the right that uses this information to issue new batches.
-        let right_stream = self.right.execute(partition, context)?;
+        let right_stream: SendableRecordBatchStream = match self.mode {
+            PartitionMode::LazyPartitioned => {
+                // LazyPartitioned mode: merge ALL probe partitions into one stream
+                // and filter lazily during probing based on hash % num_partitions
+                let right_partitions = self.right.output_partitioning().partition_count();
+                if right_partitions == 1 {
+                    self.right.execute(0, Arc::clone(&context))?
+                } else {
+                    let mut builder = RecordBatchReceiverStream::builder(
+                        self.right.schema(),
+                        right_partitions,
+                    );
+                    for part_i in 0..right_partitions {
+                        builder.run_input(
+                            Arc::clone(&self.right),
+                            part_i,
+                            Arc::clone(&context),
+                        );
+                    }
+                    builder.build()
+                }
+            }
+            _ => self.right.execute(partition, Arc::clone(&context))?,
+        };
+
+        // For LazyPartitioned mode, we need to filter probe rows by hash during probing
+        let probe_partition_filter = match self.mode {
+            PartitionMode::LazyPartitioned => Some(PartitionFilter {
+                current_partition: partition,
+                total_partitions: self.left.output_partitioning().partition_count(),
+            }),
+            _ => None,
+        };
 
         // update column indices to reflect the projection
         let column_indices_after_projection = match &self.projection {
@@ -1214,6 +1291,7 @@ impl ExecutionPlan for HashJoinExec {
             build_accumulator,
             self.mode,
             self.null_aware,
+            probe_partition_filter,
         )))
     }
 
@@ -1514,6 +1592,62 @@ fn should_collect_min_max_for_perfect_hash(
     Ok(ArrayMap::is_supported_type(&data_type))
 }
 
+/// Partition filter configuration for lazy partitioning.
+///
+/// When set, only rows where `hash(join_keys) % total_partitions == current_partition`
+/// are kept during hash table construction. This avoids the overhead of
+/// pre-partitioning with `RepartitionExec` by filtering rows locally.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PartitionFilter {
+    /// The partition index this execution is responsible for
+    current_partition: usize,
+    /// Total number of partitions in the join
+    total_partitions: usize,
+}
+
+/// Filters a record batch to only include rows that belong to the specified partition.
+///
+/// Uses the same hash function and seeds as `RepartitionExec` to ensure that
+/// rows are routed consistently. Rows where `hash(join_keys) % total_partitions == current_partition`
+/// are kept; all others are filtered out.
+///
+/// This function is used in `LazyPartitioned` mode to avoid the overhead of
+/// `RepartitionExec` by filtering rows during hash table construction instead
+/// of pre-partitioning.
+pub(super) fn filter_batch_by_partition(
+    batch: &RecordBatch,
+    on_left: &[PhysicalExprRef],
+    partition_filter: &PartitionFilter,
+) -> Result<RecordBatch> {
+    let num_rows = batch.num_rows();
+    if num_rows == 0 {
+        return Ok(batch.clone());
+    }
+
+    // Evaluate join key columns
+    let arrays = evaluate_expressions_to_arrays(on_left, batch)?;
+
+    // Compute hashes using the same random state as RepartitionExec
+    let mut hashes_buffer = vec![0u64; num_rows];
+    create_hashes(
+        &arrays,
+        REPARTITION_RANDOM_STATE.random_state(),
+        &mut hashes_buffer,
+    )?;
+
+    // Create a boolean mask for rows belonging to this partition
+    let mask: BooleanArray = hashes_buffer
+        .iter()
+        .map(|hash| {
+            *hash % partition_filter.total_partitions as u64
+                == partition_filter.current_partition as u64
+        })
+        .collect();
+
+    // Filter the batch
+    Ok(filter_record_batch(batch, &mask)?)
+}
+
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
 /// This function is responsible for:
@@ -1531,6 +1665,8 @@ fn should_collect_min_max_for_perfect_hash(
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
+/// * `partition_filter` - Optional partition filter for lazy partitioning mode.
+///   When set, only rows belonging to the specified partition are included in the hash table.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -1555,6 +1691,7 @@ async fn collect_left_input(
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
     array_map_created_count: Count,
+    partition_filter: Option<PartitionFilter>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1569,28 +1706,46 @@ async fn collect_left_input(
         should_compute_dynamic_filters || should_collect_min_max_for_phj,
     )?;
 
-    let state = left_stream
-        .try_fold(initial, |mut state, batch| async move {
-            // Update accumulators if computing bounds
-            if let Some(ref mut accumulators) = state.bounds_accumulators {
-                for accumulator in accumulators {
-                    accumulator.update_batch(&batch)?;
-                }
-            }
+    // Clone on_left for use in the closure
+    let on_left_for_filter = on_left.clone();
 
-            // Decide if we spill or not
-            let batch_size = get_record_batch_memory_size(&batch);
-            // Reserve memory for incoming batch
-            state.reservation.try_grow(batch_size)?;
-            // Update metrics
-            state.metrics.build_mem_used.add(batch_size);
-            state.metrics.build_input_batches.add(1);
-            state.metrics.build_input_rows.add(batch.num_rows());
-            // Update row count
-            state.num_rows += batch.num_rows();
-            // Push batch to output
-            state.batches.push(batch);
-            Ok(state)
+    let state = left_stream
+        .try_fold(initial, |mut state, batch| {
+            let on_left_clone = on_left_for_filter.clone();
+            async move {
+                // Apply partition filter if in lazy partitioning mode
+                let batch = if let Some(ref pf) = partition_filter {
+                    let filtered = filter_batch_by_partition(&batch, &on_left_clone, pf)?;
+                    // Skip empty batches after filtering
+                    if filtered.num_rows() == 0 {
+                        return Ok(state);
+                    }
+                    filtered
+                } else {
+                    batch
+                };
+
+                // Update accumulators if computing bounds
+                if let Some(ref mut accumulators) = state.bounds_accumulators {
+                    for accumulator in accumulators {
+                        accumulator.update_batch(&batch)?;
+                    }
+                }
+
+                // Decide if we spill or not
+                let batch_size = get_record_batch_memory_size(&batch);
+                // Reserve memory for incoming batch
+                state.reservation.try_grow(batch_size)?;
+                // Update metrics
+                state.metrics.build_mem_used.add(batch_size);
+                state.metrics.build_input_batches.add(1);
+                state.metrics.build_input_rows.add(batch.num_rows());
+                // Update row count
+                state.num_rows += batch.num_rows();
+                // Push batch to output
+                state.batches.push(batch);
+                Ok(state)
+            }
         })
         .await?;
 
@@ -1979,10 +2134,13 @@ mod tests {
 
         let left_repartitioned: Arc<dyn ExecutionPlan> = match partition_mode {
             PartitionMode::CollectLeft => Arc::new(CoalescePartitionsExec::new(left)),
-            PartitionMode::Partitioned => Arc::new(RepartitionExec::try_new(
-                left,
-                Partitioning::Hash(left_expr, partition_count),
-            )?),
+            PartitionMode::Partitioned | PartitionMode::LazyPartitioned => {
+                // For both Partitioned and LazyPartitioned, build side is hash partitioned
+                Arc::new(RepartitionExec::try_new(
+                    left,
+                    Partitioning::Hash(left_expr, partition_count),
+                )?)
+            }
             PartitionMode::Auto => {
                 return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
@@ -2000,10 +2158,17 @@ mod tests {
                     Partitioning::Hash(partition_expr, partition_count),
                 )?) as _
             }
-            PartitionMode::Partitioned => Arc::new(RepartitionExec::try_new(
-                right,
-                Partitioning::Hash(right_expr, partition_count),
-            )?),
+            PartitionMode::Partitioned => {
+                // For Partitioned, probe side is hash partitioned
+                Arc::new(RepartitionExec::try_new(
+                    right,
+                    Partitioning::Hash(right_expr, partition_count),
+                )?)
+            }
+            PartitionMode::LazyPartitioned => {
+                // For LazyPartitioned, probe side is NOT repartitioned - merged instead
+                Arc::new(CoalescePartitionsExec::new(right))
+            }
             PartitionMode::Auto => {
                 return internal_err!("Unexpected PartitionMode::Auto in join tests");
             }
