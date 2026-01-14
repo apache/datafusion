@@ -216,6 +216,10 @@ pub(super) struct HashJoinStream {
     /// Optional future to signal when build information has been reported by all partitions
     /// and the dynamic filter has been updated
     build_waiter: Option<OnceFut<()>>,
+    /// Partition index of this stream
+    partition: usize,
+    /// Whether the probe side is already partitioned
+    probe_side_partitioned: bool,
     /// Partitioning mode to use
     mode: PartitionMode,
     /// Output buffer for coalescing small batches into larger ones.
@@ -344,6 +348,8 @@ impl HashJoinStream {
         build_side: BuildSide,
         batch_size: usize,
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
+        partition: usize,
+        probe_side_partitioned: bool,
         mode: PartitionMode,
         null_aware: bool,
     ) -> Self {
@@ -373,6 +379,8 @@ impl HashJoinStream {
             build_indices_buffer: Vec::with_capacity(batch_size),
             build_accumulator,
             build_waiter: None,
+            partition,
+            probe_side_partitioned,
             mode,
             output_buffer,
             null_aware,
@@ -528,7 +536,7 @@ impl HashJoinStream {
                 create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
                 let hashes = self.hashes_buffer.clone();
 
-                let partition_indices = if num_parts > 1 {
+                let partition_indices = if num_parts > 1 && !self.probe_side_partitioned {
                     self.hashes_buffer.clear();
                     self.hashes_buffer.resize(batch.num_rows(), 0);
                     create_hashes(
@@ -547,6 +555,12 @@ impl HashJoinStream {
                     None
                 };
 
+                let current_partition_idx = if self.probe_side_partitioned {
+                    self.partition
+                } else {
+                    0
+                };
+
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
@@ -557,7 +571,7 @@ impl HashJoinStream {
                         values: keys_values,
                         hashes,
                         partition_indices,
-                        current_partition_idx: 0,
+                        current_partition_idx,
                         offset: (0, None),
                         joined_probe_idx: None,
                         probe_matched: vec![false; num_rows],
@@ -729,7 +743,11 @@ impl HashJoinStream {
                 return Ok(StatefulStreamResult::Continue);
             }
 
-            state.current_partition_idx += 1;
+            if self.probe_side_partitioned {
+                state.current_partition_idx = num_parts;
+            } else {
+                state.current_partition_idx += 1;
+            }
             state.offset = (0, None);
         }
 

@@ -51,7 +51,7 @@ use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::spill::get_record_batch_memory_size;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
+    PartitioningSatisfaction, PlanProperties, SendableRecordBatchStream, Statistics,
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
@@ -1195,6 +1195,17 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
+        let probe_side_partitioned = if self.mode == PartitionMode::Partitioned {
+            self.right.output_partitioning().partition_count() == left_partitions
+                && matches!(self.right.output_partitioning().satisfaction(
+                    &Distribution::HashPartitioned(on_right.clone()),
+                    self.right.properties().equivalence_properties(),
+                    false,
+                ), PartitioningSatisfaction::Exact | PartitioningSatisfaction::Subset)
+        } else {
+            false
+        };
+
         Ok(Box::pin(HashJoinStream::new(
             self.schema(),
             on_right,
@@ -1209,6 +1220,8 @@ impl ExecutionPlan for HashJoinExec {
             BuildSide::Initial(BuildSideInitialState { left_futs }),
             batch_size,
             build_accumulator,
+            partition,
+            probe_side_partitioned,
             self.mode,
             self.null_aware,
         )))
