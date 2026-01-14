@@ -654,8 +654,6 @@ impl<'a> ConstEvaluator<'a> {
             Expr::ScalarFunction(ScalarFunction { func, .. }) => {
                 Self::volatility_ok(func.signature().volatility)
             }
-            // Skip const-folding for struct casts with field count mismatches
-            // as these can cause optimizer hang
             Expr::Cast(Cast { expr, data_type })
             | Expr::TryCast(TryCast { expr, data_type }) => {
                 if let (
