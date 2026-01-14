@@ -28,7 +28,7 @@ echo "▶ Generating examples README…"
 bash "$ROOT_DIR/ci/scripts/generate_examples_docs.sh" > "$README_NEW"
 
 echo "▶ Formatting generated README with DataFusion's Prettier…"
-bash "$ROOT_DIR/ci/scripts/doc_prettier_check.sh" --write "$README_NEW"
+bash "$ROOT_DIR/ci/scripts/doc_prettier_check.sh" --write --allow-dirty
 
 echo "▶ Comparing generated README with committed version…"
 
