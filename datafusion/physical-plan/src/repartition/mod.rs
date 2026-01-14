@@ -620,11 +620,12 @@ impl BatchPartitioner {
 
                             // Return the taken vec
                             let (_, buffer, _) = indices_array.into_parts();
-                            let mut vec = buffer.into_inner().into_vec::<u32>().map_err(|e| {
-                                DataFusionError::Internal(format!(
-                                    "Could not convert buffer to vec: {e:?}"
-                                ))
-                            })?;
+                            let mut vec =
+                                buffer.into_inner().into_vec::<u32>().map_err(|e| {
+                                    DataFusionError::Internal(format!(
+                                        "Could not convert buffer to vec: {e:?}"
+                                    ))
+                                })?;
                             vec.clear();
                             *p_indices = vec;
                         }
