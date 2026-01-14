@@ -29,28 +29,32 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanVisitor, execute_stream, visit_execution_plan,
 };
+use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 use futures::StreamExt;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`
 pub async fn parquet_exec_visitor() -> datafusion::common::Result<()> {
     let ctx = SessionContext::new();
 
-    let test_data = datafusion::test_util::parquet_test_data();
+    // Convert the CSV input into a temporary Parquet directory for querying
+    let dataset = ExampleDataset::Cars;
+    let parquet_temp = write_csv_to_parquet(&ctx, &dataset.path()).await?;
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
     let listing_options = ListingOptions::new(Arc::new(file_format));
 
+    let table_path = parquet_temp.file_uri()?;
+
     // First example were we use an absolute path, which requires no additional setup.
-    let _ = ctx
-        .register_listing_table(
-            "my_table",
-            &format!("file://{test_data}/alltypes_plain.parquet"),
-            listing_options.clone(),
-            None,
-            None,
-        )
-        .await;
+    ctx.register_listing_table(
+        "my_table",
+        &table_path,
+        listing_options.clone(),
+        None,
+        None,
+    )
+    .await?;
 
     let df = ctx.sql("SELECT * FROM my_table").await?;
     let plan = df.create_physical_plan().await?;

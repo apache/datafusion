@@ -15,31 +15,57 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
+use arrow::array::timezone::Tz;
 use arrow::array::{
     Array, ArrowPrimitiveType, AsArray, GenericStringArray, PrimitiveArray,
     StringArrayType, StringViewArray,
 };
-use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-use arrow::datatypes::DataType;
+use arrow::compute::DecimalCast;
+use arrow::compute::kernels::cast_utils::string_to_datetime;
+use arrow::datatypes::{DataType, TimeUnit};
+use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
 use chrono::format::{Parsed, StrftimeItems, parse};
 use chrono::{DateTime, TimeZone, Utc};
-
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
-    DataFusionError, Result, ScalarType, ScalarValue, exec_datafusion_err, exec_err,
-    unwrap_or_internal_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+    internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
 
-/// Calls string_to_timestamp_nanos and converts the error type
-pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
-    string_to_timestamp_nanos(s).map_err(|e| e.into())
+static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
+
+/// Converts a string representation of a date‑time into a timestamp expressed in
+/// nanoseconds since the Unix epoch.
+///
+/// This helper is a thin wrapper around the more general `string_to_datetime`
+/// function. It accepts an optional `timezone` which, if `None`, defaults to
+/// Coordinated Universal Time (UTC). The string `s` must contain a valid
+/// date‑time format that can be parsed by the underlying chrono parser.
+///
+/// # Return Value
+///
+/// * `Ok(i64)` – The number of nanoseconds since `1970‑01‑01T00:00:00Z`.
+/// * `Err(DataFusionError)` – If the string cannot be parsed, the parsed
+///   value is out of range (between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804)
+///   or the parsed value does not correspond to an unambiguous time.
+pub(crate) fn string_to_timestamp_nanos_with_timezone(
+    timezone: &Option<Tz>,
+    s: &str,
+) -> Result<i64> {
+    let tz = timezone.as_ref().unwrap_or(&UTC);
+    let dt = string_to_datetime(tz, s)?;
+    let parsed = dt
+        .timestamp_nanos_opt()
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
+
+    Ok(parsed)
 }
 
 /// Checks that all the arguments from the second are of type [Utf8], [LargeUtf8] or [Utf8View]
@@ -69,12 +95,11 @@ pub(crate) fn validate_data_types(args: &[ColumnarValue], name: &str) -> Result<
 /// Accepts a string and parses it using the [`chrono::format::strftime`] specifiers
 /// relative to the provided `timezone`
 ///
-/// [IANA timezones] are only supported if the `arrow-array/chrono-tz` feature is enabled
-///
-/// * `2023-01-01 040506 America/Los_Angeles`
-///
 /// If a timestamp is ambiguous, for example as a result of daylight-savings time, an error
 /// will be returned
+///
+/// Note that parsing [IANA timezones] is not supported yet in chrono - <https://github.com/chronotope/chrono/issues/38>
+/// and this implementation only supports named timezones at the end of the string preceded by a space.
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 /// [IANA timezones]: https://www.iana.org/time-zones
@@ -89,11 +114,55 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
         )
     };
 
-    let mut parsed = Parsed::new();
-    parse(&mut parsed, s, StrftimeItems::new(format)).map_err(|e| err(&e.to_string()))?;
+    let mut datetime_str = s;
+    let mut format = format;
 
-    // attempt to parse the string assuming it has a timezone
-    let dt = parsed.to_datetime();
+    // Manually handle the most common case of a named timezone at the end of the timestamp.
+    // Note that %+ handles 'Z' at the end of the string without a space. This code doesn't
+    // handle named timezones with no preceding space since that would require writing a
+    // custom parser (or switching to Jiff)
+    let tz: Option<chrono_tz::Tz> = if format.trim_end().ends_with(" %Z") {
+        // grab the string after the last space as the named timezone
+        if let Some((dt_str, timezone_name)) = datetime_str.trim_end().rsplit_once(' ') {
+            datetime_str = dt_str;
+
+            // attempt to parse the timezone name
+            let result: Result<chrono_tz::Tz, chrono_tz::ParseError> =
+                timezone_name.parse();
+            let Ok(tz) = result else {
+                return Err(err(&result.unwrap_err().to_string()));
+            };
+
+            // successfully parsed the timezone name, remove the ' %Z' from the format
+            format = &format[..format.len() - 3];
+
+            Some(tz)
+        } else {
+            None
+        }
+    } else if format.contains("%Z") {
+        return Err(err(
+            "'%Z' is only supported at the end of the format string preceded by a space",
+        ));
+    } else {
+        None
+    };
+
+    let mut parsed = Parsed::new();
+    parse(&mut parsed, datetime_str, StrftimeItems::new(format))
+        .map_err(|e| err(&e.to_string()))?;
+
+    let dt = match tz {
+        Some(tz) => {
+            // A timezone was manually parsed out, convert it to a fixed offset
+            match parsed.to_datetime_with_timezone(&tz) {
+                Ok(dt) => Ok(dt.fixed_offset()),
+                Err(e) => Err(e),
+            }
+        }
+        // default to parse the string assuming it has a timezone
+        None => parsed.to_datetime(),
+    };
 
     if let Err(e) = &dt {
         // no timezone or other failure, try without a timezone
@@ -115,7 +184,7 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
-/// nanosecond precision timestamp.
+/// nanosecond precision timestamp relative to the provided `timezone`.
 ///
 /// See [`chrono::format::strftime`] for the full set of supported formats.
 ///
@@ -141,19 +210,21 @@ pub(crate) fn string_to_datetime_formatted<T: TimeZone>(
 ///
 /// [`chrono::format::strftime`]: https://docs.rs/chrono/latest/chrono/format/strftime/index.html
 #[inline]
-pub(crate) fn string_to_timestamp_nanos_formatted(
+pub(crate) fn string_to_timestamp_nanos_formatted_with_timezone(
+    timezone: &Option<Tz>,
     s: &str,
     format: &str,
 ) -> Result<i64, DataFusionError> {
-    string_to_datetime_formatted(&Utc, s, format)?
-        .naive_utc()
-        .and_utc()
+    let dt = string_to_datetime_formatted(timezone.as_ref().unwrap_or(&UTC), s, format)?;
+    let parsed = dt
         .timestamp_nanos_opt()
-        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))
+        .ok_or_else(|| exec_datafusion_err!("{ERR_NANOSECONDS_NOT_SUPPORTED}"))?;
+
+    Ok(parsed)
 }
 
 /// Accepts a string with a `chrono` format and converts it to a
-/// millisecond precision timestamp.
+/// millisecond precision timestamp relative to the provided `timezone`.
 ///
 /// See [`chrono::format::strftime`] for the full set of supported formats.
 ///
@@ -176,14 +247,14 @@ pub(crate) fn string_to_timestamp_millis_formatted(s: &str, format: &str) -> Res
         .timestamp_millis())
 }
 
-pub(crate) fn handle<O, F, S>(
+pub(crate) fn handle<O, F>(
     args: &[ColumnarValue],
     op: F,
     name: &str,
+    dt: &DataType,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
-    S: ScalarType<O::Native>,
     F: Fn(&str) -> Result<O::Native>,
 {
     match &args[0] {
@@ -210,8 +281,13 @@ where
         },
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let result = a.as_ref().map(|x| op(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
+                let result = a
+                    .as_ref()
+                    .map(|x| op(x))
+                    .transpose()?
+                    .and_then(|v| v.to_i64());
+                let s = scalar_value(dt, result)?;
+                Ok(ColumnarValue::Scalar(s))
             }
             _ => exec_err!("Unsupported data type {scalar:?} for function {name}"),
         },
@@ -221,15 +297,15 @@ where
 // Given a function that maps a `&str`, `&str` to an arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-pub(crate) fn handle_multiple<O, F, S, M>(
+pub(crate) fn handle_multiple<O, F, M>(
     args: &[ColumnarValue],
     op: F,
     op2: M,
     name: &str,
+    dt: &DataType,
 ) -> Result<ColumnarValue>
 where
     O: ArrowPrimitiveType,
-    S: ScalarType<O::Native>,
     F: Fn(&str, &str) -> Result<O::Native>,
     M: Fn(O::Native) -> O::Native,
 {
@@ -298,9 +374,9 @@ where
                     if let Some(s) = x {
                         match op(a, s.as_str()) {
                             Ok(r) => {
-                                ret = Some(Ok(ColumnarValue::Scalar(S::scalar(Some(
-                                    op2(r),
-                                )))));
+                                let result = op2(r).to_i64();
+                                let s = scalar_value(dt, result)?;
+                                ret = Some(Ok(ColumnarValue::Scalar(s)));
                                 break;
                             }
                             Err(e) => ret = Some(Err(e)),
@@ -453,4 +529,17 @@ where
 {
     // first map is the iterator, second is for the `Option<_>`
     array.iter().map(|x| x.map(&op).transpose()).collect()
+}
+
+fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
+    match dt {
+        DataType::Date32 => Ok(ScalarValue::Date32(r.and_then(|v| v.to_i32()))),
+        DataType::Timestamp(u, tz) => match u {
+            TimeUnit::Second => Ok(ScalarValue::TimestampSecond(r, tz.clone())),
+            TimeUnit::Millisecond => Ok(ScalarValue::TimestampMillisecond(r, tz.clone())),
+            TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(r, tz.clone())),
+            TimeUnit::Nanosecond => Ok(ScalarValue::TimestampNanosecond(r, tz.clone())),
+        },
+        t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
+    }
 }

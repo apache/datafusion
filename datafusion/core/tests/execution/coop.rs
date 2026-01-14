@@ -41,7 +41,6 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_coop::EnsureCooperative;
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coop::make_cooperative;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
@@ -425,10 +424,7 @@ async fn filter_reject_all_batches_yields(
     ));
     let filtered = Arc::new(FilterExec::try_new(false_predicate, Arc::new(infinite))?);
 
-    // Use CoalesceBatchesExec to guarantee each Filter pull always yields an 8192-row batch
-    let coalesced = Arc::new(CoalesceBatchesExec::new(filtered, 8_192));
-
-    query_yields(coalesced, session_ctx.task_ctx()).await
+    query_yields(filtered, session_ctx.task_ctx()).await
 }
 
 #[rstest]
@@ -584,17 +580,18 @@ async fn join_yields(
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
     let right_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
 
-    // Wrap each side in CoalesceBatches + Repartition so they are both hashed into 1 partition
-    let coalesced_left =
-        Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_left), 8_192));
-    let coalesced_right =
-        Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_right), 8_192));
-
     let part_left = Partitioning::Hash(left_keys, 1);
     let part_right = Partitioning::Hash(right_keys, 1);
 
-    let hashed_left = Arc::new(RepartitionExec::try_new(coalesced_left, part_left)?);
-    let hashed_right = Arc::new(RepartitionExec::try_new(coalesced_right, part_right)?);
+    // Wrap each side in Repartition so they are both hashed into 1 partition
+    let hashed_left = Arc::new(RepartitionExec::try_new(
+        Arc::new(infinite_left),
+        part_left,
+    )?);
+    let hashed_right = Arc::new(RepartitionExec::try_new(
+        Arc::new(infinite_right),
+        part_right,
+    )?);
 
     // Build an Inner HashJoinExec → left.value = right.value
     let join = Arc::new(HashJoinExec::try_new(
@@ -609,6 +606,7 @@ async fn join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -632,17 +630,18 @@ async fn join_agg_yields(
     let left_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
     let right_keys: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(Column::new("value", 0))];
 
-    // Wrap each side in CoalesceBatches + Repartition so they are both hashed into 1 partition
-    let coalesced_left =
-        Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_left), 8_192));
-    let coalesced_right =
-        Arc::new(CoalesceBatchesExec::new(Arc::new(infinite_right), 8_192));
-
     let part_left = Partitioning::Hash(left_keys, 1);
     let part_right = Partitioning::Hash(right_keys, 1);
 
-    let hashed_left = Arc::new(RepartitionExec::try_new(coalesced_left, part_left)?);
-    let hashed_right = Arc::new(RepartitionExec::try_new(coalesced_right, part_right)?);
+    // Wrap each side in Repartition so they are both hashed into 1 partition
+    let hashed_left = Arc::new(RepartitionExec::try_new(
+        Arc::new(infinite_left),
+        part_left,
+    )?);
+    let hashed_right = Arc::new(RepartitionExec::try_new(
+        Arc::new(infinite_right),
+        part_right,
+    )?);
 
     // Build an Inner HashJoinExec → left.value = right.value
     let join = Arc::new(HashJoinExec::try_new(
@@ -657,6 +656,7 @@ async fn join_agg_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     // Project only one column (“value” from the left side) because we just want to sum that
@@ -722,6 +722,7 @@ async fn hash_join_yields(
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await
@@ -753,9 +754,10 @@ async fn hash_join_without_repartition_and_no_agg(
         /* filter */ None,
         &JoinType::Inner,
         /* output64 */ None,
-        // Using CollectLeft is fine—just avoid RepartitionExec’s partitioned channels.
+        // Using CollectLeft is fine—just avoid RepartitionExec's partitioned channels.
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNull,
+        false,
     )?);
 
     query_yields(join, session_ctx.task_ctx()).await

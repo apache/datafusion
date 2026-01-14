@@ -582,13 +582,13 @@ drop table t;
 statement ok
 create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (row('a', 1, 2.3), row('b', 2.3, 2));
 
-# type of each column should not coerced but perserve as it is
+# type of each column should not coerced but preserve as it is
 query T
 select arrow_typeof(a) from t;
 ----
 Struct("r": Utf8View, "c": Int32, "g": Float32)
 
-# type of each column should not coerced but perserve as it is
+# type of each column should not coerced but preserve as it is
 query T
 select arrow_typeof(b) from t;
 ----

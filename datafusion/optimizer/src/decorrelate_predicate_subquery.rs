@@ -27,7 +27,10 @@ use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, Result, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, DFSchemaRef, ExprSchema, NullEquality, Result, assert_or_internal_err,
+    plan_err,
+};
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
@@ -310,6 +313,39 @@ fn mark_join(
     )
 }
 
+/// Check if join keys in the join filter may contain NULL values
+///
+/// Returns true if any join key column is nullable on either side.
+/// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
+/// we can use a regular anti join instead of the more expensive null-aware variant.
+fn join_keys_may_be_null(
+    join_filter: &Expr,
+    left_schema: &DFSchemaRef,
+    right_schema: &DFSchemaRef,
+) -> Result<bool> {
+    // Extract columns from the join filter
+    let mut columns = std::collections::HashSet::new();
+    expr_to_columns(join_filter, &mut columns)?;
+
+    // Check if any column is nullable
+    for col in columns {
+        // Check in left schema
+        if let Ok(field) = left_schema.field_from_column(&col)
+            && field.as_ref().is_nullable()
+        {
+            return Ok(true);
+        }
+        // Check in right schema
+        if let Ok(field) = right_schema.field_from_column(&col)
+            && field.as_ref().is_nullable()
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
@@ -403,6 +439,8 @@ fn build_join(
             // Degenerate case: no right columns referenced by the predicate(s)
             sub_query_alias.clone()
         };
+
+        // Mark joins don't use null-aware semantics (they use three-valued logic with mark column)
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_on(right_projected, join_type, Some(join_filter))?
             .build()?;
@@ -415,10 +453,36 @@ fn build_join(
         return Ok(Some(new_plan));
     }
 
+    // Determine if this should be a null-aware anti join
+    // Null-aware semantics are only needed for NOT IN subqueries, not NOT EXISTS:
+    // - NOT IN: Uses three-valued logic, requires null-aware handling
+    // - NOT EXISTS: Uses two-valued logic, regular anti join is correct
+    // We can distinguish them: NOT IN has in_predicate_opt, NOT EXISTS does not
+    //
+    // Additionally, if the join keys are non-nullable on both sides, we don't need
+    // null-aware semantics because NULLs cannot exist in the data.
+    let null_aware = matches!(join_type, JoinType::LeftAnti)
+        && in_predicate_opt.is_some()
+        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
+
     // join our sub query into the main plan
-    let new_plan = LogicalPlanBuilder::from(left.clone())
-        .join_on(sub_query_alias, join_type, Some(join_filter))?
-        .build()?;
+    let new_plan = if null_aware {
+        // Use join_detailed_with_options to set null_aware flag
+        LogicalPlanBuilder::from(left.clone())
+            .join_detailed_with_options(
+                sub_query_alias,
+                join_type,
+                (Vec::<Column>::new(), Vec::<Column>::new()), // No equijoin keys, filter-based join
+                Some(join_filter),
+                NullEquality::NullEqualsNothing,
+                true, // null_aware
+            )?
+            .build()?
+    } else {
+        LogicalPlanBuilder::from(left.clone())
+            .join_on(sub_query_alias, join_type, Some(join_filter))?
+            .build()?
+    };
     debug!(
         "predicate subquery optimized:\n{}",
         new_plan.display_indent()

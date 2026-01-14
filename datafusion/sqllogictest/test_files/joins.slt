@@ -3516,7 +3516,6 @@ AS VALUES
 query IT
 SELECT t1_id, t1_name FROM join_test_left WHERE t1_id NOT IN (SELECT t2_id FROM join_test_right) ORDER BY t1_id;
 ----
-NULL e
 
 ####
 # join_partitioned_test

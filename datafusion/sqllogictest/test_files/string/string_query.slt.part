@@ -528,7 +528,7 @@ FROM test_basic_operator;
 Andrew
 Xiangpeng
 Raphael
-under_scrre
+under_scare
 percent
 (empty)
 (empty)
@@ -542,10 +542,10 @@ SELECT
   TRANSLATE(unicode_1, 'foo', 'bar') as c
 FROM test_basic_operator;
 ----
-databusirn📊🔥
-databusirn数据融合
-databusirnДатаФусион
-un iść crre
+databusian📊🔥
+databusian数据融合
+databusianДатаФусион
+un iść care
 pan Tadeusz ma iść w kąt
 (empty)
 (empty)
