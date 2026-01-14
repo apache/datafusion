@@ -17,6 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1241,7 +1242,6 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 
 /// Return true if every left-field name exists in the right fields (and lengths are equal).
 fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
-    use std::collections::HashSet;
     let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
     lhs_fields
         .iter()
@@ -1251,7 +1251,6 @@ fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
 /// Coerce two structs by matching fields by name. Assumes the name-sets match.
 fn coerce_struct_by_name(lhs_fields: &Fields, rhs_fields: &Fields) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    use std::collections::HashMap;
 
     let rhs_by_name: HashMap<&str, &FieldRef> =
         rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
