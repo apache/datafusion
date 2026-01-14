@@ -1218,6 +1218,7 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
 
 fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
             // Field count must match for coercion
@@ -1225,66 +1226,76 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
                 return None;
             }
 
-            // Try name-based coercion first - match fields by name
-            // Build a map of right-side fields by name for quick lookup
-            let rhs_by_name: std::collections::HashMap<&str, &FieldRef> =
-                rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
-
-            // Check if any fields match by name
-            let has_name_overlap = lhs_fields
-                .iter()
-                .any(|lf| rhs_by_name.contains_key(lf.name().as_str()));
-
-            if has_name_overlap {
-                // Perform name-based coercion
-                let coerced_fields: Option<Vec<FieldRef>> = lhs_fields
-                    .iter()
-                    .map(|lhs_field| {
-                        // Find matching right-side field by name
-                        rhs_by_name
-                            .get(lhs_field.name().as_str())
-                            .and_then(|rhs_field| {
-                                // Coerce the data types of matching fields
-                                comparison_coercion(
-                                    lhs_field.data_type(),
-                                    rhs_field.data_type(),
-                                )
-                                .map(|coerced_type| {
-                                    // Preserve left-side field name, coerce nullability
-                                    let is_nullable = lhs_field.is_nullable()
-                                        || rhs_field.is_nullable();
-                                    Arc::new(Field::new(
-                                        lhs_field.name().clone(),
-                                        coerced_type,
-                                        is_nullable,
-                                    ))
-                                })
-                            })
-                    })
-                    .collect();
-
-                return coerced_fields.map(|fields| Struct(fields.into()));
+            // If the two structs have exactly the same set of field names (possibly in
+            // different order), prefer name-based coercion. Otherwise fall back to
+            // positional coercion which preserves backward compatibility.
+            if fields_have_same_names(lhs_fields, rhs_fields) {
+                return coerce_struct_by_name(lhs_fields, rhs_fields);
             }
 
-            // Fallback: If no names match, try positional coercion
-            // This preserves backward compatibility when field names don't match
-
-            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
-                .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
-                .collect::<Option<Vec<DataType>>>()?;
-
-            // preserve the field name and nullability
-            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
-
-            let fields: Vec<FieldRef> = coerced_types
-                .into_iter()
-                .zip(orig_fields)
-                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-                .collect();
-            Some(Struct(fields.into()))
+            coerce_struct_by_position(lhs_fields, rhs_fields)
         }
         _ => None,
     }
+}
+
+/// Return true if every left-field name exists in the right fields (and lengths are equal).
+fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
+    use std::collections::HashSet;
+    let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
+    lhs_fields
+        .iter()
+        .all(|lf| rhs_names.contains(lf.name().as_str()))
+}
+
+/// Coerce two structs by matching fields by name. Assumes the name-sets match.
+fn coerce_struct_by_name(lhs_fields: &Fields, rhs_fields: &Fields) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    use std::collections::HashMap;
+
+    let rhs_by_name: HashMap<&str, &FieldRef> =
+        rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
+
+    let mut coerced: Vec<FieldRef> = Vec::with_capacity(lhs_fields.len());
+
+    for lhs in lhs_fields.iter() {
+        let rhs = rhs_by_name.get(lhs.name().as_str()).unwrap(); // safe: caller ensured names match
+        let coerced_type = comparison_coercion(lhs.data_type(), rhs.data_type())?;
+        let is_nullable = lhs.is_nullable() || rhs.is_nullable();
+        coerced.push(Arc::new(Field::new(
+            lhs.name().clone(),
+            coerced_type,
+            is_nullable,
+        )));
+    }
+
+    Some(Struct(coerced.into()))
+}
+
+/// Coerce two structs positionally (left-to-right). This preserves field names from
+/// the left struct and uses the combined nullability.
+fn coerce_struct_by_position(
+    lhs_fields: &Fields,
+    rhs_fields: &Fields,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    // First coerce individual types; fail early if any pair cannot be coerced.
+    let coerced_types: Vec<DataType> = lhs_fields
+        .iter()
+        .zip(rhs_fields.iter())
+        .map(|(l, r)| comparison_coercion(l.data_type(), r.data_type()))
+        .collect::<Option<Vec<DataType>>>()?;
+
+    // Build final fields preserving left-side names and combined nullability.
+    let orig_pairs = lhs_fields.iter().zip(rhs_fields.iter());
+    let fields: Vec<FieldRef> = coerced_types
+        .into_iter()
+        .zip(orig_pairs)
+        .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+        .collect();
+
+    Some(Struct(fields.into()))
 }
 
 /// returns the result of coercing two fields to a common type
