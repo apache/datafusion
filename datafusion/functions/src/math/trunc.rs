@@ -110,61 +110,57 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let value = &args.args[0];
-
-        // Scalar fast path for float types with scalar or default precision
-        if let ColumnarValue::Scalar(scalar) = value {
-            // Get precision: default 0 or from second scalar arg
-            let precision = if args.args.len() >= 2 {
-                match &args.args[1] {
-                    ColumnarValue::Scalar(Int64(Some(p))) => *p,
-                    ColumnarValue::Scalar(Int64(None)) => {
-                        // Return null with the same type as the input
-                        return match scalar {
-                            ScalarValue::Float32(_) => {
-                                Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
-                            }
-                            _ => Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
-                        };
-                    }
-                    _ => {
-                        // Precision is an array - fall through to array path
-                        return make_scalar_function(trunc, vec![])(&args.args);
-                    }
-                }
-            } else {
-                0 // default precision
-            };
-
-            match scalar {
-                ScalarValue::Float64(v) => {
-                    let result = v.map(|x| {
-                        if precision == 0 {
-                            x.trunc()
-                        } else {
-                            compute_truncate64(x, precision)
-                        }
-                    });
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)));
-                }
-                ScalarValue::Float32(v) => {
-                    let result = v.map(|x| {
-                        if precision == 0 {
-                            x.trunc()
-                        } else {
-                            compute_truncate32(x, precision)
-                        }
-                    });
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(result)));
-                }
-                ScalarValue::Null => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
-                }
-                _ => {}
+        // Extract precision from second argument (default 0)
+        let precision = match args.args.get(1) {
+            Some(ColumnarValue::Scalar(Int64(Some(p)))) => Some(*p),
+            Some(ColumnarValue::Scalar(Int64(None))) => None, // null precision
+            Some(ColumnarValue::Array(_)) => {
+                // Precision is an array - use array path
+                return make_scalar_function(trunc, vec![])(&args.args);
             }
-        }
+            None => Some(0), // default precision
+            _ => Some(0),
+        };
 
-        make_scalar_function(trunc, vec![])(&args.args)
+        // Scalar fast path using tuple matching for (value, precision)
+        match (&args.args[0], precision) {
+            // Null precision returns null with same type as input
+            (ColumnarValue::Scalar(ScalarValue::Float32(_)), None) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+            }
+            (ColumnarValue::Scalar(ScalarValue::Float64(_)), None)
+            | (ColumnarValue::Scalar(ScalarValue::Null), None) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            }
+            // Float64 scalar with precision
+            (ColumnarValue::Scalar(ScalarValue::Float64(v)), Some(p)) => {
+                let result = v.map(|x| {
+                    if p == 0 {
+                        x.trunc()
+                    } else {
+                        compute_truncate64(x, p)
+                    }
+                });
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)))
+            }
+            // Float32 scalar with precision
+            (ColumnarValue::Scalar(ScalarValue::Float32(v)), Some(p)) => {
+                let result = v.map(|x| {
+                    if p == 0 {
+                        x.trunc()
+                    } else {
+                        compute_truncate32(x, p)
+                    }
+                });
+                Ok(ColumnarValue::Scalar(ScalarValue::Float32(result)))
+            }
+            // Null scalar
+            (ColumnarValue::Scalar(ScalarValue::Null), Some(_)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            }
+            // Array path for everything else
+            _ => make_scalar_function(trunc, vec![])(&args.args),
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
