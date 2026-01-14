@@ -414,7 +414,7 @@ mod tests {
     use super::*;
     use arrow::{
         array::{Date64Array, Int32Array, StructArray},
-        datatypes::{Fields, TimeUnit},
+        datatypes::{Field, Fields, TimeUnit},
     };
 
     #[test]
@@ -590,8 +590,6 @@ mod tests {
 
     #[test]
     fn cast_struct_by_field_name() {
-        use arrow::datatypes::Field;
-
         let source_fields = Fields::from(vec![
             Field::new("b", DataType::Int32, true),
             Field::new("a", DataType::Int32, true),
@@ -652,8 +650,6 @@ mod tests {
 
     #[test]
     fn cast_struct_missing_field_inserts_nulls() {
-        use arrow::datatypes::Field;
-
         let source_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
 
         let target_fields = Fields::from(vec![
