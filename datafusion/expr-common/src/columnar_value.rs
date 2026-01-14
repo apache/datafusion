@@ -296,12 +296,9 @@ impl ColumnarValue {
                 let casted = cast_array_by_name(array, cast_type, &cast_options)?;
                 Ok(ColumnarValue::Array(casted))
             }
-            ColumnarValue::Scalar(scalar) => {
-                // For scalars, use ScalarValue's cast which now supports name-based struct casting
-                Ok(ColumnarValue::Scalar(
-                    scalar.cast_to_with_options(cast_type, &cast_options)?,
-                ))
-            }
+            ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+                scalar.cast_to_with_options(cast_type, &cast_options)?,
+            )),
         }
     }
 }
