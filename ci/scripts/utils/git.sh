@@ -17,7 +17,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Note: cargo doc does not support an auto-fix mode; this script runs the check-only build.
-set -ex
-export RUSTDOCFLAGS="-D warnings"
-cargo doc --document-private-items --no-deps --workspace
+# Ensure the repository is clean before auto-fixing files.
+require_clean_work_tree() {
+  local caller="${1:-script}"
+  if [[ -n "$(git status --porcelain)" ]]; then
+    echo "[$caller] Uncommitted changes detected. Commit or stash them, or re-run with --allow-dirty." >&2
+    return 1
+  fi
+}
