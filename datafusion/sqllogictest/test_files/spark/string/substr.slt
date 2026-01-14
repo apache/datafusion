@@ -15,23 +15,52 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT substr('Spark SQL'::string, 5::int);
+----
+k SQL
 
-## Original Query: SELECT substr('Spark SQL', -3);
-## PySpark 3.5.5 Result: {'substr(Spark SQL, -3, 2147483647)': 'SQL', 'typeof(substr(Spark SQL, -3, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(-3)': 'int'}
-#query
-#SELECT substr('Spark SQL'::string, -3::int);
+query T
+SELECT substr('Spark SQL'::string, -3::int);
+----
+SQL
 
-## Original Query: SELECT substr('Spark SQL', 5);
-## PySpark 3.5.5 Result: {'substr(Spark SQL, 5, 2147483647)': 'k SQL', 'typeof(substr(Spark SQL, 5, 2147483647))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int'}
-#query
-#SELECT substr('Spark SQL'::string, 5::int);
+query T
+SELECT substr('Spark SQL'::string, NULL::int);
+----
+NULL
 
-## Original Query: SELECT substr('Spark SQL', 5, 1);
-## PySpark 3.5.5 Result: {'substr(Spark SQL, 5, 1)': 'k', 'typeof(substr(Spark SQL, 5, 1))': 'string', 'typeof(Spark SQL)': 'string', 'typeof(5)': 'int', 'typeof(1)': 'int'}
-#query
-#SELECT substr('Spark SQL'::string, 5::int, 1::int);
+query T
+SELECT substr(NULL::string, 5::int);
+----
+NULL
+
+query T
+SELECT substr('Spark SQL'::string, -3::int, 2::int);
+----
+SQ
+
+query T
+SELECT substr('Spark SQL'::string, 3::int, 1::int);
+----
+a
+
+query T
+SELECT substr('Spark SQL'::string, 3::int, -1::int);
+----
+(empty)
+
+query T
+SELECT substr(NULL::string, 3::int, 1::int);
+----
+NULL
+
+query T
+SELECT substr('Spark SQL'::string, NULL::int, 1::int);
+----
+NULL
+
+query T
+SELECT substr('Spark SQL'::string, 3::int, NULL::int);
+----
+NULL
