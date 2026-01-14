@@ -725,6 +725,10 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
+          
+      - name: Mark repository as safe for git
+        # Required for git commands inside container (avoids "dubious ownership" error)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Run examples docs check script
         run: |
