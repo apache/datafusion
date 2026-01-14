@@ -73,45 +73,34 @@ fn cast_struct_column(
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        if has_overlap {
-            for target_child_field in target_fields {
-                fields.push(Arc::clone(target_child_field));
-                match source_struct.column_by_name(target_child_field.name()) {
-                    Some(source_child_col) => {
-                        let adapted_child = cast_column(
-                            source_child_col,
-                            target_child_field,
-                            cast_options,
-                        )
-                        .map_err(|e| {
+        // Iterate target fields and pick source child either by name (when fields overlap)
+        // or by position (when there is no name overlap).
+        for (index, target_child_field) in target_fields.iter().enumerate() {
+            fields.push(Arc::clone(target_child_field));
+
+            // Determine the source child column: by name when overlapping names exist,
+            // otherwise by position.
+            let source_child_opt: Option<&ArrayRef> = if has_overlap {
+                source_struct.column_by_name(target_child_field.name())
+            } else {
+                Some(source_struct.column(index))
+            };
+
+            match source_child_opt {
+                Some(source_child_col) => {
+                    let adapted_child =
+                        cast_column(source_child_col, target_child_field, cast_options)
+                            .map_err(|e| {
                             e.context(format!(
                                 "While casting struct field '{}'",
                                 target_child_field.name()
                             ))
                         })?;
-                        arrays.push(adapted_child);
-                    }
-                    None => {
-                        arrays.push(new_null_array(
-                            target_child_field.data_type(),
-                            num_rows,
-                        ));
-                    }
+                    arrays.push(adapted_child);
                 }
-            }
-        } else {
-            for (index, target_child_field) in target_fields.iter().enumerate() {
-                fields.push(Arc::clone(target_child_field));
-                let source_child_col = source_struct.column(index);
-                let adapted_child =
-                    cast_column(source_child_col, target_child_field, cast_options)
-                        .map_err(|e| {
-                            e.context(format!(
-                                "While casting struct field '{}'",
-                                target_child_field.name()
-                            ))
-                        })?;
-                arrays.push(adapted_child);
+                None => {
+                    arrays.push(new_null_array(target_child_field.data_type(), num_rows));
+                }
             }
         }
 
