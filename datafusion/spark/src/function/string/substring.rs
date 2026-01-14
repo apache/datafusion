@@ -134,12 +134,12 @@ fn spark_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     match args[0].data_type() {
         DataType::Utf8 => spark_substring_utf8::<i32, _>(
-            args[0].as_string::<i32>(),
+            &args[0].as_string::<i32>(),
             start_array,
             length_array,
         ),
         DataType::LargeUtf8 => spark_substring_utf8::<i64, _>(
-            args[0].as_string::<i64>(),
+            &args[0].as_string::<i64>(),
             start_array,
             length_array,
         ),
@@ -171,7 +171,7 @@ fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
 }
 
 fn spark_substring_utf8<'a, O, V>(
-    string_array: V,
+    string_array: &V,
     start_array: &Int64Array,
     length_array: Option<&Int64Array>,
 ) -> Result<ArrayRef>
@@ -181,7 +181,7 @@ where
 {
     let mut builder = GenericStringBuilder::<O>::new();
 
-    let is_ascii = enable_ascii_fast_path(&string_array, start_array, length_array);
+    let is_ascii = enable_ascii_fast_path(string_array, start_array, length_array);
 
     for i in 0..string_array.len() {
         if string_array.is_null(i) || start_array.is_null(i) {
@@ -189,11 +189,11 @@ where
             continue;
         }
 
-        if let Some(len_arr) = length_array {
-            if len_arr.is_null(i) {
-                builder.append_null();
-                continue;
-            }
+        if let Some(len_arr) = length_array
+            && len_arr.is_null(i)
+        {
+            builder.append_null();
+            continue;
         }
 
         let string = string_array.value(i);
@@ -201,11 +201,11 @@ where
         let len_opt = length_array.map(|arr| arr.value(i));
 
         // Spark: negative length returns empty string
-        if let Some(len) = len_opt {
-            if len < 0 {
-                builder.append_value("");
-                continue;
-            }
+        if let Some(len) = len_opt
+            && len < 0
+        {
+            builder.append_value("");
+            continue;
         }
 
         let string_len = if is_ascii {
@@ -243,11 +243,11 @@ fn spark_substring_view(
             builder.append_null();
             continue;
         }
-        if let Some(len_arr) = length_array {
-            if len_arr.is_null(i) {
-                builder.append_null();
-                continue;
-            }
+        if let Some(len_arr) = length_array
+            && len_arr.is_null(i)
+        {
+            builder.append_null();
+            continue;
         }
 
         let string = string_array.value(i);
@@ -255,11 +255,11 @@ fn spark_substring_view(
         let len_opt = length_array.map(|arr| arr.value(i));
 
         // Spark: negative length returns empty string
-        if let Some(len) = len_opt {
-            if len < 0 {
-                builder.append_value("");
-                continue;
-            }
+        if let Some(len) = len_opt
+            && len < 0
+        {
+            builder.append_value("");
+            continue;
         }
 
         let string_len = if is_ascii {
