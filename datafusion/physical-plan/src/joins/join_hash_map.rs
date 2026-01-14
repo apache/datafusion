@@ -120,6 +120,7 @@ pub trait JoinHashMapType: Send + Sync {
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
+        indices: Option<&[u32]>,
         limit: usize,
         offset: MapOffset,
         input_indices: &mut Vec<u32>,
@@ -185,6 +186,7 @@ impl JoinHashMapType for JoinHashMapU32 {
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
+        indices: Option<&[u32]>,
         limit: usize,
         offset: MapOffset,
         input_indices: &mut Vec<u32>,
@@ -194,6 +196,7 @@ impl JoinHashMapType for JoinHashMapU32 {
             &self.map,
             &self.next,
             hash_values,
+            indices,
             limit,
             offset,
             input_indices,
@@ -263,6 +266,7 @@ impl JoinHashMapType for JoinHashMapU64 {
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
+        indices: Option<&[u32]>,
         limit: usize,
         offset: MapOffset,
         input_indices: &mut Vec<u32>,
@@ -272,6 +276,7 @@ impl JoinHashMapType for JoinHashMapU64 {
             &self.map,
             &self.next,
             hash_values,
+            indices,
             limit,
             offset,
             input_indices,
@@ -380,6 +385,7 @@ pub fn get_matched_indices_with_limit_offset<T>(
     map: &HashTable<(u64, T)>,
     next_chain: &[T],
     hash_values: &[u64],
+    indices: Option<&[u32]>,
     limit: usize,
     offset: MapOffset,
     input_indices: &mut Vec<u32>,
@@ -395,18 +401,21 @@ where
     match_indices.clear();
     let one = T::try_from(1).unwrap();
 
+    let (start_idx, total_rows) = (offset.0, indices.map(|i| i.len()).unwrap_or(hash_values.len()));
+
     // Check if hashmap consists of unique values
     // If so, we can skip the chain traversal
     if map.len() == next_chain.len() {
-        let start = offset.0;
-        let end = (start + limit).min(hash_values.len());
-        for (i, &hash) in hash_values[start..end].iter().enumerate() {
+        let end = (start_idx + limit).min(total_rows);
+        for i in start_idx..end {
+            let row_idx = indices.map(|indices| indices[i] as usize).unwrap_or(i);
+            let hash = hash_values[row_idx];
             if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
-                input_indices.push(start as u32 + i as u32);
+                input_indices.push(row_idx as u32);
                 match_indices.push((*idx - one).into());
             }
         }
-        return if end == hash_values.len() {
+        return if end == total_rows {
             None
         } else {
             Some((end, None))
@@ -416,7 +425,7 @@ where
     let mut remaining_output = limit;
 
     // Calculate initial `hash_values` index before iterating
-    let to_skip = match offset {
+    let start_idx = match offset {
         // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
         (idx, None) => idx,
         // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
@@ -426,28 +435,29 @@ where
         // to start with the next index
         (idx, Some(next_idx)) => {
             let next_idx: T = T::usize_as(next_idx as usize);
-            let is_last = idx == hash_values.len() - 1;
+            let row_idx = indices.map(|indices| indices[idx] as usize).unwrap_or(idx);
+            let is_last = idx == total_rows - 1;
             if let Some(next_offset) = traverse_chain(
                 next_chain,
-                idx,
+                row_idx,
                 next_idx,
                 &mut remaining_output,
                 input_indices,
                 match_indices,
                 is_last,
             ) {
-                return Some(next_offset);
+                return Some((idx, next_offset.1));
             }
             idx + 1
         }
     };
 
-    let hash_values_len = hash_values.len();
-    for (i, &hash) in hash_values[to_skip..].iter().enumerate() {
-        let row_idx = to_skip + i;
+    for i in start_idx..total_rows {
+        let row_idx = indices.map(|indices| indices[i] as usize).unwrap_or(i);
+        let hash = hash_values[row_idx];
         if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
             let idx: T = *idx;
-            let is_last = row_idx == hash_values_len - 1;
+            let is_last = i == total_rows - 1;
             if let Some(next_offset) = traverse_chain(
                 next_chain,
                 row_idx,
@@ -457,7 +467,7 @@ where
                 match_indices,
                 is_last,
             ) {
-                return Some(next_offset);
+                return Some((i, next_offset.1));
             }
         }
     }

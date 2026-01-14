@@ -238,6 +238,7 @@ impl ArrayMap {
     pub fn get_matched_indices_with_limit_offset(
         &self,
         prob_side_keys: &[ArrayRef],
+        indices: Option<&[u32]>,
         limit: usize,
         current_offset: MapOffset,
         probe_indices: &mut Vec<u32>,
@@ -256,6 +257,7 @@ impl ArrayMap {
                 lookup_and_get_indices,
                 self,
                 array,
+                indices,
                 limit,
                 current_offset,
                 probe_indices,
@@ -267,6 +269,7 @@ impl ArrayMap {
     fn lookup_and_get_indices<T: ArrowNumericType>(
         &self,
         array: &ArrayRef,
+        indices: Option<&[u32]>,
         limit: usize,
         current_offset: MapOffset,
         probe_indices: &mut Vec<u32>,
@@ -283,10 +286,13 @@ impl ArrayMap {
         let have_null = arr.null_count() > 0;
 
         if self.next.is_empty() {
-            for prob_idx in current_offset.0..arr.len() {
+            let num_rows = indices.map_or(arr.len(), |v| v.len());
+            for i in current_offset.0..num_rows {
                 if build_indices.len() == limit {
-                    return Ok(Some((prob_idx, None)));
+                    return Ok(Some((i, None)));
                 }
+
+                let prob_idx = indices.map_or(i, |v| v[i] as usize);
 
                 // short circuit
                 if have_null && arr.is_null(prob_idx) {
@@ -307,6 +313,7 @@ impl ArrayMap {
             Ok(None)
         } else {
             let mut remaining_output = limit;
+            let num_rows = indices.map_or(arr.len(), |v| v.len());
             let to_skip = match current_offset {
                 // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
                 (idx, None) => idx,
@@ -316,10 +323,11 @@ impl ArrayMap {
                 // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
                 // to start with the next index
                 (idx, Some(next_idx)) => {
-                    let is_last = idx == arr.len() - 1;
+                    let prob_idx = indices.map_or(idx, |v| v[idx] as usize);
+                    let is_last = idx == num_rows - 1;
                     if let Some(next_offset) = traverse_chain(
                         &self.next,
-                        idx,
+                        prob_idx,
                         next_idx as u32,
                         &mut remaining_output,
                         probe_indices,
@@ -332,19 +340,21 @@ impl ArrayMap {
                 }
             };
 
-            for prob_side_idx in to_skip..arr.len() {
+            for i in to_skip..num_rows {
                 if remaining_output == 0 {
-                    return Ok(Some((prob_side_idx, None)));
+                    return Ok(Some((i, None)));
                 }
 
-                if arr.is_null(prob_side_idx) {
+                let prob_idx = indices.map_or(i, |v| v[i] as usize);
+
+                if arr.is_null(prob_idx) {
                     continue;
                 }
 
-                let is_last = prob_side_idx == arr.len() - 1;
+                let is_last = i == num_rows - 1;
 
                 // SAFETY: prob_idx is guaranteed to be within bounds by the loop range.
-                let prob_val: u64 = unsafe { arr.value_unchecked(prob_side_idx) }.as_();
+                let prob_val: u64 = unsafe { arr.value_unchecked(prob_idx) }.as_();
                 let idx_in_build_side = prob_val.wrapping_sub(self.offset) as usize;
                 if idx_in_build_side >= self.data.len()
                     || self.data[idx_in_build_side] == 0
@@ -356,7 +366,7 @@ impl ArrayMap {
 
                 if let Some(offset) = traverse_chain(
                     &self.next,
-                    prob_side_idx,
+                    prob_idx,
                     build_idx,
                     &mut remaining_output,
                     probe_indices,
@@ -430,6 +440,7 @@ mod tests {
         while let Some(o) = next {
             next = map.get_matched_indices_with_limit_offset(
                 &probe,
+                None,
                 1,
                 o,
                 &mut prob_idx,
@@ -457,6 +468,7 @@ mod tests {
         // Skip 10, find 1, next is 2
         let next = map.get_matched_indices_with_limit_offset(
             &probe,
+            None,
             1,
             (0, None),
             &mut p_idx,
@@ -469,6 +481,7 @@ mod tests {
         // Find 2, end
         let next = map.get_matched_indices_with_limit_offset(
             &probe,
+            None,
             1,
             next.unwrap(),
             &mut p_idx,

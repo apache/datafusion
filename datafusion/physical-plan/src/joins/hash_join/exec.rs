@@ -208,9 +208,9 @@ pub(super) struct JoinLeftData {
     pub(super) membership: PushdownStrategy,
     /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti joins)
     /// This is shared across all probe partitions to provide global knowledge
-    pub(super) probe_side_non_empty: AtomicBool,
+    pub(super) probe_side_non_empty: Arc<AtomicBool>,
     /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
-    pub(super) probe_side_has_null: AtomicBool,
+    pub(super) probe_side_has_null: Arc<AtomicBool>,
 }
 
 impl JoinLeftData {
@@ -452,13 +452,13 @@ pub struct HashJoinExec {
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
-    /// Future that consumes left input and builds the hash table
+    /// Futures that consume left input and build the hash tables.
     ///
-    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
+    /// For both CollectLeft and Partitioned partition modes, this structure is *shared* across all output streams.
     ///
-    /// Each output stream waits on the `OnceAsync` to signal the completion of
-    /// the hash table creation.
-    left_fut: Arc<OnceAsync<JoinLeftData>>,
+    /// Each output stream waits on these `OnceAsync`s to signal the completion of
+    /// the hash table creation for the relevant partitions.
+    left_futs: Vec<Arc<OnceAsync<JoinLeftData>>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
     random_state: SeededRandomState,
     /// Partitioning mode to use
@@ -479,6 +479,10 @@ pub struct HashJoinExec {
     /// Set when dynamic filter pushdown is detected in handle_child_pushdown_result.
     /// HashJoinExec also needs to keep a shared bounds accumulator for coordinating updates.
     dynamic_filter: Option<HashJoinExecDynamicFilter>,
+    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti joins)
+    probe_side_non_empty: Arc<AtomicBool>,
+    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
+    probe_side_has_null: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -499,7 +503,7 @@ impl fmt::Debug for HashJoinExec {
             .field("filter", &self.filter)
             .field("join_type", &self.join_type)
             .field("join_schema", &self.join_schema)
-            .field("left_fut", &self.left_fut)
+            .field("left_futs", &self.left_futs)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
             .field("metrics", &self.metrics)
@@ -581,6 +585,10 @@ impl HashJoinExec {
         // Initialize both dynamic filter and bounds accumulator to None
         // They will be set later if dynamic filtering is enabled
 
+        let left_futs = (0..left.output_partitioning().partition_count())
+            .map(|_| Arc::new(OnceAsync::default()))
+            .collect();
+
         Ok(HashJoinExec {
             left,
             right,
@@ -588,7 +596,7 @@ impl HashJoinExec {
             filter,
             join_type: *join_type,
             join_schema,
-            left_fut: Default::default(),
+            left_futs,
             random_state,
             mode: partition_mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -598,6 +606,8 @@ impl HashJoinExec {
             null_aware,
             cache,
             dynamic_filter: None,
+            probe_side_non_empty: Arc::new(AtomicBool::new(false)),
+            probe_side_has_null: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -948,14 +958,14 @@ impl ExecutionPlan for HashJoinExec {
                 Distribution::UnspecifiedDistribution,
             ],
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
+                let (left_expr, _): (Vec<_>, Vec<_>) = self
                     .on
                     .iter()
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
                 vec![
                     Distribution::HashPartitioned(left_expr),
-                    Distribution::HashPartitioned(right_expr),
+                    Distribution::UnspecifiedDistribution,
                 ]
             }
             PartitionMode::Auto => vec![
@@ -1005,7 +1015,7 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            left_fut: Arc::clone(&self.left_fut),
+            left_futs: self.left_futs.clone(),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -1013,6 +1023,8 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             null_aware: self.null_aware,
+            probe_side_non_empty: Arc::clone(&self.probe_side_non_empty),
+            probe_side_has_null: Arc::clone(&self.probe_side_has_null),
             cache: Self::compute_properties(
                 &children[0],
                 &children[1],
@@ -1035,8 +1047,10 @@ impl ExecutionPlan for HashJoinExec {
             filter: self.filter.clone(),
             join_type: self.join_type,
             join_schema: Arc::clone(&self.join_schema),
-            // Reset the left_fut to allow re-execution
-            left_fut: Arc::new(OnceAsync::default()),
+            // Reset the left_futs to allow re-execution
+            left_futs: (0..self.left.output_partitioning().partition_count())
+                .map(|_| Arc::new(OnceAsync::default()))
+                .collect(),
             random_state: self.random_state.clone(),
             mode: self.mode,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -1044,6 +1058,8 @@ impl ExecutionPlan for HashJoinExec {
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
             null_aware: self.null_aware,
+            probe_side_non_empty: Arc::new(AtomicBool::new(false)),
+            probe_side_has_null: Arc::new(AtomicBool::new(false)),
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
@@ -1061,14 +1077,6 @@ impl ExecutionPlan for HashJoinExec {
             .map(|on| Arc::clone(&on.0))
             .collect::<Vec<_>>();
         let left_partitions = self.left.output_partitioning().partition_count();
-        let right_partitions = self.right.output_partitioning().partition_count();
-
-        assert_or_internal_err!(
-            self.mode != PartitionMode::Partitioned
-                || left_partitions == right_partitions,
-            "Invalid HashJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
-             consider using RepartitionExec"
-        );
 
         assert_or_internal_err!(
             self.mode != PartitionMode::CollectLeft || left_partitions == 1,
@@ -1094,58 +1102,35 @@ impl ExecutionPlan for HashJoinExec {
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
-        let array_map_created_count = MetricBuilder::new(&self.metrics)
-            .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
+        let left_futs = (0..left_partitions)
+            .map(|i| {
+                let array_map_created_count = MetricBuilder::new(&self.metrics)
+                    .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, i);
+                self.left_futs[i].try_once(|| {
+                    let left_stream = self.left.execute(i, Arc::clone(&context))?;
 
-        let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
-                let left_stream = self.left.execute(0, Arc::clone(&context))?;
+                    let reservation =
+                        MemoryConsumer::new(format!("HashJoinInput[{i}]"))
+                            .register(context.memory_pool());
 
-                let reservation =
-                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
-
-                Ok(collect_left_input(
-                    self.random_state.random_state().clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
-                    enable_dynamic_filter_pushdown,
-                    Arc::clone(context.session_config().options()),
-                    self.null_equality,
-                    array_map_created_count,
-                ))
-            })?,
-            PartitionMode::Partitioned => {
-                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
-
-                let reservation =
-                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
-                        .register(context.memory_pool());
-
-                OnceFut::new(collect_left_input(
-                    self.random_state.random_state().clone(),
-                    left_stream,
-                    on_left.clone(),
-                    join_metrics.clone(),
-                    reservation,
-                    need_produce_result_in_final(self.join_type),
-                    1,
-                    enable_dynamic_filter_pushdown,
-                    Arc::clone(context.session_config().options()),
-                    self.null_equality,
-                    array_map_created_count,
-                ))
-            }
-            PartitionMode::Auto => {
-                return plan_err!(
-                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
-                    PartitionMode::Auto
-                );
-            }
-        };
+                    Ok(collect_left_input(
+                        self.random_state.random_state().clone(),
+                        left_stream,
+                        on_left.clone(),
+                        join_metrics.clone(),
+                        reservation,
+                        need_produce_result_in_final(self.join_type),
+                        self.right().output_partitioning().partition_count(),
+                        enable_dynamic_filter_pushdown,
+                        Arc::clone(context.session_config().options()),
+                        self.null_equality,
+                        array_map_created_count,
+                        Arc::clone(&self.probe_side_non_empty),
+                        Arc::clone(&self.probe_side_has_null),
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let batch_size = context.session_config().batch_size();
 
@@ -1207,7 +1192,7 @@ impl ExecutionPlan for HashJoinExec {
             column_indices_after_projection,
             self.null_equality,
             HashJoinStreamState::WaitBuildSide,
-            BuildSide::Initial(BuildSideInitialState { left_fut }),
+            BuildSide::Initial(BuildSideInitialState { left_futs }),
             batch_size,
             vec![],
             self.right.output_ordering().is_some(),
@@ -1365,7 +1350,7 @@ impl ExecutionPlan for HashJoinExec {
                     filter: self.filter.clone(),
                     join_type: self.join_type,
                     join_schema: Arc::clone(&self.join_schema),
-                    left_fut: Arc::clone(&self.left_fut),
+                    left_futs: self.left_futs.clone(),
                     random_state: self.random_state.clone(),
                     mode: self.mode,
                     metrics: ExecutionPlanMetricsSet::new(),
@@ -1373,6 +1358,8 @@ impl ExecutionPlan for HashJoinExec {
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
                     null_aware: self.null_aware,
+                    probe_side_non_empty: Arc::clone(&self.probe_side_non_empty),
+                    probe_side_has_null: Arc::clone(&self.probe_side_has_null),
                     cache: self.cache.clone(),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
@@ -1555,6 +1542,8 @@ async fn collect_left_input(
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
     array_map_created_count: Count,
+    probe_side_non_empty: Arc<AtomicBool>,
+    probe_side_has_null: Arc<AtomicBool>,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1737,8 +1726,8 @@ async fn collect_left_input(
         _reservation: reservation,
         bounds,
         membership,
-        probe_side_non_empty: AtomicBool::new(false),
-        probe_side_has_null: AtomicBool::new(false),
+        probe_side_non_empty,
+        probe_side_has_null,
     };
 
     Ok(data)
@@ -3995,6 +3984,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,
@@ -4056,6 +4046,7 @@ mod tests {
             &[right_keys_values],
             NullEquality::NullEqualsNothing,
             &hashes_buffer,
+            None,
             8192,
             (0, None),
             &mut probe_indices_buffer,

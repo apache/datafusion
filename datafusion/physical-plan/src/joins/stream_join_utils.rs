@@ -78,6 +78,7 @@ impl JoinHashMapType for PruningJoinHashMap {
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
+        indices: Option<&[u32]>,
         limit: usize,
         offset: MapOffset,
         input_indices: &mut Vec<u32>,
@@ -89,6 +90,7 @@ impl JoinHashMapType for PruningJoinHashMap {
             &self.map,
             &next,
             hash_values,
+            indices,
             limit,
             offset,
             input_indices,
