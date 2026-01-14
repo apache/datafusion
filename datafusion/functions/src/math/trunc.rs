@@ -124,40 +124,28 @@ impl ScalarUDFImpl for TruncFunc {
 
         // Scalar fast path using tuple matching for (value, precision)
         match (&args.args[0], precision) {
-            // Null precision returns null with same type as input
-            (ColumnarValue::Scalar(ScalarValue::Float32(_)), None) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+            // Null cases
+            (ColumnarValue::Scalar(sv), _) if sv.is_null() => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
             }
-            (ColumnarValue::Scalar(ScalarValue::Float64(_)), None)
-            | (ColumnarValue::Scalar(ScalarValue::Null), None) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
+            (_, None) => {
+                ColumnarValue::Scalar(ScalarValue::Null).cast_to(args.return_type(), None)
             }
-            // Float64 scalar with precision
-            (ColumnarValue::Scalar(ScalarValue::Float64(v)), Some(p)) => {
-                let result = v.map(|x| {
-                    if p == 0 {
-                        x.trunc()
-                    } else {
-                        compute_truncate64(x, p)
-                    }
-                });
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(result)))
-            }
-            // Float32 scalar with precision
-            (ColumnarValue::Scalar(ScalarValue::Float32(v)), Some(p)) => {
-                let result = v.map(|x| {
-                    if p == 0 {
-                        x.trunc()
-                    } else {
-                        compute_truncate32(x, p)
-                    }
-                });
-                Ok(ColumnarValue::Scalar(ScalarValue::Float32(result)))
-            }
-            // Null scalar
-            (ColumnarValue::Scalar(ScalarValue::Null), Some(_)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)))
-            }
+            // Scalar cases
+            (ColumnarValue::Scalar(ScalarValue::Float64(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate64(*v, p)
+                }))),
+            ),
+            (ColumnarValue::Scalar(ScalarValue::Float32(Some(v))), Some(p)) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(if p == 0 {
+                    v.trunc()
+                } else {
+                    compute_truncate32(*v, p)
+                }))),
+            ),
             // Array path for everything else
             _ => make_scalar_function(trunc, vec![])(&args.args),
         }
