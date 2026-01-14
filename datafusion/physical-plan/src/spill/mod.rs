@@ -685,13 +685,13 @@ mod tests {
                 Arc::new(StringArray::from(vec!["d", "e", "f"])),
             ],
         )?;
-        // After appending each batch, spilled_rows should increase, while spill_file_count and
-        // spilled_bytes remain the same (spilled_bytes is updated only after finish() is called)
+        // After appending each batch, spilled_rows and spilled_bytes should increase incrementally,
+        // while spill_file_count remains 1 (since we're writing to the same file)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 0, 3)?;
+        verify_metrics(&in_progress_file, 1, 440, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 0, 6)?;
+        verify_metrics(&in_progress_file, 1, 704, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
@@ -797,6 +797,72 @@ mod tests {
         ]);
         let alignment = get_max_alignment_for_schema(&schema);
         assert_eq!(alignment, 8);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_real_time_spill_metrics() -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+
+        let spill_manager = Arc::new(SpillManager::new(
+            Arc::clone(&env),
+            metrics.clone(),
+            Arc::clone(&schema),
+        ));
+        let mut in_progress_file = spill_manager.create_in_progress_file("Test")?;
+
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )?;
+
+        // Before any batch, metrics should be 0
+        assert_eq!(metrics.spilled_bytes.value(), 0);
+        assert_eq!(metrics.spill_file_count.value(), 0);
+
+        // Append first batch
+        in_progress_file.append_batch(&batch1)?;
+
+        // Metrics should be updated immediately (at least schema and first batch)
+        let bytes_after_batch1 = metrics.spilled_bytes.value();
+        assert_eq!(bytes_after_batch1, 440);
+        assert_eq!(metrics.spill_file_count.value(), 1);
+
+        // Check global progress
+        let progress = env.spilling_progress();
+        assert_eq!(progress.current_bytes, bytes_after_batch1 as u64);
+        assert_eq!(progress.active_files_count, 1);
+
+        // Append another batch
+        in_progress_file.append_batch(&batch1)?;
+        let bytes_after_batch2 = metrics.spilled_bytes.value();
+        assert!(bytes_after_batch2 > bytes_after_batch1);
+
+        // Check global progress again
+        let progress = env.spilling_progress();
+        assert_eq!(progress.current_bytes, bytes_after_batch2 as u64);
+
+        // Finish the file
+        let spilled_file = in_progress_file.finish()?;
+        let final_bytes = metrics.spilled_bytes.value();
+        assert!(final_bytes > bytes_after_batch2);
+
+        // Even after finish, file is still "active" until dropped
+        let progress = env.spilling_progress();
+        assert!(progress.current_bytes > 0);
+        assert_eq!(progress.active_files_count, 1);
+
+        drop(spilled_file);
+        assert_eq!(env.spilling_progress().active_files_count, 0);
+        assert_eq!(env.spilling_progress().current_bytes, 0);
+
         Ok(())
     }
 }

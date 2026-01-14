@@ -30,6 +30,7 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::metrics::{BaselineMetrics, RecordOutput};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use futures::Stream;
 use futures::stream::StreamExt;
@@ -182,10 +183,13 @@ impl ExecutionPlan for AsyncFuncExec {
             context.session_id(),
             context.task_id()
         );
-        // TODO figure out how to record metrics
 
         // first execute the input stream
         let input_stream = self.input.execute(partition, Arc::clone(&context))?;
+
+        // TODO: Track `elapsed_compute` in `BaselineMetrics`
+        // Issue: <https://github.com/apache/datafusion/issues/19658>
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // now, for each record batch, evaluate the async expressions and add the columns to the result
         let async_exprs_captured = Arc::new(self.async_exprs.clone());
@@ -207,6 +211,7 @@ impl ExecutionPlan for AsyncFuncExec {
             let async_exprs_captured = Arc::clone(&async_exprs_captured);
             let schema_captured = Arc::clone(&schema_captured);
             let config_options = Arc::clone(&config_options_ref);
+            let baseline_metrics_captured = baseline_metrics.clone();
 
             async move {
                 let batch = batch?;
@@ -219,7 +224,8 @@ impl ExecutionPlan for AsyncFuncExec {
                     output_arrays.push(output.to_array(batch.num_rows())?);
                 }
                 let batch = RecordBatch::try_new(schema_captured, output_arrays)?;
-                Ok(batch)
+
+                Ok(batch.record_output(&baseline_metrics_captured))
             }
         });
 

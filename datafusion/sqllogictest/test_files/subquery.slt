@@ -430,7 +430,7 @@ SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t
 
 #subquery_not_allowed
 #In/Exist Subquery is not allowed in ORDER BY clause.
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
+statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: In/Exist/SetComparison subquery can only be used in Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, but was used in \[Sort: t1.t1_int IN \(<subquery>\) ASC NULLS LAST\]
 SELECT t1_id, t1_name, t1_int FROM t1 order by t1_int in (SELECT t2_int FROM t2 WHERE t1.t1_id > t1.t1_int)
 
 #non_aggregated_correlated_scalar_subquery
@@ -1469,3 +1469,62 @@ logical_plan
 
 statement count 0
 drop table person;
+
+# Set comparison subqueries (ANY/ALL)
+statement ok
+create table set_cmp_t(v int) as values (1), (6), (10);
+
+statement ok
+create table set_cmp_s(v int) as values (5), (null);
+
+statement ok
+create table set_cmp_empty(v int);
+
+query I rowsort
+select v from set_cmp_t where v > any(select v from set_cmp_s);
+----
+10
+6
+
+query I rowsort
+select v from set_cmp_t where v < all(select v from set_cmp_empty);
+----
+1
+10
+6
+
+statement count 0
+drop table set_cmp_t;
+
+statement count 0
+drop table set_cmp_s;
+
+statement count 0
+drop table set_cmp_empty;
+
+query TT
+explain select v from (values (1), (6), (10)) set_cmp_t(v) where v > any(select v from (values (5), (null)) set_cmp_s(v));
+----
+logical_plan
+01)Projection: set_cmp_t.v
+02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL)
+03)----LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_3.v IS TRUE
+04)------Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND Boolean(NULL)
+05)--------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
+06)----------Filter: __correlated_sq_1.mark OR Boolean(NULL)
+07)------------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_1.v IS TRUE
+08)--------------SubqueryAlias: set_cmp_t
+09)----------------Projection: column1 AS v
+10)------------------Values: (Int64(1)), (Int64(6)), (Int64(10))
+11)--------------SubqueryAlias: __correlated_sq_1
+12)----------------SubqueryAlias: set_cmp_s
+13)------------------Projection: column1 AS v
+14)--------------------Values: (Int64(5)), (Int64(NULL))
+15)----------SubqueryAlias: __correlated_sq_2
+16)------------SubqueryAlias: set_cmp_s
+17)--------------Projection: column1 AS v
+18)----------------Values: (Int64(5)), (Int64(NULL))
+19)------SubqueryAlias: __correlated_sq_3
+20)--------SubqueryAlias: set_cmp_s
+21)----------Projection: column1 AS v
+22)------------Values: (Int64(5)), (Int64(NULL))

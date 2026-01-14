@@ -48,6 +48,7 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 percent-encoding = "2.3.2"
@@ -65,3 +66,7 @@ name = "char"
 [[bench]]
 harness = false
 name = "space"
+
+[[bench]]
+harness = false
+name = "hex"
