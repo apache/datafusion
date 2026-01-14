@@ -1243,6 +1243,7 @@ impl protobuf::PhysicalPlanNode {
             projection,
             partition_mode,
             null_equality.into(),
+            hashjoin.null_aware,
         )?))
     }
 
@@ -2236,6 +2237,7 @@ impl protobuf::PhysicalPlanNode {
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
+                    null_aware: exec.null_aware,
                 },
             ))),
         })

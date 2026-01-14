@@ -25,7 +25,7 @@ use crate::type_coercion::functions::fields_with_udf;
 use crate::udf::ReturnFieldArgs;
 use crate::{LogicalPlan, Projection, Subquery, WindowFunctionDefinition, utils};
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
@@ -156,9 +156,10 @@ impl ExprSchemable for Expr {
                 let return_type = self.to_field(schema)?.1.data_type().clone();
                 Ok(return_type)
             }
-            Expr::WindowFunction(window_function) => self
-                .data_type_and_nullable_with_window_function(schema, window_function)
-                .map(|(return_type, _)| return_type),
+            Expr::WindowFunction(window_function) => Ok(self
+                .window_function_field(schema, window_function)?
+                .data_type()
+                .clone()),
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params: AggregateFunctionParams { args, .. },
@@ -194,6 +195,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNull(_)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -357,12 +359,9 @@ impl ExprSchemable for Expr {
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
             }
-            Expr::WindowFunction(window_function) => self
-                .data_type_and_nullable_with_window_function(
-                    input_schema,
-                    window_function,
-                )
-                .map(|(_, nullable)| nullable),
+            Expr::WindowFunction(window_function) => Ok(self
+                .window_function_field(input_schema, window_function)?
+                .is_nullable()),
             Expr::ScalarVariable(field, _) => Ok(field.is_nullable()),
             Expr::TryCast { .. } | Expr::Unnest(_) | Expr::Placeholder(_) => Ok(true),
             Expr::IsNull(_)
@@ -374,6 +373,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
+            Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -458,7 +458,7 @@ impl ExprSchemable for Expr {
     ///   with the default implementation returning empty field metadata
     /// - **Aggregate functions**: Generate metadata via function's [`return_field`] method,
     ///   with the default implementation returning empty field metadata
-    /// - **Window functions**: field metadata is empty
+    /// - **Window functions**: field metadata follows the function's return field
     ///
     /// ## Table Reference Scoping
     /// - Establishes proper qualified field references when columns belong to specific tables
@@ -534,11 +534,7 @@ impl ExprSchemable for Expr {
                 )))
             }
             Expr::WindowFunction(window_function) => {
-                let (dt, nullable) = self.data_type_and_nullable_with_window_function(
-                    schema,
-                    window_function,
-                )?;
-                Ok(Arc::new(Field::new(&schema_name, dt, nullable)))
+                self.window_function_field(schema, window_function)
             }
             Expr::AggregateFunction(aggregate_function) => {
                 let AggregateFunction {
@@ -632,6 +628,7 @@ impl ExprSchemable for Expr {
             | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -698,11 +695,11 @@ impl Expr {
     ///
     /// Otherwise, returns an error if there's a type mismatch between
     /// the window function's signature and the provided arguments.
-    fn data_type_and_nullable_with_window_function(
+    fn window_function_field(
         &self,
         schema: &dyn ExprSchema,
         window_function: &WindowFunction,
-    ) -> Result<(DataType, bool)> {
+    ) -> Result<FieldRef> {
         let WindowFunction {
             fun,
             params: WindowFunctionParams { args, .. },
@@ -738,9 +735,7 @@ impl Expr {
                     .into_iter()
                     .collect::<Vec<_>>();
 
-                let return_field = udaf.return_field(&new_fields)?;
-
-                Ok((return_field.data_type().clone(), return_field.is_nullable()))
+                udaf.return_field(&new_fields)
             }
             WindowFunctionDefinition::WindowUDF(udwf) => {
                 let data_types = fields
@@ -769,7 +764,6 @@ impl Expr {
                 let field_args = WindowUDFFieldArgs::new(&new_fields, &function_name);
 
                 udwf.field(field_args)
-                    .map(|field| (field.data_type().clone(), field.is_nullable()))
             }
         }
     }

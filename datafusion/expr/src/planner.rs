@@ -249,13 +249,6 @@ pub trait ExprPlanner: Debug + Send + Sync {
         )
     }
 
-    /// Plans `ANY` expression, such as `expr = ANY(array_expr)`
-    ///
-    /// Returns origin binary expression if not possible
-    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        Ok(PlannerResult::Original(expr))
-    }
-
     /// Plans aggregate functions, such as `COUNT(<expr>)`
     ///
     /// Returns original expression arguments if not possible
@@ -369,9 +362,9 @@ impl PlannedRelation {
 #[derive(Debug)]
 pub enum RelationPlanning {
     /// The relation was successfully planned by an extension planner
-    Planned(PlannedRelation),
+    Planned(Box<PlannedRelation>),
     /// No extension planner handled the relation, return it for default processing
-    Original(TableFactor),
+    Original(Box<TableFactor>),
 }
 
 /// Customize planning SQL table factors to [`LogicalPlan`]s.

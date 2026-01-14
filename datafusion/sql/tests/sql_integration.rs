@@ -4523,6 +4523,43 @@ fn test_parse_escaped_string_literal_value() {
 }
 
 #[test]
+fn test_parse_quoted_column_name_with_at_sign() {
+    let sql = r"SELECT `@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+
+    let sql = r"SELECT `@quoted_identifier_names_table`.`@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+}
+
+#[test]
+fn test_variable_identifier() {
+    let sql = r"SELECT t_date32 FROM test WHERE t_date32 = @variable";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: test.t_date32
+      Filter: test.t_date32 = @variable
+        TableScan: test
+    "#
+    );
+}
+
+#[test]
 fn plan_create_index() {
     let sql =
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
