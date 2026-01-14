@@ -18,16 +18,19 @@
 use crate::extensions::Extensions;
 use crate::logical_plan::producer::{
     from_aggregate, from_aggregate_function, from_alias, from_between, from_binary_expr,
-    from_case, from_cast, from_column, from_distinct, from_empty_relation, from_filter,
-    from_in_list, from_in_subquery, from_join, from_like, from_limit, from_literal,
-    from_projection, from_repartition, from_scalar_function, from_sort,
-    from_subquery_alias, from_table_scan, from_try_cast, from_unary_expr, from_union,
-    from_values, from_window, from_window_function, to_substrait_rel, to_substrait_rex,
+    from_case, from_cast, from_column, from_distinct, from_empty_relation, from_exists,
+    from_filter, from_in_list, from_in_subquery, from_join, from_like, from_limit,
+    from_literal, from_outer_reference_column, from_projection, from_repartition,
+    from_scalar_function, from_scalar_subquery, from_sort, from_subquery_alias,
+    from_table_scan, from_try_cast, from_unary_expr, from_union, from_values,
+    from_window, from_window_function, to_substrait_rel, to_substrait_rex,
 };
+use datafusion::arrow::datatypes::FieldRef;
 use datafusion::common::{Column, DFSchemaRef, ScalarValue, substrait_err};
 use datafusion::execution::SessionState;
 use datafusion::execution::registry::SerializerRegistry;
-use datafusion::logical_expr::expr::{Alias, InList, InSubquery, WindowFunction};
+use datafusion::logical_expr::Subquery;
+use datafusion::logical_expr::expr::{Alias, Exists, InList, InSubquery, WindowFunction};
 use datafusion::logical_expr::{
     Aggregate, Between, BinaryExpr, Case, Cast, Distinct, EmptyRelation, Expr, Extension,
     Filter, Join, Like, Limit, LogicalPlan, Projection, Repartition, Sort, SubqueryAlias,
@@ -360,6 +363,31 @@ pub trait SubstraitProducer: Send + Sync + Sized {
         schema: &DFSchemaRef,
     ) -> datafusion::common::Result<Expression> {
         from_in_subquery(self, in_subquery, schema)
+    }
+
+    fn handle_scalar_subquery(
+        &mut self,
+        subquery: &Subquery,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_scalar_subquery(self, subquery, schema)
+    }
+
+    fn handle_exists(
+        &mut self,
+        exists: &Exists,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_exists(self, exists, schema)
+    }
+
+    fn handle_outer_reference_column(
+        &mut self,
+        _data_type: &FieldRef,
+        column: &Column,
+        schema: &DFSchemaRef,
+    ) -> datafusion::common::Result<Expression> {
+        from_outer_reference_column(column, schema)
     }
 }
 
