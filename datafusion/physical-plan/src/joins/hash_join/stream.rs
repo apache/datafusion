@@ -31,6 +31,7 @@ use crate::joins::hash_join::exec::JoinLeftData;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
+use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
@@ -45,8 +46,8 @@ use crate::{
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
-use arrow::compute::BatchCoalescer;
+use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array, BooleanBuilder, new_null_array};
+use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -579,8 +580,15 @@ impl HashJoinStream {
                 )?;
 
                 let partition_indices = if num_parts > 1 {
-                    let mut indices = vec![Vec::with_capacity(batch.num_rows() / num_parts); num_parts];
-                    for (i, hash) in hashes.iter().enumerate() {
+                    let mut routing_hashes = vec![0u64; batch.num_rows()];
+                    create_hashes(
+                        &keys_values,
+                        &REPARTITION_RANDOM_STATE.random_state(),
+                        &mut routing_hashes,
+                    )?;
+                    let mut indices =
+                        vec![Vec::with_capacity(batch.num_rows() / num_parts); num_parts];
+                    for (i, hash) in routing_hashes.iter().enumerate() {
                         let p = (hash % num_parts as u64) as usize;
                         indices[p].push(i as u32);
                     }
@@ -692,11 +700,6 @@ impl HashJoinStream {
             };
 
             if !left_indices.is_empty() {
-                // Mark probe rows as matched
-                right_indices.values().iter().for_each(|&r_idx| {
-                    state.probe_matched[r_idx as usize] = true;
-                });
-
                 // Apply join filter if exists
                 let (left_indices, right_indices) = if let Some(filter) = &self.filter {
                     apply_join_filter_to_indices(
@@ -712,6 +715,20 @@ impl HashJoinStream {
                     (left_indices, right_indices)
                 };
 
+                // Mark probe rows as matched (AFTER FILTER)
+                if matches!(
+                    self.join_type,
+                    JoinType::Right
+                        | JoinType::Full
+                        | JoinType::RightSemi
+                        | JoinType::RightAnti
+                        | JoinType::RightMark
+                ) {
+                    right_indices.values().iter().for_each(|&r_idx| {
+                        state.probe_matched[r_idx as usize] = true;
+                    });
+                }
+
                 // Mark build visited
                 if need_produce_result_in_final(self.join_type) {
                     let mut bitmap = left_data.visited_indices_bitmap().lock();
@@ -725,10 +742,7 @@ impl HashJoinStream {
                     JoinType::Inner
                     | JoinType::Left
                     | JoinType::Right
-                    | JoinType::Full
-                    | JoinType::LeftSemi
-                    | JoinType::LeftAnti
-                    | JoinType::LeftMark => {
+                    | JoinType::Full => {
                         let batch = build_batch_from_indices(
                             &self.schema,
                             left_data.batch(),
@@ -739,6 +753,22 @@ impl HashJoinStream {
                             JoinSide::Left,
                         )?;
                         self.output_buffer.push_batch(batch)?;
+                        // If we didn't finish all matches, save state and return Continue to check output buffer
+                        if next_offset.is_some() {
+                            self.state = HashJoinStreamState::ProcessProbeBatch(
+                                ProcessProbeBatchState {
+                                    batch: state.batch.clone(),
+                                    values: state.values.clone(),
+                                    hashes: state.hashes.clone(),
+                                    partition_indices: state.partition_indices.clone(),
+                                    current_partition_idx: partition_idx,
+                                    offset: next_offset.unwrap_or((0, None)),
+                                    joined_probe_idx: state.joined_probe_idx,
+                                    probe_matched: state.probe_matched.clone(),
+                                },
+                            );
+                            return Ok(StatefulStreamResult::Continue);
+                        }
                     }
                     _ => {}
                 }
@@ -755,7 +785,11 @@ impl HashJoinStream {
 
         // After all partitions, handle probe-side outer/semi/anti joins
         match self.join_type {
-            JoinType::Right | JoinType::Full | JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+            JoinType::Right
+            | JoinType::Full
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => {
                 let mut r_indices = Vec::with_capacity(state.batch.num_rows());
                 for (i, &matched) in state.probe_matched.iter().enumerate() {
                     match self.join_type {
@@ -770,10 +804,7 @@ impl HashJoinStream {
                             }
                         }
                         JoinType::RightMark => {
-                             // RightMark is special, but let's assume it's handled or we can add it
-                             if !matched {
-                                 r_indices.push(i as u32);
-                             }
+                            r_indices.push(i as u32);
                         }
                         _ => {}
                     }
@@ -781,24 +812,46 @@ impl HashJoinStream {
 
                 if !r_indices.is_empty() {
                     let r_indices = UInt32Array::from(r_indices);
-                    let l_indices = UInt64Array::from(vec![None; r_indices.len()]);
-                    
-                    // For RightMark, we might need a different approach, but following the pattern:
-                    let (build_batch, probe_batch, join_side) = if self.join_type == JoinType::RightMark {
-                         (&state.batch, build_side.left_data[0].batch(), JoinSide::Right)
+                    let batch = if self.join_type == JoinType::RightMark {
+                        // Produce RightMark batch with mark column
+                        let mut columns = Vec::with_capacity(self.column_indices.len());
+                        for column_index in &self.column_indices {
+                            let array = match column_index.side {
+                                JoinSide::Right => {
+                                    take(state.batch.column(column_index.index), &r_indices, None)?
+                                }
+                                JoinSide::Left => {
+                                    // Should not happen for RightMark output columns? 
+                                    // Actually RightMark only produces Right side and Mark.
+                                    new_null_array(
+                                        build_side.left_data[0].batch().column(column_index.index).data_type(),
+                                        r_indices.len(),
+                                    )
+                                }
+                                JoinSide::None => {
+                                    let mut mark_builder = BooleanBuilder::with_capacity(r_indices.len());
+                                    for i in 0..r_indices.len() {
+                                        let matched = state.probe_matched[r_indices.value(i) as usize];
+                                        mark_builder.append_value(matched);
+                                    }
+                                    Arc::new(mark_builder.finish()) as ArrayRef
+                                }
+                            };
+                            columns.push(array);
+                        }
+                        RecordBatch::try_new(self.schema.clone(), columns)?
                     } else {
-                         (build_side.left_data[0].batch(), &state.batch, JoinSide::Left)
+                        let l_indices = UInt64Array::from(vec![None; r_indices.len()]);
+                        build_batch_from_indices(
+                            &self.schema,
+                            build_side.left_data[0].batch(),
+                            &state.batch,
+                            &l_indices,
+                            &r_indices,
+                            &self.column_indices,
+                            JoinSide::Left,
+                        )?
                     };
-
-                    let batch = build_batch_from_indices(
-                        &self.schema,
-                        build_batch,
-                        probe_batch,
-                        &l_indices,
-                        &r_indices,
-                        &self.column_indices,
-                        join_side,
-                    )?;
                     self.output_buffer.push_batch(batch)?;
                 }
             }

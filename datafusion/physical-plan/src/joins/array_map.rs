@@ -507,6 +507,7 @@ mod tests {
         // batch_size=3, should get 2 matches from first '1' and 1 match from second '1'
         let result_offset = array_map.get_matched_indices_with_limit_offset(
             &prob_side_keys,
+            None,
             3,
             (0, None),
             &mut prob_indices,
@@ -538,6 +539,7 @@ mod tests {
         // Call once to get all matches
         let result_offset = array_map.get_matched_indices_with_limit_offset(
             &prob_side_keys,
+            None,
             10, // A batch size larger than number of probes
             (0, None),
             &mut prob_indices,

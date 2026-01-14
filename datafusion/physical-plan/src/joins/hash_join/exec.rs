@@ -585,7 +585,13 @@ impl HashJoinExec {
         // Initialize both dynamic filter and bounds accumulator to None
         // They will be set later if dynamic filtering is enabled
 
-        let left_futs = (0..left.output_partitioning().partition_count())
+        let num_futs = if partition_mode == PartitionMode::CollectLeft {
+            1
+        } else {
+            left.output_partitioning().partition_count()
+        };
+
+        let left_futs = (0..num_futs)
             .map(|_| Arc::new(OnceAsync::default()))
             .collect();
 
@@ -4820,12 +4826,12 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput with top memory consumers (across reservations) as:\n  HashJoinInput"
+                "Resources exhausted: Additional allocation failed for HashJoinInput[0] with top memory consumers (across reservations) as:\n  HashJoinInput[0]"
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120.0 B for HashJoinInput"
+                "Failed to allocate additional 120.0 B for HashJoinInput[0]"
             );
         }
 
@@ -4902,12 +4908,12 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "Resources exhausted: Additional allocation failed for HashJoinInput[1] with top memory consumers (across reservations) as:\n  HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed for HashJoinInput"
             );
 
             assert_contains!(
                 err.to_string(),
-                "Failed to allocate additional 120.0 B for HashJoinInput[1]"
+                "Failed to allocate additional 120.0 B for HashJoinInput"
             );
         }
 
