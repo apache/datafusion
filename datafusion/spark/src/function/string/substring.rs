@@ -116,7 +116,6 @@ impl ScalarUDFImpl for SparkSubstring {
         // Spark semantics: substr returns NULL if ANY input is NULL
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        // Always return Utf8View for efficiency (same as datafusion-functions substr)
         Ok(Arc::new(Field::new(
             "substring",
             args.arg_fields[0].data_type().clone(),
