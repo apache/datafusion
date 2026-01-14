@@ -65,3 +65,37 @@ query T
 SELECT substring('Spark SQL'::string, 3::int, NULL::int);
 ----
 NULL
+
+query T
+SELECT substring(column1, column2)
+FROM VALUES
+('Spark SQL'::string, 5::int),
+('Spark SQL'::string, -3::int),
+('Spark SQL'::string, 500::int),
+('Spark SQL'::string, -300::int),
+(NULL::string, 5::int),
+('Spark SQL'::string, NULL::int);
+----
+k SQL
+SQL
+(empty)
+Spark SQL
+NULL
+NULL
+
+query T
+SELECT substring(column1, column2, column3)
+FROM VALUES
+('Spark SQL'::string, -3::int, 2::int),
+('Spark SQL'::string, 3::int, 1::int),
+('Spark SQL'::string, 3::int, -1::int),
+(NULL::string, 3::int, 1::int),
+('Spark SQL'::string, NULL::int, 1::int),
+('Spark SQL'::string, 3::int, NULL::int);
+----
+SQ
+a
+(empty)
+NULL
+NULL
+NULL
