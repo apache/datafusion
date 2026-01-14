@@ -1197,11 +1197,14 @@ impl ExecutionPlan for HashJoinExec {
 
         let probe_side_partitioned = if self.mode == PartitionMode::Partitioned {
             self.right.output_partitioning().partition_count() == left_partitions
-                && matches!(self.right.output_partitioning().satisfaction(
-                    &Distribution::HashPartitioned(on_right.clone()),
-                    self.right.properties().equivalence_properties(),
-                    false,
-                ), PartitioningSatisfaction::Exact | PartitioningSatisfaction::Subset)
+                && matches!(
+                    self.right.output_partitioning().satisfaction(
+                        &Distribution::HashPartitioned(on_right.clone()),
+                        self.right.properties().equivalence_properties(),
+                        false,
+                    ),
+                    PartitioningSatisfaction::Exact | PartitioningSatisfaction::Subset
+                )
         } else {
             false
         };

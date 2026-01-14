@@ -532,18 +532,12 @@ impl HashJoinStream {
                 let build_side = self.build_side.try_as_ready()?;
                 let num_parts = build_side.left_data.len();
 
+                self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
                 create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
                 let hashes = self.hashes_buffer.clone();
 
                 let partition_indices = if num_parts > 1 && !self.probe_side_partitioned {
-                    self.hashes_buffer.clear();
-                    self.hashes_buffer.resize(batch.num_rows(), 0);
-                    create_hashes(
-                        &keys_values,
-                        &REPARTITION_RANDOM_STATE.random_state(),
-                        &mut self.hashes_buffer,
-                    )?;
                     let mut indices =
                         vec![Vec::with_capacity(batch.num_rows() / num_parts); num_parts];
                     for (i, hash) in self.hashes_buffer.iter().enumerate() {
