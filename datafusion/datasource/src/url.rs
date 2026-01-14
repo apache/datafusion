@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::TableScopedPath;
+use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -398,42 +399,35 @@ async fn list_with_cache<'b>(
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
             .boxed()),
         Some(cache) => {
-            // Convert prefix to Option<Path> for cache lookup
-            let prefix_filter = prefix.cloned();
+            // Build the filter prefix (only Some if prefix was requested)
+            let filter_prefix = prefix.is_some().then(|| full_prefix.clone());
 
             let table_scoped_base_path = TableScopedPath {
                 table: table_ref.cloned(),
                 path: table_base_path.clone(),
             };
 
-            // Try cache lookup with optional prefix filter
-            let vec = if let Some(res) =
-                cache.get_with_extra(&table_scoped_base_path, &prefix_filter)
-            {
+            // Try cache lookup - get returns CachedFileList
+            let vec = if let Some(cached) = cache.get(&table_scoped_base_path) {
                 debug!("Hit list files cache");
-                res.as_ref().clone()
+                cached.files_matching_prefix(&filter_prefix)
             } else {
                 // Cache miss - always list and cache the full table
                 // This ensures we have complete data for future prefix queries
-                let vec = store
+                let mut vec = store
                     .list(Some(table_base_path))
                     .try_collect::<Vec<ObjectMeta>>()
                     .await?;
-                cache.put(&table_scoped_base_path, Arc::new(vec.clone()));
-
-                // If a prefix filter was requested, apply it to the results
-                if prefix.is_some() {
-                    let full_prefix_str = full_prefix.as_ref();
-                    vec.into_iter()
-                        .filter(|meta| {
-                            meta.location.as_ref().starts_with(full_prefix_str)
-                        })
-                        .collect()
-                } else {
-                    vec
-                }
+                vec.shrink_to_fit(); // Right-size before caching
+                let cached: CachedFileList = vec.into();
+                let result = cached.files_matching_prefix(&filter_prefix);
+                cache.put(&table_scoped_base_path, cached);
+                result
             };
-            Ok(futures::stream::iter(vec.into_iter().map(Ok)).boxed())
+            Ok(
+                futures::stream::iter(Arc::unwrap_or_clone(vec).into_iter().map(Ok))
+                    .boxed(),
+            )
         }
     }
 }
@@ -533,6 +527,7 @@ mod tests {
     use std::any::Any;
     use std::collections::HashMap;
     use std::ops::Range;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
