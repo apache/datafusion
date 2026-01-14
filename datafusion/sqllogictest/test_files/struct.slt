@@ -569,7 +569,7 @@ create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as valu
     (row('red', 1), row(2.3, 'blue')),
     (row('purple', 1), row('green', 2.3));
 
-# out of order struct literal - now supported with name-based casting!
+# out of order struct literal - resolved with name-based casting
 statement ok
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
 
