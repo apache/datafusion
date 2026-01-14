@@ -185,7 +185,7 @@ async fn aggregate_distinct(
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_eq!(batches.len(), 1);
     let batch = batches.first().unwrap();
-    assert_eq!(batch.num_rows(), 10);
+    assert_eq!(batch.num_rows(), LIMIT);
 
     let actual = format!("{}", pretty_format_batches(&batches)?).to_lowercase();
 
