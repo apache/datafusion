@@ -90,25 +90,25 @@ version = "51.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "57.1.0", features = [
+arrow = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", features = [
     "prettyprint",
     "chrono-tz",
-] }
-arrow-avro = { version = "57.1.0", default-features = false, features = [
+] } # fixme
+arrow-avro = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
-] }
-arrow-buffer = { version = "57.1.0", default-features = false }
-arrow-flight = { version = "57.1.0", features = [
+] }# fixme
+arrow-buffer = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false }# fixme
+arrow-flight = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", features = [# fixme
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "57.1.0", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false, features = [# fixme
     "lz4",
 ] }
-arrow-ord = { version = "57.1.0", default-features = false }
-arrow-schema = { version = "57.1.0", default-features = false }
+arrow-ord = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false }# fixme
+arrow-schema = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false }# fixme
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -171,7 +171,7 @@ log = "^0.4"
 num-traits = { version = "0.2" }
 object_store = { version = "0.12.4", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "57.1.0", default-features = false, features = [
+parquet = { git = "https://github.com/jecsand838/arrow-rs", branch = "avro-reader-projection", default-features = false, features = [ # fixme
     "arrow",
     "async",
     "object_store",

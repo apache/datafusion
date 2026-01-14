@@ -18,13 +18,11 @@
 //! Execution plan for reading line-delimited Avro files
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_avro::reader::{Reader, ReaderBuilder};
-use arrow_avro::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
-use datafusion_common::DataFusionError;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
@@ -35,7 +33,6 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
 use object_store::ObjectStore;
-use serde_json::Value;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
 #[derive(Clone)]
@@ -61,86 +58,14 @@ impl AvroSource {
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
-        // TODO: Once `ReaderBuilder::with_projection` is available, we should use it instead.
-        //  This should be an easy change. We'd simply need to:
-        //      1. Use the full file schema to generate the reader `AvroSchema`.
-        //      2. Pass `&self.projection` into `ReaderBuilder::with_projection`.
-        //      3. Remove the `build_projected_reader_schema` methods.
         ReaderBuilder::new()
-            .with_reader_schema(self.build_projected_reader_schema()?)
+            .with_reader_schema(AvroSchema::try_from(self.table_schema.file_schema().as_ref()).unwrap())
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
+            .with_projection(self.projection.file_indices.clone())
             .build(reader)
             .map_err(Into::into)
     }
 
-    fn build_projected_reader_schema(&self) -> Result<AvroSchema> {
-        let file_schema = self.table_schema.file_schema().as_ref();
-        // Fast path: no projection.
-        if self.projection.file_indices.is_empty() {
-            return  Ok(AvroSchema::try_from(file_schema).map_err(Into::<DataFusionError>::into)?)
-        }
-        // Use the writer Avro schema JSON tagged upstream to build a projected reader schema
-        match file_schema.metadata().get(SCHEMA_METADATA_KEY) {
-            Some(avro_json) => {
-                let mut schema_json: Value =
-                    serde_json::from_str(avro_json).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Failed to parse Avro schema JSON from metadata: {e}"
-                        ))
-                    })?;
-                let obj = schema_json.as_object_mut().ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Top-level Avro schema JSON must be an object".to_string(),
-                    )
-                })?;
-                let fields_val = obj.get_mut("fields").ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Top-level Avro schema JSON must contain a `fields` array"
-                            .to_string(),
-                    )
-                })?;
-                let fields_arr = fields_val.as_array_mut().ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Top-level Avro schema `fields` must be an array".to_string(),
-                    )
-                })?;
-                // Move existing fields out so we can rebuild them in projected order.
-                let original_fields = std::mem::take(fields_arr);
-                let mut by_name: HashMap<String, Value> =
-                    HashMap::with_capacity(original_fields.len());
-                for field in original_fields {
-                    if let Some(name) = field.get("name").and_then(|v| v.as_str()) {
-                        by_name.insert(name.to_string(), field);
-                    }
-                }
-                // Rebuild `fields` in the same order as the projected Arrow schema.
-                let projection = self.projection.file_indices.as_ref();
-                let projected_schema = file_schema.project(projection)?;
-                let mut projected_fields =
-                    Vec::with_capacity(projected_schema.fields().len());
-                for arrow_field in projected_schema.fields() {
-                    let name = arrow_field.name();
-                    let field = by_name.remove(name).ok_or_else(|| {
-                        DataFusionError::Execution(format!(
-                            "Projected field `{name}` not found in Avro writer schema"
-                        ))
-                    })?;
-                    projected_fields.push(field);
-                }
-                *fields_val = Value::Array(projected_fields);
-                let projected_json =
-                    serde_json::to_string(&schema_json).map_err(|e| {
-                        DataFusionError::Execution(format!(
-                            "Failed to serialize projected Avro schema JSON: {e}"
-                        ))
-                    })?;
-                Ok(AvroSchema::new(projected_json))
-            }
-            None => Err(DataFusionError::Execution(format!(
-                "Avro schema metadata ({SCHEMA_METADATA_KEY}) is missing from file schema, but is required for projection"
-            ))),
-        }
-    }
 }
 
 impl FileSource for AvroSource {
@@ -267,16 +192,17 @@ mod tests {
         TimestampMicrosecondArray,
     };
     use arrow::datatypes::{DataType, Field};
-    use arrow::datatypes::{Schema, TimeUnit};
+    use arrow::datatypes::TimeUnit;
     use std::fs::File;
     use std::io::BufReader;
 
-    fn build_reader(name: &'_ str, schema: Option<&Schema>) -> Reader<BufReader<File>> {
+    fn build_reader(name: &'_ str, projection : Option<Vec<usize>>) -> Reader<BufReader<File>> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
-        let mut builder = ReaderBuilder::new().with_batch_size(64);
-        if let Some(schema) = schema {
-            builder = builder.with_reader_schema(AvroSchema::try_from(schema).unwrap());
+        let mut builder = ReaderBuilder::new()
+            .with_batch_size(64);
+        if let Some(proj) = projection {
+            builder = builder.with_projection(proj);
         }
         builder
             .build(BufReader::new(File::open(filename).unwrap()))
@@ -382,14 +308,10 @@ mod tests {
     #[test]
     fn test_avro_with_projection() {
         // Test projection to filter and reorder columns
-        let projected_schema = Schema::new(vec![
-            Field::new("string_col", DataType::Binary, false),
-            Field::new("double_col", DataType::Float64, false),
-            Field::new("bool_col", DataType::Boolean, false),
-        ]);
+        let projection = vec![9, 7, 1]; // string_col, double_col, bool_col
 
         let mut reader =
-            build_reader("alltypes_dictionary.avro", Some(&projected_schema));
+            build_reader("alltypes_dictionary.avro", Some(projection));
         let batch = reader.next().unwrap().unwrap();
 
         // Only 3 columns should be present (not all 11)
