@@ -61,16 +61,15 @@ use arrow::array::{
     Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeBinaryBuilder, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
-    GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
-    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
-    StringViewArray, StringViewBuilder, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    new_empty_array, new_null_array,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
+    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
+    PrimitiveArray, Scalar, StringArray, StringViewArray, StringViewBuilder, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array, UnionArray, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -3031,14 +3030,7 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => {
-                    // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
-                    // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
-                    // version.
-                    let mut builder = FixedSizeBinaryBuilder::new(*s);
-                    builder.append_nulls(size);
-                    Arc::new(builder.finish())
-                }
+                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => {
