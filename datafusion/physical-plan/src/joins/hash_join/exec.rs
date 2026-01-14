@@ -38,7 +38,7 @@ use crate::joins::hash_join::stream::{
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
-    OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
+    OnceAsync, asymmetric_join_output_partitioning, reorder_output_after_swap,
     swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};

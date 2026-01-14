@@ -40,8 +40,8 @@ use crate::{
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
+        StatefulStreamResult, apply_join_filter_to_indices,
+        build_batch_from_indices,
         need_produce_result_in_final,
     },
 };
@@ -51,7 +51,7 @@ use arrow::compute::{BatchCoalescer, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
+    JoinSide, JoinType, NullEquality, Result, internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
@@ -171,18 +171,6 @@ pub(super) struct ProcessProbeBatchState {
 }
 
 impl ProcessProbeBatchState {
-    fn advance(
-        &mut self,
-        offset: MapOffset,
-        joined_probe_idx: Option<usize>,
-        current_partition_idx: usize,
-    ) {
-        self.offset = offset;
-        self.current_partition_idx = current_partition_idx;
-        if joined_probe_idx.is_some() {
-            self.joined_probe_idx = joined_probe_idx;
-        }
-    }
 }
 
 /// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
