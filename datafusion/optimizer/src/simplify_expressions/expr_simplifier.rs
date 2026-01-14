@@ -633,6 +633,7 @@ impl ConstEvaluator {
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
