@@ -284,13 +284,6 @@ impl ColumnarValue {
     /// - Missing target fields are filled with null arrays
     /// - Extra source fields are ignored
     ///
-    /// # Example
-    /// ```text
-    /// Source: {"b": 3, "a": 4}  (schema: {b: Int32, a: Int32})
-    /// Target: {"a": Int32, "b": Int32}
-    /// Result: {"a": 4, "b": 3}  (values matched by field name)
-    /// ```
-    ///
     /// For non-struct types, uses Arrow's standard positional casting.
     pub fn cast_to(
         &self,
