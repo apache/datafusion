@@ -30,7 +30,7 @@ they execute more quickly while still computing the same result.
 
 [`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
 [`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
-[`LogicalPlan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
 
