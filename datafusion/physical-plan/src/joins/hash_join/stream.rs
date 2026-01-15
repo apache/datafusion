@@ -466,7 +466,7 @@ impl HashJoinStream {
         // Handle dynamic filter build-side information accumulation
         if let Some(ref build_accumulator) = self.build_accumulator {
             let build_accumulator = Arc::clone(build_accumulator);
-
+            let mut report_futs = Vec::new();
             for (i, data) in left_data.iter().enumerate() {
                 let left_side_partition_id = match self.mode {
                     PartitionMode::Partitioned => i,
@@ -494,14 +494,17 @@ impl HashJoinStream {
                     _ => unreachable!(),
                 };
 
-                // For simplicity, we only set build_waiter once.
-                // In partitioned mode, it's likely we need to wait for all?
-                // But report_build_data already handles the waiting internally if needed.
                 let build_accumulator_clone = Arc::clone(&build_accumulator);
-                self.build_waiter = Some(OnceFut::new(async move {
+                report_futs.push(async move {
                     build_accumulator_clone.report_build_data(build_data).await
-                }));
+                });
             }
+            self.build_waiter = Some(OnceFut::new(async move {
+                for fut in report_futs {
+                    fut.await?;
+                }
+                Ok(())
+            }));
             self.state = HashJoinStreamState::WaitPartitionBoundsReport;
         } else {
             self.state = HashJoinStreamState::FetchProbeBatch;
