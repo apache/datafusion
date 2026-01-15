@@ -394,14 +394,200 @@ query II rowsort
 SELECT * FROM test_table WHERE (c1 NOT IN (SELECT c2 FROM test_table)) = true;
 ----
 
-# NOTE: The correlated subquery version from issue #10583:
-# SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE t1.c1 = t2.c1)
-# is not yet supported because it creates a multi-column join (correlation + NOT IN condition).
-# This is a known limitation - currently only supports single column null-aware anti joins.
-# This will be addressed in next Phase (multi-column support).
+#############
+## Test 19: Multi-column NOT IN with NULL in subquery
+#############
+
+statement ok
+CREATE TABLE multi_col_outer(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, 4, 'y'),
+(5, 6, 'z'),
+(NULL, 8, 'w');
+
+statement ok
+CREATE TABLE multi_col_inner_with_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+# Should return empty because subquery has NULL
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null);
+----
+
+#############
+## Test 20: Multi-column NOT IN without NULL
+#############
+
+statement ok
+CREATE TABLE multi_col_inner_no_null(x INT, y INT) AS VALUES
+(1, 2);
+
+# Should return (3, 4, 'y'), (5, 6, 'z')
+# The row (NULL, 8, 'w') is not returned because NULL is not comparable
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_no_null);
+----
+3 4 y
+5 6 z
+
+#############
+## Test 21: Multi-column with NULL in both left and build side columns
+#############
+
+statement ok
+CREATE TABLE multi_left_null(a INT, b INT) AS VALUES
+(1, 2),
+(3, NULL),
+(NULL, 4),
+(5, 6);
+
+statement ok
+CREATE TABLE multi_right_no_null(x INT, y INT) AS VALUES
+(1, 2);
+
+# Should return (5, 6) only
+# (3, NULL) filtered because b is NULL
+# (NULL, 4) filtered because a is NULL
+query II rowsort
+SELECT * FROM multi_left_null
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_right_no_null);
+----
+5 6
+
+#############
+## Test 22: Three-column NOT IN
+#############
+
+statement ok
+CREATE TABLE three_col_outer(a INT, b INT, c INT) AS VALUES
+(1, 2, 3),
+(4, 5, 6),
+(7, 8, 9);
+
+statement ok
+CREATE TABLE three_col_inner(x INT, y INT, z INT) AS VALUES
+(1, 2, 3);
+
+# Should return (4, 5, 6) and (7, 8, 9)
+query III rowsort
+SELECT * FROM three_col_outer
+WHERE (a, b, c) NOT IN (SELECT x, y, z FROM three_col_inner);
+----
+4 5 6
+7 8 9
+
+#############
+## Test 23: Three-column NOT IN with NULL
+#############
+
+statement ok
+CREATE TABLE three_col_inner_null(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(4, NULL, 6);
+
+# Should return empty because subquery has NULL
+query III rowsort
+SELECT * FROM three_col_outer
+WHERE (a, b, c) NOT IN (SELECT x, y, z FROM three_col_inner_null);
+----
+
+#############
+## Test 24: Correlated multi-column NOT IN (from issue #10583)
+#############
+
+statement ok
+CREATE TABLE test_multi(c1 INT, c2 INT, c3 INT) AS VALUES
+(1, 1, 1),
+(2, 2, 2),
+(3, 3, 3),
+(4, 4, NULL);
+
+# Correlated NOT IN with multi-column
+# Should return rows where (c2, c3) doesn't match in same c1 group
+# Row (4, 4, NULL) should not appear because it has NULL in c3
+query III rowsort
+SELECT * FROM test_multi t1
+WHERE (c2, c3) NOT IN (
+    SELECT c2, c3 FROM test_multi t2 WHERE t1.c1 = t2.c1
+);
+----
+
+# Verify the EXPLAIN plan shows LeftAnti join with multi-column join conditions
+query TT
+EXPLAIN SELECT * FROM test_multi t1
+WHERE (c2, c3) NOT IN (
+    SELECT c2, c3 FROM test_multi t2 WHERE t1.c1 = t2.c1
+);
+----
+logical_plan
+01)LeftAnti Join: t1.c2 = __correlated_sq_1.c2, t1.c3 = __correlated_sq_1.c3, t1.c1 = __correlated_sq_1.c1
+02)--SubqueryAlias: t1
+03)----TableScan: test_multi projection=[c1, c2, c3]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: t2.c2, t2.c3, t2.c1
+06)------SubqueryAlias: t2
+07)--------TableScan: test_multi projection=[c1, c2, c3]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(c2@1, c2@0), (c3@2, c3@1), (c1@0, c1@2)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 25: Multi-column NOT IN with empty subquery
+#############
+
+statement ok
+CREATE TABLE multi_empty(x INT, y INT);
+
+# Empty subquery should return all rows
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_empty);
+----
+1 2 x
+3 4 y
+5 6 z
+NULL 8 w
 
 #############
 ## Cleanup
+#############
+
+statement ok
+DROP TABLE multi_col_outer;
+
+statement ok
+DROP TABLE multi_col_inner_with_null;
+
+statement ok
+DROP TABLE multi_col_inner_no_null;
+
+statement ok
+DROP TABLE multi_left_null;
+
+statement ok
+DROP TABLE multi_right_no_null;
+
+statement ok
+DROP TABLE three_col_outer;
+
+statement ok
+DROP TABLE three_col_inner;
+
+statement ok
+DROP TABLE three_col_inner_null;
+
+statement ok
+DROP TABLE test_multi;
+
+statement ok
+DROP TABLE multi_empty;
+
+#############
+## Cleanup (original tables)
 #############
 
 statement ok
