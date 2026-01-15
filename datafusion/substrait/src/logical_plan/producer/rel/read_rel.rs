@@ -20,7 +20,7 @@ use crate::logical_plan::producer::{
 };
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
+use datafusion::logical_expr::{EmptyRelation, Expr, ProjectionExprs, TableScan, Values};
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
@@ -97,14 +97,23 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
-    let projection = scan.projection.as_ref().map(|p| {
-        p.iter()
-            .map(|i| StructItem {
-                field: *i as i32,
-                child: None,
-            })
-            .collect()
-    });
+    // Convert projection expressions to column indices for Substrait
+    let projection = scan
+        .projection
+        .as_ref()
+        .map(|proj_exprs| {
+            let indices = proj_exprs.projection_column_indices(&scan.source.schema())?;
+            Ok::<_, datafusion::common::DataFusionError>(
+                indices
+                    .into_iter()
+                    .map(|i| StructItem {
+                        field: i as i32,
+                        child: None,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .transpose()?;
 
     let projection = projection.map(|struct_items| MaskExpression {
         select: Some(StructSelect { struct_items }),

@@ -1092,23 +1092,26 @@ impl Unparser<'_> {
                     if project_vec.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
-                        let project_columns = project_vec
-                            .iter()
-                            .cloned()
-                            .map(|i| {
-                                let schema = table_scan.source.schema();
-                                let field = schema.field(i);
-                                if alias.is_some() {
-                                    Column::new(alias.clone(), field.name().clone())
-                                } else {
-                                    Column::new(
-                                        Some(table_scan.table_name.clone()),
-                                        field.name().clone(),
-                                    )
-                                }
-                            })
-                            .collect::<Vec<_>>();
-                        builder = builder.project(project_columns)?;
+                        // project_vec is already Vec<Expr>, use directly
+                        // If there's an alias, we may need to re-qualify the columns
+                        let project_exprs: Vec<Expr> = if alias.is_some() {
+                            project_vec
+                                .iter()
+                                .map(|expr| {
+                                    if let Expr::Column(col) = expr {
+                                        Expr::Column(Column::new(
+                                            alias.clone(),
+                                            col.name(),
+                                        ))
+                                    } else {
+                                        expr.clone()
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            project_vec.clone()
+                        };
+                        builder = builder.project(project_exprs)?;
                     };
                 }
 
