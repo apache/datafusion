@@ -189,13 +189,15 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
     }
 }
 
-/// replace POSIX capture groups (like \1) with Rust Regex group (like ${1})
+/// replace POSIX capture groups (like \1 or \\1) with Rust Regex group (like ${1})
 /// used by regexp_replace
+/// Handles both single backslash (\1) and double backslash (\\1) which can occur
+/// when SQL strings with escaped backslashes are passed through
 fn regex_replace_posix_groups(replacement: &str) -> String {
     static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(\\)(\d+)").unwrap());
+        LazyLock::new(|| Regex::new(r"\\{1,2}(\d+)").unwrap());
     CAPTURE_GROUPS_RE_LOCK
-        .replace_all(replacement, "$${$2}")
+        .replace_all(replacement, "$${$1}")
         .into_owned()
 }
 
@@ -666,6 +668,11 @@ mod tests {
         assert_eq!(regex_replace_posix_groups(r"\12"), "${12}");
         assert_eq!(regex_replace_posix_groups(r"X\1Y"), "X${1}Y");
         assert_eq!(regex_replace_posix_groups(r"\1\2"), "${1}${2}");
+
+        // Test double backslash (from SQL escaped strings like '\\1')
+        assert_eq!(regex_replace_posix_groups(r"\\1"), "${1}");
+        assert_eq!(regex_replace_posix_groups(r"X\\1Y"), "X${1}Y");
+        assert_eq!(regex_replace_posix_groups(r"\\1\\2"), "${1}${2}");
 
         // Test that a lone backslash is NOT replaced (requires at least one digit)
         assert_eq!(regex_replace_posix_groups(r"\"), r"\");
