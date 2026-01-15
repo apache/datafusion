@@ -30,11 +30,11 @@ CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
-statement ok
 # ClickBench encodes EventDate as UInt16 days since epoch.
+statement ok
 CREATE VIEW hits AS
 SELECT * EXCEPT ("EventDate"),
-       CAST(CAST("EventDate" AS Int32) AS Date32) AS "EventDate"
+       CAST(CAST("EventDate" AS Int32) AS DATE) AS "EventDate"
 FROM hits_raw;
 
 # queries.sql came from
