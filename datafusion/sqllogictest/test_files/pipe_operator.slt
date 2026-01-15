@@ -193,5 +193,5 @@ query error
    ON produce_sales.item = produce_data.item
 |> SELECT produce_sales.item, sales, id;
 ----
-DataFusion error: Internal error: Assertion failed: partition < self.partitions: PlaceholderRowExec invalid partition 3 (expected less than 1).
+DataFusion error: Internal error: Assertion failed: partition < self.partitions: PlaceholderRowExec invalid partition 1 (expected less than 1).
 This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues

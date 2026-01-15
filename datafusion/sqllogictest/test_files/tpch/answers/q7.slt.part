@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query error
+query TTIR
 select
     supp_nation,
     cust_nation,
@@ -57,6 +57,7 @@ order by
     cust_nation,
     l_year;
 ----
-DataFusion error: Join Error
-caused by
-External error: task 34160 panicked with message "index out of bounds: the len is 1710 but the index is 2620"
+FRANCE GERMANY 1995 4637235.1501
+FRANCE GERMANY 1996 5224779.5736
+GERMANY FRANCE 1995 6232818.7037
+GERMANY FRANCE 1996 5557312.1121

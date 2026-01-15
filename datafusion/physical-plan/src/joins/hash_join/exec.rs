@@ -25,7 +25,7 @@ use crate::ExecutionPlanProperties;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
@@ -1326,18 +1326,26 @@ impl ExecutionPlan for HashJoinExec {
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-        // For now we don't support them.
+        // We only support pushdown when it's safe for the specific join type.
         // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-        // See https://github.com/apache/datafusion/issues/16973 for tracking.
-        if self.join_type != JoinType::Inner {
+        let left_pushdown_supported = matches!(
+            self.join_type,
+            JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti
+        );
+        let right_pushdown_supported = matches!(
+            self.join_type,
+            JoinType::Inner | JoinType::Right | JoinType::RightSemi | JoinType::RightAnti
+        );
+
+        if !left_pushdown_supported && !right_pushdown_supported {
             return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
                 &self.children(),
             ));
         }
 
-        // Get basic filter descriptions for both children
-        let left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
+        // Get basic filter descriptions for both children based on column analysis
+        let mut left_child = crate::filter_pushdown::ChildFilterDescription::from_child(
             &parent_filters,
             self.left(),
         )?;
@@ -1346,9 +1354,31 @@ impl ExecutionPlan for HashJoinExec {
             self.right(),
         )?;
 
-        // Add dynamic filters in Post phase if enabled
+        // If pushdown is not allowed for a side due to join type, mark parent filters as unsupported for that child
+        if !left_pushdown_supported {
+            for f in left_child.parent_filters.iter_mut() {
+                if matches!(f.discriminant, PushedDown::Yes) {
+                    *f = PushedDownPredicate::unsupported(Arc::clone(&f.predicate));
+                }
+            }
+        }
+        if !right_pushdown_supported {
+            for f in right_child.parent_filters.iter_mut() {
+                if matches!(f.discriminant, PushedDown::Yes) {
+                    *f = PushedDownPredicate::unsupported(Arc::clone(&f.predicate));
+                }
+            }
+        }
+
+        // Add dynamic filters in Post phase if enabled.
+        // Dynamic filter is built from the BUILD side (left) and applied to the PROBE side (right).
+        // It is safe for join types that only return rows from probe side that have a match in build side.
         if matches!(phase, FilterPushdownPhase::Post)
             && config.optimizer.enable_join_dynamic_filter_pushdown
+            && matches!(
+                self.join_type,
+                JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+            )
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
@@ -1366,20 +1396,20 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Note: this check shouldn't be necessary because we already marked all parent filters as unsupported for
-        // non-inner joins in `gather_filters_for_pushdown`.
-        // However it's a cheap check and serves to inform future devs touching this function that they need to be really
-        // careful pushing down filters through non-inner joins.
-        if self.join_type != JoinType::Inner {
-            // Other types of joins can support *some* filters, but restrictions are complex and error prone.
-            // For now we don't support them.
-            // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
-            return Ok(FilterPushdownPropagation::all_unsupported(
-                child_pushdown_result,
-            ));
-        }
+        // Other types of joins can support *some* filters, but restrictions are complex and error prone.
+        // We only support pushdown when it's safe for the specific join type.
+        // See the logical optimizer rules for more details: datafusion/optimizer/src/push_down_filter.rs
+        let dynamic_filter_supported = matches!(
+            self.join_type,
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        );
 
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+
+        if !dynamic_filter_supported {
+            return Ok(result);
+        }
+
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
