@@ -19,9 +19,7 @@ use std::any::Any;
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, StringBuilder,
-};
+use arrow::array::{Array, ArrayRef, StringBuilder};
 use arrow::datatypes::DataType;
 use arrow::{
     array::{as_dictionary_array, as_largestring_array, as_string_array},
@@ -29,12 +27,12 @@ use arrow::{
 };
 use datafusion_common::cast::as_large_binary_array;
 use datafusion_common::cast::as_string_view_array;
-use datafusion_common::types::{logical_int64, logical_string, NativeType};
+use datafusion_common::types::{NativeType, logical_int64, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
+    DataFusionError,
     cast::{as_binary_array, as_fixed_size_binary_array, as_int64_array},
     exec_err,
-    DataFusionError,
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -266,7 +264,7 @@ pub fn compute_hex(
                         return exec_err!(
                             "hex got an unexpected argument type: {}",
                             dict_values.data_type()
-                        )
+                        );
                     }
                 };
 
@@ -292,8 +290,8 @@ mod test {
     use arrow::array::{DictionaryArray, Int32Array, Int64Array, StringArray};
     use arrow::{
         array::{
-            as_string_array, BinaryDictionaryBuilder, PrimitiveDictionaryBuilder,
-            StringDictionaryBuilder,
+            BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringDictionaryBuilder,
+            as_string_array,
         },
         datatypes::{Int32Type, Int64Type},
     };
