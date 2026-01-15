@@ -402,7 +402,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
     "
     );
 
-    // Test left join - filters should be pushed down to the preserved side (left)
+    // Test left join - filters should NOT be pushed down
     let join = Arc::new(
         HashJoinExec::try_new(
             TestScanBuilder::new(Arc::clone(&build_side_schema))
@@ -430,7 +430,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
     let plan =
         Arc::new(FilterExec::try_new(filter, join).unwrap()) as Arc<dyn ExecutionPlan>;
 
-    // Test that filters are pushed down for left join
+    // Test that filters are NOT pushed down for left join
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
         @r"
@@ -442,9 +442,10 @@ async fn test_static_filter_pushdown_through_hash_join() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+          - FilterExec: a@0 = aa
+          -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
     "
     );
 }
@@ -1245,7 +1246,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
     "
     );
 
