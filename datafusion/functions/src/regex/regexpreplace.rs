@@ -193,7 +193,7 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// used by regexp_replace
 fn regex_replace_posix_groups(replacement: &str) -> String {
     static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(\\)(\d*)").unwrap());
+        LazyLock::new(|| Regex::new(r"(\\)(\d+)").unwrap());
     CAPTURE_GROUPS_RE_LOCK
         .replace_all(replacement, "$${$2}")
         .into_owned()
@@ -658,6 +658,23 @@ mod tests {
     use arrow::array::*;
 
     use super::*;
+
+    #[test]
+    fn test_regex_replace_posix_groups() {
+        // Test that \1, \2, etc. are replaced with ${1}, ${2}, etc.
+        assert_eq!(regex_replace_posix_groups(r"\1"), "${1}");
+        assert_eq!(regex_replace_posix_groups(r"\12"), "${12}");
+        assert_eq!(regex_replace_posix_groups(r"X\1Y"), "X${1}Y");
+        assert_eq!(regex_replace_posix_groups(r"\1\2"), "${1}${2}");
+
+        // Test that a lone backslash is NOT replaced (requires at least one digit)
+        assert_eq!(regex_replace_posix_groups(r"\"), r"\");
+        assert_eq!(regex_replace_posix_groups(r"foo\bar"), r"foo\bar");
+
+        // Test that backslash followed by non-digit is preserved
+        assert_eq!(regex_replace_posix_groups(r"\n"), r"\n");
+        assert_eq!(regex_replace_posix_groups(r"\t"), r"\t");
+    }
 
     macro_rules! static_pattern_regexp_replace {
         ($name:ident, $T:ty, $O:ty) => {
