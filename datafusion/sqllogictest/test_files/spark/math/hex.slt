@@ -63,3 +63,18 @@ query T
 SELECT hex(arrow_cast('test', 'LargeBinary')) as lar_b;
 ----
 74657374
+
+statement ok
+CREATE TABLE t_dict_utf8 AS
+SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') as dict_col
+FROM VALUES ('foo'), ('bar'), ('foo'), (NULL), ('baz'), ('bar');
+
+query T
+SELECT hex(dict_col) FROM t_dict_utf8;
+----
+666F6F
+626172
+666F6F
+NULL
+62617A
+626172
