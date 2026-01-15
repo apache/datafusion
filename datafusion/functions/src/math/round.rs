@@ -141,6 +141,50 @@ impl ScalarUDFImpl for RoundFunc {
             &default_decimal_places
         };
 
+        // Scalar fast path for float types - avoid array conversion overhead
+        if let (ColumnarValue::Scalar(value_scalar), ColumnarValue::Scalar(dp_scalar)) =
+            (&args.args[0], decimal_places)
+        {
+            // Extract decimal places as i32
+            let dp = match dp_scalar {
+                ScalarValue::Int32(Some(dp)) => *dp,
+                ScalarValue::Int32(None) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                }
+                _ => {
+                    // Fall through to array path for non-Int32 decimal places
+                    return round_columnar(
+                        &args.args[0],
+                        decimal_places,
+                        args.number_rows,
+                    );
+                }
+            };
+
+            match value_scalar {
+                ScalarValue::Float64(Some(v)) => {
+                    let factor = 10_f64.powi(dp);
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
+                        (v * factor).round() / factor,
+                    ))));
+                }
+                ScalarValue::Float64(None) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                }
+                ScalarValue::Float32(Some(v)) => {
+                    let factor = 10_f32.powi(dp);
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
+                        (v * factor).round() / factor,
+                    ))));
+                }
+                ScalarValue::Float32(None) => {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)));
+                }
+                // For decimals and other types: fall through to array path
+                _ => {}
+            }
+        }
+
         round_columnar(&args.args[0], decimal_places, args.number_rows)
     }
 
