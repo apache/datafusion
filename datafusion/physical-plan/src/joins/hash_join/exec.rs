@@ -92,9 +92,8 @@ use parking_lot::Mutex;
 
 use super::partitioned_hash_eval::SeededRandomState;
 
-/// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
-pub(crate) const HASH_JOIN_SEED: SeededRandomState =
-    SeededRandomState::with_seeds('J' as u64, 'O' as u64, 'I' as u64, 'N' as u64);
+/// Hard-coded seed to ensure hash values from the hash join match `RepartitionExec`'s hashing for internal routing.
+pub(crate) const HASH_JOIN_SEED: SeededRandomState = REPARTITION_RANDOM_STATE;
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
