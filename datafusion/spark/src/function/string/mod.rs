@@ -94,8 +94,8 @@ pub mod expr_fn {
     export_functions!((space, "Returns a string consisting of n spaces.", arg1));
     export_functions!((
         substring,
-        "Returns the substring from string str starting at position pos with length len.",
-        str pos
+        "Returns the substring from string `str` starting at position `pos` with length `length.",
+        str pos length
     ));
 }
 
