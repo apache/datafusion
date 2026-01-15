@@ -132,32 +132,35 @@ impl RowGroupAccessPlanFilter {
     /// |  +-----------------------------------+-----------------------------+  |
     /// +-----------------------------------------------------------------------+
     ///
-    /// # Example with Statistics Truncation and NOT Inversion
+    /// ### Identification of Fully Matching Row Groups
     ///
-    /// When statistics are truncated to length 6 (e.g., `statistics_truncate_length = 6`),
-    /// the min/max values become:
+    /// DataFusion identifies row groups where ALL rows satisfy the filter by inverting the
+    /// predicate and checking if statistics prove the inverted version is false for the group.
     ///
-    /// ```text
-    /// Row group 3: species_min="Alpine", species_max="Alpine" (truncated from "Alpine Ibex"/"Alpine Sheep")
-    ///              s_min=76, s_max=101
-    /// ```
+    /// For example, prefix matches like `species LIKE 'Alpine%'` are pruned using ranges:
+    /// 1. Candidate Range: `species >= 'Alpine' AND species < 'Alpinf'`
+    /// 2. Inverted Condition (to prove full match): `species < 'Alpine' OR species >= 'Alpinf'`
+    /// 3. Statistical Evaluation (check if any row *could* satisfy the inverted condition):
+    ///    `min < 'Alpine' OR max >= 'Alpinf'`
     ///
-    /// To identify this as fully matching, the system uses NOT inversion:
-    /// 1. Original predicate: `species LIKE 'Alpine%' AND s >= 50`
-    /// 2. Inverted predicate: `NOT (species LIKE 'Alpine%' AND s >= 50)`
-    ///    Simplified to: `species NOT LIKE 'Alpine%' OR s < 50`
-    /// 3. Pruning predicate generated:
-    ///    `(species_min NOT LIKE 'Alpine%' OR species_max NOT LIKE 'Alpine%') OR s_min < 50`
+    /// If this evaluation is **false**, it proves no row can fail the original filter,
+    /// so the row group is **FULLY MATCHING**.
     ///
-    /// For row group 3 with truncated stats:
-    /// - Evaluating `species_min NOT LIKE 'Alpine%'`: `"A" NOT LIKE 'Alpine%'` = `false`
-    /// - Evaluating `species_max NOT LIKE 'Alpine%'`: `"A" NOT LIKE 'Alpine%'` = `false`
-    /// - Evaluating `s_min < 50`: `76 < 50` = `false`
-    /// - Final result: `(false OR false) OR false` = `false`
+    /// ### Impact of Statistics Truncation
     ///
-    /// Since the inverted predicate would prune this row group (returns false), it means
-    /// no rows in this group could possibly satisfy the inverted predicate.
-    /// Therefore, all rows in this group must match the original predicate, making it fully matched
+    /// The precision of pruning depends on the metadata quality. Truncated statistics
+    /// may prevent the system from proving a full match.
+    ///
+    /// **Example**: `WHERE species LIKE 'Alpine%'` (Target range: `['Alpine', 'Alpinf')`)
+    ///
+    /// | Truncation Length | min / max           | Inverted Evaluation                                                 | Status                 |
+    /// |-------------------|---------------------|---------------------------------------------------------------------|------------------------|
+    /// | **Length 6**      | `Alpine` / `Alpine` | `"Alpine" < "Alpine" (F) OR "Alpine" >= "Alpinf" (F)` -> **false**  | **FULLY MATCHING**     |
+    /// | **Length 3**      | `Alp` / `Alq`       | `"Alp" < "Alpine" (T) OR "Alq" >= "Alpinf" (T)` -> **true**         | **PARTIALLY MATCHING** |
+    ///
+    /// Even though Row Group 3 only contains matching rows, truncation to length 3 makes
+    /// the statistics `[Alp, Alq]` too broad to prove it (they could include "Alpha").
+    /// The system must conservatively scan the group.
     ///
     /// Without limit pruning: Scan Partition 2 → Partition 3 → Partition 4 (until limit reached)
     /// With limit pruning: If Partition 3 contains enough rows to satisfy the limit,
