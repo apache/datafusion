@@ -346,6 +346,7 @@ where v = 1 or v = 10000000
 order by t1.k, t2.v;
 ----
 1 1 1
+10000000 10000000 10000000
 
 query III rowsort
 select *
@@ -355,6 +356,7 @@ where v = 1 or v = 10000000
 order by t1.k, t2.v;
 ----
 1 1 1
+10000000 10000000 10000000
 
 query III rowsort
 select *
@@ -364,6 +366,7 @@ where v = 1 or v = 10000000
 order by t1.k, t2.v;
 ----
 1 1 1
+10000000 10000000 10000000
 
 query III rowsort
 select *
@@ -373,6 +376,7 @@ where v = 1 or v = 10000000
 order by t1.k, t2.v;
 ----
 1 1 1
+10000000 10000000 10000000
 
 query III rowsort
 select *
@@ -382,6 +386,7 @@ where v = 1 or v = 10000000
 order by t1.k, t2.v;
 ----
 1 1 1
+10000000 10000000 10000000
 
 # Regression test for https://github.com/apache/datafusion/issues/17512
 
