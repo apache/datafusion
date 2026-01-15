@@ -805,13 +805,14 @@ fn multi_joins_after_alias() -> Result<()> {
         plan_distrib,
         @r"
     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a2@1, c@2)]
-      ProjectionExec: expr=[a@0 as a1, a@0 as a2]
-        HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
-          RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-          RepartitionExec: partitioning=Hash([b@1], 10), input_partitions=1
-            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
-      RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=1
+      RepartitionExec: partitioning=Hash([a2@1], 10), input_partitions=10
+        ProjectionExec: expr=[a@0 as a1, a@0 as a2]
+          HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, b@1)]
+            RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+            RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
+              DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
+      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     "
     );

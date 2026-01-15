@@ -2507,13 +2507,9 @@ async fn verify_join_output_partitioning() -> Result<()> {
             | JoinType::RightSemi
             | JoinType::RightAnti
             | JoinType::RightMark => {
-                let right_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-                    Arc::new(Column::new_with_schema("c2_c1", &join_schema)?),
-                    Arc::new(Column::new_with_schema("c2_c2", &join_schema)?),
-                ];
                 assert_eq!(
                     out_partitioning,
-                    &Partitioning::Hash(right_exprs, default_partition_count)
+                    &Partitioning::RoundRobinBatch(default_partition_count)
                 );
             }
             JoinType::Full => {
