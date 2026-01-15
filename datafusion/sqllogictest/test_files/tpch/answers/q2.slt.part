@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query RTTITTTT
+query error
 select
     s_acctbal,
     s_name,
@@ -62,13 +62,6 @@ order by
     p_partkey
 limit 10;
 ----
-9828.21 Supplier#000000647 UNITED KINGDOM 13120 Manufacturer#5 x5U7MBZmwfG9 33-258-202-4782 s the slyly even ideas poach fluffily 
-9508.37 Supplier#000000070 FRANCE 3563 Manufacturer#1 INWNH2w,OOWgNDq0BRCcBwOMQc6PdFDc4 16-821-608-1166 ests sleep quickly express ideas. ironic ideas haggle about the final T
-9508.37 Supplier#000000070 FRANCE 17268 Manufacturer#4 INWNH2w,OOWgNDq0BRCcBwOMQc6PdFDc4 16-821-608-1166 ests sleep quickly express ideas. ironic ideas haggle about the final T
-9453.01 Supplier#000000802 ROMANIA 10021 Manufacturer#5 ,6HYXb4uaHITmtMBj4Ak57Pd 29-342-882-6463 gular frets. permanently special multipliers believe blithely alongs
-9453.01 Supplier#000000802 ROMANIA 13275 Manufacturer#4 ,6HYXb4uaHITmtMBj4Ak57Pd 29-342-882-6463 gular frets. permanently special multipliers believe blithely alongs
-9192.1 Supplier#000000115 UNITED KINGDOM 13325 Manufacturer#1 nJ 2t0f7Ve,wL1,6WzGBJLNBUCKlsV 33-597-248-1220 es across the carefully express accounts boost caref
-9032.15 Supplier#000000959 GERMANY 4958 Manufacturer#4 8grA EHBnwOZhO 17-108-642-3106 nding dependencies nag furiou
-8702.02 Supplier#000000333 RUSSIA 11810 Manufacturer#3 MaVf XgwPdkiX4nfJGOis8Uu2zKiIZH 32-508-202-6136 oss the deposits cajole carefully even pinto beans. regular foxes detect alo
-8615.5 Supplier#000000812 FRANCE 10551 Manufacturer#2 8qh4tezyScl5bidLAysvutB,,ZI2dn6xP 16-585-724-6633 y quickly regular deposits? quickly pending packages after the caref
-8615.5 Supplier#000000812 FRANCE 13811 Manufacturer#4 8qh4tezyScl5bidLAysvutB,,ZI2dn6xP 16-585-724-6633 y quickly regular deposits? quickly pending packages after the caref
+DataFusion error: Join Error
+caused by
+External error: task 33393 panicked with message "index out of bounds: the len is 256 but the index is 427"
