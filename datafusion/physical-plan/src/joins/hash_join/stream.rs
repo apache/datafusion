@@ -34,7 +34,6 @@ use crate::joins::hash_join::shared_bounds::{
 use crate::joins::utils::{
     OnceFut, equal_rows_arr, get_final_indices_from_shared_bitmap,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
     hash_utils::create_hashes,
@@ -331,7 +330,6 @@ pub(super) fn lookup_join_hashmap(
 /// Counts the number of distinct elements in the input array.
 ///
 /// The input array must be sorted (e.g., `[0, 1, 1, 2, 2, ...]`) and contain no null values.
-
 impl HashJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -808,7 +806,7 @@ impl HashJoinStream {
                             };
                             columns.push(array);
                         }
-                        RecordBatch::try_new(self.schema.clone(), columns)?
+                        RecordBatch::try_new(Arc::clone(&self.schema), columns)?
                     } else {
                         let l_indices = UInt64Array::from(vec![None; r_indices.len()]);
                         build_batch_from_indices(

@@ -381,6 +381,7 @@ where
     (input_indices, match_indices)
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn get_matched_indices_with_limit_offset<T>(
     map: &HashTable<(u64, T)>,
     next_chain: &[T],
