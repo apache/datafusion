@@ -731,6 +731,10 @@ impl BatchPartitioner {
 /// system Paper](https://dl.acm.org/doi/pdf/10.1145/93605.98720)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
+///
+/// For more background, please also see the [Optimizing Repartitions in DataFusion] blog.
+///
+/// [Optimizing Repartitions in DataFusion]: https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
