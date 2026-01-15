@@ -2548,7 +2548,7 @@ extract(field FROM source)
 
 ### `date_trunc`
 
-Truncates a timestamp value to a specified precision.
+Truncates a timestamp or time value to a specified precision.
 
 ```sql
 date_trunc(precision, expression)
@@ -2557,6 +2557,8 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
+
+  For Timestamp types:
 
   - year / YEAR
   - quarter / QUARTER
@@ -2569,7 +2571,15 @@ date_trunc(precision, expression)
   - millisecond / MILLISECOND
   - microsecond / MICROSECOND
 
-- **expression**: Time expression to operate on. Can be a constant, column, or function.
+  For Time types (hour, minute, second, millisecond, microsecond only):
+
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
+
+- **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
 
 #### Aliases
 
