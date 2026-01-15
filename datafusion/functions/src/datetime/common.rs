@@ -160,11 +160,7 @@ where
         // if the first argument is a scalar utf8 all arguments are expected to be scalar utf8
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(a) => {
-                let a = a.as_ref();
-                // ASK: Why do we trust `a` to be non-null at this point?
-                let a = unwrap_or_internal_err!(a);
-
-                let mut ret = None;
+                let mut vals = vec![];
 
                 for (pos, v) in args.iter().enumerate().skip(1) {
                     let ColumnarValue::Scalar(
@@ -179,17 +175,22 @@ where
                     };
 
                     if let Some(s) = x {
-                        match op(a, &[s.as_str()]) {
-                            Ok(r) => {
-                                let result = op2(r).to_i64();
-                                let s = scalar_value(dt, result)?;
-                                ret = Some(Ok(ColumnarValue::Scalar(s)));
-                                break;
-                            }
-                            Err(e) => ret = Some(Err(e)),
-                        }
+                        vals.push(s.as_str());
                     }
                 }
+
+                let a = a.as_ref();
+                // ASK: Why do we trust `a` to be non-null at this point?
+                let a = unwrap_or_internal_err!(a);
+
+                let ret = match op(a, &vals) {
+                    Ok(r) => {
+                        let result = op2(r).to_i64();
+                        let s = scalar_value(dt, result)?;
+                        Some(Ok(ColumnarValue::Scalar(s)))
+                    }
+                    Err(e) => Some(Err(e)),
+                };
 
                 unwrap_or_internal_err!(ret)
             }
