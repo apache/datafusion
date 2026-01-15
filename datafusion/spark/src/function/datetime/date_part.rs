@@ -103,9 +103,9 @@ impl ScalarUDFImpl for SparkDatePart {
         let [part_expr, date_expr] = take_function_args(self.name(), args)?;
 
         let part = match part_expr.as_literal() {
-            Some(ScalarValue::Utf8(Some(v))) | Some(ScalarValue::Utf8View(Some(v))) => {
-                v.to_lowercase()
-            }
+            Some(ScalarValue::Utf8(Some(v)))
+            | Some(ScalarValue::Utf8View(Some(v)))
+            | Some(ScalarValue::LargeUtf8(Some(v))) => v.to_lowercase(),
             _ => {
                 return internal_err!(
                     "First argument of `DATE_PART` must be non-null scalar Utf8"
