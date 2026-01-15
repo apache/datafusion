@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericStringBuilder, Int64Array, StringArrayType,
-    StringViewArray, StringViewBuilder,
+    Array, ArrayBuilder, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringArrayType, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
@@ -133,19 +133,24 @@ fn spark_substring(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     match args[0].data_type() {
-        DataType::Utf8 => spark_substring_utf8::<i32, _>(
+        DataType::Utf8 => spark_substring_impl(
             &args[0].as_string::<i32>(),
             start_array,
             length_array,
+            GenericStringBuilder::<i32>::new(),
         ),
-        DataType::LargeUtf8 => spark_substring_utf8::<i64, _>(
+        DataType::LargeUtf8 => spark_substring_impl(
             &args[0].as_string::<i64>(),
             start_array,
             length_array,
+            GenericStringBuilder::<i64>::new(),
         ),
-        DataType::Utf8View => {
-            spark_substring_view(args[0].as_string_view(), start_array, length_array)
-        }
+        DataType::Utf8View => spark_substring_impl(
+            &args[0].as_string_view(),
+            start_array,
+            length_array,
+            StringViewBuilder::new(),
+        ),
         other => exec_err!(
             "Unsupported data type {other:?} for function spark_substring, expected Utf8View, Utf8 or LargeUtf8."
         ),
@@ -171,17 +176,39 @@ fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
     }
 }
 
-fn spark_substring_utf8<'a, O, V>(
+trait StringArrayBuilder: ArrayBuilder {
+    fn append_value(&mut self, val: &str);
+    fn append_null(&mut self);
+}
+
+impl<O: OffsetSizeTrait> StringArrayBuilder for GenericStringBuilder<O> {
+    fn append_value(&mut self, val: &str) {
+        GenericStringBuilder::append_value(self, val);
+    }
+    fn append_null(&mut self) {
+        GenericStringBuilder::append_null(self);
+    }
+}
+
+impl StringArrayBuilder for StringViewBuilder {
+    fn append_value(&mut self, val: &str) {
+        StringViewBuilder::append_value(self, val);
+    }
+    fn append_null(&mut self) {
+        StringViewBuilder::append_null(self);
+    }
+}
+
+fn spark_substring_impl<'a, V, B>(
     string_array: &V,
     start_array: &Int64Array,
     length_array: Option<&Int64Array>,
+    mut builder: B,
 ) -> Result<ArrayRef>
 where
-    O: arrow::array::OffsetSizeTrait,
     V: StringArrayType<'a>,
+    B: StringArrayBuilder,
 {
-    let mut builder = GenericStringBuilder::<O>::new();
-
     let is_ascii = enable_ascii_fast_path(string_array, start_array, length_array);
 
     for i in 0..string_array.len() {
@@ -227,59 +254,5 @@ where
         builder.append_value(substr);
     }
 
-    Ok(Arc::new(builder.finish()) as ArrayRef)
-}
-
-fn spark_substring_view(
-    string_array: &StringViewArray,
-    start_array: &Int64Array,
-    length_array: Option<&Int64Array>,
-) -> Result<ArrayRef> {
-    let mut builder = StringViewBuilder::new();
-
-    let is_ascii = enable_ascii_fast_path(&string_array, start_array, length_array);
-
-    for i in 0..string_array.len() {
-        if string_array.is_null(i) || start_array.is_null(i) {
-            builder.append_null();
-            continue;
-        }
-        if let Some(len_arr) = length_array
-            && len_arr.is_null(i)
-        {
-            builder.append_null();
-            continue;
-        }
-
-        let string = string_array.value(i);
-        let start = start_array.value(i);
-        let len_opt = length_array.map(|arr| arr.value(i));
-
-        // Spark: negative length returns empty string
-        if let Some(len) = len_opt
-            && len < 0
-        {
-            builder.append_value("");
-            continue;
-        }
-
-        let string_len = if is_ascii {
-            string.len()
-        } else {
-            string.chars().count()
-        };
-
-        let adjusted_start = spark_start_to_datafusion_start(start, string_len);
-
-        let (byte_start, byte_end) = get_true_start_end(
-            string,
-            adjusted_start,
-            len_opt.map(|l| l as u64),
-            is_ascii,
-        );
-        let substr = &string[byte_start..byte_end];
-        builder.append_value(substr);
-    }
-
-    Ok(Arc::new(builder.finish()) as ArrayRef)
+    Ok(builder.finish())
 }
