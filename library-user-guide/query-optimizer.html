@@ -409,7 +409,7 @@
 format.</p>
 <p>DataFusion has modular design, allowing individual crates to be re-used in other projects.</p>
 <p>This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code></a>s and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRules</span></code></a> that may rewrite the plan and/or its expressions so
+contains an extensive set of <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code></a>s and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html"><code class="docutils literal notranslate"><span class="pre">PhysicalOptimizerRule</span></code></a>s that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.</p>
 <section id="running-the-optimizer">
 <h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">#</a></h2>
@@ -452,7 +452,7 @@ and applying it to a logical plan to produce an optimized logical plan.</p>
 <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/optimizer_rule.rs">optimizer_rule.rs</a>
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.</p>
-<p><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> transforms one [‘LogicalPlan’] into another which
+<p><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> transforms one <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html"><code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code></a> into another which
 computes the same results, but in a potentially more efficient
 way. If there are no suitable transformations for the input plan,
 the optimizer can simply return it as is.</p>
