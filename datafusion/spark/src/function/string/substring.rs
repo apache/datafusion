@@ -108,12 +108,12 @@ impl ScalarUDFImpl for SparkSubstring {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         datafusion_common::internal_err!(
-            "return_type should not be called for Spark substr"
+            "return_type should not be called for Spark substring"
         )
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
-        // Spark semantics: substr returns NULL if ANY input is NULL
+        // Spark semantics: substring returns NULL if ANY input is NULL
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
         Ok(Arc::new(Field::new(
@@ -165,7 +165,8 @@ fn spark_start_to_datafusion_start(start: i64, len: usize) -> i64 {
     if start >= 0 {
         start.max(1)
     } else {
-        let start = start + len as i64 + 1;
+        let len_i64 = i64::try_from(len).unwrap_or(i64::MAX);
+        let start = start.saturating_add(len_i64).saturating_add(1);
         start.max(1)
     }
 }
