@@ -70,9 +70,10 @@ use arrow_schema::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, assert_or_internal_err,
+    internal_err, plan_err, project_schema,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
@@ -1122,27 +1123,47 @@ impl ExecutionPlan for HashJoinExec {
             .map(|i| {
                 let array_map_created_count = MetricBuilder::new(&self.metrics)
                     .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, i);
+
+                let random_state = self.random_state.random_state().clone();
+                let on_left = on_left.clone();
+                let join_metrics = join_metrics.clone();
+                let join_type = self.join_type;
+                let right_partition_count =
+                    self.right().output_partitioning().partition_count();
+                let null_equality = self.null_equality;
+                let probe_side_non_empty = Arc::clone(&self.probe_side_non_empty);
+                let probe_side_has_null = Arc::clone(&self.probe_side_has_null);
+                let options = Arc::clone(context.session_config().options());
+
                 self.left_futs[i].try_once(|| {
                     let left_stream = self.left.execute(i, Arc::clone(&context))?;
 
                     let reservation = MemoryConsumer::new(format!("HashJoinInput[{i}]"))
                         .register(context.memory_pool());
 
-                    Ok(collect_left_input(
-                        self.random_state.random_state().clone(),
+                    let task = SpawnedTask::spawn(collect_left_input(
+                        random_state,
                         left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
+                        on_left,
+                        join_metrics,
                         reservation,
-                        need_produce_result_in_final(self.join_type),
-                        self.right().output_partitioning().partition_count(),
+                        need_produce_result_in_final(join_type),
+                        right_partition_count,
                         enable_dynamic_filter_pushdown,
-                        Arc::clone(context.session_config().options()),
-                        self.null_equality,
+                        options,
+                        null_equality,
                         array_map_created_count,
-                        Arc::clone(&self.probe_side_non_empty),
-                        Arc::clone(&self.probe_side_has_null),
-                    ))
+                        probe_side_non_empty,
+                        probe_side_has_null,
+                    ));
+
+                    Ok(Box::pin(async move {
+                        task.join().await.map_err(|e| {
+                            DataFusionError::Execution(format!(
+                                "HashJoin build side task failed: {e}"
+                            ))
+                        })?
+                    }))
                 })
             })
             .collect::<Result<Vec<_>>>()?;
