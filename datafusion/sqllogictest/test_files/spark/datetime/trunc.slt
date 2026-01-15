@@ -84,10 +84,10 @@ SELECT trunc(NULL::date, 'YEAR'::string);
 ----
 NULL
 
-query error Internal error: First argument of `TRUNC` must be non-null scalar Utf8.
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Second argument of `TRUNC` must be non-null scalar Utf8
 SELECT trunc('2009-02-12'::date, NULL::string);
 
 # incorrect format
-query error Internal error: The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter.
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter.
 SELECT trunc('2009-02-12'::date, 'test'::string);
 

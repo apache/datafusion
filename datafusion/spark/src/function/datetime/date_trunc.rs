@@ -21,7 +21,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -105,7 +105,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
             | Some(ScalarValue::Utf8View(Some(v)))
             | Some(ScalarValue::LargeUtf8(Some(v))) => v.to_lowercase(),
             _ => {
-                return internal_err!(
+                return plan_err!(
                     "First argument of `DATE_TRUNC` must be non-null scalar Utf8"
                 );
             }

@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
@@ -100,7 +101,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
             | Some(ScalarValue::Utf8View(Some(v)))
             | Some(ScalarValue::LargeUtf8(Some(v))) => v.to_lowercase(),
             _ => {
-                return internal_err!(
+                return plan_err!(
                     "First argument of `TIME_TRUNC` must be non-null scalar Utf8"
                 );
             }
@@ -110,7 +111,7 @@ impl ScalarUDFImpl for SparkTimeTrunc {
             fmt.as_str(),
             "hour" | "minute" | "second" | "millisecond" | "microsecond"
         ) {
-            return internal_err!(
+            return plan_err!(
                 "The format argument of `TIME_TRUNC` must be one of: hour, minute, second, millisecond, microsecond"
             );
         }
