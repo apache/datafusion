@@ -26,10 +26,16 @@
 # COPY (SELECT * FROM 'hits.parquet' LIMIT 10) TO 'clickbench_hits_10.parquet' (FORMAT PARQUET);
 
 statement ok
-CREATE EXTERNAL TABLE hits
+CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
+statement ok
+# ClickBench encodes EventDate as UInt16 days since epoch.
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS Int32) AS Date32) AS "EventDate"
+FROM hits_raw;
 
 # queries.sql came from
 # https://github.com/ClickHouse/ClickBench/blob/8b9e3aa05ea18afa427f14909ddc678b8ef0d5e6/datafusion/queries.sql
@@ -67,7 +73,7 @@ SELECT COUNT(DISTINCT "SearchPhrase") FROM hits;
 query II
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
 ----
-15901 15901
+2013-07-15 2013-07-15
 
 query II
 SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
@@ -293,4 +299,7 @@ SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitCo
 
 
 statement ok
-drop table hits;
+drop view hits;
+
+statement ok
+drop table hits_raw;
