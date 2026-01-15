@@ -119,7 +119,12 @@ impl ScalarUDFImpl for TruncFunc {
                 return make_scalar_function(trunc, vec![])(&args.args);
             }
             None => Some(0), // default precision
-            _ => Some(0),
+            Some(cv) => {
+                return exec_err!(
+                    "trunc function requires precision to be Int64, got {:?}",
+                    cv.data_type()
+                );
+            }
         };
 
         // Scalar fast path using tuple matching for (value, precision)
