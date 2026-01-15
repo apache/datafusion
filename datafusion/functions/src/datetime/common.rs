@@ -23,21 +23,88 @@ use arrow::array::{
     StringArrayType, StringViewArray,
 };
 use arrow::compute::DecimalCast;
-use arrow::compute::kernels::cast_utils::string_to_datetime;
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::compute::kernels::cast_utils::{
+    string_to_datetime, string_to_timestamp_nanos,
+};
+use arrow::datatypes::{ArrowTimestampType, DataType, TimeUnit};
 use arrow_buffer::ArrowNativeType;
 use chrono::LocalResult::Single;
 use chrono::format::{Parsed, StrftimeItems, parse};
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, MappedLocalTime, TimeDelta, TimeZone, Utc};
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
     internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use std::ops::Add;
 
 /// Error message if nanosecond conversion request beyond supported interval
 const ERR_NANOSECONDS_NOT_SUPPORTED: &str = "The dates that can be represented as nanoseconds have to be between 1677-09-21T00:12:44.0 and 2262-04-11T23:47:16.854775804";
+
+pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+    fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
+    where
+        F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,
+    {
+        match converter(ts) {
+            MappedLocalTime::Ambiguous(earliest, latest) => exec_err!(
+                "Ambiguous timestamp. Do you mean {:?} or {:?}",
+                earliest,
+                latest
+            ),
+            MappedLocalTime::None => exec_err!(
+                "The local time does not exist because there is a gap in the local time."
+            ),
+            Single(date_time) => Ok(date_time),
+        }
+    }
+
+    let date_time = match T::UNIT {
+        TimeUnit::Nanosecond => Utc.timestamp_nanos(ts),
+        TimeUnit::Microsecond => convert_timestamp(ts, |ts| Utc.timestamp_micros(ts))?,
+        TimeUnit::Millisecond => convert_timestamp(ts, |ts| Utc.timestamp_millis_opt(ts))?,
+        TimeUnit::Second => convert_timestamp(ts, |ts| Utc.timestamp_opt(ts, 0))?,
+    };
+
+    // Get the timezone offset for this datetime
+    let tz_offset = tz.offset_from_utc_datetime(&date_time.naive_utc());
+    // Convert offset to seconds - offset is formatted like "+01:00" or "-05:00"
+    let offset_str = format!("{tz_offset}");
+    let offset_seconds: i64 = if let Some(stripped) = offset_str.strip_prefix('-') {
+        let parts: Vec<&str> = stripped.split(':').collect();
+        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        -((hours * 3600) + (mins * 60))
+    } else {
+        let parts: Vec<&str> = offset_str.split(':').collect();
+        let hours: i64 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mins: i64 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (hours * 3600) + (mins * 60)
+    };
+
+    let adjusted_date_time = date_time.add(
+        TimeDelta::try_seconds(offset_seconds)
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+    );
+
+    // convert back to i64
+    match T::UNIT {
+        TimeUnit::Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(|| {
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
+        }),
+        TimeUnit::Microsecond => Ok(adjusted_date_time.timestamp_micros()),
+        TimeUnit::Millisecond => Ok(adjusted_date_time.timestamp_millis()),
+        TimeUnit::Second => Ok(adjusted_date_time.timestamp()),
+    }
+}
+
+/// Calls string_to_timestamp_nanos and converts the error type
+pub(crate) fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
+    string_to_timestamp_nanos(s).map_err(|e| e.into())
+}
 
 static UTC: LazyLock<Tz> = LazyLock::new(|| "UTC".parse().expect("UTC is always valid"));
 
@@ -452,8 +519,7 @@ where
                 )
             }
             other => exec_err!(
-                "Unsupported data type {other:?} for function substr,\
-                    expected Utf8View, Utf8 or LargeUtf8."
+                "Unsupported data type {other:?} for function substr, expected Utf8View, Utf8 or LargeUtf8."
             ),
         },
         other => exec_err!(
@@ -487,12 +553,14 @@ where
                             DataType::Utf8View => Ok(a.as_string_view().value(pos)),
                             DataType::LargeUtf8 => Ok(a.as_string::<i64>().value(pos)),
                             DataType::Utf8 => Ok(a.as_string::<i32>().value(pos)),
-                            other => exec_err!("Unexpected type encountered '{other}'"),
+                            other => exec_err!("Unexpected type encountered '{}'", other),
                         },
                         ColumnarValue::Scalar(s) => match s.try_as_str() {
                             Some(Some(v)) => Ok(v),
                             Some(None) => continue, // null string
-                            None => exec_err!("Unexpected scalar type encountered '{s}'"),
+                            None => {
+                                exec_err!("Unexpected scalar type encountered '{}'", s)
+                            }
                         },
                     }?;
 
@@ -540,6 +608,6 @@ fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
             TimeUnit::Microsecond => Ok(ScalarValue::TimestampMicrosecond(r, tz.clone())),
             TimeUnit::Nanosecond => Ok(ScalarValue::TimestampNanosecond(r, tz.clone())),
         },
-        t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
+        t => Err(internal_datafusion_err!("Unsupported data type: {:?}", t)),
     }
 }
