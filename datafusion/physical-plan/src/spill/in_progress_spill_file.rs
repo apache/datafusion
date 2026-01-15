@@ -63,7 +63,7 @@ impl InProgressSpillFile {
         }
         if self.writer.is_none() {
             let schema = batch.schema();
-            if let Some(ref in_progress_file) = self.in_progress_file {
+            if let Some(in_progress_file) = &mut self.in_progress_file {
                 self.writer = Some(IPCStreamWriter::new(
                     in_progress_file.path(),
                     schema.as_ref(),
@@ -72,18 +72,31 @@ impl InProgressSpillFile {
 
                 // Update metrics
                 self.spill_writer.metrics.spill_file_count.add(1);
+
+                // Update initial size (schema/header)
+                in_progress_file.update_disk_usage()?;
+                let initial_size = in_progress_file.current_disk_usage();
+                self.spill_writer
+                    .metrics
+                    .spilled_bytes
+                    .add(initial_size as usize);
             }
         }
         if let Some(writer) = &mut self.writer {
             let (spilled_rows, _) = writer.write(batch)?;
             if let Some(in_progress_file) = &mut self.in_progress_file {
+                let pre_size = in_progress_file.current_disk_usage();
                 in_progress_file.update_disk_usage()?;
+                let post_size = in_progress_file.current_disk_usage();
+
+                self.spill_writer.metrics.spilled_rows.add(spilled_rows);
+                self.spill_writer
+                    .metrics
+                    .spilled_bytes
+                    .add((post_size - pre_size) as usize);
             } else {
                 unreachable!() // Already checked inside current function
             }
-
-            // Update metrics
-            self.spill_writer.metrics.spilled_rows.add(spilled_rows);
         }
         Ok(())
     }
@@ -106,9 +119,13 @@ impl InProgressSpillFile {
         // Since spill files are append-only, add the file size to spilled_bytes
         if let Some(in_progress_file) = &mut self.in_progress_file {
             // Since writer.finish() writes continuation marker and message length at the end
+            let pre_size = in_progress_file.current_disk_usage();
             in_progress_file.update_disk_usage()?;
-            let size = in_progress_file.current_disk_usage();
-            self.spill_writer.metrics.spilled_bytes.add(size as usize);
+            let post_size = in_progress_file.current_disk_usage();
+            self.spill_writer
+                .metrics
+                .spilled_bytes
+                .add((post_size - pre_size) as usize);
         }
 
         Ok(self.in_progress_file.take())
