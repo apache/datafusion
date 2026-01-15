@@ -238,6 +238,7 @@ mod test {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 15.0);
+        assert_eq!(floats.value(1), 1_234.267);
         assert_eq!(floats.value(2), 1_233.12);
         assert_eq!(floats.value(3), 3.312_97);
         assert_eq!(floats.value(4), -21.123_4);
