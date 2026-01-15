@@ -72,14 +72,41 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
 
-        self.validate_single_column(
-            &sub_plan,
-            &spans,
-            "Too many columns! The subquery should only return one column",
-            "Select only one column in the subquery",
-        )?;
+        // Check if the left expression is a tuple (multi-column IN)
+        // For tuples like (a, b) NOT IN (SELECT x, y FROM ...), allow multiple columns
+        let is_tuple = matches!(expr, SQLExpr::Tuple(_));
+
+        if !is_tuple {
+            // Single-column IN: validate subquery returns exactly one column
+            self.validate_single_column(
+                &sub_plan,
+                &spans,
+                "Too many columns! The subquery should only return one column",
+                "Select only one column in the subquery",
+            )?;
+        }
 
         let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
+
+        // For multi-column IN, validate that the number of columns match
+        if is_tuple {
+            // Tuples are converted to struct expressions
+            // Extract the number of fields by checking if it's a ScalarFunction call
+            let tuple_len = if let Expr::ScalarFunction(func) = &expr_obj {
+                func.args.len()
+            } else {
+                1 // Fallback to single column if we can't determine
+            };
+
+            let subquery_len = sub_plan.schema().fields().len();
+            if tuple_len != subquery_len {
+                return plan_err!(
+                    "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
+                    tuple_len,
+                    subquery_len
+                );
+            }
+        }
 
         Ok(Expr::InSubquery(InSubquery::new(
             Box::new(expr_obj),

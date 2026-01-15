@@ -222,13 +222,32 @@ pub fn check_subquery_expr(
         check_correlations_in_subquery(inner_plan)
     } else {
         if let Expr::InSubquery(subquery) = expr {
-            // InSubquery should only return one column
-            if subquery.subquery.subquery.schema().fields().len() > 1 {
+            // InSubquery should only return one column UNLESS the left expression is a struct
+            // (multi-column IN like: (a, b) NOT IN (SELECT x, y FROM ...))
+            let is_struct = matches!(*subquery.expr, Expr::ScalarFunction(ref func) if func.func.name() == "struct");
+
+            let num_subquery_cols = subquery.subquery.subquery.schema().fields().len();
+
+            if !is_struct && num_subquery_cols > 1 {
                 return plan_err!(
                     "InSubquery should only return one column, but found {}: {}",
-                    subquery.subquery.subquery.schema().fields().len(),
+                    num_subquery_cols,
                     subquery.subquery.subquery.schema().field_names().join(", ")
                 );
+            }
+
+            // For struct expressions, validate that the number of fields matches
+            if is_struct {
+                if let Expr::ScalarFunction(ref func) = *subquery.expr {
+                    let num_tuple_cols = func.args.len();
+                    if num_tuple_cols != num_subquery_cols {
+                        return plan_err!(
+                            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
+                            num_tuple_cols,
+                            num_subquery_cols
+                        );
+                    }
+                }
             }
         }
         if let Expr::SetComparison(set_comparison) = expr

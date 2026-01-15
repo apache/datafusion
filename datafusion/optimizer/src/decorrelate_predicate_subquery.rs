@@ -386,9 +386,57 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
-            let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            in_predicate.and(join_filter)
+            // Check if this is a multi-column IN (struct expression)
+            if let Expr::ScalarFunction(func) = left.deref() {
+                if func.func.name() == "struct" {
+                    // Decompose struct into individual field comparisons
+                    let struct_args = &func.args;
+
+                    // The right side should be the subquery result
+                    // Note: After pull-up, the subquery may have additional correlated columns
+                    // We only care about the first N columns that match our struct fields
+                    let subquery_fields = sub_query_alias.schema().fields();
+
+                    if struct_args.len() > subquery_fields.len() {
+                        return plan_err!(
+                            "Struct field count ({}) exceeds subquery column count ({})",
+                            struct_args.len(),
+                            subquery_fields.len()
+                        );
+                    }
+
+                    // Create equality conditions for each field
+                    let mut conditions = Vec::new();
+                    for (i, arg) in struct_args.iter().enumerate() {
+                        let field = &subquery_fields[i];
+                        let right_col = Expr::Column(Column::new(
+                            Some(alias.clone()),
+                            field.name().to_string(),
+                        ));
+                        conditions.push(Expr::eq(arg.clone(), right_col));
+                    }
+
+                    // Combine all conditions with AND
+                    let in_predicate = conditions
+                        .into_iter()
+                        .reduce(|acc, cond| acc.and(cond))
+                        .unwrap_or(lit(true));
+
+                    in_predicate.and(join_filter)
+                } else {
+                    // Regular scalar function, handle as before
+                    let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                    let in_predicate =
+                        Expr::eq(left.deref().clone(), Expr::Column(right_col));
+                    in_predicate.and(join_filter)
+                }
+            } else {
+                // Not a struct, handle as before
+                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                let in_predicate =
+                    Expr::eq(left.deref().clone(), Expr::Column(right_col));
+                in_predicate.and(join_filter)
+            }
         }
         (Some(join_filter), _) => join_filter,
         (
@@ -399,9 +447,51 @@ fn build_join(
                 right,
             })),
         ) => {
-            let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+            // Check if this is a multi-column IN (struct expression)
+            if let Expr::ScalarFunction(func) = left.deref() {
+                if func.func.name() == "struct" {
+                    // Decompose struct into individual field comparisons
+                    let struct_args = &func.args;
 
-            Expr::eq(left.deref().clone(), Expr::Column(right_col))
+                    // The right side should be the subquery result
+                    // Note: After pull-up, the subquery may have additional correlated columns
+                    // We only care about the first N columns that match our struct fields
+                    let subquery_fields = sub_query_alias.schema().fields();
+
+                    if struct_args.len() > subquery_fields.len() {
+                        return plan_err!(
+                            "Struct field count ({}) exceeds subquery column count ({})",
+                            struct_args.len(),
+                            subquery_fields.len()
+                        );
+                    }
+
+                    // Create equality conditions for each field
+                    let mut conditions = Vec::new();
+                    for (i, arg) in struct_args.iter().enumerate() {
+                        let field = &subquery_fields[i];
+                        let right_col = Expr::Column(Column::new(
+                            Some(alias.clone()),
+                            field.name().to_string(),
+                        ));
+                        conditions.push(Expr::eq(arg.clone(), right_col));
+                    }
+
+                    // Combine all conditions with AND
+                    conditions
+                        .into_iter()
+                        .reduce(|acc, cond| acc.and(cond))
+                        .unwrap_or(lit(true))
+                } else {
+                    // Regular scalar function, handle as before
+                    let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                    Expr::eq(left.deref().clone(), Expr::Column(right_col))
+                }
+            } else {
+                // Not a struct, handle as before
+                let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
+                Expr::eq(left.deref().clone(), Expr::Column(right_col))
+            }
         }
         (None, None) => lit(true),
         _ => return Ok(None),
