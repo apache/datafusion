@@ -32,6 +32,7 @@ use datafusion_common::{
 };
 
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
     Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
@@ -39,6 +40,7 @@ use datafusion_expr::{
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_functions_nested::expr_fn::array_has;
 
 mod binary_op;
 mod function;
@@ -594,32 +596,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // ANY/SOME are equivalent, this field specifies which the user
                 // specified but it doesn't affect the plan so ignore the field
                 is_some: _,
-            } => {
-                let mut binary_expr = RawBinaryExpr {
-                    op: compare_op,
-                    left: self.sql_expr_to_logical_expr(
-                        *left,
-                        schema,
-                        planner_context,
-                    )?,
-                    right: self.sql_expr_to_logical_expr(
-                        *right,
-                        schema,
-                        planner_context,
-                    )?,
-                };
-                for planner in self.context_provider.get_expr_planners() {
-                    match planner.plan_any(binary_expr)? {
-                        PlannerResult::Planned(expr) => {
-                            return Ok(expr);
-                        }
-                        PlannerResult::Original(expr) => {
-                            binary_expr = expr;
-                        }
+            } => match *right {
+                SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
+                    *left,
+                    *subquery,
+                    &compare_op,
+                    SetQuantifier::Any,
+                    schema,
+                    planner_context,
+                ),
+                _ => {
+                    if compare_op != BinaryOperator::Eq {
+                        plan_err!(
+                            "Unsupported AnyOp: '{compare_op}', only '=' is supported"
+                        )
+                    } else {
+                        let left_expr =
+                            self.sql_to_expr(*left, schema, planner_context)?;
+                        let right_expr =
+                            self.sql_to_expr(*right, schema, planner_context)?;
+                        Ok(array_has(right_expr, left_expr))
                     }
                 }
-                not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
-            }
+            },
+            SQLExpr::AllOp {
+                left,
+                compare_op,
+                right,
+            } => match *right {
+                SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
+                    *left,
+                    *subquery,
+                    &compare_op,
+                    SetQuantifier::All,
+                    schema,
+                    planner_context,
+                ),
+                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+            },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,

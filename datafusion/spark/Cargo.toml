@@ -70,3 +70,7 @@ name = "space"
 [[bench]]
 harness = false
 name = "hex"
+
+[[bench]]
+harness = false
+name = "slice"
