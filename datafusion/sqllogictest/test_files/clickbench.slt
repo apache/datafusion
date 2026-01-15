@@ -37,6 +37,18 @@ SELECT * EXCEPT ("EventDate"),
        CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
 FROM hits_raw;
 
+# Verify EventDate transformation from UInt16 to DATE
+query D
+SELECT "EventDate" FROM hits LIMIT 1;
+----
+2013-07-15
+
+# Verify the raw value is still UInt16 in hits_raw
+query I
+SELECT "EventDate" FROM hits_raw LIMIT 1;
+----
+15901
+
 # queries.sql came from
 # https://github.com/ClickHouse/ClickBench/blob/8b9e3aa05ea18afa427f14909ddc678b8ef0d5e6/datafusion/queries.sql
 
