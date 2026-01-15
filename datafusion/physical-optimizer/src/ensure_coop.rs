@@ -82,7 +82,6 @@ impl PhysicalOptimizerRule for EnsureCooperative {
             },
             // Up phase: Wrap nodes with CooperativeExec if needed
             |plan| {
- 
                 ancestry_stack.borrow_mut().pop();
 
                 let props = plan.properties();
