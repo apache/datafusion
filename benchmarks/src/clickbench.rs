@@ -279,7 +279,7 @@ impl RunOpt {
         let path = self.path.as_os_str().to_str().unwrap();
         let create_view_sql = r#"CREATE VIEW hits AS
             SELECT * EXCEPT ("EventDate"),
-                   CAST(CAST("EventDate" AS Int32) AS Date32) AS "EventDate"
+                   CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
             FROM hits_raw"#;
 
         // If sorted_by is specified, use CREATE EXTERNAL TABLE with WITH ORDER

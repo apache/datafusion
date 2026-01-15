@@ -34,7 +34,7 @@ LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 statement ok
 CREATE VIEW hits AS
 SELECT * EXCEPT ("EventDate"),
-       CAST(CAST("EventDate" AS Int32) AS DATE) AS "EventDate"
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
 FROM hits_raw;
 
 # queries.sql came from
