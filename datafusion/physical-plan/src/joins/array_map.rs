@@ -334,7 +334,7 @@ impl ArrayMap {
                         build_indices,
                         is_last,
                     ) {
-                        return Ok(Some(next_offset));
+                        return Ok(Some((idx, next_offset.1)));
                     }
                     idx + 1
                 }
@@ -373,7 +373,7 @@ impl ArrayMap {
                     build_indices,
                     is_last,
                 ) {
-                    return Ok(Some(offset));
+                    return Ok(Some((i, offset.1)));
                 }
             }
             Ok(None)
