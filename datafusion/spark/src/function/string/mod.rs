@@ -42,7 +42,6 @@ make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
 make_udf_function!(space::SparkSpace, space);
 make_udf_function!(substring::SparkSubstring, substring);
-make_udf_function!(substring::SparkSubstring, substr);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
