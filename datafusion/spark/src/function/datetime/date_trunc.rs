@@ -25,11 +25,12 @@ use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 
 /// Spark date_trunc supports extra format aliases.
+/// It also handles timestamps with timezones by converting to session timezone first.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#date_trunc>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDateTrunc {
@@ -82,7 +83,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
 
         Ok(Arc::new(Field::new(
             self.name(),
-            args.arg_fields[1].data_type().clone(),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
             nullable,
         )))
     }
@@ -96,7 +97,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &SimplifyContext,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [fmt_expr, ts_expr] = take_function_args(self.name(), args)?;
 
@@ -117,6 +118,41 @@ impl ScalarUDFImpl for SparkDateTrunc {
             "mm" | "mon" => "month",
             "dd" => "day",
             other => other,
+        };
+
+        let session_tz = info.config_options().execution.time_zone.clone();
+        let ts_type = ts_expr.get_type(info.schema())?;
+
+        // Spark interprets timestamps in the session timezone before truncating,
+        // then returns a timestamp without timezone at microsecond precision.
+        // See: https://github.com/apache/spark/blob/f310f4fcc95580a6824bc7d22b76006f79b8804a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/DateTimeUtils.scala#L492
+        //
+        // For sub-second truncations (second, millisecond, microsecond), timezone
+        // adjustment is unnecessary since timezone offsets are whole seconds.
+        let ts_expr = match (&ts_type, fmt) {
+            // Sub-second truncations don't need timezone adjustment
+            (_, "second" | "millisecond" | "microsecond") => ts_expr,
+
+            // Timestamp with timezone: convert to local time (applying session tz if needed)
+            (DataType::Timestamp(_, Some(_)), _) => {
+                let ts_with_tz = match &session_tz {
+                    Some(tz) => ts_expr.cast_to(
+                        &DataType::Timestamp(
+                            TimeUnit::Microsecond,
+                            Some(Arc::from(tz.as_str())),
+                        ),
+                        info.schema(),
+                    )?,
+                    None => ts_expr,
+                };
+                Expr::ScalarFunction(ScalarFunction::new_udf(
+                    datafusion_functions::datetime::to_local_time(),
+                    vec![ts_with_tz],
+                ))
+            }
+
+            // Timestamp without timezone: use as-is
+            _ => ts_expr,
         };
 
         let fmt_expr = Expr::Literal(ScalarValue::new_utf8(fmt), None);

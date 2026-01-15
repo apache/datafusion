@@ -33,9 +33,9 @@ SELECT date_trunc('YY', '2015-03-05T09:32:05.123456'::timestamp);
 
 # QUARTER - truncate to first date of quarter, time zeroed
 query P
-SELECT date_trunc('QUARTER', '2015-03-05T09:32:05.123456'::timestamp);
+SELECT date_trunc('QUARTER', '2015-05-05T09:32:05.123456'::timestamp);
 ----
-2015-01-01T00:00:00
+2015-04-01T00:00:00
 
 # MONTH - truncate to first date of month, time zeroed
 query P
@@ -120,7 +120,7 @@ SELECT date_trunc('YEAR', '2015-03-05T09:32:05.123456');
 2015-01-01T00:00:00
 
 # Null handling
-query error Internal error: First argument of `DATE_TRUNC` must be non-null scalar Utf8.
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: First argument of `DATE_TRUNC` must be non-null scalar Utf8
 SELECT date_trunc(NULL, '2015-03-05T09:32:05.123456');
 
 query P
@@ -132,3 +132,33 @@ NULL
 query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'test'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
 SELECT date_trunc('test', '2015-03-05T09:32:05.123456');
 
+# Timezone handling - Spark-compatible behavior
+# Spark converts timestamps to session timezone before truncating for coarse granularities
+
+query P
+SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, Some("UTC"))'));
+----
+2024-07-15T00:00:00
+
+query P
+SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, None)'));
+----
+2024-07-15T00:00:00
+
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+# This timestamp is 03:30 UTC = 23:30 EDT (previous day) on July 14
+# With session timezone, truncation happens in America/New_York timezone
+query P
+SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, Some("UTC"))'));
+----
+2024-07-14T00:00:00
+
+query P
+SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, None)'));
+----
+2024-07-15T00:00:00
+
+statement ok
+RESET datafusion.execution.time_zone;
