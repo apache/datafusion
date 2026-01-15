@@ -28,8 +28,20 @@ This crate is a submodule of DataFusion that provides a query optimizer for logi
 contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRules`] that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
 
+For a deeper background on optimizer architecture and rule types and predicates, see 
+[Optimizing SQL (and DataFrames) in DataFusion, Part 1], [Part 2],
+[Using Ordering for Better Plans in Apache DataFusion], and 
+[Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries].
+
 [`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
 [`physicaloptimizerrules`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
+
+[Optimizing SQL (and DataFrames) in DataFusion, Part 1]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one
+[Part 2]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two
+[Using Ordering for Better Plans in Apache DataFusion]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis
+[Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
+
+
 
 ## Running the Optimizer
 
