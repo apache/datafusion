@@ -15,33 +15,120 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# YEAR - truncate to first date of year, time zeroed
+query P
+SELECT date_trunc('YEAR', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-01-01T00:00:00
 
-## Original Query: SELECT date_trunc('DD', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'date_trunc(DD, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 5, 0, 0), 'typeof(date_trunc(DD, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(DD)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
-#query
-#SELECT date_trunc('DD'::string, '2015-03-05T09:32:05.359'::string);
+query P
+SELECT date_trunc('YYYY', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-01-01T00:00:00
 
-## Original Query: SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'date_trunc(HOUR, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 5, 9, 0), 'typeof(date_trunc(HOUR, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(HOUR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
-#query
-#SELECT date_trunc('HOUR'::string, '2015-03-05T09:32:05.359'::string);
+query P
+SELECT date_trunc('YY', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-01-01T00:00:00
 
-## Original Query: SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');
-## PySpark 3.5.5 Result: {'date_trunc(MILLISECOND, 2015-03-05T09:32:05.123456)': datetime.datetime(2015, 3, 5, 9, 32, 5, 123000), 'typeof(date_trunc(MILLISECOND, 2015-03-05T09:32:05.123456))': 'timestamp', 'typeof(MILLISECOND)': 'string', 'typeof(2015-03-05T09:32:05.123456)': 'string'}
-#query
-#SELECT date_trunc('MILLISECOND'::string, '2015-03-05T09:32:05.123456'::string);
+# QUARTER - truncate to first date of quarter, time zeroed
+query P
+SELECT date_trunc('QUARTER', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-01-01T00:00:00
 
-## Original Query: SELECT date_trunc('MM', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'date_trunc(MM, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 3, 1, 0, 0), 'typeof(date_trunc(MM, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(MM)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
-#query
-#SELECT date_trunc('MM'::string, '2015-03-05T09:32:05.359'::string);
+# MONTH - truncate to first date of month, time zeroed
+query P
+SELECT date_trunc('MONTH', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-01T00:00:00
 
-## Original Query: SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359');
-## PySpark 3.5.5 Result: {'date_trunc(YEAR, 2015-03-05T09:32:05.359)': datetime.datetime(2015, 1, 1, 0, 0), 'typeof(date_trunc(YEAR, 2015-03-05T09:32:05.359))': 'timestamp', 'typeof(YEAR)': 'string', 'typeof(2015-03-05T09:32:05.359)': 'string'}
-#query
-#SELECT date_trunc('YEAR'::string, '2015-03-05T09:32:05.359'::string);
+query P
+SELECT date_trunc('MM', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-01T00:00:00
+
+query P
+SELECT date_trunc('MON', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-01T00:00:00
+
+# WEEK - truncate to Monday of the week, time zeroed
+query P
+SELECT date_trunc('WEEK', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-02T00:00:00
+
+# DAY - zero out time part
+query P
+SELECT date_trunc('DAY', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T00:00:00
+
+query P
+SELECT date_trunc('DD', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T00:00:00
+
+# HOUR - zero out minute and second with fraction
+query P
+SELECT date_trunc('HOUR', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T09:00:00
+
+# MINUTE - zero out second with fraction
+query P
+SELECT date_trunc('MINUTE', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T09:32:00
+
+# SECOND - zero out fraction
+query P
+SELECT date_trunc('SECOND', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T09:32:05
+
+# MILLISECOND - zero out microseconds
+query P
+SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T09:32:05.123
+
+# MICROSECOND - everything remains
+query P
+SELECT date_trunc('MICROSECOND', '2015-03-05T09:32:05.123456'::timestamp);
+----
+2015-03-05T09:32:05.123456
+
+query P
+SELECT date_trunc('YEAR', column1)
+FROM VALUES
+('2015-03-05T09:32:05.123456'::timestamp),
+('2020-11-15T22:45:30.654321'::timestamp),
+('1999-07-20T14:20:10.000001'::timestamp),
+(NULL::timestamp);
+----
+2015-01-01T00:00:00
+2020-01-01T00:00:00
+1999-01-01T00:00:00
+NULL
+
+# String input
+query P
+SELECT date_trunc('YEAR', '2015-03-05T09:32:05.123456');
+----
+2015-01-01T00:00:00
+
+# Null handling
+query error Internal error: First argument of `DATE_TRUNC` must be non-null scalar Utf8.
+SELECT date_trunc(NULL, '2015-03-05T09:32:05.123456');
+
+query P
+SELECT date_trunc('YEAR', NULL::timestamp);
+----
+NULL
+
+# incorrect format
+query error DataFusion error: Execution error: Unsupported date_trunc granularity: 'test'. Supported values are: microsecond, millisecond, second, minute, hour, day, week, month, quarter, year
+SELECT date_trunc('test', '2015-03-05T09:32:05.123456');
+

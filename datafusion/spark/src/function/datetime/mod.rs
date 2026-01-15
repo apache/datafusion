@@ -17,11 +17,14 @@
 
 pub mod date_add;
 pub mod date_sub;
+pub mod date_trunc;
 pub mod extract;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
 pub mod next_day;
+pub mod time_trunc;
+pub mod trunc;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -36,6 +39,9 @@ make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
 make_udf_function!(next_day::SparkNextDay, next_day);
+make_udf_function!(date_trunc::SparkDateTrunc, date_trunc);
+make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
+make_udf_function!(trunc::SparkTrunc, trunc);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -83,6 +89,21 @@ pub mod expr_fn {
         "Returns the first date which is later than start_date and named as indicated. The function returns NULL if at least one of the input parameters is NULL.",
         arg1 arg2
     ));
+    export_functions!((
+        date_trunc,
+        "Truncates a timestamp `ts` to the unit specified by the format `fmt`.",
+        fmt ts
+    ));
+    export_functions!((
+        time_trunc,
+        "Truncates a time `t` to the unit specified by the format `fmt`.",
+        fmt t
+    ));
+    export_functions!((
+        trunc,
+        "Truncates a date `dt` to the unit specified by the format `fmt`.",
+        dt fmt
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -96,5 +117,8 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_dt_interval(),
         make_interval(),
         next_day(),
+        date_trunc(),
+        time_trunc(),
+        trunc(),
     ]
 }
