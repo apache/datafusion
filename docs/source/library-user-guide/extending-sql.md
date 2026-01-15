@@ -30,7 +30,7 @@ need to:
 You can read more about this topic in the [Extending SQL in DataFusion: from ->>
 to TABLESAMPLE] blog.
 
-[Extending SQL in DataFusion: from ->> to TABLESAMPLE]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
+[extending sql in datafusion: from ->> to tablesample]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 
 ## Architecture Overview
 

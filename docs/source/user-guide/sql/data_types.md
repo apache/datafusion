@@ -28,7 +28,7 @@ This mapping occurs when defining the schema in a `CREATE EXTERNAL TABLE` comman
 For background on extension types and custom metadata, see the
 [Implementing User Defined Types and Custom Metadata in DataFusion] blog.
 
-[Implementing User Defined Types and Custom Metadata in DataFusion]: https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata
+[implementing user defined types and custom metadata in datafusion]: https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata
 
 You can see the corresponding Arrow type for any SQL expression using
 the `arrow_typeof` function. For example:
