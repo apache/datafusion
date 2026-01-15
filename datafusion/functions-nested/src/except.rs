@@ -184,24 +184,25 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 
     let nulls = NullBuffer::union(l.nulls(), r.nulls());
 
-    for (i, ((l_start, l_end), (r_start, r_end))) in l
-        .offsets()
-        .iter()
-        .tuple_windows()
-        .zip(r.offsets().iter().tuple_windows())
-        .enumerate()
+    let l_offsets_iter = l.offsets().iter().tuple_windows();
+    let r_offsets_iter = r.offsets().iter().tuple_windows();
+    for (list_index, ((l_start, l_end), (r_start, r_end))) in
+        l_offsets_iter.zip(r_offsets_iter).enumerate()
     {
-        if nulls.as_ref().is_some_and(|nulls| nulls.is_null(i)) {
+        if nulls
+            .as_ref()
+            .is_some_and(|nulls| nulls.is_null(list_index))
+        {
             offsets.push(OffsetSize::usize_as(rows.len()));
             continue;
         }
 
-        for i in r_start.as_usize()..r_end.as_usize() {
-            let right_row = r_values.row(i);
+        for element_index in r_start.as_usize()..r_end.as_usize() {
+            let right_row = r_values.row(element_index);
             dedup.insert(right_row);
         }
-        for i in l_start.as_usize()..l_end.as_usize() {
-            let left_row = l_values.row(i);
+        for element_index in l_start.as_usize()..l_end.as_usize() {
+            let left_row = l_values.row(element_index);
             if dedup.insert(left_row) {
                 rows.push(left_row);
             }
