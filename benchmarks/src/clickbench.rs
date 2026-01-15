@@ -277,6 +277,10 @@ impl RunOpt {
     /// If sorted_by is specified, uses CREATE EXTERNAL TABLE with WITH ORDER
     async fn register_hits(&self, ctx: &SessionContext) -> Result<()> {
         let path = self.path.as_os_str().to_str().unwrap();
+        let create_view_sql = r#"CREATE VIEW hits AS
+            SELECT * EXCEPT ("EventDate"),
+                   CAST(CAST("EventDate" AS Int32) AS Date32) AS "EventDate"
+            FROM hits_raw"#;
 
         // If sorted_by is specified, use CREATE EXTERNAL TABLE with WITH ORDER
         if let Some(ref sort_column) = self.sorted_by {
@@ -295,7 +299,7 @@ impl RunOpt {
             // Build CREATE EXTERNAL TABLE DDL with WITH ORDER clause
             // Schema will be automatically inferred from the Parquet file
             let create_table_sql = format!(
-                "CREATE EXTERNAL TABLE hits \
+                "CREATE EXTERNAL TABLE hits_raw \
                  STORED AS PARQUET \
                  LOCATION '{}' \
                  WITH ORDER ({} {})",
@@ -309,18 +313,24 @@ impl RunOpt {
             // Execute the CREATE EXTERNAL TABLE statement
             ctx.sql(&create_table_sql).await?.collect().await?;
 
+            // ClickBench encodes EventDate as UInt16 days since epoch.
+            ctx.sql(create_view_sql).await?.collect().await?;
+
             Ok(())
         } else {
             // Original registration without sort order
             let options = Default::default();
-            ctx.register_parquet("hits", path, options)
+            ctx.register_parquet("hits_raw", path, options)
                 .await
                 .map_err(|e| {
                     DataFusionError::Context(
-                        format!("Registering 'hits' as {path}"),
+                        format!("Registering 'hits_raw' as {path}"),
                         Box::new(e),
                     )
-                })
+                })?;
+            // ClickBench encodes EventDate as UInt16 days since epoch.
+            ctx.sql(create_view_sql).await?.collect().await?;
+            Ok(())
         }
     }
 
