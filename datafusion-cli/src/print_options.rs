@@ -48,9 +48,9 @@ impl FromStr for MaxRows {
     type Err = String;
 
     fn from_str(maxrows: &str) -> Result<Self, Self::Err> {
-        if maxrows.to_lowercase() == "inf"
-            || maxrows.to_lowercase() == "infinite"
-            || maxrows.to_lowercase() == "none"
+        if maxrows.eq_ignore_ascii_case("inf")
+            || maxrows.eq_ignore_ascii_case("infinite")
+            || maxrows.eq_ignore_ascii_case("none")
         {
             Ok(Self::Unlimited)
         } else {

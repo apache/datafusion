@@ -56,7 +56,7 @@ use datafusion_macros::user_doc;
     argument(
         name = "part",
         description = r#"Part of the date to return. The following date parts are supported:
-        
+
     - year
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
@@ -214,13 +214,20 @@ impl ScalarUDFImpl for DatePartFunc {
             }
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
-            match part_trim.to_lowercase().as_str() {
-                "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
-                "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
-                "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
-                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
-                "epoch" => epoch(array.as_ref())?,
-                _ => return exec_err!("Date part '{part}' not supported"),
+            if part_trim.eq_ignore_ascii_case("qtr")
+                || part_trim.eq_ignore_ascii_case("quarter")
+            {
+                date_part(array.as_ref(), DatePart::Quarter)?
+            } else if part_trim.eq_ignore_ascii_case("doy") {
+                date_part(array.as_ref(), DatePart::DayOfYear)?
+            } else if part_trim.eq_ignore_ascii_case("dow") {
+                date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?
+            } else if part_trim.eq_ignore_ascii_case("isodow") {
+                date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?
+            } else if part_trim.eq_ignore_ascii_case("epoch") {
+                epoch(array.as_ref())?
+            } else {
+                return exec_err!("Date part '{part}' not supported");
             }
         };
 

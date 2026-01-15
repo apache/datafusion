@@ -399,11 +399,14 @@ impl AdjustedPrintOptions {
 }
 
 fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
-    match ext.to_lowercase().as_str() {
-        "csv" => Some(ConfigFileType::CSV),
-        "json" => Some(ConfigFileType::JSON),
-        "parquet" => Some(ConfigFileType::PARQUET),
-        _ => None,
+    if ext.eq_ignore_ascii_case("csv") {
+        Some(ConfigFileType::CSV)
+    } else if ext.eq_ignore_ascii_case("json") {
+        Some(ConfigFileType::JSON)
+    } else if ext.eq_ignore_ascii_case("parquet") {
+        Some(ConfigFileType::PARQUET)
+    } else {
+        None
     }
 }
 
