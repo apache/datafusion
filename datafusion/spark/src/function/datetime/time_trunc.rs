@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::logical_string;
-use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
