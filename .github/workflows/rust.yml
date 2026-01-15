@@ -730,6 +730,12 @@ jobs:
         # Required for git commands inside container (avoids "dubious ownership" error)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Set up Node.js (required for prettier)
+        # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
       - name: Run examples docs check script
         run: |
           bash ci/scripts/check_examples_docs.sh
