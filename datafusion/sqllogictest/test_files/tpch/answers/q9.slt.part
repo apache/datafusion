@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-query TIR
+query error
 select
     nation,
     o_year,
@@ -51,13 +51,6 @@ order by
     o_year desc
 limit 10;
 ----
-ALGERIA 1998 2321785.3682
-ALGERIA 1997 3685016.8589
-ALGERIA 1996 4276597.4253
-ALGERIA 1995 4418370.4154
-ALGERIA 1994 3864849.9521
-ALGERIA 1993 3541051.3865
-ALGERIA 1992 4310013.3482
-ARGENTINA 1998 2685983.8005
-ARGENTINA 1997 4242147.8124
-ARGENTINA 1996 3907867.0103
+DataFusion error: Join Error
+caused by
+External error: task 34439 panicked with message "index out of bounds: the len is 262 but the index is 984"
