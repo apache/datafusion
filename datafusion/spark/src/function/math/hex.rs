@@ -138,7 +138,7 @@ fn hex_encode_bytes<'a, I, T>(
     iter: I,
     lowercase: bool,
     len: usize,
-) -> Result<ColumnarValue, DataFusionError>
+) -> Result<ArrayRef, DataFusionError>
 where
     I: Iterator<Item = Option<T>>,
     T: AsRef<[u8]> + 'a,
@@ -168,14 +168,14 @@ where
         }
     }
 
-    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Generic hex encoding for int64 type
-fn hex_encode_int64<I>(iter: I, len: usize) -> Result<ColumnarValue, DataFusionError>
-where
-    I: Iterator<Item = Option<i64>>,
-{
+fn hex_encode_int64(
+    iter: impl Iterator<Item = Option<i64>>,
+    len: usize,
+) -> Result<ArrayRef, DataFusionError> {
     let mut builder = StringBuilder::with_capacity(len, len * 16);
 
     for v in iter {
@@ -191,7 +191,7 @@ where
         }
     }
 
-    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Spark-compatible `hex` function
@@ -217,37 +217,71 @@ pub fn compute_hex(
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Int64 => {
                 let array = as_int64_array(array)?;
-                hex_encode_int64(array.iter(), array.len())
+                Ok(ColumnarValue::Array(hex_encode_int64(
+                    array.iter(),
+                    array.len(),
+                )?))
             }
             DataType::Utf8 => {
                 let array = as_string_array(array);
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
             DataType::Utf8View => {
                 let array = as_string_view_array(array)?;
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
             DataType::LargeUtf8 => {
                 let array = as_largestring_array(array);
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
             DataType::Binary => {
                 let array = as_binary_array(array)?;
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
             DataType::LargeBinary => {
                 let array = as_large_binary_array(array)?;
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
             DataType::FixedSizeBinary(_) => {
                 let array = as_fixed_size_binary_array(array)?;
-                hex_encode_bytes(array.iter(), lowercase, array.len())
+                Ok(ColumnarValue::Array(hex_encode_bytes(
+                    array.iter(),
+                    lowercase,
+                    array.len(),
+                )?))
             }
-            DataType::Dictionary(_, _) => {
+            DataType::Dictionary(key_type, _) => {
+                if **key_type != DataType::Int32 {
+                    return exec_err!(
+                        "hex only supports Int32 dictionary keys, get: {}",
+                        key_type
+                    );
+                }
+
                 let dict = as_dictionary_array::<Int32Type>(&array);
                 let dict_values = dict.values();
 
-                let encoded_values: ColumnarValue = match dict_values.data_type() {
+                let encoded_values = match dict_values.data_type() {
                     DataType::Int64 => {
                         let arr = as_int64_array(dict_values)?;
                         hex_encode_int64(arr.iter(), arr.len())?
@@ -256,8 +290,24 @@ pub fn compute_hex(
                         let arr = as_string_array(dict_values);
                         hex_encode_bytes(arr.iter(), lowercase, arr.len())?
                     }
+                    DataType::LargeUtf8 => {
+                        let arr = as_largestring_array(dict_values);
+                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                    }
+                    DataType::Utf8View => {
+                        let arr = as_string_view_array(dict_values)?;
+                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                    }
                     DataType::Binary => {
                         let arr = as_binary_array(dict_values)?;
+                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                    }
+                    DataType::LargeBinary => {
+                        let arr = as_large_binary_array(dict_values)?;
+                        hex_encode_bytes(arr.iter(), lowercase, arr.len())?
+                    }
+                    DataType::FixedSizeBinary(_) => {
+                        let arr = as_fixed_size_binary_array(dict_values)?;
                         hex_encode_bytes(arr.iter(), lowercase, arr.len())?
                     }
                     _ => {
@@ -268,12 +318,7 @@ pub fn compute_hex(
                     }
                 };
 
-                let encoded_values_array: ArrayRef = match encoded_values {
-                    ColumnarValue::Array(a) => a,
-                    ColumnarValue::Scalar(s) => Arc::new(s.to_array()?),
-                };
-
-                let new_dict = dict.with_values(encoded_values_array);
+                let new_dict = dict.with_values(encoded_values);
                 Ok(ColumnarValue::Array(Arc::new(new_dict)))
             }
             _ => exec_err!("hex got an unexpected argument type: {}", array.data_type()),
