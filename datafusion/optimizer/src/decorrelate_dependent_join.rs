@@ -412,7 +412,7 @@ impl DependentJoinDecorrelator {
         // replace correlated column in dependent with delimget's column
         let new_plan = if let LogicalPlan::DependentJoin(DependentJoin { .. }) = plan {
             return internal_err!(
-                "logical error, this function should not be called if one of the plan is still dependent join node");
+                "logical error, this function should not be called if one of the plan is still dependent join node, plan: {plan}");
         } else {
             plan
         };
@@ -615,8 +615,9 @@ impl DependentJoinDecorrelator {
                 }
                 other => {
                     if self.domains.is_empty() {
+                        let decorrelated = self.decorrelate(other, true, 0)?;
                         // No correlated columns, nothing to do.
-                        return Ok(other.clone());
+                        return Ok(decorrelated);
                     }
 
                     let delim_scan = self.build_delim_scan()?;
@@ -661,19 +662,19 @@ impl DependentJoinDecorrelator {
                 let mut proj = old_proj.clone();
                 proj.input = Arc::new(if exit_projection {
                     if self.domains.is_empty() {
-                        return Ok(LogicalPlan::Projection(proj));
+                        self.decorrelate(proj.input.deref(), true, 0)?
+                    } else {
+                        let delim_scan = self.build_delim_scan()?;
+                        let new_left = self.decorrelate(proj.input.deref(), true, 0)?;
+                        LogicalPlanBuilder::new(new_left)
+                            .join(
+                                delim_scan,
+                                JoinType::Inner,
+                                (Vec::<Column>::new(), Vec::<Column>::new()),
+                                None,
+                            )?
+                            .build()?
                     }
-
-                    let delim_scan = self.build_delim_scan()?;
-                    let new_left = self.decorrelate(proj.input.deref(), true, 0)?;
-                    LogicalPlanBuilder::new(new_left)
-                        .join(
-                            delim_scan,
-                            JoinType::Inner,
-                            (Vec::<Column>::new(), Vec::<Column>::new()),
-                            None,
-                        )?
-                        .build()?
                 } else {
                     self.push_down_dependent_join_internal(
                         proj.input.as_ref(),
@@ -1503,6 +1504,7 @@ impl OptimizerRule for DecorrelateDependentJoin {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        debug_println!("original plan\n{}", plan.display_indent());
         let mut transformer =
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
         let rewrite_result =
@@ -1521,13 +1523,12 @@ impl OptimizerRule for DecorrelateDependentJoin {
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
-            debug_println!("decorrelated plan\n{}", ret.display_indent_schema(),);
+            debug_println!("decorrelated plan\n{}", ret.display_indent(),);
             let deliminator = Deliminator::new();
             let ret = deliminator.rewrite(ret, config)?;
-            if ret.transformed{
-                debug_println!("deliminated plan\n{}", ret.data.display_indent_schema());
+            if ret.transformed {
+                debug_println!("deliminated plan\n{}", ret.data.display_indent());
             }
-
 
             return Ok(ret);
         }
