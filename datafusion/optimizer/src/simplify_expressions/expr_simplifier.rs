@@ -5102,9 +5102,10 @@ mod tests {
 
         // The cast should remain unchanged since field counts differ
         let result = simplifier.simplify(expr.clone()).unwrap();
-        assert!(
-            matches!(result, Expr::Cast(_)),
-            "Struct cast with different field counts should remain as Cast"
+        // Ensure const-folding was not attempted (the expression remains exactly the same)
+        assert_eq!(
+            result, expr,
+            "Struct cast with different field counts should remain unchanged (no const-folding)"
         );
     }
 
