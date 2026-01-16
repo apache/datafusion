@@ -139,7 +139,7 @@ pub trait ContextProvider {
 }
 
 /// Customize planning of SQL AST expressions to [`Expr`]s
-    ///
+///
 /// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
 ///
 /// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
