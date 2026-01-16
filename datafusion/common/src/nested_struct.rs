@@ -288,8 +288,17 @@ pub fn validate_struct_compatibility(
             .find(|f| f.name() == target_field.name())
         {
             validate_field_compatibility(source_field, target_field)?;
+        } else {
+            // Target field is missing from source
+            // If it's non-nullable, we cannot fill it with NULL
+            if !target_field.is_nullable() {
+                return _plan_err!(
+                    "Cannot cast struct: target field '{}' is non-nullable but missing from source. \
+                     Cannot fill with NULL.",
+                    target_field.name()
+                );
+            }
         }
-        // Missing fields in source are OK - they'll be filled with nulls
     }
 
     // Extra fields in source are OK - they'll be ignored
@@ -880,5 +889,62 @@ mod tests {
         let b_col = get_column_as!(&struct_array, "b", StringArray);
         assert_eq!(b_col.value(0), "alpha");
         assert_eq!(b_col.value(1), "beta");
+    }
+
+    #[test]
+    fn test_cast_struct_missing_non_nullable_field_fails() {
+        // Source has only field 'a'
+        let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
+        let source_struct =
+            StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        // Target has fields 'a' (nullable) and 'b' (non-nullable)
+        let target_field = struct_field(
+            "s",
+            vec![
+                field("a", DataType::Int32),
+                non_null_field("b", DataType::Int32),
+            ],
+        );
+
+        // Should fail because 'b' is non-nullable but missing from source
+        let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("target field 'b' is non-nullable but missing from source"),
+            "Unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_missing_nullable_field_succeeds() {
+        // Source has only field 'a'
+        let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
+        let source_struct =
+            StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_col = Arc::new(source_struct) as ArrayRef;
+
+        // Target has fields 'a' and 'b' (both nullable)
+        let target_field = struct_field(
+            "s",
+            vec![field("a", DataType::Int32), field("b", DataType::Int32)],
+        );
+
+        // Should succeed - 'b' is nullable so can be filled with NULL
+        let result =
+            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
+        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let a_col = get_column_as!(&struct_array, "a", Int32Array);
+        assert_eq!(a_col.value(0), 1);
+        assert_eq!(a_col.value(1), 2);
+
+        let b_col = get_column_as!(&struct_array, "b", Int32Array);
+        assert!(b_col.is_null(0));
+        assert!(b_col.is_null(1));
     }
 }
