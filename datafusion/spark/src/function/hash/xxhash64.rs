@@ -91,17 +91,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
         // Initialize hashes with seed
         let mut hashes: Vec<u64> = vec![DEFAULT_SEED as u64; num_rows];
 
-        // Convert all arguments to arrays
-        let arrays: Vec<ArrayRef> = args
-            .args
-            .iter()
-            .map(|arg| match arg {
-                ColumnarValue::Array(array) => Arc::clone(array),
-                ColumnarValue::Scalar(scalar) => scalar
-                    .to_array_of_size(num_rows)
-                    .expect("Failed to convert scalar to array"),
-            })
-            .collect();
+        let arrays = ColumnarValue::values_to_arrays(&args.args)?;
 
         // Hash each column
         for (i, col) in arrays.iter().enumerate() {
