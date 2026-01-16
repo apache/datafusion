@@ -674,6 +674,11 @@ mod tests {
         assert_eq!(regex_replace_posix_groups(r"X\\1Y"), "X${1}Y");
         assert_eq!(regex_replace_posix_groups(r"\\1\\2"), "${1}${2}");
 
+        // Test 3 or 4 backslashes before digits to document expected behavior
+        assert_eq!(regex_replace_posix_groups(r"\\\1"), r"\${1}");
+        assert_eq!(regex_replace_posix_groups(r"\\\\1"), r"\\${1}");
+        assert_eq!(regex_replace_posix_groups(r"\\\1\\\\2"), r"\${1}\\${2}");
+
         // Test that a lone backslash is NOT replaced (requires at least one digit)
         assert_eq!(regex_replace_posix_groups(r"\"), r"\");
         assert_eq!(regex_replace_posix_groups(r"foo\bar"), r"foo\bar");
