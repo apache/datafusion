@@ -38,6 +38,25 @@ select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), a
 ----
 -128 -32768 -2147483648 -9223372036854775808
 
+# abs: Spark ANSI mode
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+query error DataFusion error: Arrow error: Compute error: Int8 overflow on abs\(\-128\)
+select abs((-128)::TINYINT)
+
+query error DataFusion error: Arrow error: Compute error: Int16 overflow on abs\(\-32768\)
+select abs((-32768)::SMALLINT)
+
+query error DataFusion error: Arrow error: Compute error: Int32 overflow on abs\(\-2147483648\)
+select abs((-2147483648)::INT)
+
+query error DataFusion error: Arrow error: Compute error: Int64 overflow on abs\(\-9223372036854775808\)
+select abs((-9223372036854775808)::BIGINT)
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;
+
 # abs: floats, NULL, NaN, -0, infinity, -infinity
 query RRRRRRRRRRRR
 SELECT abs(-1.0::FLOAT), abs(0.::FLOAT), abs(-0.::FLOAT), abs(-0::FLOAT), abs(NULL::FLOAT), abs('NaN'::FLOAT), abs('inf'::FLOAT), abs('+inf'::FLOAT), abs('-inf'::FLOAT), abs('infinity'::FLOAT), abs('+infinity'::FLOAT), abs('-infinity'::FLOAT)
