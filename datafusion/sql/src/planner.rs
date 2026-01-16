@@ -823,7 +823,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::HugeInt
             | SQLDataType::UHugeInt
             | SQLDataType::UBigInt
-            | SQLDataType::TimestampNtz
+            | SQLDataType::TimestampNtz{..}
             | SQLDataType::NamedTable { .. }
             | SQLDataType::TsVector
             | SQLDataType::TsQuery
