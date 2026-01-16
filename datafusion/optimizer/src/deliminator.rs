@@ -61,21 +61,21 @@ impl OptimizerRule for Deliminator {
         let _ = node_visitor.collect_nodes(&rewrite_result.data)?;
         let mut candidate_visitor = DelimCandidateVisitor::new(node_visitor);
         let _ = rewrite_result.data.visit(&mut candidate_visitor)?;
-        for (_, candidate) in candidate_visitor.candidates.iter() {
-            println!("=== DelimCandidate ===");
-            println!("  plan: {}", candidate.node.plan.display());
-            println!("  delim_get_count: {}", candidate.delim_scan_count);
-            println!("  joins: [");
-            for join in &candidate.joins {
-                println!("    JoinWithDelimGet {{");
-                println!("      id: {}", join.node.id);
-                println!("      depth: {}", join.depth);
-                println!("      join: {}", join.node.plan.display());
-                println!("    }},");
-            }
-            println!("  ]");
-            println!("==================\n");
-        }
+        // for (_, candidate) in candidate_visitor.candidates.iter() {
+        //     println!("=== DelimCandidate ===");
+        //     println!("  plan: {}", candidate.node.plan.display());
+        //     println!("  delim_get_count: {}", candidate.delim_scan_count);
+        //     println!("  joins: [");
+        //     for join in &candidate.joins {
+        //         println!("    JoinWithDelimGet {{");
+        //         println!("      id: {}", join.node.id);
+        //         println!("      depth: {}", join.depth);
+        //         println!("      join: {}", join.node.plan.display());
+        //         println!("    }},");
+        //     }
+        //     println!("  ]");
+        //     println!("==================\n");
+        // }
 
         if candidate_visitor.candidates.is_empty() {
             return Ok(rewrite_result);
@@ -161,28 +161,29 @@ impl OptimizerRule for Deliminator {
             }
         }
 
-        println!("\n=== Processing All Joins ===");
+        // println!("\n=== Processing All Joins ===");
         let mut joins = IndexMap::new();
-        for candidate in candidate_visitor.candidates.values() {
-            for join in &candidate.joins {
-                println!("  Join {{");
-                println!("    id: {}", join.node.id);
-                println!("    depth: {}", join.depth);
-                println!("    plan: {}", join.node.plan.display());
-                if let Some(replacement) = &join.replacement_plan {
-                    println!("    replacement_plan: {}", replacement.display());
-                }
-                println!("    can_be_eliminated: {}", join.can_be_eliminated);
-                println!("    is_filter_generated: {}", join.is_filter_generated);
-                println!("  }},");
-                joins.insert(join.node.id, join.clone());
-            }
-        }
-        println!("========================\n");
+        // for candidate in candidate_visitor.candidates.values() {
+        //     for join in &candidate.joins {
+        //         println!("  Join {{");
+        //         println!("    id: {}", join.node.id);
+        //         println!("    depth: {}", join.depth);
+        //         println!("    plan: {}", join.node.plan.display());
+        //         if let Some(replacement) = &join.replacement_plan {
+        //             println!("    replacement_plan: {}", replacement.display());
+        //         }
+        //         println!("    can_be_eliminated: {}", join.can_be_eliminated);
+        //         println!("    is_filter_generated: {}", join.is_filter_generated);
+        //         println!("  }},");
+        //         joins.insert(join.node.id, join.clone());
+        //     }
+        // }
+        // println!("========================\n");
 
         let mut rewriter =
             DelimCandidateRewriter::new(candidate_visitor.candidates, joins);
         let rewrite_result = rewrite_result.data.rewrite(&mut rewriter)?;
+        println!("Done delim candidate rewriter");
 
         // Replace all columns.
         let mut rewriter = ColumnRewriter::new(replacement_cols);
@@ -190,6 +191,7 @@ impl OptimizerRule for Deliminator {
 
         // TODO
         rewrite_result.transformed = true;
+        println!("Done rewriting using deliminator");
 
         Ok(rewrite_result)
     }
@@ -888,3 +890,4 @@ mod tests {
         Ok(())
     }
 }
+

@@ -47,15 +47,15 @@ logical_plan
 02)--Projection: nation.n_name, sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue
 03)----Aggregate: groupBy=[[nation.n_name]], aggr=[[sum(lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount)) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
 04)------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name
-05)--------Inner Join: nation.n_regionkey = region.r_regionkey
+05)--------Inner Join(ComparisonJoin): nation.n_regionkey = region.r_regionkey
 06)----------Projection: lineitem.l_extendedprice, lineitem.l_discount, nation.n_name, nation.n_regionkey
-07)------------Inner Join: supplier.s_nationkey = nation.n_nationkey
+07)------------Inner Join(ComparisonJoin): supplier.s_nationkey = nation.n_nationkey
 08)--------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
-09)----------------Inner Join: lineitem.l_suppkey = supplier.s_suppkey, customer.c_nationkey = supplier.s_nationkey
+09)----------------Inner Join(ComparisonJoin): lineitem.l_suppkey = supplier.s_suppkey, customer.c_nationkey = supplier.s_nationkey
 10)------------------Projection: customer.c_nationkey, lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
-11)--------------------Inner Join: orders.o_orderkey = lineitem.l_orderkey
+11)--------------------Inner Join(ComparisonJoin): orders.o_orderkey = lineitem.l_orderkey
 12)----------------------Projection: customer.c_nationkey, orders.o_orderkey
-13)------------------------Inner Join: customer.c_custkey = orders.o_custkey
+13)------------------------Inner Join(ComparisonJoin): customer.c_custkey = orders.o_custkey
 14)--------------------------TableScan: customer projection=[c_custkey, c_nationkey]
 15)--------------------------Projection: orders.o_orderkey, orders.o_custkey
 16)----------------------------Filter: orders.o_orderdate >= Date32("1994-01-01") AND orders.o_orderdate < Date32("1995-01-01")

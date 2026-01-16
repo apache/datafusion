@@ -61,19 +61,19 @@ logical_plan
 03)----Aggregate: groupBy=[[all_nations.o_year]], aggr=[[sum(CASE WHEN all_nations.nation = Utf8View("BRAZIL") THEN all_nations.volume ELSE Decimal128(Some(0),38,4) END) AS sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]]
 04)------SubqueryAlias: all_nations
 05)--------Projection: date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) AS volume, n2.n_name AS nation
-06)----------Inner Join: n1.n_regionkey = region.r_regionkey
+06)----------Inner Join(ComparisonJoin): n1.n_regionkey = region.r_regionkey
 07)------------Projection: lineitem.l_extendedprice, lineitem.l_discount, orders.o_orderdate, n1.n_regionkey, n2.n_name
-08)--------------Inner Join: supplier.s_nationkey = n2.n_nationkey
+08)--------------Inner Join(ComparisonJoin): supplier.s_nationkey = n2.n_nationkey
 09)----------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate, n1.n_regionkey
-10)------------------Inner Join: customer.c_nationkey = n1.n_nationkey
+10)------------------Inner Join(ComparisonJoin): customer.c_nationkey = n1.n_nationkey
 11)--------------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate, customer.c_nationkey
-12)----------------------Inner Join: orders.o_custkey = customer.c_custkey
+12)----------------------Inner Join(ComparisonJoin): orders.o_custkey = customer.c_custkey
 13)------------------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_custkey, orders.o_orderdate
-14)--------------------------Inner Join: lineitem.l_orderkey = orders.o_orderkey
+14)--------------------------Inner Join(ComparisonJoin): lineitem.l_orderkey = orders.o_orderkey
 15)----------------------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
-16)------------------------------Inner Join: lineitem.l_suppkey = supplier.s_suppkey
+16)------------------------------Inner Join(ComparisonJoin): lineitem.l_suppkey = supplier.s_suppkey
 17)--------------------------------Projection: lineitem.l_orderkey, lineitem.l_suppkey, lineitem.l_extendedprice, lineitem.l_discount
-18)----------------------------------Inner Join: part.p_partkey = lineitem.l_partkey
+18)----------------------------------Inner Join(ComparisonJoin): part.p_partkey = lineitem.l_partkey
 19)------------------------------------Projection: part.p_partkey
 20)--------------------------------------Filter: part.p_type = Utf8View("ECONOMY ANODIZED STEEL")
 21)----------------------------------------TableScan: part projection=[p_partkey, p_type], partial_filters=[part.p_type = Utf8View("ECONOMY ANODIZED STEEL")]

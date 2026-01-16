@@ -112,16 +112,16 @@ impl NodeVisitor {
 
         plan.visit(self)?;
 
-        println!("\n=== Nodes after visit ===");
-        for (id, node) in &self.nodes {
-            println!(
-                "Node ID: {}, Type: {:?}, SubPlan Size: {}",
-                id,
-                node.plan.display().to_string(),
-                node.sub_plan_size
-            );
-        }
-        println!("======================\n");
+        // println!("\n=== Nodes after visit ===");
+        // for (id, node) in &self.nodes {
+        //     println!(
+        //         "Node ID: {}, Type: {:?}, SubPlan Size: {}",
+        //         id,
+        //         node.plan.display().to_string(),
+        //         node.sub_plan_size
+        //     );
+        // }
+        // println!("======================\n");
 
         Ok(())
     }

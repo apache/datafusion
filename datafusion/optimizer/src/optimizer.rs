@@ -233,14 +233,14 @@ impl Optimizer {
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
+
+            Arc::new(EliminateDuplicatedExpr::new()),
+            Arc::new(EliminateFilter::new()),
+            Arc::new(EliminateCrossJoin::new()),
             Arc::new(DecorrelateDependentJoin::new()), // TODO
             // Arc::new(DecorrelatePredicateSubquery::new()),
             // Arc::new(ScalarSubqueryToJoin::new()),
             Arc::new(DecorrelateLateralJoin::new()),
-            Arc::new(ExtractEquijoinPredicate::new()),
-            Arc::new(EliminateDuplicatedExpr::new()),
-            Arc::new(EliminateFilter::new()),
-            Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
             // Must be after PropagateEmptyRelation
@@ -250,6 +250,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules

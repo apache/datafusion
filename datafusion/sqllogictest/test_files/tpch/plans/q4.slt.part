@@ -44,14 +44,18 @@ logical_plan
 02)--Projection: orders.o_orderpriority, count(Int64(1)) AS count(*) AS order_count
 03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count(Int64(1))]]
 04)------Projection: orders.o_orderpriority
-05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
-06)----------Projection: orders.o_orderkey, orders.o_orderpriority
-07)------------Filter: orders.o_orderdate >= Date32("1993-07-01") AND orders.o_orderdate < Date32("1993-10-01")
-08)--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("1993-07-01"), orders.o_orderdate < Date32("1993-10-01")]
-09)----------SubqueryAlias: __correlated_sq_1
-10)------------Projection: lineitem.l_orderkey
-11)--------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate
-12)----------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate]
+05)--------Filter: mark
+06)----------Projection: orders.o_orderpriority, mark
+07)------------LeftMark Join(ComparisonJoin): orders.o_orderkey = orders_dscan_1.orders_o_orderkey Null=Null
+08)--------------Projection: orders.o_orderkey, orders.o_orderpriority
+09)----------------Filter: orders.o_orderdate >= Date32("1993-07-01") AND orders.o_orderdate < Date32("1993-10-01")
+10)------------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("1993-07-01"), orders.o_orderdate < Date32("1993-10-01")]
+11)--------------Inner Join(DelimJoin): lineitem.l_orderkey = orders_dscan_1.orders_o_orderkey
+12)----------------Projection: lineitem.l_orderkey
+13)------------------Filter: lineitem.l_receiptdate > lineitem.l_commitdate AND Boolean(true)
+14)--------------------TableScan: lineitem projection=[l_orderkey, l_commitdate, l_receiptdate], partial_filters=[lineitem.l_receiptdate > lineitem.l_commitdate, Boolean(true)]
+15)----------------Projection: orders.o_orderkey AS orders_dscan_1.orders_o_orderkey
+16)------------------DelimGet: orders.o_orderkey
 physical_plan
 01)SortPreservingMergeExec: [o_orderpriority@0 ASC NULLS LAST]
 02)--SortExec: expr=[o_orderpriority@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -61,14 +65,25 @@ physical_plan
 06)----------RepartitionExec: partitioning=Hash([o_orderpriority@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[o_orderpriority@0 as o_orderpriority], aggr=[count(Int64(1))]
 08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(o_orderkey@0, l_orderkey@0)], projection=[o_orderpriority@1]
+09)----------------FilterExec: mark@1, projection=[o_orderpriority@0]
 10)------------------CoalesceBatchesExec: target_batch_size=8192
-11)--------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+11)--------------------HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(o_orderkey@0, orders_o_orderkey@1)], projection=[o_orderpriority@1, mark@2], NullsEqual: true
 12)----------------------CoalesceBatchesExec: target_batch_size=8192
-13)------------------------FilterExec: o_orderdate@1 >= 1993-07-01 AND o_orderdate@1 < 1993-10-01, projection=[o_orderkey@0, o_orderpriority@2]
-14)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate, o_orderpriority], file_type=csv, has_header=false
-15)------------------CoalesceBatchesExec: target_batch_size=8192
-16)--------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+13)------------------------RepartitionExec: partitioning=Hash([o_orderkey@0], 4), input_partitions=4
+14)--------------------------CoalesceBatchesExec: target_batch_size=8192
+15)----------------------------FilterExec: o_orderdate@1 >= 1993-07-01 AND o_orderdate@1 < 1993-10-01, projection=[o_orderkey@0, o_orderpriority@2]
+16)------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey, o_orderdate, o_orderpriority], file_type=csv, has_header=false
 17)----------------------CoalesceBatchesExec: target_batch_size=8192
-18)------------------------FilterExec: l_receiptdate@2 > l_commitdate@1, projection=[l_orderkey@0]
-19)--------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_commitdate, l_receiptdate], file_type=csv, has_header=false
+18)------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(l_orderkey@0, orders_o_orderkey@0)]
+19)--------------------------CoalesceBatchesExec: target_batch_size=8192
+20)----------------------------RepartitionExec: partitioning=Hash([l_orderkey@0], 4), input_partitions=4
+21)------------------------------CoalesceBatchesExec: target_batch_size=8192
+22)--------------------------------FilterExec: l_receiptdate@2 > l_commitdate@1 AND true, projection=[l_orderkey@0]
+23)----------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:0..18561749], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:18561749..37123498], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:37123498..55685247], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/lineitem.tbl:55685247..74246996]]}, projection=[l_orderkey, l_commitdate, l_receiptdate], file_type=csv, has_header=false
+24)--------------------------CoalesceBatchesExec: target_batch_size=8192
+25)----------------------------RepartitionExec: partitioning=Hash([orders_o_orderkey@0], 4), input_partitions=4
+26)------------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+27)--------------------------------ProjectionExec: expr=[o_orderkey@0 as orders_o_orderkey]
+28)----------------------------------AggregateExec: mode=Final, gby=[o_orderkey@0 as o_orderkey], aggr=[]
+29)------------------------------------CoalescePartitionsExec
+30)--------------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:0..4223281], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:4223281..8446562], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:8446562..12669843], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/orders.tbl:12669843..16893122]]}, projection=[o_orderkey], file_type=csv, has_header=false

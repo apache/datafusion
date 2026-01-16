@@ -1380,7 +1380,8 @@ impl DefaultPhysicalPlanner {
                     }
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
-                    && !prefer_hash_join
+                    // FIXME: SortMergeJoin to support LeftSingle join
+                    && !prefer_hash_join && *join_type != JoinType::LeftSingle
                 {
                     // Use SortMergeJoin if hash join is not preferred
                     let join_on_len = join_on.len();

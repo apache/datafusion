@@ -52,28 +52,29 @@ order by
 limit 10;
 ----
 logical_plan
-01)Sort: profit.nation ASC NULLS LAST, profit.o_year DESC NULLS FIRST, fetch=10
-02)--Projection: profit.nation, profit.o_year, sum(profit.amount) AS sum_profit
-03)----Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[sum(profit.amount)]]
-04)------SubqueryAlias: profit
-05)--------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
-06)----------Inner Join: supplier.s_nationkey = nation.n_nationkey
-07)------------Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost, orders.o_orderdate
-08)--------------Inner Join: lineitem.l_orderkey = orders.o_orderkey
-09)----------------Projection: lineitem.l_orderkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost
-10)------------------Inner Join: lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey
-11)--------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
-12)----------------------Inner Join: lineitem.l_suppkey = supplier.s_suppkey
-13)------------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount
-14)--------------------------Inner Join: part.p_partkey = lineitem.l_partkey
-15)----------------------------Projection: part.p_partkey
-16)------------------------------Filter: part.p_name LIKE Utf8View("%green%")
-17)--------------------------------TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8View("%green%")]
-18)----------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
-19)------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
-20)--------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
-21)----------------TableScan: orders projection=[o_orderkey, o_orderdate]
-22)------------TableScan: nation projection=[n_nationkey, n_name]
+01)Limit: skip=0, fetch=10
+02)--Sort: profit.nation ASC NULLS LAST, profit.o_year DESC NULLS FIRST, fetch=10
+03)----Projection: profit.nation, profit.o_year, sum(profit.amount) AS sum_profit
+04)------Aggregate: groupBy=[[profit.nation, profit.o_year]], aggr=[[sum(profit.amount)]]
+05)--------SubqueryAlias: profit
+06)----------Projection: nation.n_name AS nation, date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) - partsupp.ps_supplycost * lineitem.l_quantity AS amount
+07)------------Inner Join(ComparisonJoin): supplier.s_nationkey = nation.n_nationkey
+08)--------------Projection: lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost, orders.o_orderdate
+09)----------------Inner Join(ComparisonJoin): lineitem.l_orderkey = orders.o_orderkey
+10)------------------Projection: lineitem.l_orderkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, partsupp.ps_supplycost
+11)--------------------Inner Join(ComparisonJoin): lineitem.l_suppkey = partsupp.ps_suppkey, lineitem.l_partkey = partsupp.ps_partkey
+12)----------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey
+13)------------------------Inner Join(ComparisonJoin): lineitem.l_suppkey = supplier.s_suppkey
+14)--------------------------Projection: lineitem.l_orderkey, lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity, lineitem.l_extendedprice, lineitem.l_discount
+15)----------------------------Inner Join(ComparisonJoin): part.p_partkey = lineitem.l_partkey
+16)------------------------------Projection: part.p_partkey
+17)--------------------------------Filter: part.p_name LIKE Utf8View("%green%")
+18)----------------------------------TableScan: part projection=[p_partkey, p_name], partial_filters=[part.p_name LIKE Utf8View("%green%")]
+19)------------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_quantity, l_extendedprice, l_discount]
+20)--------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
+21)----------------------TableScan: partsupp projection=[ps_partkey, ps_suppkey, ps_supplycost]
+22)------------------TableScan: orders projection=[o_orderkey, o_orderdate]
+23)--------------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 01)SortPreservingMergeExec: [nation@0 ASC NULLS LAST, o_year@1 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[nation@0 ASC NULLS LAST, o_year@1 DESC], preserve_partitioning=[true]

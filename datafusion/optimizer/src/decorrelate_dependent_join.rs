@@ -18,13 +18,16 @@
 //! [`DependentJoinRewriter`] converts correlated subqueries to `DependentJoin`
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
+use crate::deliminator::Deliminator;
 use crate::rewrite_dependent_join::DependentJoinRewriter;
 use crate::{ApplyOrder, OptimizerConfig, OptimizerRule};
 use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{internal_datafusion_err, internal_err, Column, Result};
+use datafusion_common::{
+    internal_datafusion_err, internal_err, not_impl_datafusion_err, Column, Result,
+};
 use datafusion_expr::expr::{
     self, Exists, InSubquery, WindowFunction, WindowFunctionParams,
 };
@@ -302,7 +305,7 @@ impl DependentJoinDecorrelator {
         _perform_delim: bool,
     ) -> Result<(Expr, JoinType, Option<Expr>)> {
         if node.lateral_join_condition.is_some() {
-            unimplemented!()
+            return Err(not_impl_datafusion_err!("lateral join not supported"));
         }
 
         let mut join_conditions = vec![];
@@ -484,8 +487,7 @@ impl DependentJoinDecorrelator {
                 .clone();
             let domains = domains_by_table.entry(table_ref.to_string()).or_default();
             if !domains.iter().any(|existing| {
-                (&existing.col == &domain.col)
-                    && (&existing.field == &domain.field)
+                (&existing.col == &domain.col) && (&existing.field == &domain.field)
             }) {
                 domains.push(domain.clone());
             }
@@ -1312,9 +1314,9 @@ impl DependentJoinDecorrelator {
                     false,
                 )
             }
-            plan_ => {
-                unimplemented!("implement pushdown dependent join for node {plan_}")
-            }
+            plan_ => Err(not_impl_datafusion_err!(
+                "implement pushdown dependent join for node {plan_}"
+            ))?,
         }
     }
 
@@ -1487,7 +1489,6 @@ macro_rules! debug_println {
     };
 }
 
-
 impl OptimizerRule for DecorrelateDependentJoin {
     fn supports_rewrite(&self) -> bool {
         true
@@ -1504,7 +1505,11 @@ impl OptimizerRule for DecorrelateDependentJoin {
     ) -> Result<Transformed<LogicalPlan>> {
         let mut transformer =
             DependentJoinRewriter::new(Arc::clone(config.alias_generator()));
-        let rewrite_result = transformer.rewrite_subqueries_into_dependent_joins(plan)?;
+        let rewrite_result =
+            match transformer.rewrite_subqueries_into_dependent_joins(plan.clone()) {
+                Err(e) => Transformed::no(plan),
+                Ok(transformed) => transformed,
+            };
 
         // Only print debug info if PLAN_DEBUG env var is exactly "1"
 
@@ -1516,13 +1521,15 @@ impl OptimizerRule for DecorrelateDependentJoin {
             let mut decorrelator = DependentJoinDecorrelator::new_root();
             let ret = decorrelator.decorrelate(&rewrite_result.data, true, 0)?;
 
-            
-            debug_println!(
-                "dependent join plan\n{}",
-                ret.display_indent_schema(),
-            );
+            debug_println!("decorrelated plan\n{}", ret.display_indent_schema(),);
+            let deliminator = Deliminator::new();
+            let ret = deliminator.rewrite(ret, config)?;
+            if ret.transformed{
+                debug_println!("deliminated plan\n{}", ret.data.display_indent_schema());
+            }
 
-            return Ok(Transformed::yes(ret));
+
+            return Ok(ret);
         }
 
         Ok(rewrite_result)

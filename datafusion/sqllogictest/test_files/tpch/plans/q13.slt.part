@@ -40,18 +40,19 @@ order by
 limit 10;
 ----
 logical_plan
-01)Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
-02)--Projection: c_orders.c_count, count(Int64(1)) AS count(*) AS custdist
-03)----Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count(Int64(1))]]
-04)------SubqueryAlias: c_orders
-05)--------Projection: count(orders.o_orderkey) AS c_count
-06)----------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[count(orders.o_orderkey)]]
-07)------------Projection: customer.c_custkey, orders.o_orderkey
-08)--------------Left Join: customer.c_custkey = orders.o_custkey
-09)----------------TableScan: customer projection=[c_custkey]
-10)----------------Projection: orders.o_orderkey, orders.o_custkey
-11)------------------Filter: orders.o_comment NOT LIKE Utf8View("%special%requests%")
-12)--------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8View("%special%requests%")]
+01)Limit: skip=0, fetch=10
+02)--Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
+03)----Projection: c_orders.c_count, count(Int64(1)) AS count(*) AS custdist
+04)------Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count(Int64(1))]]
+05)--------SubqueryAlias: c_orders
+06)----------Projection: count(orders.o_orderkey) AS c_count
+07)------------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[count(orders.o_orderkey)]]
+08)--------------Projection: customer.c_custkey, orders.o_orderkey
+09)----------------Left Join(ComparisonJoin): customer.c_custkey = orders.o_custkey
+10)------------------TableScan: customer projection=[c_custkey]
+11)------------------Projection: orders.o_orderkey, orders.o_custkey
+12)--------------------Filter: orders.o_comment NOT LIKE Utf8View("%special%requests%")
+13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8View("%special%requests%")]
 physical_plan
 01)SortPreservingMergeExec: [custdist@1 DESC, c_count@0 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[custdist@1 DESC, c_count@0 DESC], preserve_partitioning=[true]
