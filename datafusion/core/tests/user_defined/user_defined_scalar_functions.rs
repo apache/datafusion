@@ -42,7 +42,7 @@ use datafusion_common::{
     assert_batches_sorted_eq, assert_contains, exec_datafusion_err, exec_err,
     not_impl_err, plan_err,
 };
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -65,13 +65,13 @@ async fn csv_query_custom_udf_with_cast() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c11)) |
     +------------------------------------------+
     | 0.6584408483418835                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -84,13 +84,13 @@ async fn csv_query_avg_sqrt() -> Result<()> {
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
     let actual = plan_and_collect(&ctx, sql).await?;
 
-    insta::assert_snapshot!(batches_to_string(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r"
     +------------------------------------------+
     | avg(custom_sqrt(aggregate_test_100.c12)) |
     +------------------------------------------+
     | 0.6706002946036459                       |
     +------------------------------------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -155,7 +155,7 @@ async fn scalar_udf() -> Result<()> {
 
     let result = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+-----+-----------------+
     | a   | b   | my_add(t.a,t.b) |
     +-----+-----+-----------------+
@@ -164,7 +164,7 @@ async fn scalar_udf() -> Result<()> {
     | 10  | 12  | 22              |
     | 100 | 120 | 220             |
     +-----+-----+-----------------+
-    "###);
+    ");
 
     let batch = &result[0];
     let a = as_int32_array(batch.column(0))?;
@@ -281,7 +281,7 @@ async fn scalar_udf_zero_params() -> Result<()> {
     ctx.register_udf(ScalarUDF::from(get_100_udf));
 
     let result = plan_and_collect(&ctx, "select get_100() a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
@@ -290,22 +290,22 @@ async fn scalar_udf_zero_params() -> Result<()> {
     | 100 |
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() a").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +-----+
     | a   |
     +-----+
     | 100 |
     +-----+
-    "###);
+    ");
 
     let result = plan_and_collect(&ctx, "select get_100() from t where a=999").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     ++
     ++
-    "###);
+    ");
 
     Ok(())
 }
@@ -332,13 +332,13 @@ async fn scalar_udf_override_built_in_scalar_function() -> Result<()> {
 
     // Make sure that the UDF is used instead of the built-in function
     let result = plan_and_collect(&ctx, "select abs(a) a from t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +---+
     | a |
     +---+
     | 1 |
     +---+
-    "###);
+    ");
 
     Ok(())
 }
@@ -435,13 +435,13 @@ async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
     // Can call it if you put quotes
     let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +--------------+
     | MY_FUNC(t.i) |
     +--------------+
     | 1            |
     +--------------+
-    "###);
+    ");
 
     Ok(())
 }
@@ -472,13 +472,13 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
     ctx.register_udf(udf);
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
-    insta::assert_snapshot!(batches_to_string(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r"
     +------------+
     | dummy(t.i) |
     +------------+
     | 1          |
     +------------+
-    "###);
+    ");
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
     insta::assert_snapshot!(batches_to_string(&alias_result), @r"
@@ -699,7 +699,7 @@ impl ScalarUDFImpl for CastToI64UDF {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // DataFusion should have ensured the function is called with just a
         // single argument
@@ -975,7 +975,7 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let replacement = Self::replacement(&self.expr, &args, &self.defaults)?;
 
@@ -1306,19 +1306,14 @@ async fn create_scalar_function_from_sql_statement_default_arguments() -> Result
         "Error during planning: Non-default arguments cannot follow default arguments.";
     assert!(expected.starts_with(&err.strip_backtrace()));
 
-    // FIXME: The `DEFAULT` syntax does not work with positional params
-    let bad_expression_sql = r#"
+    let expression_sql = r#"
     CREATE FUNCTION bad_expression_fun(DOUBLE, DOUBLE DEFAULT 2.0)
         RETURNS DOUBLE
         RETURN $1 + $2
     "#;
-    let err = ctx
-        .sql(bad_expression_sql)
-        .await
-        .expect_err("sqlparser error");
-    let expected =
-        "SQL error: ParserError(\"Expected: ), found: 2.0 at Line: 2, Column: 63\")";
-    assert!(expected.starts_with(&err.strip_backtrace()));
+    let result = ctx.sql(expression_sql).await;
+
+    assert!(result.is_ok());
     Ok(())
 }
 

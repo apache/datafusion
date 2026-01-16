@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use crate::metrics::ExpressionEvaluatorMetrics;
 use crate::physical_expr::PhysicalExpr;
 use crate::tree_node::ExprContext;
 
@@ -102,10 +103,24 @@ pub fn evaluate_expressions_to_arrays<'a>(
     exprs: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
+    evaluate_expressions_to_arrays_with_metrics(exprs, batch, None)
+}
+
+/// Same as [`evaluate_expressions_to_arrays`] but records optional per-expression metrics.
+///
+/// For metrics tracking, see [`ExpressionEvaluatorMetrics`] for details.
+#[inline]
+pub fn evaluate_expressions_to_arrays_with_metrics<'a>(
+    exprs: impl IntoIterator<Item = &'a Arc<dyn PhysicalExpr>>,
+    batch: &RecordBatch,
+    metrics: Option<&ExpressionEvaluatorMetrics>,
+) -> Result<Vec<ArrayRef>> {
     let num_rows = batch.num_rows();
     exprs
         .into_iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(idx, e)| {
+            let _timer = metrics.and_then(|m| m.scoped_timer(idx));
             e.evaluate(batch)
                 .and_then(|col| col.into_array_of_size(num_rows))
         })

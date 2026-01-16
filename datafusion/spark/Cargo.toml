@@ -48,6 +48,7 @@ datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true, features = ["crypto_expressions"] }
+datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 percent-encoding = "2.3.2"
@@ -56,8 +57,25 @@ sha1 = "0.10"
 url = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 
 [[bench]]
 harness = false
 name = "char"
+
+[[bench]]
+harness = false
+name = "space"
+
+[[bench]]
+harness = false
+name = "hex"
+
+[[bench]]
+harness = false
+name = "slice"
+
+[[bench]]
+harness = false
+name = "substring"

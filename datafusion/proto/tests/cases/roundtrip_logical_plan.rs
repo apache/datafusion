@@ -31,6 +31,7 @@ use datafusion::datasource::listing::{
 use datafusion::execution::options::ArrowReadOptions;
 use datafusion::optimizer::Optimizer;
 use datafusion::optimizer::optimize_unions::OptimizeUnions;
+use datafusion_common::parquet_config::DFParquetWriterVersion;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_functions_aggregate::sum::sum_distinct;
 use prost::Message;
@@ -464,7 +465,7 @@ async fn roundtrip_logical_plan_copy_to_writer_options() -> Result<()> {
 
     parquet_format.global.bloom_filter_on_read = true;
     parquet_format.global.created_by = "DataFusion Test".to_string();
-    parquet_format.global.writer_version = "PARQUET_2_0".to_string();
+    parquet_format.global.writer_version = DFParquetWriterVersion::V2_0;
     parquet_format.global.write_batch_size = 111;
     parquet_format.global.data_pagesize_limit = 222;
     parquet_format.global.data_page_row_count_limit = 333;
@@ -549,6 +550,8 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
     csv_format.timestamp_format = Some("HH:mm:ss.SSSSSS".to_string());
     csv_format.time_format = Some("HH:mm:ss".to_string());
     csv_format.null_value = Some("NIL".to_string());
+    csv_format.compression = CompressionTypeVariant::GZIP;
+    csv_format.compression_level = Some(6);
 
     let file_type = format_as_file_type(Arc::new(CsvFormatFactory::new_with_options(
         csv_format.clone(),
@@ -593,7 +596,9 @@ async fn roundtrip_logical_plan_copy_to_csv() -> Result<()> {
             assert_eq!(csv_format.datetime_format, csv_config.datetime_format);
             assert_eq!(csv_format.timestamp_format, csv_config.timestamp_format);
             assert_eq!(csv_format.time_format, csv_config.time_format);
-            assert_eq!(csv_format.null_value, csv_config.null_value)
+            assert_eq!(csv_format.null_value, csv_config.null_value);
+            assert_eq!(csv_format.compression, csv_config.compression);
+            assert_eq!(csv_format.compression_level, csv_config.compression_level);
         }
         _ => panic!(),
     }
@@ -1775,19 +1780,20 @@ fn round_trip_datatype() {
             ),
         ])),
         DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![7, 5, 3],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         ),
         DataType::Union(
-            UnionFields::new(
-                vec![5, 8, 1],
+            UnionFields::try_new(
+                vec![5, 8, 1, 100],
                 vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
@@ -1802,7 +1808,8 @@ fn round_trip_datatype() {
                         true,
                     ),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         DataType::Dictionary(

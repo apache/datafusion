@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -86,7 +86,7 @@ impl RecursiveQueryExec {
         is_distinct: bool,
     ) -> Result<Self> {
         // Each recursive query needs its own work table
-        let work_table = Arc::new(WorkTable::new());
+        let work_table = Arc::new(WorkTable::new(name.clone()));
         // Use the same work table for both the WorkTableExec and the recursive term
         let recursive_term = assign_work_table(recursive_term, &work_table)?;
         let cache = Self::compute_properties(static_term.schema());
@@ -380,25 +380,9 @@ fn assign_work_table(
                 work_table_refs += 1;
                 Ok(Transformed::yes(new_plan))
             }
-        } else if plan.as_any().is::<RecursiveQueryExec>() {
-            not_impl_err!("Recursive queries cannot be nested")
         } else {
             Ok(Transformed::no(plan))
         }
-    })
-    .data()
-}
-
-/// Some plans will change their internal states after execution, making them unable to be executed again.
-/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
-///
-/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
-/// However, if the data of the left table is derived from the work table, it will become outdated
-/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
-fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let new_plan = Arc::clone(&plan).reset_state()?;
-        Ok(Transformed::yes(new_plan))
     })
     .data()
 }

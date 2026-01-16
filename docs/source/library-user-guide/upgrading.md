@@ -19,11 +19,106 @@
 
 # Upgrade Guides
 
+## DataFusion `53.0.0`
+
+**Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+
+### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
+
+The `SimplifyInfo` trait has been removed and replaced with the concrete `SimplifyContext` struct. This simplifies the expression simplification API and removes the need for trait objects.
+
+**Who is affected:**
+
+- Users who implemented custom `SimplifyInfo` implementations
+- Users who implemented `ScalarUDFImpl::simplify()` for custom scalar functions
+- Users who directly use `SimplifyContext` or `ExprSimplifier`
+
+**Breaking changes:**
+
+1. The `SimplifyInfo` trait has been removed entirely
+2. `SimplifyContext` no longer takes `&ExecutionProps` - it now uses a builder-style API with direct fields
+3. `ScalarUDFImpl::simplify()` now takes `&SimplifyContext` instead of `&dyn SimplifyInfo`
+4. Time-dependent function simplification (e.g., `now()`) is now optional - if `query_execution_start_time` is `None`, these functions won't be simplified
+
+**Migration guide:**
+
+If you implemented a custom `SimplifyInfo`:
+
+**Before:**
+
+```rust,ignore
+impl SimplifyInfo for MySimplifyInfo {
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> { ... }
+    fn nullable(&self, expr: &Expr) -> Result<bool> { ... }
+    fn execution_props(&self) -> &ExecutionProps { ... }
+    fn get_data_type(&self, expr: &Expr) -> Result<DataType> { ... }
+}
+```
+
+**After:**
+
+Use `SimplifyContext` directly with the builder-style API:
+
+```rust,ignore
+let context = SimplifyContext::default()
+    .with_schema(schema)
+    .with_config_options(config_options)
+    .with_query_execution_start_time(Some(Utc::now())); // or use .with_current_time()
+```
+
+If you implemented `ScalarUDFImpl::simplify()`:
+
+**Before:**
+
+```rust,ignore
+fn simplify(
+    &self,
+    args: Vec<Expr>,
+    info: &dyn SimplifyInfo,
+) -> Result<ExprSimplifyResult> {
+    let now_ts = info.execution_props().query_execution_start_time;
+    // ...
+}
+```
+
+**After:**
+
+```rust,ignore
+fn simplify(
+    &self,
+    args: Vec<Expr>,
+    info: &SimplifyContext,
+) -> Result<ExprSimplifyResult> {
+    // query_execution_start_time is now Option<DateTime<Utc>>
+    // Return Original if time is not set (simplification skipped)
+    let Some(now_ts) = info.query_execution_start_time() else {
+        return Ok(ExprSimplifyResult::Original(args));
+    };
+    // ...
+}
+```
+
+If you created `SimplifyContext` from `ExecutionProps`:
+
+**Before:**
+
+```rust,ignore
+let props = ExecutionProps::new();
+let context = SimplifyContext::new(&props).with_schema(schema);
+```
+
+**After:**
+
+```rust,ignore
+let context = SimplifyContext::default()
+    .with_schema(schema)
+    .with_config_options(config_options)
+    .with_current_time(); // Sets query_execution_start_time to Utc::now()
+```
+
+See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
+
 ## DataFusion `52.0.0`
-
-**Note:** DataFusion `52.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
-
-You can see the current [status of the `52.0.0`release here](https://github.com/apache/datafusion/issues/18566)
 
 ### Changes to DFSchema API
 
@@ -45,22 +140,152 @@ directly on the `Field`. For example:
 In prior versions, `ListingTableProvider` would issue `LIST` commands to
 the underlying object store each time it needed to list files for a query.
 To improve performance, `ListingTableProvider` now caches the results of
-`LIST` commands for the lifetime of the `ListingTableProvider` instance.
+`LIST` commands for the lifetime of the `ListingTableProvider` instance or
+until a cache entry expires.
 
 Note that by default the cache has no expiration time, so if files are added or removed
 from the underlying object store, the `ListingTableProvider` will not see
 those changes until the `ListingTableProvider` instance is dropped and recreated.
 
-You will be able to configure the maximum cache size and cache expiration time via a configuration option:
+You can configure the maximum cache size and cache entry expiration time via configuration options:
 
-See <https://github.com/apache/datafusion/issues/19056> for more details.
+- `datafusion.runtime.list_files_cache_limit` - Limits the size of the cache in bytes
+- `datafusion.runtime.list_files_cache_ttl` - Limits the TTL (time-to-live) of an entry in seconds
+
+Detailed configuration information can be found in the [DataFusion Runtime
+Configuration](https://datafusion.apache.org/user-guide/configs.html#runtime-configuration-settings) user's guide.
+
+Caching can be disabled by setting the limit to 0:
+
+```sql
+SET datafusion.runtime.list_files_cache_limit TO "0K";
+```
 
 Note that the internal API has changed to use a trait `ListFilesCache` instead of a type alias.
+
+### `newlines_in_values` moved from `FileScanConfig` to `CsvOptions`
+
+The CSV-specific `newlines_in_values` configuration option has been moved from `FileScanConfig` to `CsvOptions`, as it only applies to CSV file parsing.
+
+**Who is affected:**
+
+- Users who set `newlines_in_values` via `FileScanConfigBuilder::with_newlines_in_values()`
+
+**Migration guide:**
+
+Set `newlines_in_values` in `CsvOptions` instead of on `FileScanConfigBuilder`:
+
+**Before:**
+
+```rust,ignore
+let source = Arc::new(CsvSource::new(file_schema.clone()));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .with_newlines_in_values(true)
+    .build();
+```
+
+**After:**
+
+```rust,ignore
+let options = CsvOptions {
+    newlines_in_values: Some(true),
+    ..Default::default()
+};
+let source = Arc::new(CsvSource::new(file_schema.clone())
+    .with_csv_options(options));
+let config = FileScanConfigBuilder::new(object_store_url, source)
+    .build();
+```
 
 ### Removal of `pyarrow` feature
 
 The `pyarrow` feature flag has been removed. This feature has been migrated to
 the `datafusion-python` repository since version `44.0.0`.
+
+### Refactoring of `FileSource` constructors and `FileScanConfigBuilder` to accept schemas upfront
+
+The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and `FileScanConfigBuilder` no longer takes a separate schema parameter.
+
+**Who is affected:**
+
+- Users who create `FileScanConfig` or file sources (`ParquetSource`, `CsvSource`, `JsonSource`, `AvroSource`) directly
+- Users who implement custom `FileFormat` implementations
+
+**Key changes:**
+
+1. **FileSource constructors now require TableSchema**: All built-in file sources now take the schema in their constructor:
+
+   ```diff
+   - let source = ParquetSource::default();
+   + let source = ParquetSource::new(table_schema);
+   ```
+
+2. **FileScanConfigBuilder no longer takes schema as a parameter**: The schema is now passed via the FileSource:
+
+   ```diff
+   - FileScanConfigBuilder::new(url, schema, source)
+   + FileScanConfigBuilder::new(url, source)
+   ```
+
+3. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
+
+   ```diff
+   + let table_schema = TableSchema::new(
+   +     file_schema,
+   +     vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+   + );
+   + let source = ParquetSource::new(table_schema);
+     let config = FileScanConfigBuilder::new(url, source)
+   -     .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
+         .with_file(partitioned_file)
+         .build();
+   ```
+
+4. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
+   ```diff
+   impl FileFormat for MyFileFormat {
+   -   fn file_source(&self) -> Arc<dyn FileSource> {
+   +   fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+   -       Arc::new(MyFileSource::default())
+   +       Arc::new(MyFileSource::new(table_schema))
+       }
+   }
+   ```
+
+**Migration examples:**
+
+For Parquet files:
+
+```diff
+- let source = Arc::new(ParquetSource::default());
+- let config = FileScanConfigBuilder::new(url, schema, source)
++ let table_schema = TableSchema::new(schema, vec![]);
++ let source = Arc::new(ParquetSource::new(table_schema));
++ let config = FileScanConfigBuilder::new(url, source)
+      .with_file(partitioned_file)
+      .build();
+```
+
+For CSV files with partition columns:
+
+```diff
+- let source = Arc::new(CsvSource::new(true, b',', b'"'));
+- let config = FileScanConfigBuilder::new(url, file_schema, source)
+-     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
++ let options = CsvOptions {
++     has_header: Some(true),
++     delimiter: b',',
++     quote: b'"',
++     ..Default::default()
++ };
++ let table_schema = TableSchema::new(
++     file_schema,
++     vec![Arc::new(Field::new("year", DataType::Int32, false))],
++ );
++ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));
++ let config = FileScanConfigBuilder::new(url, source)
+      .build();
+```
 
 ### Adaptive filter representation in Parquet filter pushdown
 
@@ -362,6 +587,47 @@ Instead this should now be:
     let foreign_udf = ScalarUDF::new_from_shared_impl(foreign_udf);
 ```
 
+When creating any of the following structs, we now require the user to
+provide a `TaskContextProvider` and optionally a `LogicalExtensionCodec`:
+
+- `FFI_CatalogListProvider`
+- `FFI_CatalogProvider`
+- `FFI_SchemaProvider`
+- `FFI_TableProvider`
+- `FFI_TableFunction`
+
+Each of these structs has a `new()` and a `new_with_ffi_codec()` method for
+instantiation. For example, when you previously would write
+
+```rust,ignore
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None);
+```
+
+Now you will need to provide a `TaskContextProvider`. The most common
+implementation of this trait is `SessionContext`.
+
+```rust,ignore
+   let ctx = Arc::new(SessionContext::default());
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new(table, None, ctx, None);
+```
+
+The alternative function to create these structures may be more convenient
+if you are doing many of these operations. A `FFI_LogicalExtensionCodec` will
+store the `TaskContextProvider` as well.
+
+```rust,ignore
+   let codec = Arc::new(DefaultLogicalExtensionCodec {});
+   let ctx = Arc::new(SessionContext::default());
+   let ffi_codec = FFI_LogicalExtensionCodec::new(codec, None, ctx);
+   let table = Arc::new(MyTableProvider::new());
+   let ffi_table = FFI_TableProvider::new_with_ffi_codec(table, None, ffi_codec);
+```
+
+Additional information about the usage of the `TaskContextProvider` can be
+found in the crate README.
+
 Additionally, the FFI structure for Scalar UDF's no longer contains a
 `return_type` call. This code was not used since the `ForeignScalarUDF`
 struct implements the `return_field_from_args` instead.
@@ -479,16 +745,27 @@ let config = FileScanConfigBuilder::new(url, source)
     .build();
 ```
 
-### `SchemaAdapterFactory` Fully Removed from Parquet
+### `SchemaAdapter` and `SchemaAdapterFactory` completely removed
 
 Following the deprecation announced in [DataFusion 49.0.0](#deprecating-schemaadapterfactory-and-schemaadapter), `SchemaAdapterFactory` has been fully removed from Parquet scanning. This applies to both:
 
-- **Predicate pushdown / row filtering** (deprecated in 49.0.0)
-- **Projections** (newly removed in 52.0.0)
+The following symbols have been deprecated and will be removed in the next release:
 
+- `SchemaAdapter` trait
+- `SchemaAdapterFactory` trait
+- `SchemaMapper` trait
+- `SchemaMapping` struct
+- `DefaultSchemaAdapterFactory` struct
+
+These types were previously used to adapt record batch schemas during file reading.
+This functionality has been replaced by `PhysicalExprAdapterFactory`, which rewrites expressions at planning time rather than transforming batches at runtime.
 If you were using a custom `SchemaAdapterFactory` for schema adaptation (e.g., default column values, type coercion), you should now implement `PhysicalExprAdapterFactory` instead.
-
 See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for how to implement a custom `PhysicalExprAdapterFactory`.
+
+**Migration guide:**
+
+If you implemented a custom `SchemaAdapterFactory`, migrate to `PhysicalExprAdapterFactory`.
+See the [default column values example](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs) for a complete implementation.
 
 ## DataFusion `51.0.0`
 
@@ -656,91 +933,6 @@ TIMEZONE = '+00:00';
 
 This change was made to better support using the default timezone in scalar UDF functions such as
 `now`, `current_date`, `current_time`, and `to_timestamp` among others.
-
-### Refactoring of `FileSource` constructors and `FileScanConfigBuilder` to accept schemas upfront
-
-The way schemas are passed to file sources and scan configurations has been significantly refactored. File sources now require the schema (including partition columns) to be provided at construction time, and `FileScanConfigBuilder` no longer takes a separate schema parameter.
-
-**Who is affected:**
-
-- Users who create `FileScanConfig` or file sources (`ParquetSource`, `CsvSource`, `JsonSource`, `AvroSource`) directly
-- Users who implement custom `FileFormat` implementations
-
-**Key changes:**
-
-1. **FileSource constructors now require TableSchema**: All built-in file sources now take the schema in their constructor:
-
-   ```diff
-   - let source = ParquetSource::default();
-   + let source = ParquetSource::new(table_schema);
-   ```
-
-2. **FileScanConfigBuilder no longer takes schema as a parameter**: The schema is now passed via the FileSource:
-
-   ```diff
-   - FileScanConfigBuilder::new(url, schema, source)
-   + FileScanConfigBuilder::new(url, source)
-   ```
-
-3. **Partition columns are now part of TableSchema**: The `with_table_partition_cols()` method has been removed from `FileScanConfigBuilder`. Partition columns are now passed as part of the `TableSchema` to the FileSource constructor:
-
-   ```diff
-   + let table_schema = TableSchema::new(
-   +     file_schema,
-   +     vec![Arc::new(Field::new("date", DataType::Utf8, false))],
-   + );
-   + let source = ParquetSource::new(table_schema);
-     let config = FileScanConfigBuilder::new(url, source)
-   -     .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
-         .with_file(partitioned_file)
-         .build();
-   ```
-
-4. **FileFormat::file_source() now takes TableSchema parameter**: Custom `FileFormat` implementations must be updated:
-   ```diff
-   impl FileFormat for MyFileFormat {
-   -   fn file_source(&self) -> Arc<dyn FileSource> {
-   +   fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
-   -       Arc::new(MyFileSource::default())
-   +       Arc::new(MyFileSource::new(table_schema))
-       }
-   }
-   ```
-
-**Migration examples:**
-
-For Parquet files:
-
-```diff
-- let source = Arc::new(ParquetSource::default());
-- let config = FileScanConfigBuilder::new(url, schema, source)
-+ let table_schema = TableSchema::new(schema, vec![]);
-+ let source = Arc::new(ParquetSource::new(table_schema));
-+ let config = FileScanConfigBuilder::new(url, source)
-      .with_file(partitioned_file)
-      .build();
-```
-
-For CSV files with partition columns:
-
-```diff
-- let source = Arc::new(CsvSource::new(true, b',', b'"'));
-- let config = FileScanConfigBuilder::new(url, file_schema, source)
--     .with_table_partition_cols(vec![Field::new("year", DataType::Int32, false)])
-+ let options = CsvOptions {
-+     has_header: Some(true),
-+     delimiter: b',',
-+     quote: b'"',
-+     ..Default::default()
-+ };
-+ let table_schema = TableSchema::new(
-+     file_schema,
-+     vec![Arc::new(Field::new("year", DataType::Int32, false))],
-+ );
-+ let source = Arc::new(CsvSource::new(table_schema).with_csv_options(options));
-+ let config = FileScanConfigBuilder::new(url, source)
-      .build();
-```
 
 ### Introduction of `TableSchema` and changes to `FileSource::with_schema()` method
 
