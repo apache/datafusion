@@ -895,8 +895,7 @@ mod tests {
     fn test_cast_struct_missing_non_nullable_field_fails() {
         // Source has only field 'a'
         let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
-        let source_struct =
-            StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_struct = StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
         // Target has fields 'a' (nullable) and 'b' (non-nullable)
@@ -924,8 +923,7 @@ mod tests {
     fn test_cast_struct_missing_nullable_field_succeeds() {
         // Source has only field 'a'
         let a = Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef;
-        let source_struct =
-            StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
+        let source_struct = StructArray::from(vec![(arc_field("a", DataType::Int32), a)]);
         let source_col = Arc::new(source_struct) as ArrayRef;
 
         // Target has fields 'a' and 'b' (both nullable)
