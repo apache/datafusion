@@ -2189,7 +2189,7 @@ mod tests {
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
     use arrow::{
-        array::StructArray,
+        array::{Int32Array, StructArray},
         datatypes::{FieldRef, Fields},
     };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
@@ -5080,8 +5080,8 @@ mod tests {
 
         // Create an empty struct with the source fields
         let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
         ];
         let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
 
@@ -5120,8 +5120,8 @@ mod tests {
 
         // Create an empty struct with the source fields
         let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
         ];
         let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
 
@@ -5159,8 +5159,8 @@ mod tests {
 
         // Create an empty struct with the source fields
         let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
-            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
         ];
         let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
 
