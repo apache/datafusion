@@ -778,7 +778,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok
@@ -1182,8 +1183,10 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
 06)----------DataSourceExec: partitions=1, partition_sizes=[0]
-07)----------DataSourceExec: partitions=1, partition_sizes=[0]
-08)--DataSourceExec: partitions=1, partition_sizes=[0]
+07)----------BufferExec: capacity=1048576
+08)------------DataSourceExec: partitions=1, partition_sizes=[0]
+09)--BufferExec: capacity=1048576
+10)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 
 
@@ -1372,14 +1375,16 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(s.b AS Int64)@1, col1@1)], projection=[b@0, col0@2, col1@3, a@4]
 03)----ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
-06)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
-07)--------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)--------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
-10)----------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
-11)------------FilterExec: y@1 = x@0
-12)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----BufferExec: capacity=1048576
+06)------ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+07)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+08)----------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------BufferExec: capacity=1048576
+11)------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+12)--------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+13)----------------FilterExec: y@1 = x@0
+14)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table pairs;
@@ -1453,7 +1458,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IIII
 SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);

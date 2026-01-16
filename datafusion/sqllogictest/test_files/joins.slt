@@ -1343,8 +1343,9 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------BufferExec: capacity=1048576
+07)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Join on struct
 query TT
@@ -1359,8 +1360,9 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(s3@0, s4@0)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ??
 select join_t3.s3, join_t4.s4
@@ -1398,8 +1400,9 @@ physical_plan
 04)------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------BufferExec: capacity=1048576
+08)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
 EXPLAIN
@@ -1425,8 +1428,9 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[t1_id@0 as alias1], aggr=[]
 08)--------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-11)------------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------------BufferExec: capacity=1048576
+11)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+12)--------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -1490,9 +1494,10 @@ physical_plan
 04)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
-08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1515,9 +1520,10 @@ physical_plan
 04)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_int@2 as t1_int, CAST(t1_id@0 AS Int64) + 11 as join_t1.t1_id + Int64(11)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
-08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, CAST(t2_id@0 AS Int64) as CAST(join_t2.t2_id AS Int64)]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Both side expr key inner join
 
@@ -1542,9 +1548,10 @@ physical_plan
 04)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as join_t2.t2_id + UInt32(1)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
-08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1567,9 +1574,10 @@ physical_plan
 04)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 + 1 as join_t2.t2_id + UInt32(1)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
-08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-09)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 12 as join_t1.t1_id + UInt32(12)]
+09)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Left side expr key inner join
 
@@ -1592,9 +1600,10 @@ physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)], projection=[t2_id@0, t1_id@1, t1_name@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
+05)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1615,9 +1624,10 @@ physical_plan
 01)ProjectionExec: expr=[t1_id@1 as t1_id, t2_id@0 as t2_id, t1_name@2 as t1_name]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t2_id@0, join_t1.t1_id + UInt32(11)@2)], projection=[t2_id@0, t1_id@1, t1_name@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
+05)------ProjectionExec: expr=[t1_id@0 as t1_id, t1_name@1 as t1_name, t1_id@0 + 11 as join_t1.t1_id + UInt32(11)]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Right side expr key inner join
 
@@ -1643,8 +1653,9 @@ physical_plan
 04)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1668,8 +1679,9 @@ physical_plan
 04)------ProjectionExec: expr=[t2_id@0 as t2_id, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
-07)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-08)------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----BufferExec: capacity=1048576
+08)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Select wildcard with expr key inner join
 
@@ -1690,9 +1702,10 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, join_t2.t2_id - UInt32(11)@3)], projection=[t1_id@0, t1_name@1, t1_int@2, t2_id@3, t2_name@4, t2_int@5]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
-04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
+05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.repartition_joins = true;
@@ -1711,9 +1724,10 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, join_t2.t2_id - UInt32(11)@3)], projection=[t1_id@0, t1_name@1, t1_int@2, t2_id@3, t2_name@4, t2_int@5]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
-04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----ProjectionExec: expr=[t2_id@0 as t2_id, t2_name@1 as t2_name, t2_int@2 as t2_int, t2_id@0 - 11 as join_t2.t2_id - UInt32(11)]
+05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 #####
 # Config teardown
@@ -2552,8 +2566,9 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(millis@2, millis@2)]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+03)--BufferExec: capacity=1048576
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # left_join_using_2
 query II
@@ -2810,9 +2825,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IT rowsort
@@ -2846,9 +2861,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -2903,9 +2918,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IT rowsort
@@ -2939,9 +2954,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query IT
@@ -2997,9 +3012,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITI rowsort
@@ -3014,9 +3029,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITI rowsort
@@ -3069,9 +3084,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@1 != t1_name@0
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITI rowsort
@@ -3086,9 +3101,9 @@ physical_plan
 01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
 02)--HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(t2_id@0, t1_id@0)], filter=t2_name@0 != t1_name@1
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
-05)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-06)--------BufferExec: capacity=1048576
+04)----BufferExec: capacity=1048576
+05)------SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITI rowsort
@@ -3272,9 +3287,10 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@1, a@1)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-03)--ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
-04)----BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
+03)--BufferExec: capacity=1048576
+04)----ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
+05)------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
+06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 
 # hash join should propagate ordering equivalence of the right side for RIGHT ANTI join.
 # Hence final requirement rn1 ASC is already satisfied at the end of HashJoinExec.
@@ -3346,7 +3362,8 @@ physical_plan
 02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+05)------BufferExec: capacity=1048576
+06)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # create a table where there more than one valid ordering
 # that describes table.
@@ -3393,9 +3410,10 @@ physical_plan
 02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]], ordering_mode=Sorted
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
-05)------ProjectionExec: expr=[a@0 as a, d@1 as d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
-06)--------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-07)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
+05)------BufferExec: capacity=1048576
+06)--------ProjectionExec: expr=[a@0 as a, d@1 as d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
+07)----------BoundedWindowAggExec: wdw=[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+08)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 # run query above in multiple partitions
 statement ok
@@ -3431,8 +3449,9 @@ physical_plan
 06)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
 07)------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
-09)------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
-10)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
+09)------------BufferExec: capacity=1048576
+10)--------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
+11)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT *
@@ -4066,8 +4085,9 @@ physical_plan
 03)----AggregateExec: mode=Single, gby=[sn@1 as sn, ts@0 as ts, amount@2 as amount, currency@3 as currency], aggr=[last_value(e.rate)]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(currency@3, currency_from@1)], filter=ts@0 >= ts@1, projection=[ts@0, sn@1, amount@2, currency@3, rate@6]
 05)--------DataSourceExec: partitions=1, partition_sizes=[0]
-06)--------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
-07)----------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--------BufferExec: capacity=1048576
+07)----------FilterExec: currency_to@2 = USD, projection=[ts@0, currency_from@1, rate@3]
+08)------------DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 DROP TABLE sales_global;
@@ -4108,8 +4128,9 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(b@1, y@1)], filter=a@0 < x@1
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
-04)----DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----SortExec: expr=[x@0 ASC NULLS LAST], preserve_partitioning=[false]
+05)------DataSourceExec: partitions=1, partition_sizes=[0]
 
 # Test full join with limit
 statement ok
@@ -4390,7 +4411,8 @@ physical_plan
 03)----ProjectionExec: expr=[]
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------BufferExec: capacity=1048576
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test hash join sort push down
 # Issue: https://github.com/apache/datafusion/issues/13559
@@ -4483,7 +4505,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2, state@5]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT age FROM (SELECT * FROM person a join person b using (id, age, state));
@@ -4498,7 +4521,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[age@1]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT a.* FROM person a join person b using (id, age);
@@ -4513,7 +4537,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT a.*, b.* FROM person a join person b using (id, age);
@@ -4527,7 +4552,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state);
@@ -4547,8 +4573,10 @@ physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)----DataSourceExec: partitions=1, partition_sizes=[0]
-05)--DataSourceExec: partitions=1, partition_sizes=[0]
+04)----BufferExec: capacity=1048576
+05)------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--BufferExec: capacity=1048576
+07)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 query TT
 explain SELECT * FROM person a NATURAL JOIN lineitem b;
@@ -4576,7 +4604,8 @@ logical_plan
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c1@0, c1@0)], projection=[c1@0]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--BufferExec: capacity=1048576
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement count 0
 drop table person;
@@ -4712,8 +4741,9 @@ physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(person.id + Int64(10)@1, orders.customer_id * Int64(2)@1)], projection=[id@0, customer_id@2]
 02)--ProjectionExec: expr=[id@0 as id, CAST(id@0 AS Int64) + 10 as person.id + Int64(10)]
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)--ProjectionExec: expr=[customer_id@0 as customer_id, CAST(customer_id@0 AS Int64) * 2 as orders.customer_id * Int64(2)]
-05)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)--BufferExec: capacity=1048576
+05)----ProjectionExec: expr=[customer_id@0 as customer_id, CAST(customer_id@0 AS Int64) * 2 as orders.customer_id * Int64(2)]
+06)------DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement count 0
 drop table person;
@@ -4869,7 +4899,8 @@ physical_plan
 01)ProjectionExec: expr=[k1@2 as k1, v1@3 as v1, k2@0 as k2, v2@1 as v2]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k2@0, k1@0)]
 03)----DataSourceExec: partitions=1, partition_sizes=[0]
-04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+04)----BufferExec: capacity=1048576
+05)------DataSourceExec: partitions=1, partition_sizes=[10000]
 
 query IIII
 SELECT sum(k1), sum(v1), sum(k2), sum(v2)
@@ -5291,7 +5322,8 @@ physical_plan
 02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
 03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------BufferExec: capacity=1048576
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0
 set datafusion.explain.physical_plan_only = false;

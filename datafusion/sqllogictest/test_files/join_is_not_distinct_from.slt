@@ -82,7 +82,8 @@ physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.explain.format = "tree";
@@ -109,12 +110,19 @@ physical_plan
 13)│      on: (val = val)      │              │
 14)└─────────────┬─────────────┘              │
 15)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-16)│       DataSourceExec      ││       DataSourceExec      │
+16)│       DataSourceExec      ││         BufferExec        │
 17)│    --------------------   ││    --------------------   │
-18)│         bytes: 288        ││         bytes: 288        │
-19)│       format: memory      ││       format: memory      │
-20)│          rows: 1          ││          rows: 1          │
-21)└───────────────────────────┘└───────────────────────────┘
+18)│         bytes: 288        ││     target_batch_size:    │
+19)│       format: memory      ││          1048576          │
+20)│          rows: 1          ││                           │
+21)└───────────────────────────┘└─────────────┬─────────────┘
+22)-----------------------------┌─────────────┴─────────────┐
+23)-----------------------------│       DataSourceExec      │
+24)-----------------------------│    --------------------   │
+25)-----------------------------│         bytes: 288        │
+26)-----------------------------│       format: memory      │
+27)-----------------------------│          rows: 1          │
+28)-----------------------------└───────────────────────────┘
 
 statement ok
 set datafusion.explain.format = "indent";
@@ -147,8 +155,9 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------FilterExec: CAST(val@1 AS Int64) + 1 IS NOT DISTINCT FROM 11
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
-08)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
-09)------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----BufferExec: capacity=1048576
+09)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+10)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Mixed join predicate with `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`
 query IIII rowsort
@@ -173,8 +182,9 @@ physical_plan
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1.val + Int64(1)@2, t2.val + Int64(1)@2)], filter=CAST(val@0 AS Int64) % 3 IS DISTINCT FROM CAST(val@1 AS Int64) % 3, projection=[id@0, val@1, id@3, val@4], NullsEqual: true
 03)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t1.val + Int64(1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
-05)----ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
-06)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----BufferExec: capacity=1048576
+06)------ProjectionExec: expr=[id@0 as id, val@1 as val, CAST(val@1 AS Int64) + 1 as t2.val + Int64(1)]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test mixed equal and IS NOT DISTINCT FROM conditions
 # The `IS NOT DISTINCT FROM` expr should NOT in HashJoin's `on` predicate
@@ -192,7 +202,8 @@ physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)], filter=val@0 IS NOT DISTINCT FROM val@1
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test the mixed condition join result
 query IIII rowsort
@@ -232,10 +243,12 @@ physical_plan
 01)ProjectionExec: expr=[id@0 as t1_id, id@2 as t2_id, val@1 as val, val@3 as val]
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@0, val@1)], projection=[id@1, val@2, id@3, val@4], NullsEqual: true
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
-06)--------DataSourceExec: partitions=1, partition_sizes=[1]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
+05)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(val@1, val@1)], NullsEqual: true
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------BufferExec: capacity=1048576
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Test IS NOT DISTINCT FROM with multiple columns
 statement ok
@@ -276,8 +289,9 @@ JOIN t4 ON (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.val2 IS NOT DISTINCT F
 02)--Inner Join: t3.val1 = t4.val1, t3.val2 = t4.val2
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 03)----TableScan: t3 projection=[id, val1, val2]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----BufferExec: capacity=1048576
 04)----TableScan: t4 projection=[id, val1, val2]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 logical_plan
 physical_plan
 
