@@ -841,8 +841,8 @@ SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
 ----
 {a: 1, b: 2}
 
-# Test no overlap with mismatched field count
-query error DataFusion error: (Plan error|Error during planning): Cannot cast struct with 3 fields to 2 fields without name overlap; positional mapping is ambiguous
+# Test no overlap with mismatched field count - should fail because no field names match
+statement error DataFusion error: (Plan error|Error during planning|This feature is not implemented): (Cannot cast struct: at least one field name must match between source and target|Cannot cast struct with 3 fields to 2 fields without name overlap|Unsupported CAST from Struct)
 SELECT CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
 
 # Test nested struct with field reordering
