@@ -233,6 +233,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -354,6 +355,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -418,6 +420,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -981,6 +984,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1170,6 +1174,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1363,6 +1368,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1531,6 +1537,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1550,6 +1557,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1665,6 +1673,7 @@ async fn test_hashjoin_parent_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1752,15 +1761,17 @@ STORED AS PARQUET;
     .unwrap();
 
     // Create a TopK query that will use dynamic filter pushdown
+    // Note that we use t * t as the order by expression to avoid
+    // the order pushdown optimizer from optimizing away the TopK.
     let df = ctx
-        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t LIMIT 10;")
+        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t * t LIMIT 10;")
         .await
         .unwrap();
     let batches = df.collect().await.unwrap();
     let explain = format!("{}", pretty_format_batches(&batches).unwrap());
 
     assert!(explain.contains("output_rows=128")); // Read 1 row group
-    assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
+    assert!(explain.contains("t@0 < 1884329474306198481")); // Dynamic filter was applied
     assert!(
         explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99.87 K"),
         "{explain}"
@@ -2771,6 +2782,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -2899,6 +2911,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3049,6 +3062,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3199,6 +3213,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3333,6 +3348,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3441,6 +3457,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
                 None,
                 PartitionMode::CollectLeft,
                 datafusion_common::NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;

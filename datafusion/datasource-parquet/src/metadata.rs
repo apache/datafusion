@@ -658,6 +658,73 @@ pub(crate) fn lex_ordering_to_sorting_columns(
     ordering.iter().map(sort_expr_to_sorting_column).collect()
 }
 
+/// Extracts ordering information from Parquet metadata.
+///
+/// This function reads the sorting_columns from the first row group's metadata
+/// and converts them into a [`LexOrdering`] that can be used by the query engine.
+///
+/// # Arguments
+/// * `metadata` - The Parquet metadata containing sorting_columns information
+/// * `schema` - The Arrow schema to use for column lookup
+///
+/// # Returns
+/// * `Ok(Some(ordering))` if valid ordering information was found
+/// * `Ok(None)` if no sorting columns were specified or they couldn't be resolved
+pub fn ordering_from_parquet_metadata(
+    metadata: &ParquetMetaData,
+    schema: &SchemaRef,
+) -> Result<Option<LexOrdering>> {
+    // Get the sorting columns from the first row group metadata.
+    // If no row groups exist or no sorting columns are specified, return None.
+    let sorting_columns = metadata
+        .row_groups()
+        .first()
+        .and_then(|rg| rg.sorting_columns())
+        .filter(|cols| !cols.is_empty());
+
+    let Some(sorting_columns) = sorting_columns else {
+        return Ok(None);
+    };
+
+    let parquet_schema = metadata.file_metadata().schema_descr();
+
+    let sort_exprs =
+        sorting_columns_to_physical_exprs(sorting_columns, parquet_schema, schema);
+
+    if sort_exprs.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(LexOrdering::new(sort_exprs))
+}
+
+/// Converts Parquet sorting columns to physical sort expressions.
+fn sorting_columns_to_physical_exprs(
+    sorting_columns: &[SortingColumn],
+    parquet_schema: &SchemaDescriptor,
+    arrow_schema: &SchemaRef,
+) -> Vec<PhysicalSortExpr> {
+    use arrow::compute::SortOptions;
+
+    sorting_columns
+        .iter()
+        .filter_map(|sc| {
+            let parquet_column = parquet_schema.column(sc.column_idx as usize);
+            let name = parquet_column.name();
+
+            // Find the column in the arrow schema
+            let (index, _) = arrow_schema.column_with_name(name)?;
+
+            let expr = Arc::new(Column::new(name, index));
+            let options = SortOptions {
+                descending: sc.descending,
+                nulls_first: sc.nulls_first,
+            };
+            Some(PhysicalSortExpr::new(expr, options))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

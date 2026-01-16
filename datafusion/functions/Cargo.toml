@@ -109,6 +109,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "concat_ws"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "to_timestamp"
 required-features = ["datetime_expressions"]
 
@@ -309,4 +314,9 @@ required-features = ["unicode_expressions"]
 [[bench]]
 harness = false
 name = "factorial"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "floor_ceil"
 required-features = ["math_expressions"]
