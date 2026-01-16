@@ -22,6 +22,7 @@ pub mod date_part;
 pub mod date_sub;
 pub mod date_trunc;
 pub mod extract;
+pub mod from_utc_timestamp;
 pub mod last_day;
 pub mod make_dt_interval;
 pub mod make_interval;
@@ -39,6 +40,10 @@ make_udf_function!(date_diff::SparkDateDiff, date_diff);
 make_udf_function!(date_part::SparkDatePart, date_part);
 make_udf_function!(date_sub::SparkDateSub, date_sub);
 make_udf_function!(date_trunc::SparkDateTrunc, date_trunc);
+make_udf_function!(
+    from_utc_timestamp::SparkFromUtcTimestamp,
+    from_utc_timestamp
+);
 make_udf_function!(extract::SparkHour, hour);
 make_udf_function!(extract::SparkMinute, minute);
 make_udf_function!(extract::SparkSecond, second);
@@ -125,6 +130,11 @@ pub mod expr_fn {
         "Extracts a part of the date or time from a date, time, or timestamp expression.",
         arg1 arg2
     ));
+    export_functions!((
+        from_utc_timestamp,
+        "Interpret a given timestamp `ts` in UTC timezone and then convert it to timezone `tz`.",
+        ts tz
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -135,6 +145,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         date_part(),
         date_sub(),
         date_trunc(),
+        from_utc_timestamp(),
         hour(),
         last_day(),
         make_dt_interval(),
