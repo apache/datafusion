@@ -5064,9 +5064,10 @@ mod tests {
 
     /// Helper to create a `Struct` literal cast expression from `source_fields` and `target_fields`.
     fn make_struct_cast_expr(source_fields: Fields, target_fields: Fields) -> Expr {
+        // Create 1-row struct array (not 0-row) so it can be evaluated by simplifier
         let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(Int32Array::new(vec![].into(), None)),
-            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::from(vec![Some(1)])),
+            Arc::new(Int32Array::from(vec![Some(2)])),
         ];
         let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
 
@@ -5130,8 +5131,13 @@ mod tests {
 
         // The cast should be simplified
         let result = simplifier.simplify(expr.clone()).unwrap();
-        // Result should still be a cast (struct casts generally don't fold to literals)
-        assert!(matches!(result, Expr::Cast(_)));
+        // Struct casts with same field count should be const-folded to a literal
+        assert!(matches!(result, Expr::Literal(_, _)));
+        // Ensure the simplifier made a change (not identical to original)
+        assert!(
+            result != expr,
+            "Struct cast with same field count should be simplified (not identical to input)"
+        );
     }
 
     #[test]
@@ -5156,7 +5162,12 @@ mod tests {
 
         // The cast should be simplified since field counts match
         let result = simplifier.simplify(expr.clone()).unwrap();
-        // With name-based casting, actual field matching validation happens at planning time
-        assert!(matches!(result, Expr::Cast(_)));
+        // Struct casts with same field count are const-folded to literals
+        assert!(matches!(result, Expr::Literal(_, _)));
+        // Ensure the simplifier made a change (not identical to original)
+        assert!(
+            result != expr,
+            "Struct cast with different names but same field count should be simplified"
+        );
     }
 }
