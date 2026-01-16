@@ -5062,13 +5062,21 @@ mod tests {
     // --- Struct Cast Tests -----
     // --------------------------------
 
-    /// Helper to create a `StructArray` with empty child arrays matching `source_fields`.
-    fn make_empty_struct_array(source_fields: Fields) -> StructArray {
+    /// Helper to create a `Struct` literal cast expression from `source_fields` and `target_fields`.
+    fn make_struct_cast_expr(source_fields: Fields, target_fields: Fields) -> Expr {
         let arrays: Vec<Arc<dyn Array>> = vec![
             Arc::new(Int32Array::new(vec![].into(), None)),
             Arc::new(Int32Array::new(vec![].into(), None)),
         ];
-        StructArray::try_new(source_fields, arrays, None).unwrap()
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ))
     }
 
     #[test]
@@ -5087,16 +5095,7 @@ mod tests {
             Arc::new(Field::new("z", DataType::Int32, true)),
         ]);
 
-        // Create an empty struct with the source fields
-        let struct_array = make_empty_struct_array(source_fields);
-
-        let expr = Expr::Cast(Cast::new(
-            Box::new(Expr::Literal(
-                ScalarValue::Struct(Arc::new(struct_array)),
-                None,
-            )),
-            DataType::Struct(target_fields),
-        ));
+        let expr = make_struct_cast_expr(source_fields, target_fields);
 
         let simplifier =
             ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
@@ -5123,16 +5122,7 @@ mod tests {
             Arc::new(Field::new("b", DataType::Int32, true)),
         ]);
 
-        // Create an empty struct with the source fields
-        let struct_array = make_empty_struct_array(source_fields);
-
-        let expr = Expr::Cast(Cast::new(
-            Box::new(Expr::Literal(
-                ScalarValue::Struct(Arc::new(struct_array)),
-                None,
-            )),
-            DataType::Struct(target_fields),
-        ));
+        let expr = make_struct_cast_expr(source_fields, target_fields);
 
         let simplifier =
             ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
@@ -5158,16 +5148,7 @@ mod tests {
             Arc::new(Field::new("y", DataType::Int32, true)),
         ]);
 
-        // Create an empty struct with the source fields
-        let struct_array = make_empty_struct_array(source_fields);
-
-        let expr = Expr::Cast(Cast::new(
-            Box::new(Expr::Literal(
-                ScalarValue::Struct(Arc::new(struct_array)),
-                None,
-            )),
-            DataType::Struct(target_fields),
-        ));
+        let expr = make_struct_cast_expr(source_fields, target_fields);
 
         let simplifier =
             ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
