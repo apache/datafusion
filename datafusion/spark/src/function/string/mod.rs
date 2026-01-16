@@ -25,6 +25,7 @@ pub mod length;
 pub mod like;
 pub mod luhn_check;
 pub mod space;
+pub mod substring;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
@@ -40,6 +41,7 @@ make_udf_function!(like::SparkLike, like);
 make_udf_function!(luhn_check::SparkLuhnCheck, luhn_check);
 make_udf_function!(format_string::FormatStringFunc, format_string);
 make_udf_function!(space::SparkSpace, space);
+make_udf_function!(substring::SparkSubstring, substring);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -90,6 +92,11 @@ pub mod expr_fn {
         strfmt args
     ));
     export_functions!((space, "Returns a string consisting of n spaces.", arg1));
+    export_functions!((
+        substring,
+        "Returns the substring from string `str` starting at position `pos` with length `length.",
+        str pos length
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -104,5 +111,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         luhn_check(),
         format_string(),
         space(),
+        substring(),
     ]
 }

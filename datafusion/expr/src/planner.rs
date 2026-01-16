@@ -139,6 +139,10 @@ pub trait ContextProvider {
 }
 
 /// Customize planning of SQL AST expressions to [`Expr`]s
+///
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait ExprPlanner: Debug + Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
@@ -369,6 +373,9 @@ pub enum RelationPlanning {
 
 /// Customize planning SQL table factors to [`LogicalPlan`]s.
 #[cfg(feature = "sql")]
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait RelationPlanner: Debug + Send + Sync {
     /// Plan a table factor into a [`LogicalPlan`].
     ///
@@ -420,6 +427,9 @@ pub trait RelationPlannerContext {
 
 /// Customize planning SQL types to DataFusion (Arrow) types.
 #[cfg(feature = "sql")]
+/// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
+///
+/// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait TypePlanner: Debug + Send + Sync {
     /// Plan SQL [`sqlparser::ast::DataType`] to DataFusion [`DataType`]
     ///
