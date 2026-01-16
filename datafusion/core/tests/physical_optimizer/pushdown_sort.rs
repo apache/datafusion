@@ -996,6 +996,3 @@ fn test_sort_pushdown_with_test_scan_arbitrary_ordering() {
     "
     );
 }
-
-
-
