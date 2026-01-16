@@ -251,7 +251,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Only push down projections that are trivial AND provide benefit (narrow schema or have field accessors)
         let input_field_count = projection.input().schema().fields().len();
-        if !projection.projection_expr().should_push_through_operator(input_field_count) {
+        if !projection
+            .projection_expr()
+            .should_push_through_operator(input_field_count)
+        {
             return Ok(None);
         }
         // CoalescePartitionsExec always has a single child, so zero indexing is safe.

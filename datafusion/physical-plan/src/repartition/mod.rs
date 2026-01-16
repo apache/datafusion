@@ -1126,7 +1126,9 @@ impl ExecutionPlan for RepartitionExec {
         // If pushdown is not beneficial or applicable, break it.
         let input_field_count = projection.input().schema().fields().len();
         if projection.benefits_from_input_partitioning()[0]
-            || !projection.projection_expr().should_push_through_operator(input_field_count)
+            || !projection
+                .projection_expr()
+                .should_push_through_operator(input_field_count)
         {
             return Ok(None);
         }

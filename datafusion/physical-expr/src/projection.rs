@@ -369,10 +369,7 @@ impl ProjectionExprs {
         // - Or has literals that can be absorbed by datasource
         let narrows_schema = self.exprs.len() < input_field_count;
         let has_beneficial_exprs = self.benefits_from_pushdown();
-        let has_literals = self
-            .exprs
-            .iter()
-            .any(|p| p.expr.as_any().is::<Literal>());
+        let has_literals = self.exprs.iter().any(|p| p.expr.as_any().is::<Literal>());
 
         narrows_schema || has_beneficial_exprs || has_literals
     }
