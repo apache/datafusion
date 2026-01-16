@@ -52,7 +52,7 @@ use std::{collections::HashSet, sync::Arc};
 /// Returns a `DataFusionError::Plan` if the source column is not a struct type
 ///
 /// # Note on Null Handling
-/// This function includes a check for all-null source columns (lines 58-65) that may
+/// This function includes a check for all-null source columns  that may
 /// seem redundant if only called from `cast_column`. However, this check is **necessary**
 /// if `cast_struct_column` is called directly from other code paths (e.g., custom
 /// execution plans or PhysicalExpr implementations), to ensure correct handling of NULL
