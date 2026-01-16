@@ -27,8 +27,10 @@ README_NEW="$EXAMPLES_DIR/README-NEW.md"
 echo "▶ Generating examples README…"
 bash "$ROOT_DIR/ci/scripts/generate_examples_docs.sh" > "$README_NEW"
 
-echo "▶ Formatting generated README with DataFusion's Prettier…"
-bash "$ROOT_DIR/ci/scripts/doc_prettier_check.sh" --write --allow-dirty
+echo "▶ Formatting generated README with Prettier…"
+npx prettier@2.7.1 \
+  --parser markdown \
+  --write "$README_NEW"
 
 echo "▶ Comparing generated README with committed version…"
 
