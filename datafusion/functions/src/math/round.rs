@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -146,13 +146,22 @@ impl ScalarUDFImpl for RoundFunc {
             (&args.args[0], decimal_places)
         {
             // Extract decimal places as i32
+            // Note: decimal_places is coerced to Int32 by the signature, so the non-Int32
+            // arm should be unreachable in normal execution. We fall through to the array
+            // path as a safety measure.
             let dp = match dp_scalar {
                 ScalarValue::Int32(Some(dp)) => *dp,
                 ScalarValue::Int32(None) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
+                    // Return type depends on input type, but for null dp we return null
+                    return match value_scalar {
+                        ScalarValue::Float32(_) => {
+                            Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
+                        }
+                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
+                    };
                 }
                 _ => {
-                    // Fall through to array path for non-Int32 decimal places
+                    // Unreachable in normal execution due to type coercion
                     return round_columnar(
                         &args.args[0],
                         decimal_places,
@@ -163,23 +172,22 @@ impl ScalarUDFImpl for RoundFunc {
 
             match value_scalar {
                 ScalarValue::Float64(Some(v)) => {
-                    let factor = 10_f64.powi(dp);
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
-                        (v * factor).round() / factor,
-                    ))));
+                    return round_float(*v, dp)
+                        .map(|r| ColumnarValue::Scalar(ScalarValue::Float64(Some(r))))
+                        .map_err(DataFusionError::from);
                 }
                 ScalarValue::Float64(None) => {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
                 }
                 ScalarValue::Float32(Some(v)) => {
-                    let factor = 10_f32.powi(dp);
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(
-                        (v * factor).round() / factor,
-                    ))));
+                    return round_float(*v, dp)
+                        .map(|r| ColumnarValue::Scalar(ScalarValue::Float32(Some(r))))
+                        .map_err(DataFusionError::from);
                 }
                 ScalarValue::Float32(None) => {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)));
                 }
+                // TODO: Add scalar fast path for decimal types
                 // For decimals and other types: fall through to array path
                 _ => {}
             }
