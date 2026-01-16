@@ -30,6 +30,7 @@ use crate::{
 };
 use arrow::array::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -37,17 +38,15 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
-};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
 use std::any::Any;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
@@ -91,8 +90,8 @@ pub struct BufferExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
     capacity: usize,
-    wait_first_poll: bool,
     metrics: ExecutionPlanMetricsSet,
+    lazy_dyn_filters_below: Arc<OnceLock<bool>>,
 }
 
 impl BufferExec {
@@ -107,8 +106,8 @@ impl BufferExec {
             input,
             properties,
             capacity,
-            wait_first_poll: false,
             metrics: ExecutionPlanMetricsSet::new(),
+            lazy_dyn_filters_below: Arc::new(OnceLock::new()),
         }
     }
 
@@ -180,6 +179,19 @@ impl ExecutionPlan for BufferExec {
             .register(context.memory_pool());
         let in_stream = self.input.execute(partition, context)?;
 
+        let input = Arc::clone(&self.input);
+        let has_dynamic_filter_below = self.lazy_dyn_filters_below.get_or_init(|| {
+            let mut result = false;
+            let _ = input.transform_up(|plan| {
+                if !plan.dynamic_filters().is_empty() {
+                    result = true;
+                    return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
+                }
+                Ok(Transformed::no(plan))
+            });
+            result
+        });
+
         // Set up the metrics for the stream.
         let curr_mem_in = Arc::new(AtomicUsize::new(0));
         let curr_mem_out = Arc::clone(&curr_mem_in);
@@ -211,7 +223,7 @@ impl ExecutionPlan for BufferExec {
             in_stream,
             self.capacity,
             mem_reservation,
-            self.wait_first_poll,
+            *has_dynamic_filter_below,
         );
         // Update in the metrics that when an element gets out, some memory gets freed.
         let out_stream = out_stream.inspect_ok(move |v| {
@@ -268,24 +280,7 @@ impl ExecutionPlan for BufferExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // If there is a dynamic filter being pushed down through this node, we don't want to buffer,
-        // we prefer to give a chance to the dynamic filter to be populated with something rather
-        // than eagerly polling data with an empty dynamic filter.
-        let mut has_dynamic_filter = false;
-        for parent_filter in &child_pushdown_result.parent_filters {
-            if is_dynamic_physical_expr(&parent_filter.filter) {
-                has_dynamic_filter = true;
-            }
-        }
-        if has_dynamic_filter {
-            let mut new_self = self.clone();
-            new_self.wait_first_poll = true;
-            let mut result = FilterPushdownPropagation::if_all(child_pushdown_result);
-            result.updated_node = Some(Arc::new(new_self) as _);
-            Ok(result)
-        } else {
-            Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
-        }
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     fn try_pushdown_sort(
