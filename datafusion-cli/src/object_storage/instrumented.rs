@@ -119,11 +119,14 @@ impl FromStr for InstrumentedObjectStoreMode {
     type Err = DataFusionError;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "disabled" => Ok(Self::Disabled),
-            "summary" => Ok(Self::Summary),
-            "trace" => Ok(Self::Trace),
-            _ => Err(DataFusionError::Execution(format!("Unrecognized mode {s}"))),
+        if s.eq_ignore_ascii_case("disabled") {
+            Ok(Self::Disabled)
+        } else if s.eq_ignore_ascii_case("summary") {
+            Ok(Self::Summary)
+        } else if s.eq_ignore_ascii_case("trace") {
+            Ok(Self::Trace)
+        } else {
+            Err(DataFusionError::Execution(format!("Unrecognized mode {s}")))
         }
     }
 }
