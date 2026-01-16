@@ -83,7 +83,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
 
         Ok(Arc::new(Field::new(
             self.name(),
-            DataType::Timestamp(TimeUnit::Microsecond, None),
+            args.arg_fields[1].data_type().clone(),
             nullable,
         )))
     }
@@ -124,7 +124,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
         let ts_type = ts_expr.get_type(info.schema())?;
 
         // Spark interprets timestamps in the session timezone before truncating,
-        // then returns a timestamp without timezone at microsecond precision.
+        // then returns a timestamp at microsecond precision.
         // See: https://github.com/apache/spark/blob/f310f4fcc95580a6824bc7d22b76006f79b8804a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/DateTimeUtils.scala#L492
         //
         // For sub-second truncations (second, millisecond, microsecond), timezone
@@ -133,13 +133,13 @@ impl ScalarUDFImpl for SparkDateTrunc {
             // Sub-second truncations don't need timezone adjustment
             (_, "second" | "millisecond" | "microsecond") => ts_expr,
 
-            // Timestamp with timezone: convert to local time (applying session tz if needed)
-            (DataType::Timestamp(_, Some(_)), _) => {
-                let ts_with_tz = match &session_tz {
-                    Some(tz) => ts_expr.cast_to(
+            // Timestamp with timezone: convert to session timezone, strip timezone and convert back to original timezone
+            (DataType::Timestamp(unit, tz), _) => {
+                let ts_expr = match &session_tz {
+                    Some(session_tz) => ts_expr.cast_to(
                         &DataType::Timestamp(
                             TimeUnit::Microsecond,
-                            Some(Arc::from(tz.as_str())),
+                            Some(Arc::from(session_tz.as_str())),
                         ),
                         info.schema(),
                     )?,
@@ -147,8 +147,9 @@ impl ScalarUDFImpl for SparkDateTrunc {
                 };
                 Expr::ScalarFunction(ScalarFunction::new_udf(
                     datafusion_functions::datetime::to_local_time(),
-                    vec![ts_with_tz],
+                    vec![ts_expr],
                 ))
+                .cast_to(&DataType::Timestamp(*unit, tz.clone()), info.schema())?
             }
 
             // Timestamp without timezone: use as-is

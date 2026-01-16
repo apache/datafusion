@@ -138,7 +138,7 @@ SELECT date_trunc('test', '2015-03-05T09:32:05.123456');
 query P
 SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, Some("UTC"))'));
 ----
-2024-07-15T00:00:00
+2024-07-15T00:00:00Z
 
 query P
 SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, None)'));
@@ -153,7 +153,7 @@ SET datafusion.execution.time_zone = 'America/New_York';
 query P
 SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, Some("UTC"))'));
 ----
-2024-07-14T00:00:00
+2024-07-14T00:00:00Z
 
 query P
 SELECT date_trunc('DAY', arrow_cast(timestamp '2024-07-15T03:30:00', 'Timestamp(Microsecond, None)'));
