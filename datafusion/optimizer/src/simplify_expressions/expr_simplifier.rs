@@ -658,10 +658,9 @@ impl ConstEvaluator {
                     // when evaluating 0-row struct literals
                     if let Expr::Literal(ScalarValue::Struct(struct_array), _) =
                         expr.as_ref()
+                        && struct_array.len() == 0
                     {
-                        if struct_array.len() == 0 {
-                            return false;
-                        }
+                        return false;
                     }
                 }
                 true
