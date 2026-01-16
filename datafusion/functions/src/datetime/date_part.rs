@@ -73,7 +73,7 @@ use datafusion_macros::user_doc;
     - nanosecond
     - dow (day of the week where Sunday is 0)
     - doy (day of the year)
-    - epoch (seconds since Unix epoch)
+    - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
     - isodow (day of the week where Monday is 0)
 "#
     ),
@@ -352,6 +352,10 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
+    // Note: Month-to-second conversion uses 30 days as an approximation.
+    // This matches PostgreSQL's behavior for interval epoch extraction,
+    // but does not represent exact calendar months (which vary 28-31 days).
+    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
     const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
