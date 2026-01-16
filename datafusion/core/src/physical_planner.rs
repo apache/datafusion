@@ -886,7 +886,11 @@ impl DefaultPhysicalPlanner {
 
                 let can_repartition = !groups.is_empty()
                     && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_aggregations();
+                    && session_state.config().repartition_aggregations()
+                    && has_sufficient_size_for_repartition(
+                        initial_aggr.input(),
+                        session_state,
+                    )?;
 
                 // Some aggregators may be modified during initialization for
                 // optimization purposes. For example, a FIRST_VALUE may turn
@@ -1673,6 +1677,29 @@ impl DefaultPhysicalPlanner {
             ))
         }
     }
+}
+
+fn has_sufficient_size_for_repartition(
+    input: &Arc<dyn ExecutionPlan>,
+    session_state: &SessionState,
+) -> Result<bool> {
+    let stats = match input.partition_statistics(None) {
+        Ok(s) => s,
+        Err(_) => {
+            // Statistics unavailable; cannot verify min_size threshold
+            return Ok(false);
+        }
+    };
+
+    // Check if data size meets the minimum threshold
+    if let Some(total_bytes) = stats.total_byte_size.get_value().copied() {
+        let total_bytes = total_bytes as u64;
+        let min_bytes = session_state.config().repartition_file_min_size() as u64;
+        return Ok(total_bytes >= min_bytes);
+    }
+
+    // Byte statistics unavailable - cannot verify min_size threshold, so don't repartition
+    Ok(false)
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -3375,7 +3402,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hash_agg_group_by_partitioned() -> Result<()> {
+    async fn hash_agg_group_by_small_dataset() -> Result<()> {
         let logical_plan = test_csv_scan()
             .await?
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
@@ -3384,9 +3411,12 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // CSV files without byte statistics use Final mode (not FinalPartitioned)
+        // per the strict partitioning rule
+        assert!(
+            formatted.contains("mode: Final") || formatted.contains("mode: Single"),
+            "CSV dataset without byte statistics should use Final or Single mode, not FinalPartitioned"
+        );
 
         Ok(())
     }
@@ -3415,14 +3445,15 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // With the small-dataset optimization enabled, a tiny dictionary-encoded
+        // input should use a single-partition aggregate rather than a fully
+        // partitioned aggregate tree.
+        assert!(formatted.contains("mode: Single"));
         Ok(())
     }
 
     #[tokio::test]
-    async fn hash_agg_grouping_set_by_partitioned() -> Result<()> {
+    async fn hash_agg_grouping_set_small_dataset() -> Result<()> {
         let grouping_set_expr = Expr::GroupingSet(GroupingSet::GroupingSets(vec![
             vec![col("c1")],
             vec![col("c2")],
@@ -3436,9 +3467,45 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // With the small-dataset optimization, CSV files without byte statistics
+        // use Final mode instead of FinalPartitioned
+        assert!(formatted.contains("mode: Final"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_agg_repartition_file_min_size_config() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .with_repartition_aggregations(true)
+            .with_repartition_file_min_size(1);
+        let config = config.set_bool("datafusion.optimizer.skip_failed_rules", false);
+        let session_state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_runtime_env(runtime)
+            .with_default_features()
+            .build();
+
+        let logical_plan = test_csv_scan()
+            .await?
+            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+            .build()?;
+
+        let logical_plan = session_state.optimize(&logical_plan)?;
+        let planner = DefaultPhysicalPlanner::default();
+        let execution_plan = planner
+            .create_physical_plan(&logical_plan, &session_state)
+            .await?;
+        let formatted = format!("{execution_plan:?}");
+
+        // Even with repartition_file_min_size=1, CSV files without byte statistics
+        // cannot verify the threshold and thus will not be repartitioned
+        assert!(
+            formatted.contains("mode: Final") || formatted.contains("mode: Single"),
+            "CSV without byte statistics should not be repartitioned even with low threshold"
+        );
 
         Ok(())
     }
