@@ -25,7 +25,7 @@ use super::{
 use crate::extensions::Extensions;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{TableFunction, TableProvider};
 use datafusion::common::{
     DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
@@ -155,6 +155,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         &self,
         table_ref: &TableReference,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>>;
+
+    /// Retrieve a registered table function by name, if any.
+    ///
+    /// The default implementation returns `None`, allowing consumers that do
+    /// not support table functions to opt out.
+    fn get_table_function(&self, _name: &str) -> Option<Arc<TableFunction>> {
+        None
+    }
 
     // TODO: Remove these two methods
     //   Ideally, the abstract consumer should not place any constraints on implementations.
@@ -455,6 +463,10 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
         let schema = self.state.schema_for_ref(table_ref.clone())?;
         let table_provider = schema.table(&table).await?;
         Ok(table_provider)
+    }
+
+    fn get_table_function(&self, name: &str) -> Option<Arc<TableFunction>> {
+        self.state.table_functions().get(name).cloned()
     }
 
     fn get_extensions(&self) -> &Extensions {

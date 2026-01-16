@@ -15,5 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod constants;
 pub mod consumer;
 pub mod producer;
+pub mod table_function_extension;
+pub mod utils;
