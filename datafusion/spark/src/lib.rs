@@ -95,6 +95,7 @@
 //![`Expr`]: datafusion_expr::Expr
 
 pub mod function;
+pub mod planner;
 
 use datafusion_catalog::TableFunction;
 use datafusion_common::Result;

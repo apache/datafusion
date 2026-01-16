@@ -26,6 +26,7 @@ use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 
 pub use datafusion_common::hash_utils;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 pub use datafusion_common::utils::project_schema;
 pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -1395,6 +1396,30 @@ pub fn check_not_null_constraints(
     }
 
     Ok(batch)
+}
+
+/// Make plan ready to be re-executed returning its clone with state reset for all nodes.
+///
+/// Some plans will change their internal states after execution, making them unable to be executed again.
+/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
+///
+/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
+/// However, if the data of the left table is derived from the work table, it will become outdated
+/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
+///
+/// # Limitations
+///
+/// While this function enables plan reuse, it does not allow the same plan to be executed if it (OR):
+///
+/// * uses dynamic filters,
+/// * represents a recursive query.
+///
+pub fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    plan.transform_up(|plan| {
+        let new_plan = Arc::clone(&plan).reset_state()?;
+        Ok(Transformed::yes(new_plan))
+    })
+    .data()
 }
 
 /// Utility function yielding a string representation of the given [`ExecutionPlan`].
