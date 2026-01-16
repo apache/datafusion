@@ -420,7 +420,7 @@ fn build_join(
                     let in_predicate = conditions
                         .into_iter()
                         .reduce(|acc, cond| acc.and(cond))
-                        .unwrap_or(lit(true));
+                        .unwrap_or_else(|| lit(true));
 
                     in_predicate.and(join_filter)
                 } else {
@@ -481,7 +481,7 @@ fn build_join(
                     conditions
                         .into_iter()
                         .reduce(|acc, cond| acc.and(cond))
-                        .unwrap_or(lit(true))
+                        .unwrap_or_else(|| lit(true))
                 } else {
                     // Regular scalar function, handle as before
                     let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
