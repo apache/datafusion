@@ -175,6 +175,7 @@ env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }
 paste = { workspace = true }
+pretty_assertions = "1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
 recursive = { workspace = true }
