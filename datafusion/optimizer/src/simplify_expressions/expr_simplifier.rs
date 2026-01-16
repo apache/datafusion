@@ -5170,4 +5170,46 @@ mod tests {
             "Struct cast with different names but same field count should be simplified"
         );
     }
+
+    #[test]
+    fn test_struct_cast_empty_array_not_foldable() {
+        // Test that struct casts with 0-row (empty) struct arrays are NOT const-folded
+        // The simplifier uses a 1-row input batch, which causes dimension mismatches
+        // when evaluating 0-row struct literals
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        // Create a 0-row (empty) struct array
+        let arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ));
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should remain unchanged since the struct array is empty (0-row)
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        assert_eq!(
+            result, expr,
+            "Struct cast with empty (0-row) array should remain unchanged"
+        );
+    }
 }
