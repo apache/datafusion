@@ -69,13 +69,15 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMe
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {
     /// Execution partition index
-    pub partition_index: usize,
+    pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
     pub projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
     pub batch_size: usize,
     /// Optional limit on the number of rows to read
-    pub limit: Option<usize>,
+    pub(crate) limit: Option<usize>,
+    /// If should keep the output rows in order
+    pub preserve_order: bool,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Table schema, including partition columns.
@@ -281,6 +283,8 @@ impl FileOpener for ParquetOpener {
         let max_predicate_cache_size = self.max_predicate_cache_size;
 
         let reverse_row_groups = self.reverse_row_groups;
+        let preserve_order = self.preserve_order;
+
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
             let file_decryption_properties = encryption_context
@@ -549,11 +553,15 @@ impl FileOpener for ParquetOpener {
                     .add_matched(n_remaining_row_groups);
             }
 
-            let mut access_plan = row_groups.build();
+            // Prune by limit if limit is set and limit order is not sensitive
+            if let (Some(limit), false) = (limit, preserve_order) {
+                row_groups.prune_by_limit(limit, rg_metadata, &file_metrics);
+            }
 
             // --------------------------------------------------------
             // Step: prune pages from the kept row groups
             //
+            let mut access_plan = row_groups.build();
             // page index pruning: if all data on individual pages can
             // be ruled using page metadata, rows from other columns
             // with that range can be skipped as well
@@ -1056,6 +1064,7 @@ mod test {
         max_predicate_cache_size: Option<usize>,
         reverse_row_groups: bool,
         reverse_pages: bool,
+        preserve_order: bool,
     }
 
     impl ParquetOpenerBuilder {
@@ -1082,6 +1091,7 @@ mod test {
                 max_predicate_cache_size: None,
                 reverse_row_groups: false,
                 reverse_pages: false,
+                preserve_order: false,
             }
         }
 
@@ -1196,6 +1206,7 @@ mod test {
                 max_predicate_cache_size: self.max_predicate_cache_size,
                 reverse_row_groups: self.reverse_row_groups,
                 reverse_pages: self.reverse_pages,
+                preserve_order: self.preserve_order,
             }
         }
     }

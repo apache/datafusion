@@ -936,6 +936,57 @@ SELECT extract(second from arrow_cast(NULL, 'Interval(MonthDayNano)'))
 ----
 NULL
 
+# extract epoch from intervals
+query R
+SELECT extract(epoch from interval '15 minutes')
+----
+900
+
+query R
+SELECT extract(epoch from interval '1 hour')
+----
+3600
+
+query R
+SELECT extract(epoch from interval '1 day')
+----
+86400
+
+query R
+SELECT extract(epoch from interval '1 month')
+----
+2592000
+
+query R
+SELECT extract(epoch from arrow_cast('3 days', 'Interval(DayTime)'))
+----
+259200
+
+query R
+SELECT extract(epoch from arrow_cast('100 milliseconds', 'Interval(MonthDayNano)'))
+----
+0.1
+
+query R
+SELECT extract(epoch from arrow_cast('500 microseconds', 'Interval(MonthDayNano)'))
+----
+0.0005
+
+query R
+SELECT extract(epoch from arrow_cast('2500 nanoseconds', 'Interval(MonthDayNano)'))
+----
+0.0000025
+
+query R
+SELECT extract(epoch from arrow_cast('1 month 2 days 500 milliseconds', 'Interval(MonthDayNano)'))
+----
+2764800.5
+
+query R
+SELECT extract(epoch from arrow_cast('2 months', 'Interval(YearMonth)'))
+----
+5184000
+
 statement ok
 create table t (id int, i interval) as values
   (0, interval '5 months 1 day 10 nanoseconds'),
