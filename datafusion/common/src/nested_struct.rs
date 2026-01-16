@@ -50,13 +50,6 @@ use std::{collections::HashSet, sync::Arc};
 ///
 /// # Errors
 /// Returns a `DataFusionError::Plan` if the source column is not a struct type
-///
-/// # Note on Null Handling
-/// This function includes a check for all-null source columns  that may
-/// seem redundant if only called from `cast_column`. However, this check is **necessary**
-/// if `cast_struct_column` is called directly from other code paths (e.g., custom
-/// execution plans or PhysicalExpr implementations), to ensure correct handling of NULL
-/// columns without cascading errors or type mismatches.
 fn cast_struct_column(
     source_col: &ArrayRef,
     target_fields: &[Arc<Field>],
@@ -185,15 +178,6 @@ pub fn cast_column(
 ) -> Result<ArrayRef> {
     match target_field.data_type() {
         Struct(target_fields) => {
-            if source_col.data_type() == &DataType::Null
-                || (!source_col.is_empty() && source_col.null_count() == source_col.len())
-            {
-                return Ok(new_null_array(
-                    &Struct(target_fields.to_vec().into()),
-                    source_col.len(),
-                ));
-            }
-
             cast_struct_column(source_col, target_fields, cast_options)
         }
         _ => Ok(cast_with_options(
