@@ -446,10 +446,11 @@ impl ProjectionExprs {
         }
 
         // Add columns needed by non-beneficial expressions (if not already present)
+        // Build mapping from input column index -> inner projection index
         let mut col_index_to_inner: IndexMap<usize, usize> = IndexMap::new();
-        for (proj, _) in &classifications {
+        for (proj_idx, (proj, _)) in classifications.iter().enumerate() {
             if let Some(col) = proj.expr.as_any().downcast_ref::<Column>()
-                && let Some(&inner_idx) = original_to_inner.get(&col.index())
+                && let Some(&inner_idx) = original_to_inner.get(&proj_idx)
             {
                 col_index_to_inner.insert(col.index(), inner_idx);
             }
