@@ -36,7 +36,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_expr::logical_plan::JoinType;
+use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
@@ -1312,7 +1312,7 @@ pub fn ensure_distribution(
                 if exprs.iter().any(|expr| {
                     expr.as_any()
                         .downcast_ref::<Column>()
-                        .is_some_and(|col| col.name() == "__grouping_id")
+                        .is_some_and(|col| col.name() == Aggregate::INTERNAL_GROUPING_ID)
                 })
             );
 
