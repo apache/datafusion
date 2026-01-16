@@ -45,9 +45,11 @@ pub struct ParquetFileMetrics {
     pub files_ranges_pruned_statistics: PruningMetrics,
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
-    /// Number of row groups whose bloom filters were checked, tracked with matched/pruned counts
+    /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_bloom_filter: PruningMetrics,
-    /// Number of row groups whose statistics were checked, tracked with matched/pruned counts
+    /// Number of row groups pruned due to limit pruning.
+    pub limit_pruned_row_groups: PruningMetrics,
+    /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: PruningMetrics,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
@@ -98,6 +100,11 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("row_groups_pruned_bloom_filter", partition);
+
+        let limit_pruned_row_groups = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .pruning_metrics("limit_pruned_row_groups", partition);
 
         let row_groups_pruned_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -173,6 +180,7 @@ impl ParquetFileMetrics {
             predicate_evaluation_errors,
             row_groups_pruned_bloom_filter,
             row_groups_pruned_statistics,
+            limit_pruned_row_groups,
             bytes_scanned,
             pushdown_rows_pruned,
             pushdown_rows_matched,

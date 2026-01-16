@@ -26,8 +26,7 @@ use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::coalesce::LimitedBatchCoalescer;
-use crate::coalesce::PushBatchStatus::LimitReached;
+use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::common::can_project;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
@@ -615,6 +614,19 @@ impl ExecutionPlan for FilterExec {
             fetch,
         }))
     }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.input
+            .with_preserve_order(preserve_order)
+            .and_then(|new_input| {
+                Arc::new(self.clone())
+                    .with_new_children(vec![new_input])
+                    .ok()
+            })
+    }
 }
 
 impl EmbeddedProjection for FilterExec {
@@ -711,23 +723,6 @@ impl FilterExecMetrics {
     }
 }
 
-impl FilterExecStream {
-    fn flush_remaining_batches(
-        &mut self,
-    ) -> Poll<Option<std::result::Result<RecordBatch, DataFusionError>>> {
-        // Flush any remaining buffered batch
-        match self.batch_coalescer.finish() {
-            Ok(()) => {
-                Poll::Ready(self.batch_coalescer.next_completed_batch().map(|batch| {
-                    self.metrics.selectivity.add_part(batch.num_rows());
-                    Ok(batch)
-                }))
-            }
-            Err(e) => Poll::Ready(Some(Err(e))),
-        }
-    }
-}
-
 pub fn batch_filter(
     batch: &RecordBatch,
     predicate: &Arc<dyn PhysicalExpr>,
@@ -767,10 +762,26 @@ impl Stream for FilterExecStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll;
         let elapsed_compute = self.metrics.baseline_metrics.elapsed_compute().clone();
         loop {
+            // If there is a completed batch ready, return it
+            if let Some(batch) = self.batch_coalescer.next_completed_batch() {
+                self.metrics.selectivity.add_part(batch.num_rows());
+                let poll = Poll::Ready(Some(Ok(batch)));
+                return self.metrics.baseline_metrics.record_poll(poll);
+            }
+
+            if self.batch_coalescer.is_finished() {
+                // If input is done and no batches are ready, return None to signal end of stream.
+                return Poll::Ready(None);
+            }
+
+            // Attempt to pull the next batch from the input stream.
             match ready!(self.input.poll_next_unpin(cx)) {
+                None => {
+                    self.batch_coalescer.finish()?;
+                    // continue draining the coalescer
+                }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
                     let status = self.predicate.as_ref()
@@ -802,37 +813,22 @@ impl Stream for FilterExecStream {
                         })?;
                     timer.done();
 
-                    if let LimitReached = status {
-                        poll = self.flush_remaining_batches();
-                        break;
+                    match status {
+                        PushBatchStatus::Continue => {
+                            // Keep pushing more batches
+                        }
+                        PushBatchStatus::LimitReached => {
+                            // limit was reached, so stop early
+                            self.batch_coalescer.finish()?;
+                            // continue draining the coalescer
+                        }
                     }
+                }
 
-                    if let Some(batch) = self.batch_coalescer.next_completed_batch() {
-                        self.metrics.selectivity.add_part(batch.num_rows());
-                        poll = Poll::Ready(Some(Ok(batch)));
-                        break;
-                    }
-                    continue;
-                }
-                None => {
-                    // Flush any remaining buffered batch
-                    match self.batch_coalescer.finish() {
-                        Ok(()) => {
-                            poll = self.flush_remaining_batches();
-                        }
-                        Err(e) => {
-                            poll = Poll::Ready(Some(Err(e)));
-                        }
-                    }
-                    break;
-                }
-                value => {
-                    poll = Poll::Ready(value);
-                    break;
-                }
+                // Error case
+                other => return Poll::Ready(other),
             }
         }
-        self.metrics.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

@@ -281,3 +281,7 @@ name = "spm"
 harness = false
 name = "preserve_file_partitioning"
 required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "reset_plan_states"
