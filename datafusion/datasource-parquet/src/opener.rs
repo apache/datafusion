@@ -47,7 +47,7 @@ use datafusion_physical_expr_common::physical_expr::{
     PhysicalExpr, is_dynamic_physical_expr,
 };
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
 use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
 
@@ -682,15 +682,15 @@ impl FileOpener for ParquetOpener {
 /// arrow-rs parquet reader) to the parquet file metrics for DataFusion
 fn copy_arrow_reader_metrics(
     arrow_reader_metrics: &ArrowReaderMetrics,
-    predicate_cache_inner_records: &Count,
-    predicate_cache_records: &Count,
+    predicate_cache_inner_records: &Gauge,
+    predicate_cache_records: &Gauge,
 ) {
     if let Some(v) = arrow_reader_metrics.records_read_from_inner() {
-        predicate_cache_inner_records.add(v);
+        predicate_cache_inner_records.set(v);
     }
 
     if let Some(v) = arrow_reader_metrics.records_read_from_cache() {
-        predicate_cache_records.add(v);
+        predicate_cache_records.set(v);
     }
 }
 
