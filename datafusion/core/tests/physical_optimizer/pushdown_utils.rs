@@ -112,8 +112,7 @@ pub struct TestSource {
 
 impl TestSource {
     pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
-        let table_schema =
-            datafusion_datasource::TableSchema::new(schema, vec![]);
+        let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),

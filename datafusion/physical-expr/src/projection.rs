@@ -129,6 +129,49 @@ pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
 }
 
+/// Classification of how beneficial a projection expression is for pushdown.
+///
+/// This is used to determine whether an expression should be pushed down
+/// below other operators in the query plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushdownBenefit {
+    /// Field accessors - reduce data size, should be pushed down.
+    /// Examples: `struct_col['field']`, nested field access.
+    Beneficial,
+    /// Column references - neutral, can be pushed if needed.
+    /// Examples: `col_a`, `col_b@1`
+    Neutral,
+    /// Literals and computed expressions - add data, should NOT be pushed down.
+    /// Examples: `42`, `'hello'`, `a + b`
+    NonBeneficial,
+}
+
+/// Result of splitting a projection for optimized pushdown.
+///
+/// When a projection contains a mix of beneficial and non-beneficial expressions,
+/// we can split it into two projections:
+/// - `inner`: Pushed down below operators (contains beneficial exprs + needed columns)
+/// - `outer`: Stays above operators (references inner outputs + adds non-beneficial exprs)
+///
+/// Example:
+/// ```text
+/// -- Original:
+/// Projection: struct['a'] AS f1, 42 AS const, col_b
+///   FilterExec: predicate
+///
+/// -- After splitting:
+/// Projection: f1, 42 AS const, col_b       <- outer (keeps literal, refs inner)
+///   Projection: struct['a'] AS f1, col_b   <- inner (pushed down)
+///     FilterExec: predicate
+/// ```
+#[derive(Debug, Clone)]
+pub struct ProjectionSplit {
+    /// The inner projection to be pushed down (beneficial exprs + columns needed by outer)
+    pub inner: ProjectionExprs,
+    /// The outer projection to keep above (refs to inner outputs + non-beneficial exprs)
+    pub outer: ProjectionExprs,
+}
+
 impl std::fmt::Display for ProjectionExprs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let exprs: Vec<String> = self.exprs.iter().map(|e| e.to_string()).collect();
@@ -237,6 +280,239 @@ impl ProjectionExprs {
     /// Checks if all of the projection expressions are trivial.
     pub fn is_trivial(&self) -> bool {
         self.exprs.iter().all(|p| p.expr.is_trivial())
+    }
+
+    /// Classifies a single expression for pushdown benefit.
+    ///
+    /// - Literals are `NonBeneficial` (they add data)
+    /// - Non-trivial expressions are `NonBeneficial` (they add computation)
+    /// - Column references are `Neutral` (no cost/benefit)
+    /// - Trivial non-column expressions (e.g., field accessors) are `Beneficial`
+    fn classify_expr(expr: &Arc<dyn PhysicalExpr>) -> PushdownBenefit {
+        // Literals add data size downstream - don't push
+        if expr.as_any().is::<Literal>() {
+            return PushdownBenefit::NonBeneficial;
+        }
+        // Column references are neutral
+        if expr.as_any().is::<Column>() {
+            return PushdownBenefit::Neutral;
+        }
+
+        if expr.is_trivial() {
+            // Trivial non-column expressions (field accessors) reduce data - push
+            PushdownBenefit::Beneficial
+        } else {
+            // Any other expression is considered non-beneficial
+            PushdownBenefit::NonBeneficial
+        }
+    }
+
+    /// Check if this projection benefits from being pushed down lower in the plan.
+    ///
+    /// The goal is to push down projections that reduce the amount of data processed
+    /// by subsequent operations and are "compute neutral" (i.e., do not add computation overhead).
+    ///
+    /// Some "compute neutral" projections include:
+    /// - Dropping unneeded columns (e.g., `SELECT a, b` from `a, b, c`). Subsequent filters or joins
+    ///   now process fewer columns.
+    /// - Struct field access (e.g., `SELECT struct_col.field1 AS f1`). This reduces the data size
+    ///   processed downstream and is a cheap reference / metadata only clone of the inner array.
+    ///
+    /// Examples of projections that do NOT benefit from pushdown:
+    /// - Literal projections (e.g., `SELECT 42 AS const_col`). These add constant columns
+    ///   that increase data size downstream.
+    /// - Computed expressions (e.g., `SELECT a + b AS sum_ab`). These add computation overhead
+    ///   and may increase data size downstream, so they should be applied after filters or joins.
+    pub fn benefits_from_pushdown(&self) -> bool {
+        // All expressions must be trivial for pushdown to be beneficial
+        if !self.is_trivial() {
+            // Contains computed expressions, function calls, etc. - do not push down
+            return false;
+        }
+
+        // Check if all expressions are just columns or literals (no field accessors)
+        // If so, there's no benefit to pushing down because:
+        // - Columns are just references (no data reduction)
+        // - Literals add data (definitely don't want to push down)
+        let all_columns_or_literals = self
+            .exprs
+            .iter()
+            .all(|p| p.expr.as_any().is::<Column>() || p.expr.as_any().is::<Literal>());
+
+        // Only benefit from pushdown if we have field accessors (or other beneficial trivial exprs)
+        !all_columns_or_literals
+    }
+
+    /// Attempts to split this projection into beneficial and non-beneficial parts.
+    ///
+    /// When a projection contains both beneficial expressions (field accessors) and
+    /// non-beneficial expressions (literals), this method splits it so that the
+    /// beneficial parts can be pushed down while non-beneficial parts stay above.
+    ///
+    /// # Returns
+    /// - `Ok(Some(split))` - The projection was split successfully
+    /// - `Ok(None)` - No split needed (all expressions are the same category)
+    ///
+    /// # Arguments
+    /// * `input_schema` - The schema of the input to this projection
+    pub fn split_for_pushdown(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<ProjectionSplit>> {
+        // Classify all expressions
+        let classifications: Vec<_> = self
+            .exprs
+            .iter()
+            .map(|p| (p, Self::classify_expr(&p.expr)))
+            .collect();
+
+        let has_beneficial = classifications
+            .iter()
+            .any(|(_, c)| *c == PushdownBenefit::Beneficial);
+        let has_non_beneficial = classifications
+            .iter()
+            .any(|(_, c)| *c == PushdownBenefit::NonBeneficial);
+
+        // If no beneficial expressions, nothing to push down
+        if !has_beneficial {
+            return Ok(None);
+        }
+
+        // If no non-beneficial expressions, push the entire projection (no split needed)
+        if !has_non_beneficial {
+            return Ok(None);
+        }
+
+        // We need to split: beneficial + columns needed by non-beneficial go to inner,
+        // references to inner + non-beneficial expressions go to outer
+
+        // Collect columns needed by non-beneficial expressions
+        let mut columns_needed_by_outer: HashSet<usize> = HashSet::new();
+        for (proj, class) in &classifications {
+            if *class == PushdownBenefit::NonBeneficial {
+                for col in collect_columns(&proj.expr) {
+                    columns_needed_by_outer.insert(col.index());
+                }
+            }
+        }
+
+        // Build inner projection: beneficial exprs + columns needed by outer
+        let mut inner_exprs: Vec<ProjectionExpr> = Vec::new();
+        // Track where each original expression ends up in inner projection
+        // Maps original index -> inner index (if it goes to inner)
+        let mut original_to_inner: IndexMap<usize, usize> = IndexMap::new();
+
+        // First add beneficial expressions
+        for (orig_idx, (proj, class)) in classifications.iter().enumerate() {
+            if *class == PushdownBenefit::Beneficial || *class == PushdownBenefit::Neutral
+            {
+                original_to_inner.insert(orig_idx, inner_exprs.len());
+                inner_exprs.push((*proj).clone());
+            }
+        }
+
+        // Add columns needed by non-beneficial expressions (if not already present)
+        let mut col_index_to_inner: IndexMap<usize, usize> = IndexMap::new();
+        for (proj, _) in &classifications {
+            if let Some(col) = proj.expr.as_any().downcast_ref::<Column>() {
+                if let Some(&inner_idx) = original_to_inner.get(&col.index()) {
+                    col_index_to_inner.insert(col.index(), inner_idx);
+                }
+            }
+        }
+
+        // Track columns we need to add to inner for outer's non-beneficial exprs
+        for col_idx in &columns_needed_by_outer {
+            if !col_index_to_inner.contains_key(col_idx) {
+                // Add this column to inner
+                let field = input_schema.field(*col_idx);
+                let col_expr = ProjectionExpr::new(
+                    Arc::new(Column::new(field.name(), *col_idx)),
+                    field.name().clone(),
+                );
+                col_index_to_inner.insert(*col_idx, inner_exprs.len());
+                inner_exprs.push(col_expr);
+            }
+        }
+
+        // Build inner schema (for rewriting outer expressions)
+        let inner_schema = self.build_schema_for_exprs(&inner_exprs, input_schema)?;
+
+        // Build outer projection: references to inner outputs + non-beneficial exprs
+        let mut outer_exprs: Vec<ProjectionExpr> = Vec::new();
+
+        for (orig_idx, (proj, class)) in classifications.iter().enumerate() {
+            match class {
+                PushdownBenefit::Beneficial | PushdownBenefit::Neutral => {
+                    // Reference the inner projection output
+                    let inner_idx = original_to_inner[&orig_idx];
+                    let col_expr = ProjectionExpr::new(
+                        Arc::new(Column::new(&proj.alias, inner_idx)),
+                        proj.alias.clone(),
+                    );
+                    outer_exprs.push(col_expr);
+                }
+                PushdownBenefit::NonBeneficial => {
+                    // Keep the expression but rewrite column references to point to inner
+                    let rewritten_expr = self.rewrite_columns_for_inner(
+                        &proj.expr,
+                        &col_index_to_inner,
+                        &inner_schema,
+                    )?;
+                    outer_exprs
+                        .push(ProjectionExpr::new(rewritten_expr, proj.alias.clone()));
+                }
+            }
+        }
+
+        Ok(Some(ProjectionSplit {
+            inner: ProjectionExprs::new(inner_exprs),
+            outer: ProjectionExprs::new(outer_exprs),
+        }))
+    }
+
+    /// Helper to build a schema from projection expressions
+    fn build_schema_for_exprs(
+        &self,
+        exprs: &[ProjectionExpr],
+        input_schema: &Schema,
+    ) -> Result<Schema> {
+        let fields: Result<Vec<Field>> = exprs
+            .iter()
+            .map(|p| {
+                let field = p.expr.return_field(input_schema)?;
+                Ok(Field::new(
+                    &p.alias,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                ))
+            })
+            .collect();
+        Ok(Schema::new(fields?))
+    }
+
+    /// Rewrite column references in an expression to point to inner projection outputs
+    fn rewrite_columns_for_inner(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        col_index_to_inner: &IndexMap<usize, usize>,
+        inner_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        expr.clone()
+            .transform(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    if let Some(&inner_idx) = col_index_to_inner.get(&col.index()) {
+                        let inner_field = inner_schema.field(inner_idx);
+                        return Ok(Transformed::yes(Arc::new(Column::new(
+                            inner_field.name(),
+                            inner_idx,
+                        ))
+                            as Arc<dyn PhysicalExpr>));
+                    }
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
     }
 
     /// Creates a ProjectionMapping from this projection

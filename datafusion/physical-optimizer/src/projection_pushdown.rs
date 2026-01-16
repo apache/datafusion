@@ -76,6 +76,11 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             })
             .map(|t| t.data)?;
 
+        // First, try to split mixed projections (beneficial + non-beneficial expressions)
+        // This allows the beneficial parts to be pushed down while keeping non-beneficial parts above.
+        let plan = plan.transform_down(try_split_projection).map(|t| t.data)?;
+
+        // Then apply the normal projection pushdown logic
         plan.transform_down(remove_unnecessary_projections).data()
     }
 
@@ -86,6 +91,44 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Tries to split a projection that contains a mix of beneficial and non-beneficial expressions.
+///
+/// Beneficial expressions (like field accessors) should be pushed down, while non-beneficial
+/// expressions (like literals) should stay above. This function splits the projection into
+/// two parts:
+/// - Inner projection: Contains beneficial expressions + columns needed by outer
+/// - Outer projection: Contains references to inner + non-beneficial expressions
+///
+/// This enables the inner projection to be pushed down while the outer stays in place.
+fn try_split_projection(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let input_schema = projection.input().schema();
+    let split = projection
+        .projection_expr()
+        .split_for_pushdown(input_schema.as_ref())?;
+
+    let Some(split) = split else {
+        // No split needed - either all beneficial (push whole thing) or all non-beneficial (don't push)
+        return Ok(Transformed::no(plan));
+    };
+
+    // Create the inner projection (to be pushed down)
+    let inner = ProjectionExec::try_new(
+        split.inner.as_ref().to_vec(),
+        Arc::clone(projection.input()),
+    )?;
+
+    // Create the outer projection (stays above)
+    let outer = ProjectionExec::try_new(split.outer.as_ref().to_vec(), Arc::new(inner))?;
+
+    Ok(Transformed::yes(Arc::new(outer)))
 }
 
 /// Tries to push down parts of the filter.
