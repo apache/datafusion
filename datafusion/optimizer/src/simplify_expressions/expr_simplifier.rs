@@ -18,7 +18,7 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{AsArray, new_null_array},
+    array::{Array, AsArray, new_null_array},
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -651,6 +651,17 @@ impl ConstEvaluator {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
                         return false;
+                    }
+
+                    // Don't const-fold struct casts with empty (0-row) literals
+                    // The simplifier uses a 1-row input batch, which causes dimension mismatches
+                    // when evaluating 0-row struct literals
+                    if let Expr::Literal(ScalarValue::Struct(struct_array), _) =
+                        expr.as_ref()
+                    {
+                        if struct_array.len() == 0 {
+                            return false;
+                        }
                     }
                 }
                 true
@@ -5069,7 +5080,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+        let arrays: Vec<Arc<dyn Array>> = vec![
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
         ];
@@ -5109,7 +5120,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+        let arrays: Vec<Arc<dyn Array>> = vec![
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
         ];
@@ -5148,7 +5159,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+        let arrays: Vec<Arc<dyn Array>> = vec![
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
             Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
         ];
