@@ -108,6 +108,10 @@ impl TableProvider for StreamingTable {
                 create_physical_sort_exprs(&self.sort_order, &df_schema, eqp)?;
 
             if let Some(p) = projection {
+                // When performing a projection, the output columns will not match
+                // the original physical sort expression indices. Also the sort columns
+                // may not be in the output projection. To correct for these issues
+                // we need to project the ordering based on the output schema.
                 let schema = Arc::new(self.schema.project(p)?);
                 LexOrdering::new(original_sort_exprs)
                     .and_then(|lex_ordering| project_ordering(&lex_ordering, &schema))
