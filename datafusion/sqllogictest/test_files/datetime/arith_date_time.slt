@@ -113,4 +113,3 @@ SELECT '2001-09-28'::date / '03:00'::time
 
 query error Invalid timestamp arithmetic operation
 SELECT '2001-09-28'::date % '03:00'::time
-
