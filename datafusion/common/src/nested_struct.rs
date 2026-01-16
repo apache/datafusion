@@ -914,8 +914,7 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("target field 'b' is non-nullable but missing from source"),
-            "Unexpected error: {}",
-            err
+            "Unexpected error: {err}"
         );
     }
 
