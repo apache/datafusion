@@ -1,0 +1,178 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+# Tests for ROLLUP/CUBE/GROUPING SETS with multiple partitions
+#
+# This tests the fix for https://github.com/apache/datafusion/issues/19849
+# where ROLLUP queries produced incorrect results with multiple partitions
+# because subset partitioning satisfaction was incorrectly applied.
+#
+# The bug manifests when:
+# 1. UNION ALL of subqueries each with hash-partitioned aggregates
+# 2. Outer ROLLUP groups by more columns than inner hash partitioning
+# 3. InterleaveExec preserves the inner hash partitioning
+# 4. Optimizer incorrectly uses subset satisfaction, skipping necessary repartition
+#
+# The fix ensures that when hash partitioning includes __grouping_id,
+# subset satisfaction is disabled and proper RepartitionExec is inserted.
+##########
+
+##########
+# SETUP: Create partitioned parquet files to simulate distributed data
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_aggregations = true;
+
+# Create partition 1
+statement ok
+COPY (SELECT column1 as channel, column2 as brand, column3 as amount FROM (VALUES
+    ('store', 'nike', 100),
+    ('store', 'nike', 200),
+    ('store', 'adidas', 150)
+))
+TO 'test_files/scratch/grouping_set_repartition/part=1/data.parquet'
+STORED AS PARQUET;
+
+# Create partition 2
+statement ok
+COPY (SELECT column1 as channel, column2 as brand, column3 as amount FROM (VALUES
+    ('store', 'adidas', 250),
+    ('web', 'nike', 300),
+    ('web', 'nike', 400)
+))
+TO 'test_files/scratch/grouping_set_repartition/part=2/data.parquet'
+STORED AS PARQUET;
+
+# Create partition 3
+statement ok
+COPY (SELECT column1 as channel, column2 as brand, column3 as amount FROM (VALUES
+    ('web', 'adidas', 350),
+    ('web', 'adidas', 450),
+    ('catalog', 'nike', 500)
+))
+TO 'test_files/scratch/grouping_set_repartition/part=3/data.parquet'
+STORED AS PARQUET;
+
+# Create partition 4
+statement ok
+COPY (SELECT column1 as channel, column2 as brand, column3 as amount FROM (VALUES
+    ('catalog', 'nike', 600),
+    ('catalog', 'adidas', 550),
+    ('catalog', 'adidas', 650)
+))
+TO 'test_files/scratch/grouping_set_repartition/part=4/data.parquet'
+STORED AS PARQUET;
+
+# Create external table pointing to the partitioned data
+statement ok
+CREATE EXTERNAL TABLE sales (channel VARCHAR, brand VARCHAR, amount INT)
+STORED AS PARQUET
+PARTITIONED BY (part INT)
+LOCATION 'test_files/scratch/grouping_set_repartition/';
+
+##########
+# TEST 1: UNION ALL + ROLLUP pattern (similar to TPC-DS q14)
+# This query pattern triggers the subset satisfaction bug because:
+# - Each UNION ALL branch has hash partitioning on (brand)
+# - The outer ROLLUP requires hash partitioning on (channel, brand, __grouping_id)
+# - Without the fix, subset satisfaction incorrectly skips repartition
+##########
+
+query TTI rowsort
+SELECT channel, brand, SUM(total) as grand_total
+FROM (
+    SELECT 'store' as channel, brand, SUM(amount) as total
+    FROM sales WHERE channel = 'store'
+    GROUP BY brand
+    UNION ALL
+    SELECT 'web' as channel, brand, SUM(amount) as total
+    FROM sales WHERE channel = 'web'
+    GROUP BY brand
+    UNION ALL
+    SELECT 'catalog' as channel, brand, SUM(amount) as total
+    FROM sales WHERE channel = 'catalog'
+    GROUP BY brand
+) sub
+GROUP BY ROLLUP(channel, brand)
+ORDER BY channel NULLS FIRST, brand NULLS FIRST;
+----
+NULL NULL 4500
+catalog NULL 2300
+catalog adidas 1200
+catalog nike 1100
+store NULL 700
+store adidas 400
+store nike 300
+web NULL 1500
+web adidas 800
+web nike 700
+
+##########
+# TEST 2: Simple ROLLUP (baseline test)
+##########
+
+query TTI rowsort
+SELECT channel, brand, SUM(amount) as total
+FROM sales
+GROUP BY ROLLUP(channel, brand)
+ORDER BY channel NULLS FIRST, brand NULLS FIRST;
+----
+NULL NULL 4500
+catalog NULL 2300
+catalog adidas 1200
+catalog nike 1100
+store NULL 700
+store adidas 400
+store nike 300
+web NULL 1500
+web adidas 800
+web nike 700
+
+##########
+# TEST 3: Verify CUBE also works correctly
+##########
+
+query TTI rowsort
+SELECT channel, brand, SUM(amount) as total
+FROM sales
+GROUP BY CUBE(channel, brand)
+ORDER BY channel NULLS FIRST, brand NULLS FIRST;
+----
+NULL NULL 4500
+NULL adidas 2400
+NULL nike 2100
+catalog NULL 2300
+catalog adidas 1200
+catalog nike 1100
+store NULL 700
+store adidas 400
+store nike 300
+web NULL 1500
+web adidas 800
+web nike 700
+
+##########
+# CLEANUP
+##########
+
+statement ok
+DROP TABLE sales;
