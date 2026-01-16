@@ -98,10 +98,6 @@ impl PhysicalOptimizer {
             // as that rule may inject other operations in between the different AggregateExecs.
             // Applying the rule early means only directly-connected AggregateExecs must be examined.
             Arc::new(LimitedDistinctAggregation::new()),
-            // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
-            // in the prob side of hash joins. That way, the probe side gets eagerly polled before
-            // the build side is completely finished.
-            Arc::new(HashJoinBuffering::new()),
             // The FilterPushdown rule tries to push down filters as far as it can.
             // For example, it will push down filtering from a `FilterExec` to `DataSourceExec`.
             // Note that this does not push down dynamic filters (such as those created by a `SortExec` operator in TopK mode),
@@ -136,6 +132,10 @@ impl PhysicalOptimizer {
             // This can possibly be combined with [LimitPushdown]
             // It needs to come after [EnforceSorting]
             Arc::new(LimitPushPastWindows::new()),
+            // The HashJoinBuffering rule adds a BufferExec node with the configured capacity
+            // in the prob side of hash joins. That way, the probe side gets eagerly polled before
+            // the build side is completely finished.
+            Arc::new(HashJoinBuffering::new()),
             // The LimitPushdown rule tries to push limits down as far as possible,
             // replacing operators with fetching variants, or adding limits
             // past operators that support limit pushdown.
