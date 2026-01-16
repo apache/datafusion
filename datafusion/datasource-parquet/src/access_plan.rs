@@ -82,6 +82,10 @@ use parquet::file::metadata::RowGroupMetaData;
 /// └───────────────────┘
 ///  Row Group 3
 /// ```
+///
+/// For more background, please also see the [Embedding User-Defined Indexes in Apache Parquet Files blog]
+///
+/// [Embedding User-Defined Indexes in Apache Parquet Files blog]: https://datafusion.apache.org/blog/2025/07/14/user-defined-parquet-indexes
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParquetAccessPlan {
     /// How to access the i-th row group

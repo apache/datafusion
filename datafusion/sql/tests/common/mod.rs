@@ -227,6 +227,11 @@ impl ContextProvider for MockContextProvider {
                     false,
                 ),
             ])),
+            "@quoted_identifier_names_table" => Ok(Schema::new(vec![Field::new(
+                "@column",
+                DataType::UInt32,
+                false,
+            )])),
             _ => plan_err!("No table named: {} found", name.table()),
         };
 
@@ -244,8 +249,11 @@ impl ContextProvider for MockContextProvider {
         self.state.aggregate_functions.get(name).cloned()
     }
 
-    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
-        unimplemented!()
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        match variable_names {
+            [var] if var == "@variable" => Some(DataType::Date32),
+            _ => unimplemented!(),
+        }
     }
 
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>> {

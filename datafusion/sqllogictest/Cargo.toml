@@ -58,7 +58,7 @@ object_store = { workspace = true }
 postgres-types = { version = "0.2.11", features = ["derive", "with-chrono-0_4"], optional = true }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
-sqllogictest = "0.28.4"
+sqllogictest = "0.29.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["postgres"], optional = true }
