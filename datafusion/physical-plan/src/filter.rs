@@ -115,6 +115,18 @@ impl FilterExecBuilder {
         }
     }
 
+    /// Set the input execution plan
+    pub fn with_input(mut self, input: Arc<dyn ExecutionPlan>) -> Self {
+        self.input = input;
+        self
+    }
+
+    /// Set the predicate expression
+    pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
+        self.predicate = predicate;
+        self
+    }
+
     /// Set the projection, composing with any existing projection.
     ///
     /// If a projection is already set, the new projection indices are mapped
@@ -200,6 +212,23 @@ impl FilterExecBuilder {
     }
 }
 
+impl From<&FilterExec> for FilterExecBuilder {
+    fn from(exec: &FilterExec) -> Self {
+        Self {
+            predicate: Arc::clone(&exec.predicate),
+            input: Arc::clone(&exec.input),
+            projection: exec.projection.clone(),
+            default_selectivity: exec.default_selectivity,
+            batch_size: exec.batch_size,
+            fetch: exec.fetch,
+            // We could cache / copy over PlanProperties
+            // here but that would require invalidating them in FilterExecBuilder::apply_projection, etc.
+            // and currently every call to this method ends up invalidating them anyway.
+            // If useful this can be added in the future as a non-breaking change.
+        }
+    }
+}
+
 impl FilterExec {
     /// Create a FilterExec on an input using the builder pattern
     pub fn try_new(
@@ -232,17 +261,8 @@ impl FilterExec {
         note = "Use FilterExecBuilder::with_projection instead"
     )]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        // Check if the projection is valid against current output schema
-        can_project(&self.schema(), projection.as_ref())?;
-
-        // Builder's with_projection composes projections, so set existing first
-        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
-            .with_projection(self.projection.clone())
-            .with_projection(projection)
-            .with_default_selectivity(self.default_selectivity)
-            .with_batch_size(self.batch_size)
-            .with_fetch(self.fetch)
-            .build()
+        let builder = FilterExecBuilder::from(self);
+        builder.apply_projection(projection)?.build()
     }
 
     /// Set the batch size
@@ -479,11 +499,9 @@ impl ExecutionPlan for FilterExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        FilterExecBuilder::new(Arc::clone(&self.predicate), children.swap_remove(0))
-            .with_default_selectivity(self.default_selectivity())
-            .with_projection(self.projection().cloned())
-            .with_batch_size(self.batch_size)
-            .with_fetch(self.fetch)
+        let new_input = children.swap_remove(0);
+        FilterExecBuilder::from(&*self)
+            .with_input(new_input)
             .build()
             .map(|e| Arc::new(e) as _)
     }
@@ -551,13 +569,11 @@ impl ExecutionPlan for FilterExec {
             if let Some(new_predicate) =
                 update_expr(self.predicate(), projection.expr(), false)?
             {
-                return FilterExecBuilder::new(
-                    new_predicate,
-                    make_with_child(projection, self.input())?,
-                )
-                .with_default_selectivity(self.default_selectivity())
-                .build()
-                .map(|e| Some(Arc::new(e) as _));
+                return FilterExecBuilder::from(self)
+                    .with_input(make_with_child(projection, self.input())?)
+                    .with_predicate(new_predicate)
+                    .build()
+                    .map(|e| Some(Arc::new(e) as _));
             }
         }
         try_embed_projection(projection, self)
@@ -708,22 +724,8 @@ impl ExecutionPlan for FilterExec {
 
 impl EmbeddedProjection for FilterExec {
     fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        // Check if the projection is valid
-        can_project(&self.schema(), projection.as_ref())?;
-
-        let projection = match projection {
-            Some(projection) => match &self.projection {
-                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
-                None => Some(projection),
-            },
-            None => None,
-        };
-
-        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
-            .with_projection(projection)
-            .with_default_selectivity(self.default_selectivity)
-            .with_batch_size(self.batch_size)
-            .with_fetch(self.fetch)
+        FilterExecBuilder::from(self)
+            .apply_projection(projection)?
             .build()
     }
 }
