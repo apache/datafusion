@@ -343,6 +343,40 @@ impl ProjectionExprs {
         !all_columns_or_literals
     }
 
+    /// Determines whether this projection should be pushed through an operator.
+    ///
+    /// A projection should be pushed through when it is:
+    /// 1. Trivial (no expensive computations to duplicate)
+    /// 2. AND provides some benefit:
+    ///    - Either narrows the schema (fewer output columns than input columns)
+    ///    - Or has beneficial expressions like field accessors that reduce data size
+    ///    - Or has literal expressions that can be absorbed by the datasource
+    ///
+    /// Column-only projections that just rename without narrowing the schema are NOT
+    /// pushed through, as they provide no benefit.
+    ///
+    /// # Arguments
+    /// * `input_field_count` - Number of fields in the input schema
+    pub fn should_push_through_operator(&self, input_field_count: usize) -> bool {
+        // Must be trivial (no expensive computations)
+        if !self.is_trivial() {
+            return false;
+        }
+
+        // Must provide some benefit:
+        // - Either narrows schema (fewer output columns than input columns)
+        // - Or has field accessors that reduce data size
+        // - Or has literals that can be absorbed by datasource
+        let narrows_schema = self.exprs.len() < input_field_count;
+        let has_beneficial_exprs = self.benefits_from_pushdown();
+        let has_literals = self
+            .exprs
+            .iter()
+            .any(|p| p.expr.as_any().is::<Literal>());
+
+        narrows_schema || has_beneficial_exprs || has_literals
+    }
+
     /// Attempts to split this projection into beneficial and non-beneficial parts.
     ///
     /// When a projection contains both beneficial expressions (field accessors) and
