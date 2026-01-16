@@ -81,6 +81,23 @@ SELECT date_part('year', ts_nano_no_tz), date_part('year', ts_nano_utc), date_pa
 2020 2020 2019 2020 2020 2019
 2020 2020 2019 2020 2020 2019
 
+# date_part (isoyear) with columns and explicit timestamp
+query IIIIII
+SELECT date_part('isoyear', ts_nano_no_tz), date_part('isoyear', ts_nano_utc), date_part('isoyear', ts_nano_eastern), date_part('isoyear', ts_milli_no_tz), date_part('isoyear', ts_milli_utc), date_part('isoyear', ts_milli_eastern)  FROM source_ts;
+----
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+2020 2020 2020 2020 2020 2020
+
+
 # date_part (month)
 query IIIIII
 SELECT date_part('month', ts_nano_no_tz), date_part('month', ts_nano_utc), date_part('month', ts_nano_eastern), date_part('month', ts_milli_no_tz), date_part('month', ts_milli_utc), date_part('month', ts_milli_eastern)  FROM source_ts;
@@ -225,6 +242,26 @@ SELECT EXTRACT("year" FROM  timestamp '2020-09-08T12:00:00+00:00')
 
 query I
 SELECT EXTRACT('year' FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query I
+SELECT date_part('ISOYEAR', CAST('2000-01-01' AS DATE))
+----
+1999
+
+query I
+SELECT EXTRACT(isoyear FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query I
+SELECT EXTRACT("isoyear" FROM  timestamp '2020-09-08T12:00:00+00:00')
+----
+2020
+
+query I
+SELECT EXTRACT('isoyear' FROM  timestamp '2020-09-08T12:00:00+00:00')
 ----
 2020
 
@@ -865,8 +902,14 @@ SELECT extract(month from arrow_cast('20 months', 'Interval(YearMonth)'))
 ----
 8
 
+query error DataFusion error: Arrow error: Compute error: YearISO does not support: Interval\(YearMonth\)
+SELECT extract(isoyear from arrow_cast('10 years', 'Interval(YearMonth)'))
+
 query error DataFusion error: Arrow error: Compute error: Year does not support: Interval\(DayTime\)
 SELECT extract(year from arrow_cast('10 days', 'Interval(DayTime)'))
+
+query error DataFusion error: Arrow error: Compute error: YearISO does not support: Interval\(DayTime\)
+SELECT extract(isoyear from arrow_cast('10 days', 'Interval(DayTime)'))
 
 query error DataFusion error: Arrow error: Compute error: Month does not support: Interval\(DayTime\)
 SELECT extract(month from arrow_cast('10 days', 'Interval(DayTime)'))
@@ -1062,6 +1105,9 @@ SELECT extract(month from arrow_cast(864000, 'Duration(Second)'))
 query error DataFusion error: Arrow error: Compute error: Year does not support: Duration\(s\)
 SELECT extract(year from arrow_cast(864000, 'Duration(Second)'))
 
+query error DataFusion error: Arrow error: Compute error: YearISO does not support: Duration\(s\)
+SELECT extract(isoyear from arrow_cast(864000, 'Duration(Second)'))
+
 query I
 SELECT extract(day from arrow_cast(NULL, 'Duration(Second)'))
 ----
@@ -1071,6 +1117,11 @@ NULL
 
 query B
 SELECT (date_part('year', now()) = EXTRACT(year FROM now()))
+----
+true
+
+query B
+SELECT (date_part('isoyear', now()) = EXTRACT(isoyear FROM now()))
 ----
 true
 
