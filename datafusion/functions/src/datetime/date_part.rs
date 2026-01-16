@@ -26,13 +26,16 @@ use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
+};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
     Result, ScalarValue,
     cast::{
-        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
+        as_interval_mdn_array, as_interval_ym_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
@@ -56,7 +59,7 @@ use datafusion_macros::user_doc;
     argument(
         name = "part",
         description = r#"Part of the date to return. The following date parts are supported:
-        
+
     - year
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
@@ -70,7 +73,7 @@ use datafusion_macros::user_doc;
     - nanosecond
     - dow (day of the week where Sunday is 0)
     - doy (day of the year)
-    - epoch (seconds since Unix epoch)
+    - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
     - isodow (day of the week where Monday is 0)
 "#
     ),
@@ -349,6 +352,11 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
+    // Note: Month-to-second conversion uses 30 days as an approximation.
+    // This matches PostgreSQL's behavior for interval epoch extraction,
+    // but does not represent exact calendar months (which vary 28-31 days).
+    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
+    const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
         Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
@@ -373,7 +381,19 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        Interval(_) | Duration(_) => return seconds(array, Second),
+        Interval(ArrowIntervalUnit::YearMonth) => as_interval_ym_array(array)?
+            .unary(|x| x as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY),
+        Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?.unary(|x| {
+            x.days as f64 * SECONDS_IN_A_DAY + x.milliseconds as f64 / 1_000_f64
+        }),
+        Interval(ArrowIntervalUnit::MonthDayNano) => {
+            as_interval_mdn_array(array)?.unary(|x| {
+                x.months as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY
+                    + x.days as f64 * SECONDS_IN_A_DAY
+                    + x.nanoseconds as f64 / 1_000_000_000_f64
+            })
+        }
+        Duration(_) => return seconds(array, Second),
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))
