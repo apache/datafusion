@@ -2519,6 +2519,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -2531,7 +2532,7 @@ date_part(part, expression)
   - nanosecond
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
-  - epoch (seconds since Unix epoch)
+  - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
