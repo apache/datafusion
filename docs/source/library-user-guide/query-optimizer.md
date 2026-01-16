@@ -25,11 +25,12 @@ format.
 DataFusion has modular design, allowing individual crates to be re-used in other projects.
 
 This crate is a submodule of DataFusion that provides a query optimizer for logical plans, and
-contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRules`] that may rewrite the plan and/or its expressions so
+contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRule`]s that may rewrite the plan and/or its expressions so
 they execute more quickly while still computing the same result.
 
 [`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
-[`physicaloptimizerrules`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
+[`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html
+[`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
 
@@ -75,7 +76,7 @@ Please refer to the
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
-`OptimizerRule` transforms one ['LogicalPlan'] into another which
+`OptimizerRule` transforms one [`LogicalPlan`] into another which
 computes the same results, but in a potentially more efficient
 way. If there are no suitable transformations for the input plan,
 the optimizer can simply return it as is.

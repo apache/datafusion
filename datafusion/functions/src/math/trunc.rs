@@ -202,12 +202,12 @@ fn trunc(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn compute_truncate32(x: f32, y: i64) -> f32 {
     let factor = 10.0_f32.powi(y as i32);
-    (x * factor).round() / factor
+    (x * factor).trunc() / factor
 }
 
 fn compute_truncate64(x: f64, y: i64) -> f64 {
     let factor = 10.0_f64.powi(y as i32);
-    (x * factor).round() / factor
+    (x * factor).trunc() / factor
 }
 
 #[cfg(test)]
@@ -238,9 +238,9 @@ mod test {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 15.0);
-        assert_eq!(floats.value(1), 1_234.268);
+        assert_eq!(floats.value(1), 1_234.267);
         assert_eq!(floats.value(2), 1_233.12);
-        assert_eq!(floats.value(3), 3.312_98);
+        assert_eq!(floats.value(3), 3.312_97);
         assert_eq!(floats.value(4), -21.123_4);
     }
 
@@ -263,9 +263,9 @@ mod test {
 
         assert_eq!(floats.len(), 5);
         assert_eq!(floats.value(0), 5.0);
-        assert_eq!(floats.value(1), 234.268);
+        assert_eq!(floats.value(1), 234.267);
         assert_eq!(floats.value(2), 123.12);
-        assert_eq!(floats.value(3), 123.312_98);
+        assert_eq!(floats.value(3), 123.312_97);
         assert_eq!(floats.value(4), -321.123_1);
     }
 
