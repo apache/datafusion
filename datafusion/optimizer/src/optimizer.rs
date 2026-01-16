@@ -409,9 +409,6 @@ impl Optimizer {
                     }
                     // OptimizerRule was unsuccessful, but skipped failed rules is off, return error
                     (Err(e), None) => {
-                        if matches!(e, DataFusionError::Plan(_)) {
-                            return Err(e);
-                        }
                         return Err(e.context(format!(
                             "Optimizer rule '{}' failed",
                             rule.name()
@@ -502,7 +499,11 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
-        assert_eq!("Error during planning: rule failed", err.strip_backtrace());
+        assert_eq!(
+            "Optimizer rule 'bad rule' failed\ncaused by\n\
+            Error during planning: rule failed",
+            err.strip_backtrace()
+        );
     }
 
     #[test]
