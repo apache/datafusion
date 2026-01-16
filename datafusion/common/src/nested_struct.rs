@@ -222,7 +222,7 @@ pub fn cast_column(
 ///
 /// # Errors
 /// Returns an error if the source is not a struct array or if field casting fails
-pub(crate) fn cast_struct_array_by_name(
+pub fn cast_struct_array_by_name(
     array: &ArrayRef,
     target_fields: &arrow::datatypes::Fields,
     cast_options: &CastOptions,

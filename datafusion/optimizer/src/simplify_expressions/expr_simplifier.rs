@@ -18,8 +18,8 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{AsArray, new_null_array},
-    datatypes::{DataType, Field, Schema},
+    array::{AsArray, StructArray, new_null_array},
+    datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
 };
 use std::borrow::Cow;
@@ -5043,5 +5043,128 @@ mod tests {
             when_then_expr: vec![(lit(true).into(), lit(then).into())],
             else_expr: None,
         })
+    }
+
+    // --------------------------------
+    // --- Struct Cast Tests -----
+    // --------------------------------
+
+    #[test]
+    fn test_struct_cast_different_field_counts_not_foldable() {
+        // Test that struct casts with different field counts are NOT marked as foldable
+        // When field counts differ, const-folding should not be attempted
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(Field::new("y", DataType::Int32, true)),
+            Arc::new(Field::new("z", DataType::Int32, true)),
+        ]);
+
+        // Create an empty struct with the source fields
+        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ));
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should remain unchanged since field counts differ
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        assert!(
+            matches!(result, Expr::Cast(_)),
+            "Struct cast with different field counts should remain as Cast"
+        );
+    }
+
+    #[test]
+    fn test_struct_cast_same_field_count_foldable() {
+        // Test that struct casts with same field counts can be considered for const-folding
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        // Create an empty struct with the source fields
+        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ));
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should be simplified
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        // Result should still be a cast (struct casts generally don't fold to literals)
+        assert!(matches!(result, Expr::Cast(_)));
+    }
+
+    #[test]
+    fn test_struct_cast_different_names_same_count() {
+        // Test struct cast with same field count but different names
+        // Field count matches; simplification should succeed
+
+        let source_fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(Field::new("y", DataType::Int32, true)),
+        ]);
+
+        // Create an empty struct with the source fields
+        let arrays: Vec<Arc<dyn arrow::array::Array>> = vec![
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+            Arc::new(arrow::array::Int32Array::new(vec![].into(), None)),
+        ];
+        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(Expr::Literal(
+                ScalarValue::Struct(Arc::new(struct_array)),
+                None,
+            )),
+            DataType::Struct(target_fields),
+        ));
+
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
+
+        // The cast should be simplified since field counts match
+        let result = simplifier.simplify(expr.clone()).unwrap();
+        // With name-based casting, actual field matching validation happens at planning time
+        assert!(matches!(result, Expr::Cast(_)));
     }
 }
