@@ -1150,6 +1150,7 @@ mod test {
         }
 
         /// Set reverse pages flag.
+        #[expect(dead_code)]
         fn with_reverse_pages(mut self, enable: bool) -> Self {
             self.reverse_pages = enable;
             self
