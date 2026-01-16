@@ -82,12 +82,7 @@ impl ScalarUDFImpl for SparkDateAdd {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
-
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Date32,
@@ -142,7 +137,6 @@ fn spark_date_add(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod tests {
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_add_non_nullable_inputs() {
@@ -175,27 +169,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: args,
                 scalar_arguments: &[None, None],
-            })
-            .unwrap();
-
-        assert_eq!(ret_field.data_type(), &DataType::Date32);
-        assert!(ret_field.is_nullable());
-    }
-
-    #[test]
-    fn test_date_add_null_scalar() {
-        let func = SparkDateAdd::new();
-        let args = &[
-            Arc::new(Field::new("date", DataType::Date32, false)),
-            Arc::new(Field::new("num", DataType::Int32, false)),
-        ];
-
-        let null_scalar = ScalarValue::Int32(None);
-
-        let ret_field = func
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: args,
-                scalar_arguments: &[None, Some(&null_scalar)],
             })
             .unwrap();
 

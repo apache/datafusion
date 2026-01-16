@@ -57,6 +57,10 @@ use futures::stream::{Stream, StreamExt};
 /// reaches the `fetch` value.
 ///
 /// See [`LimitedBatchCoalescer`] for more information
+#[deprecated(
+    since = "52.0.0",
+    note = "We now use BatchCoalescer from arrow-rs instead of a dedicated operator"
+)]
 #[derive(Debug, Clone)]
 pub struct CoalesceBatchesExec {
     /// The input plan
@@ -70,6 +74,7 @@ pub struct CoalesceBatchesExec {
     cache: PlanProperties,
 }
 
+#[expect(deprecated)]
 impl CoalesceBatchesExec {
     /// Create a new CoalesceBatchesExec
     pub fn new(input: Arc<dyn ExecutionPlan>, target_batch_size: usize) -> Self {
@@ -112,6 +117,7 @@ impl CoalesceBatchesExec {
     }
 }
 
+#[expect(deprecated)]
 impl DisplayAs for CoalesceBatchesExec {
     fn fmt_as(
         &self,
@@ -142,6 +148,7 @@ impl DisplayAs for CoalesceBatchesExec {
     }
 }
 
+#[expect(deprecated)]
 impl ExecutionPlan for CoalesceBatchesExec {
     fn name(&self) -> &'static str {
         "CoalesceBatchesExec"

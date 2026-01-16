@@ -15,31 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use postgres_types::Type;
-use std::fmt::Display;
-use tokio_postgres::types::FromSql;
+use std::sync::Arc;
 
-pub struct PgRegtype {
-    value: String,
-}
+use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 
-impl<'a> FromSql<'a> for PgRegtype {
-    fn from_sql(
-        _: &Type,
-        buf: &'a [u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-        let oid = postgres_protocol::types::oid_from_sql(buf)?;
-        let value = Type::from_oid(oid).ok_or("bad type")?.to_string();
-        Ok(PgRegtype { value })
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        matches!(*ty, Type::REGTYPE)
-    }
-}
-
-impl Display for PgRegtype {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.value)
-    }
+/// Schema for the `data/csv/cars.csv` example dataset.
+pub fn schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new("car", DataType::Utf8, false),
+        Field::new("speed", DataType::Float64, false),
+        Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+    ]))
 }

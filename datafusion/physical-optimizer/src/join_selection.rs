@@ -184,7 +184,9 @@ pub(crate) fn try_collect_left(
 
     match (left_can_collect, right_can_collect) {
         (true, true) => {
+            // Don't swap null-aware anti joins as they have specific side requirements
             if hash_join.join_type().supports_swap()
+                && !hash_join.null_aware
                 && should_swap_join_order(&**left, &**right)?
             {
                 Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
@@ -198,6 +200,7 @@ pub(crate) fn try_collect_left(
                     hash_join.projection.clone(),
                     PartitionMode::CollectLeft,
                     hash_join.null_equality(),
+                    hash_join.null_aware,
                 )?)))
             }
         }
@@ -210,9 +213,11 @@ pub(crate) fn try_collect_left(
             hash_join.projection.clone(),
             PartitionMode::CollectLeft,
             hash_join.null_equality(),
+            hash_join.null_aware,
         )?))),
         (false, true) => {
-            if hash_join.join_type().supports_swap() {
+            // Don't swap null-aware anti joins as they have specific side requirements
+            if hash_join.join_type().supports_swap() && !hash_join.null_aware {
                 hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
             } else {
                 Ok(None)
@@ -232,10 +237,23 @@ pub(crate) fn partitioned_hash_join(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let left = hash_join.left();
     let right = hash_join.right();
-    if hash_join.join_type().supports_swap() && should_swap_join_order(&**left, &**right)?
+    // Don't swap null-aware anti joins as they have specific side requirements
+    if hash_join.join_type().supports_swap()
+        && !hash_join.null_aware
+        && should_swap_join_order(&**left, &**right)?
     {
         hash_join.swap_inputs(PartitionMode::Partitioned)
     } else {
+        // Null-aware anti joins must use CollectLeft mode because they track probe-side state
+        // (probe_side_non_empty, probe_side_has_null) per-partition, but need global knowledge
+        // for correct null handling. With partitioning, a partition might not see probe rows
+        // even if the probe side is globally non-empty, leading to incorrect NULL row handling.
+        let partition_mode = if hash_join.null_aware {
+            PartitionMode::CollectLeft
+        } else {
+            PartitionMode::Partitioned
+        };
+
         Ok(Arc::new(HashJoinExec::try_new(
             Arc::clone(left),
             Arc::clone(right),
@@ -243,8 +261,9 @@ pub(crate) fn partitioned_hash_join(
             hash_join.filter().cloned(),
             hash_join.join_type(),
             hash_join.projection.clone(),
-            PartitionMode::Partitioned,
+            partition_mode,
             hash_join.null_equality(),
+            hash_join.null_aware,
         )?))
     }
 }
@@ -277,7 +296,9 @@ fn statistical_join_selection_subrule(
                 PartitionMode::Partitioned => {
                     let left = hash_join.left();
                     let right = hash_join.right();
+                    // Don't swap null-aware anti joins as they have specific side requirements
                     if hash_join.join_type().supports_swap()
+                        && !hash_join.null_aware
                         && should_swap_join_order(&**left, &**right)?
                     {
                         hash_join
@@ -484,6 +505,7 @@ pub fn hash_join_swap_subrule(
     if let Some(hash_join) = input.as_any().downcast_ref::<HashJoinExec>()
         && hash_join.left.boundedness().is_unbounded()
         && !hash_join.right.boundedness().is_unbounded()
+        && !hash_join.null_aware // Don't swap null-aware anti joins
         && matches!(
             *hash_join.join_type(),
             JoinType::Inner | JoinType::Left | JoinType::LeftSemi | JoinType::LeftAnti

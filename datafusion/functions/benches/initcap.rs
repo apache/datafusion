@@ -22,12 +22,14 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::unicode;
 use std::hint::black_box;
 use std::sync::Arc;
+use std::time::Duration;
 
 fn create_args<O: OffsetSizeTrait>(
     size: usize,
@@ -49,60 +51,87 @@ fn create_args<O: OffsetSizeTrait>(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let initcap = unicode::initcap();
-    for size in [1024, 4096] {
-        let args = create_args::<i32>(size, 8, true);
-        let arg_fields = args
-            .iter()
-            .enumerate()
-            .map(|(idx, arg)| {
-                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
-            })
-            .collect::<Vec<_>>();
-        let config_options = Arc::new(ConfigOptions::default());
+    let config_options = Arc::new(ConfigOptions::default());
 
-        c.bench_function(
-            format!("initcap string view shorter than 12 [size={size}]").as_str(),
-            |b| {
-                b.iter(|| {
-                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
-                        arg_fields: arg_fields.clone(),
-                        number_rows: size,
-                        return_field: Field::new("f", DataType::Utf8View, true).into(),
-                        config_options: Arc::clone(&config_options),
-                    }))
-                })
-            },
-        );
+    // Grouped benchmarks for array sizes - to compare with scalar performance
+    for size in [1024, 4096, 8192] {
+        let mut group = c.benchmark_group(format!("initcap size={size}"));
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+        group.measurement_time(Duration::from_secs(10));
 
-        let args = create_args::<i32>(size, 16, true);
-        c.bench_function(
-            format!("initcap string view longer than 12 [size={size}]").as_str(),
-            |b| {
-                b.iter(|| {
-                    black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
-                        arg_fields: arg_fields.clone(),
-                        number_rows: size,
-                        return_field: Field::new("f", DataType::Utf8View, true).into(),
-                        config_options: Arc::clone(&config_options),
-                    }))
-                })
-            },
-        );
+        // Array benchmark - Utf8
+        let array_args = create_args::<i32>(size, 16, false);
+        let array_arg_fields = vec![Field::new("arg_0", DataType::Utf8, true).into()];
+        let batch_len = size;
 
-        let args = create_args::<i32>(size, 16, false);
-        c.bench_function(format!("initcap string [size={size}]").as_str(), |b| {
+        group.bench_function("array_utf8", |b| {
             b.iter(|| {
                 black_box(initcap.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
-                    arg_fields: arg_fields.clone(),
-                    number_rows: size,
+                    args: array_args.clone(),
+                    arg_fields: array_arg_fields.clone(),
+                    number_rows: batch_len,
                     return_field: Field::new("f", DataType::Utf8, true).into(),
                     config_options: Arc::clone(&config_options),
                 }))
             })
         });
+
+        // Array benchmark - Utf8View
+        let array_view_args = create_args::<i32>(size, 16, true);
+        let array_view_arg_fields =
+            vec![Field::new("arg_0", DataType::Utf8View, true).into()];
+
+        group.bench_function("array_utf8view", |b| {
+            b.iter(|| {
+                black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                    args: array_view_args.clone(),
+                    arg_fields: array_view_arg_fields.clone(),
+                    number_rows: batch_len,
+                    return_field: Field::new("f", DataType::Utf8View, true).into(),
+                    config_options: Arc::clone(&config_options),
+                }))
+            })
+        });
+
+        // Scalar benchmark - Utf8 (the optimization we added)
+        let scalar_args = vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+            "hello world test string".to_string(),
+        )))];
+        let scalar_arg_fields = vec![Field::new("arg_0", DataType::Utf8, false).into()];
+
+        group.bench_function("scalar_utf8", |b| {
+            b.iter(|| {
+                black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                    args: scalar_args.clone(),
+                    arg_fields: scalar_arg_fields.clone(),
+                    number_rows: 1,
+                    return_field: Field::new("f", DataType::Utf8, false).into(),
+                    config_options: Arc::clone(&config_options),
+                }))
+            })
+        });
+
+        // Scalar benchmark - Utf8View
+        let scalar_view_args = vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+            "hello world test string".to_string(),
+        )))];
+        let scalar_view_arg_fields =
+            vec![Field::new("arg_0", DataType::Utf8View, false).into()];
+
+        group.bench_function("scalar_utf8view", |b| {
+            b.iter(|| {
+                black_box(initcap.invoke_with_args(ScalarFunctionArgs {
+                    args: scalar_view_args.clone(),
+                    arg_fields: scalar_view_arg_fields.clone(),
+                    number_rows: 1,
+                    return_field: Field::new("f", DataType::Utf8View, false).into(),
+                    config_options: Arc::clone(&config_options),
+                }))
+            })
+        });
+
+        group.finish();
     }
 }
 

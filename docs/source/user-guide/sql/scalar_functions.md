@@ -2519,6 +2519,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -2531,7 +2532,7 @@ date_part(part, expression)
   - nanosecond
   - dow (day of the week where Sunday is 0)
   - doy (day of the year)
-  - epoch (seconds since Unix epoch)
+  - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (day of the week where Monday is 0)
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
@@ -2548,7 +2549,7 @@ extract(field FROM source)
 
 ### `date_trunc`
 
-Truncates a timestamp value to a specified precision.
+Truncates a timestamp or time value to a specified precision.
 
 ```sql
 date_trunc(precision, expression)
@@ -2557,6 +2558,8 @@ date_trunc(precision, expression)
 #### Arguments
 
 - **precision**: Time precision to truncate to. The following precisions are supported:
+
+  For Timestamp types:
 
   - year / YEAR
   - quarter / QUARTER
@@ -2569,7 +2572,15 @@ date_trunc(precision, expression)
   - millisecond / MILLISECOND
   - microsecond / MICROSECOND
 
-- **expression**: Time expression to operate on. Can be a constant, column, or function.
+  For Time types (hour, minute, second, millisecond, microsecond only):
+
+  - hour / HOUR
+  - minute / MINUTE
+  - second / SECOND
+  - millisecond / MILLISECOND
+  - microsecond / MICROSECOND
+
+- **expression**: Timestamp or time expression to operate on. Can be a constant, column, or function.
 
 #### Aliases
 
@@ -4211,7 +4222,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_union`
 
-Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
 
 ```sql
 array_union(array1, array2)
