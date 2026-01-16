@@ -237,16 +237,14 @@ pub fn check_subquery_expr(
             }
 
             // For struct expressions, validate that the number of fields matches
-            if is_struct {
-                if let Expr::ScalarFunction(ref func) = *subquery.expr {
-                    let num_tuple_cols = func.args.len();
-                    if num_tuple_cols != num_subquery_cols {
-                        return plan_err!(
-                            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
-                            num_tuple_cols,
-                            num_subquery_cols
-                        );
-                    }
+            if is_struct && let Expr::ScalarFunction(ref func) = *subquery.expr {
+                let num_tuple_cols = func.args.len();
+                if num_tuple_cols != num_subquery_cols {
+                    return plan_err!(
+                        "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
+                        num_tuple_cols,
+                        num_subquery_cols
+                    );
                 }
             }
         }

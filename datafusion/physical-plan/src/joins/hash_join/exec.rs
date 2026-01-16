@@ -544,12 +544,10 @@ impl HashJoinExec {
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
         // Validate null_aware flag
-        if null_aware {
-            if !matches!(join_type, JoinType::LeftAnti) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins, got {join_type}"
-                );
-            }
+        if null_aware && !matches!(join_type, JoinType::LeftAnti) {
+            return plan_err!(
+                "null_aware can only be true for LeftAnti joins, got {join_type}"
+            );
         }
 
         let (join_schema, column_indices) =
