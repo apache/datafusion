@@ -20,7 +20,7 @@
 use arrow::{
     array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
     compute::{CastOptions, kernels, max, min},
-    datatypes::DataType,
+    datatypes::{DataType, Field},
     util::pretty::pretty_format_columns,
 };
 use datafusion_common::internal_datafusion_err;
@@ -313,11 +313,13 @@ fn cast_array_by_name(
         return Ok(Arc::clone(array));
     }
 
-    match (array.data_type(), cast_type) {
-        (DataType::Struct(_source_fields), DataType::Struct(target_fields)) => {
-            datafusion_common::nested_struct::cast_struct_array_by_name(
+    match cast_type {
+        DataType::Struct(_) => {
+            // Field name is unused; only the struct's inner field names matter
+            let target_field = Field::new("_", cast_type.clone(), true);
+            datafusion_common::nested_struct::cast_column(
                 array,
-                target_fields,
+                &target_field,
                 cast_options,
             )
         }

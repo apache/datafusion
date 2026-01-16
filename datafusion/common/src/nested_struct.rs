@@ -188,31 +188,7 @@ pub fn cast_column(
     }
 }
 
-/// Cast a struct array to another struct type by aligning child arrays using
-/// field names instead of their physical order.
-///
-/// This is a convenience wrapper around the internal function `cast_struct_column` that accepts
-/// `Fields` directly instead of requiring a `Field` wrapper.
-///
-/// See [`cast_column`] for detailed documentation on the casting behavior.
-///
-/// # Arguments
-/// * `array` - The source array to cast (must be a struct array)
-/// * `target_fields` - The target struct field definitions
-/// * `cast_options` - Options controlling cast behavior (strictness, formatting)
-///
-/// # Returns
-/// A `Result<ArrayRef>` containing the cast struct array
-///
-/// # Errors
-/// Returns an error if the source is not a struct array or if field casting fails
-pub fn cast_struct_array_by_name(
-    array: &ArrayRef,
-    target_fields: &arrow::datatypes::Fields,
-    cast_options: &CastOptions,
-) -> Result<ArrayRef> {
-    cast_struct_column(array, target_fields.as_ref(), cast_options)
-}
+
 
 /// Validates compatibility between source and target struct fields for casting operations.
 ///
