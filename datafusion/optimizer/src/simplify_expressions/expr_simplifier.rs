@@ -5134,8 +5134,8 @@ mod tests {
         // Struct casts with same field count should be const-folded to a literal
         assert!(matches!(result, Expr::Literal(_, _)));
         // Ensure the simplifier made a change (not identical to original)
-        assert!(
-            result != expr,
+        assert_ne!(
+            result, expr,
             "Struct cast with same field count should be simplified (not identical to input)"
         );
     }
@@ -5165,8 +5165,8 @@ mod tests {
         // Struct casts with same field count are const-folded to literals
         assert!(matches!(result, Expr::Literal(_, _)));
         // Ensure the simplifier made a change (not identical to original)
-        assert!(
-            result != expr,
+        assert_ne!(
+            result, expr,
             "Struct cast with different names but same field count should be simplified"
         );
     }
