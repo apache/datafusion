@@ -310,6 +310,15 @@ fn validate_field_compatibility(
     target_field: &Field,
 ) -> Result<()> {
     if source_field.data_type() == &DataType::Null {
+        // Validate that target allows nulls before returning early.
+        // It is invalid to cast a NULL source field to a non-nullable target field.
+        if !target_field.is_nullable() {
+            return _plan_err!(
+                "Cannot cast NULL struct field '{}' to non-nullable field '{}'",
+                source_field.name(),
+                target_field.name()
+            );
+        }
         return Ok(());
     }
 
