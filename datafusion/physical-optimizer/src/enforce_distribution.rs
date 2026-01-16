@@ -1301,10 +1301,25 @@ pub fn ensure_distribution(
             // Allow subset satisfaction when:
             // 1. Current partition count >= threshold
             // 2. Not a partitioned join since must use exact hash matching for joins
+            // 3. Not a grouping set aggregate (requires exact hash including __grouping_id)
             let current_partitions = child.plan.output_partitioning().partition_count();
+
+            // Check if the hash partitioning requirement includes __grouping_id column.
+            // Grouping set aggregates (ROLLUP, CUBE, GROUPING SETS) require exact hash
+            // partitioning on all group columns including __grouping_id to ensure partial
+            // aggregates from different partitions are correctly combined.
+            let requires_grouping_id = matches!(&requirement, Distribution::HashPartitioned(exprs)
+                if exprs.iter().any(|expr| {
+                    expr.as_any()
+                        .downcast_ref::<Column>()
+                        .is_some_and(|col| col.name() == "__grouping_id")
+                })
+            );
+
             let allow_subset_satisfy_partitioning = current_partitions
                 >= subset_satisfaction_threshold
-                && !is_partitioned_join;
+                && !is_partitioned_join
+                && !requires_grouping_id;
 
             // When `repartition_file_scans` is set, attempt to increase
             // parallelism at the source.
