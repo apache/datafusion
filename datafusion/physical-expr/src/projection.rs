@@ -1120,9 +1120,11 @@ pub fn update_expr(
         RewrittenInvalid,
     }
 
-    // Track columns introduced by pass 1 (by name and index).
+    // Track Arc pointers of columns created by pass 1.
     // These should not be modified by pass 2.
-    let mut valid_columns = HashSet::new();
+    // We use Arc pointer addresses (not name/index) to distinguish pass-1-created columns
+    // from original columns that happen to have the same name and index.
+    let mut pass1_created: HashSet<usize> = HashSet::new();
 
     // First pass: try to rewrite the expression in terms of the projected expressions.
     // For example, if the expression is `a + b > 5` and the projection is `a + b AS sum_ab`,
@@ -1140,12 +1142,12 @@ pub fn update_expr(
                 // If expr is equal to one of the projected expressions, we can short-circuit the rewrite:
                 for (idx, projected_expr) in projected_exprs.iter().enumerate() {
                     if expr.eq(&projected_expr.expr) {
-                        // Track this column so pass 2 doesn't modify it
-                        valid_columns.insert((projected_expr.alias.clone(), idx));
-                        return Ok(Transformed::yes(Arc::new(Column::new(
-                            &projected_expr.alias,
-                            idx,
-                        )) as _));
+                        // Create new column and track its Arc pointer so pass 2 doesn't modify it
+                        let new_col = Arc::new(Column::new(&projected_expr.alias, idx))
+                            as Arc<dyn PhysicalExpr>;
+                        // Use data pointer for trait object (ignores vtable)
+                        pass1_created.insert(Arc::as_ptr(&new_col) as *const () as usize);
+                        return Ok(Transformed::yes(new_col));
                     }
                 }
                 Ok(Transformed::no(expr))
@@ -1170,8 +1172,9 @@ pub fn update_expr(
 
             // Skip columns introduced by pass 1 - they're already valid OUTPUT references.
             // Mark state as valid since pass 1 successfully handled this column.
-            if valid_columns.contains(&(column.name().to_string(), column.index()))
-            {
+            // We check the Arc pointer address to distinguish pass-1-created columns from
+            // original columns that might have the same name and index.
+            if pass1_created.contains(&(Arc::as_ptr(&expr) as *const () as usize)) {
                 state = RewriteState::RewrittenValid;
                 return Ok(Transformed::no(expr));
             }
@@ -3013,6 +3016,57 @@ pub(crate) mod tests {
         assert!(
             result.is_none(),
             "Should return None when column can't be resolved"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_column_name_collision() -> Result<()> {
+        // Regression test for a bug where an original column with the same (name, index)
+        // as a pass-1-rewritten column would incorrectly be considered "already handled".
+        //
+        // Example from SQLite tests:
+        // - Input schema: [col0, col1, col2]
+        // - Projection: [col2 AS col0]  (col2@2 becomes col0@0)
+        // - Filter: col0 - col2 <= col2 / col2
+        //
+        // The bug: when pass 1 rewrites col2@2 to col0@0, it added ("col0", 0) to
+        // valid_columns. Then in pass 2, the ORIGINAL col0@0 in the filter would
+        // match ("col0", 0) and be incorrectly skipped, resulting in:
+        //   col0 - col0 <= col0 / col0 = 0 - 0 <= 0 / 0 = always true (or NaN)
+        // instead of flagging the expression as invalid.
+
+        // Projection: [col2 AS col0] - note the alias matches another input column's name!
+        let projection = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("col2", 2)),
+            alias: "col0".to_string(), // Alias collides with original col0!
+        }];
+
+        // Filter: col0@0 - col2@2 <= col2@2 / col2@2
+        // After correct rewrite, col2@2 becomes col0@0 (via pass 1 match)
+        // But col0@0 (the original) can't be resolved since the projection
+        // doesn't include it - should return None
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col0", 0)), // Original col0 - NOT in projection!
+                Operator::Minus,
+                Arc::new(Column::new("col2", 2)), // This will be rewritten to col0@0
+            )),
+            Operator::LtEq,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col2", 2)),
+                Operator::Divide,
+                Arc::new(Column::new("col2", 2)),
+            )),
+        ));
+
+        // With sync_with_child=false: should return None because original col0@0
+        // can't be resolved (only col2 is in projection, aliased as col0)
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when original column collides with rewritten alias but isn't in projection"
         );
 
         Ok(())
