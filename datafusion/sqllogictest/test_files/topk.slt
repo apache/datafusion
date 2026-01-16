@@ -340,7 +340,7 @@ explain select number, letter, age from partial_sorted order by number asc limit
 ----
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[number@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, letter, age], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query TT
 explain select number, letter, age from partial_sorted order by letter asc, number desc limit 3;
@@ -394,3 +394,4 @@ set datafusion.explain.physical_plan_only = false
 
 statement ok
 set datafusion.execution.batch_size = 8192
+
