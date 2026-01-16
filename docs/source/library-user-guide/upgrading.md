@@ -118,7 +118,6 @@ let context = SimplifyContext::default()
 
 See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
 
-
 ### `FilterExec` builder methods deprecated
 
 The following methods on `FilterExec` have been deprecated in favor of using `FilterExecBuilder`:

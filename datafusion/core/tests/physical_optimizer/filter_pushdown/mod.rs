@@ -564,10 +564,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), scan)
-            .unwrap()
+        FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan)
             .with_batch_size(10)
-            .unwrap(),
+            .build()?,
     );
 
     let aggregate_expr = vec![
@@ -596,10 +595,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
 
     let predicate = col_lit_predicate("b", "bar", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, aggregate)
-            .unwrap()
+        FilterExecBuilder::new(predicate, aggregate)
             .with_batch_size(100)
-            .unwrap(),
+            .build()?,
     );
 
     // Both filters should be pushed down to the DataSource since both reference grouping columns
