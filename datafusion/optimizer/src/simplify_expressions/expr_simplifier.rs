@@ -5062,6 +5062,15 @@ mod tests {
     // --- Struct Cast Tests -----
     // --------------------------------
 
+    /// Helper to create a `StructArray` with empty child arrays matching `source_fields`.
+    fn make_empty_struct_array(source_fields: Fields) -> StructArray {
+        let arrays: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Int32Array::new(vec![].into(), None)),
+            Arc::new(Int32Array::new(vec![].into(), None)),
+        ];
+        StructArray::try_new(source_fields, arrays, None).unwrap()
+    }
+
     #[test]
     fn test_struct_cast_different_field_counts_not_foldable() {
         // Test that struct casts with different field counts are NOT marked as foldable
@@ -5079,11 +5088,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(Int32Array::new(vec![].into(), None)),
-            Arc::new(Int32Array::new(vec![].into(), None)),
-        ];
-        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+        let struct_array = make_empty_struct_array(source_fields);
 
         let expr = Expr::Cast(Cast::new(
             Box::new(Expr::Literal(
@@ -5119,11 +5124,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(Int32Array::new(vec![].into(), None)),
-            Arc::new(Int32Array::new(vec![].into(), None)),
-        ];
-        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+        let struct_array = make_empty_struct_array(source_fields);
 
         let expr = Expr::Cast(Cast::new(
             Box::new(Expr::Literal(
@@ -5158,11 +5159,7 @@ mod tests {
         ]);
 
         // Create an empty struct with the source fields
-        let arrays: Vec<Arc<dyn Array>> = vec![
-            Arc::new(Int32Array::new(vec![].into(), None)),
-            Arc::new(Int32Array::new(vec![].into(), None)),
-        ];
-        let struct_array = StructArray::try_new(source_fields, arrays, None).unwrap();
+        let struct_array = make_empty_struct_array(source_fields);
 
         let expr = Expr::Cast(Cast::new(
             Box::new(Expr::Literal(
