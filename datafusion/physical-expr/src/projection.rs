@@ -414,10 +414,10 @@ impl ProjectionExprs {
         // Add columns needed by non-beneficial expressions (if not already present)
         let mut col_index_to_inner: IndexMap<usize, usize> = IndexMap::new();
         for (proj, _) in &classifications {
-            if let Some(col) = proj.expr.as_any().downcast_ref::<Column>() {
-                if let Some(&inner_idx) = original_to_inner.get(&col.index()) {
-                    col_index_to_inner.insert(col.index(), inner_idx);
-                }
+            if let Some(col) = proj.expr.as_any().downcast_ref::<Column>()
+                && let Some(&inner_idx) = original_to_inner.get(&col.index())
+            {
+                col_index_to_inner.insert(col.index(), inner_idx);
             }
         }
 
@@ -498,17 +498,17 @@ impl ProjectionExprs {
         col_index_to_inner: &IndexMap<usize, usize>,
         inner_schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        expr.clone()
+        Arc::clone(expr)
             .transform(|e| {
-                if let Some(col) = e.as_any().downcast_ref::<Column>() {
-                    if let Some(&inner_idx) = col_index_to_inner.get(&col.index()) {
-                        let inner_field = inner_schema.field(inner_idx);
-                        return Ok(Transformed::yes(Arc::new(Column::new(
-                            inner_field.name(),
-                            inner_idx,
-                        ))
-                            as Arc<dyn PhysicalExpr>));
-                    }
+                if let Some(col) = e.as_any().downcast_ref::<Column>()
+                    && let Some(&inner_idx) = col_index_to_inner.get(&col.index())
+                {
+                    let inner_field = inner_schema.field(inner_idx);
+                    return Ok(Transformed::yes(Arc::new(Column::new(
+                        inner_field.name(),
+                        inner_idx,
+                    ))
+                        as Arc<dyn PhysicalExpr>));
                 }
                 Ok(Transformed::no(e))
             })
