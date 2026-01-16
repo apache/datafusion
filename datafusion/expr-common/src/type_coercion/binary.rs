@@ -1271,6 +1271,24 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 /// - `struct<c1 int> -> struct<c1 int, c1 int>` (target has duplicate field names)
 /// - `struct<c1 int, c1 int> -> struct<c1 int>` (source has duplicate field names)
 fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
+    // Debug assertions: field names should be unique within each struct
+    #[cfg(debug_assertions)]
+    {
+        let lhs_names: HashSet<_> = lhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            lhs_names.len(),
+            lhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+
+        let rhs_names_check: HashSet<_> = rhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            rhs_names_check.len(),
+            rhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+    }
+
     let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
     lhs_fields
         .iter()
