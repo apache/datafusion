@@ -621,10 +621,10 @@ fn get_value(metrics: &MetricsSet, metric_name: &str) -> usize {
 #[tokio::test]
 async fn predicate_cache_default() -> datafusion_common::Result<()> {
     let ctx = SessionContext::new();
-    // The cache is on by default, but not used unless filter pushdown is enabled
+    // The cache is on by default, and used since pushdown_filters is now true by default
     PredicateCacheTest {
-        expected_inner_records: 0,
-        expected_records: 0,
+        expected_inner_records: 8,
+        expected_records: 7, // reads more than necessary from the cache as then another bitmap is applied
     }
     .run(&ctx)
     .await
