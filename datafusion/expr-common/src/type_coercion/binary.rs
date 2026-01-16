@@ -1259,6 +1259,17 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
 }
 
 /// Return true if every left-field name exists in the right fields (and lengths are equal).
+///
+/// # Assumptions
+/// **This function assumes field names within each struct are unique.** This assumption is safe
+/// because field name uniqueness is enforced at multiple levels:
+/// - **Arrow level:** `StructType` construction enforces unique field names at the schema level
+/// - **DataFusion level:** SQL parser rejects duplicate field names in `CREATE TABLE` and struct type definitions
+/// - **Runtime level:** `StructArray::try_new()` validates field uniqueness
+///
+/// Therefore, we don't need to handle degenerate cases like:
+/// - `struct<c1 int> -> struct<c1 int, c1 int>` (target has duplicate field names)
+/// - `struct<c1 int, c1 int> -> struct<c1 int>` (source has duplicate field names)
 fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
     let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
     lhs_fields
