@@ -48,7 +48,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
+    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -622,9 +623,9 @@ impl BatchPartitioner {
                             let (_, buffer, _) = indices_array.into_parts();
                             let mut vec =
                                 buffer.into_inner().into_vec::<u32>().map_err(|e| {
-                                    DataFusionError::Internal(format!(
+                                    internal_datafusion_err!(
                                         "Could not convert buffer to vec: {e:?}"
-                                    ))
+                                    )
                                 })?;
                             vec.clear();
                             *p_indices = vec;
