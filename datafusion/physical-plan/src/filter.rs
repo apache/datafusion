@@ -116,9 +116,25 @@ impl FilterExecBuilder {
         }
     }
 
-    /// Set the projection
+    /// Set the projection, composing with any existing projection.
+    ///
+    /// If a projection is already set, the new projection indices are mapped
+    /// through the existing projection. For example, if the current projection
+    /// is `[0, 2, 3]` and `with_projection(Some(vec![0, 2]))` is called, the
+    /// resulting projection will be `[0, 3]` (indices 0 and 2 of `[0, 2, 3]`).
+    ///
+    /// If no projection is currently set, the new projection is used directly.
+    /// If `None` is passed, the projection is cleared.
     pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
-        self.projection = projection;
+        self.projection = match projection {
+            Some(new_proj) => match &self.projection {
+                Some(existing_proj) => {
+                    Some(new_proj.iter().map(|i| existing_proj[*i]).collect())
+                }
+                None => Some(new_proj),
+            },
+            None => None,
+        };
         self
     }
 
@@ -217,18 +233,12 @@ impl FilterExec {
         note = "Use FilterExecBuilder::with_projection instead"
     )]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
-        //  Check if the projection is valid
+        // Check if the projection is valid against current output schema
         can_project(&self.schema(), projection.as_ref())?;
 
-        let projection = match projection {
-            Some(projection) => match &self.projection {
-                Some(p) => Some(projection.iter().map(|i| p[*i]).collect()),
-                None => Some(projection),
-            },
-            None => None,
-        };
-
+        // Builder's with_projection composes projections, so set existing first
         FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
+            .with_projection(self.projection.clone())
             .with_projection(projection)
             .with_default_selectivity(self.default_selectivity)
             .with_batch_size(self.batch_size)
@@ -1902,6 +1912,79 @@ mod tests {
             .build();
 
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_projection_composition() -> Result<()> {
+        // Test that calling with_projection multiple times composes projections
+        // If initial projection is [0, 2, 3] and we call with_projection([0, 2]),
+        // the result should be [0, 3] (indices 0 and 2 of [0, 2, 3])
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        // Create a filter predicate: a > 10
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // First projection: [0, 2, 3] -> select columns a, c, d
+        // Second projection: [0, 2] -> select indices 0 and 2 of [0, 2, 3] -> [0, 3]
+        // Final result: columns a and d
+        let filter = FilterExecBuilder::new(predicate, input)
+            .with_projection(Some(vec![0, 2, 3]))
+            .with_projection(Some(vec![0, 2]))
+            .build()?;
+
+        // Verify composed projection is [0, 3]
+        assert_eq!(filter.projection(), Some(&vec![0, 3]));
+
+        // Verify schema contains only columns a and d
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
+        assert_eq!(output_schema.field(0).name(), "a");
+        assert_eq!(output_schema.field(1).name(), "d");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_projection_composition_none_clears() -> Result<()> {
+        // Test that passing None clears the projection
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // Set a projection then clear it with None
+        let filter = FilterExecBuilder::new(predicate, input)
+            .with_projection(Some(vec![0]))
+            .with_projection(None)
+            .build()?;
+
+        // Projection should be cleared
+        assert_eq!(filter.projection(), None);
+
+        // Schema should have all columns
+        let output_schema = filter.schema();
+        assert_eq!(output_schema.fields().len(), 2);
 
         Ok(())
     }
