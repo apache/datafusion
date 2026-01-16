@@ -18,8 +18,8 @@
 //! Expression simplification API
 
 use arrow::{
-    array::{AsArray, StructArray, new_null_array},
-    datatypes::{DataType, Field, Fields, Schema},
+    array::{AsArray, new_null_array},
+    datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
 use std::borrow::Cow;
@@ -2178,7 +2178,10 @@ mod tests {
     use super::*;
     use crate::simplify_expressions::SimplifyContext;
     use crate::test::test_table_scan_with_name;
-    use arrow::datatypes::FieldRef;
+    use arrow::{
+        array::StructArray,
+        datatypes::{FieldRef, Fields},
+    };
     use datafusion_common::{DFSchemaRef, ToDFSchema, assert_contains};
     use datafusion_expr::{
         expr::WindowFunction,
