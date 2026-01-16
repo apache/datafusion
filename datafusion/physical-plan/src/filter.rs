@@ -131,12 +131,14 @@ impl FilterExecBuilder {
     ///
     /// If a projection is already set, the new projection indices are mapped
     /// through the existing projection. For example, if the current projection
-    /// is `[0, 2, 3]` and `with_projection(Some(vec![0, 2]))` is called, the
+    /// is `[0, 2, 3]` and `apply_projection(Some(vec![0, 2]))` is called, the
     /// resulting projection will be `[0, 3]` (indices 0 and 2 of `[0, 2, 3]`).
     ///
     /// If no projection is currently set, the new projection is used directly.
     /// If `None` is passed, the projection is cleared.
-    pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
+    pub fn apply_projection(mut self, projection: Option<Vec<usize>>) -> Result<Self> {
+        // Check if the projection is valid against current output schema
+        can_project(&self.input.schema(), projection.as_ref())?;
         self.projection = match projection {
             Some(new_proj) => match &self.projection {
                 Some(existing_proj) => {
@@ -146,7 +148,7 @@ impl FilterExecBuilder {
             },
             None => None,
         };
-        self
+        Ok(self)
     }
 
     /// Set the default selectivity
@@ -255,10 +257,10 @@ impl FilterExec {
     /// Return new instance of [FilterExec] with the given projection.
     ///
     /// # Deprecated
-    /// Use [`FilterExecBuilder::with_projection`] instead
+    /// Use [`FilterExecBuilder::apply_projection`] instead
     #[deprecated(
         since = "52.0.0",
-        note = "Use FilterExecBuilder::with_projection instead"
+        note = "Use FilterExecBuilder::apply_projection instead"
     )]
     pub fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
         let builder = FilterExecBuilder::from(self);
@@ -266,20 +268,17 @@ impl FilterExec {
     }
 
     /// Set the batch size
-    ///
-    /// # Deprecated
-    /// Use [`FilterExecBuilder::with_batch_size`] instead
-    #[deprecated(
-        since = "52.0.0",
-        note = "Use FilterExecBuilder::with_batch_size instead"
-    )]
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
-        FilterExecBuilder::new(Arc::clone(&self.predicate), Arc::clone(&self.input))
-            .with_projection(self.projection.clone())
-            .with_default_selectivity(self.default_selectivity)
-            .with_batch_size(batch_size)
-            .with_fetch(self.fetch)
-            .build()
+        Ok(Self {
+            predicate: Arc::clone(&self.predicate),
+            input: Arc::clone(&self.input),
+            metrics: self.metrics.clone(),
+            default_selectivity: self.default_selectivity,
+            cache: self.cache.clone(),
+            projection: self.projection.clone(),
+            batch_size,
+            fetch: self.fetch,
+        })
     }
 
     /// The expression to filter on. This expression must evaluate to a boolean value.
@@ -1700,7 +1699,8 @@ mod tests {
         // Create filter with projection [0, 2] (columns a and c) using builder
         let projection = Some(vec![0, 2]);
         let filter = FilterExecBuilder::new(predicate, input)
-            .with_projection(projection.clone())
+            .apply_projection(projection.clone())
+            .unwrap()
             .build()?;
 
         // Verify projection is set correctly
@@ -1759,9 +1759,8 @@ mod tests {
         ));
 
         // Try to create filter with invalid projection (index out of bounds) using builder
-        let result = FilterExecBuilder::new(predicate, input)
-            .with_projection(Some(vec![0, 5])) // 5 is out of bounds
-            .build();
+        let result =
+            FilterExecBuilder::new(predicate, input).apply_projection(Some(vec![0, 5])); // 5 is out of bounds
 
         // Should return an error
         assert!(result.is_err());
@@ -1815,12 +1814,14 @@ mod tests {
 
         // Method 1: Builder with projection (one call to compute_properties)
         let filter1 = FilterExecBuilder::new(Arc::clone(&predicate), Arc::clone(&input))
-            .with_projection(projection.clone())
+            .apply_projection(projection.clone())
+            .unwrap()
             .build()?;
 
         // Method 2: Also using builder for comparison (deprecated try_new().with_projection() removed)
         let filter2 = FilterExecBuilder::new(predicate, input)
-            .with_projection(projection)
+            .apply_projection(projection)
+            .unwrap()
             .build()?;
 
         // Both methods should produce equivalent results
@@ -1878,7 +1879,8 @@ mod tests {
         ));
 
         let filter = FilterExecBuilder::new(predicate, input)
-            .with_projection(Some(vec![0, 2]))
+            .apply_projection(Some(vec![0, 2]))
+            .unwrap()
             .build()?;
 
         let statistics = filter.partition_statistics(None)?;
@@ -1907,7 +1909,8 @@ mod tests {
 
         // Should fail because predicate doesn't return boolean
         let result = FilterExecBuilder::new(invalid_predicate, input)
-            .with_projection(Some(vec![0]))
+            .apply_projection(Some(vec![0]))
+            .unwrap()
             .build();
 
         assert!(result.is_err());
@@ -1917,8 +1920,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_builder_projection_composition() -> Result<()> {
-        // Test that calling with_projection multiple times composes projections
-        // If initial projection is [0, 2, 3] and we call with_projection([0, 2]),
+        // Test that calling apply_projection multiple times composes projections
+        // If initial projection is [0, 2, 3] and we call apply_projection([0, 2]),
         // the result should be [0, 3] (indices 0 and 2 of [0, 2, 3])
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -1940,8 +1943,8 @@ mod tests {
         // Second projection: [0, 2] -> select indices 0 and 2 of [0, 2, 3] -> [0, 3]
         // Final result: columns a and d
         let filter = FilterExecBuilder::new(predicate, input)
-            .with_projection(Some(vec![0, 2, 3]))
-            .with_projection(Some(vec![0, 2]))
+            .apply_projection(Some(vec![0, 2, 3]))?
+            .apply_projection(Some(vec![0, 2]))?
             .build()?;
 
         // Verify composed projection is [0, 3]
@@ -1974,8 +1977,8 @@ mod tests {
 
         // Set a projection then clear it with None
         let filter = FilterExecBuilder::new(predicate, input)
-            .with_projection(Some(vec![0]))
-            .with_projection(None)
+            .apply_projection(Some(vec![0]))?
+            .apply_projection(None)?
             .build()?;
 
         // Projection should be cleared
