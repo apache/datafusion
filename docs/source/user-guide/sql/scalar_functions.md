@@ -2519,6 +2519,7 @@ date_part(part, expression)
 - **part**: Part of the date to return. The following date parts are supported:
 
   - year
+  - isoyear (ISO 8601 week-numbering year)
   - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
   - month
   - week (week of the year)
@@ -4221,7 +4222,7 @@ array_to_string(array, delimiter[, null_string])
 
 ### `array_union`
 
-Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
+Returns an array of elements that are present in both arrays (all elements from both arrays) without duplicates.
 
 ```sql
 array_union(array1, array2)
