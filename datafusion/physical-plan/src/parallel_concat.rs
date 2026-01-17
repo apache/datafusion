@@ -38,8 +38,10 @@ pub async fn parallel_concat_batches<'a>(
     let mut tasks = Vec::with_capacity(num_columns);
 
     for i in 0..num_columns {
-        let column_arrays: Vec<ArrayRef> =
-            batches.iter().map(|batch| batch.column(i).clone()).collect();
+        let column_arrays: Vec<ArrayRef> = batches
+            .iter()
+            .map(|batch| batch.column(i).clone())
+            .collect();
 
         let task = tokio::spawn(async move {
             let arrays_to_concat: Vec<&dyn Array> =
@@ -49,13 +51,11 @@ pub async fn parallel_concat_batches<'a>(
         tasks.push(task);
     }
 
-    let task_outputs = try_join_all(tasks)
-        .await
-        .map_err(|e| {
-            datafusion_common::DataFusionError::Execution(format!(
-                "Tokio join error during parallel concatenation: {e}"
-            ))
-        })?;
+    let task_outputs = try_join_all(tasks).await.map_err(|e| {
+        datafusion_common::DataFusionError::Execution(format!(
+            "Tokio join error during parallel concatenation: {e}"
+        ))
+    })?;
 
     let columns = task_outputs
         .into_iter()

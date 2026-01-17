@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
-use crate::ExecutionPlanProperties;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -60,8 +59,10 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use crate::{ExecutionPlanProperties, parallel_concat};
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -1119,6 +1120,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    true,
                 ))
             })?,
             PartitionMode::Partitioned => {
@@ -1140,6 +1142,7 @@ impl ExecutionPlan for HashJoinExec {
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     array_map_created_count,
+                    false,
                 ))
             }
             PartitionMode::Auto => {
@@ -1558,6 +1561,7 @@ async fn collect_left_input(
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
     array_map_created_count: Count,
+    parallel_concat: bool,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -1681,12 +1685,17 @@ async fn collect_left_input(
             }
 
             // Merge all batches into a single batch, so we can directly index into the arrays
-            let batches_to_concat: Vec<&RecordBatch> = batches_iter.clone().collect();
-            let batch = crate::parallel_concat::parallel_concat_batches(
-                &schema,
-                &batches_to_concat,
-            )
-            .await?;
+            let batch = if parallel_concat {
+                let batches_to_concat: Vec<&RecordBatch> = batches_iter.clone().collect();
+                let batch = crate::parallel_concat::parallel_concat_batches(
+                    &schema,
+                    &batches_to_concat,
+                )
+                .await?;
+                batch
+            } else {
+                concat_batches(&schema, batches_iter)?
+            };
 
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
