@@ -46,7 +46,8 @@ bigdecimal = { workspace = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { version = "4.5.53", features = ["derive", "env"] }
-datafusion = { workspace = true, default-features = true, features = ["avro", "spark"] }
+datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-spark = { workspace = true, features = ["core"] }
 datafusion-substrait = { workspace = true, default-features = true }
 futures = { workspace = true }
 half = { workspace = true, default-features = true }

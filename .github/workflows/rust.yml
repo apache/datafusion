@@ -217,8 +217,8 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=serde
       - name: Check datafusion (sql)
         run: cargo check --profile ci --no-default-features -p datafusion --features=sql
-      - name: Check datafusion (spark)
-        run: cargo check --profile ci --no-default-features -p datafusion --features=spark
+      - name: Check datafusion-spark (core)
+        run: cargo check --profile ci -p datafusion-spark --features=core
       - name: Check datafusion (string_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
@@ -301,7 +301,7 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features serde,avro,json,backtrace,integration-tests,parquet_encryption,spark
+            --features serde,avro,json,backtrace,integration-tests,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
         # Check no temporary directories created during test.
@@ -559,7 +559,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests,spark
+        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   vendor:
     name: Verify Vendored Code

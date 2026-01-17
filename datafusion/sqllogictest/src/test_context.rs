@@ -46,6 +46,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use async_trait::async_trait;

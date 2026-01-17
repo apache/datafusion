@@ -30,8 +30,6 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-#[cfg(feature = "spark")]
-use crate::spark;
 use arrow_schema::{DataType, FieldRef};
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
@@ -1134,41 +1132,6 @@ impl SessionStateBuilder {
             .get_or_insert_with(HashMap::new)
             .extend(
                 SessionStateDefaults::default_table_functions()
-                    .into_iter()
-                    .map(|f| (f.name().to_string(), f)),
-            );
-
-        self
-    }
-
-    /// Adds all expr_planners, scalar, aggregate, window and table functions
-    /// compatible with Apache Spark.
-    ///
-    /// Note overwrites any previously registered items with the same name.
-    #[cfg(feature = "spark")]
-    pub fn with_spark_features(mut self) -> Self {
-        self.expr_planners
-            .get_or_insert_with(Vec::new)
-            // planners are evaluated in order of insertion. Push Apache Spark function planner to the front
-            // to take precedence over others
-            .insert(0, Arc::new(spark::planner::SparkFunctionPlanner));
-
-        self.scalar_functions
-            .get_or_insert_with(Vec::new)
-            .extend(spark::all_default_scalar_functions());
-
-        self.aggregate_functions
-            .get_or_insert_with(Vec::new)
-            .extend(spark::all_default_aggregate_functions());
-
-        self.window_functions
-            .get_or_insert_with(Vec::new)
-            .extend(spark::all_default_window_functions());
-
-        self.table_functions
-            .get_or_insert_with(HashMap::new)
-            .extend(
-                spark::all_default_table_functions()
                     .into_iter()
                     .map(|f| (f.name().to_string(), f)),
             );
@@ -2541,26 +2504,5 @@ mod tests {
         fn udwf_names(&self) -> Vec<String> {
             self.state.window_functions().keys().cloned().collect()
         }
-    }
-
-    #[test]
-    #[cfg(feature = "spark")]
-    fn test_session_state_with_spark_features() {
-        let state = SessionStateBuilder::new().with_spark_features().build();
-
-        assert!(
-            state.scalar_functions().contains_key("sha2"),
-            "Apache Spark scalar function 'sha2' should be registered"
-        );
-
-        assert!(
-            state.aggregate_functions().contains_key("try_sum"),
-            "Apache Spark aggregate function 'try_sum' should be registered"
-        );
-
-        assert!(
-            !state.expr_planners().is_empty(),
-            "Apache Spark expr planners should be registered"
-        );
     }
 }
