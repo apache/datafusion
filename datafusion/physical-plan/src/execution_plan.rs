@@ -60,6 +60,7 @@ use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use futures::stream::{StreamExt, TryStreamExt};
 
 /// Represent nodes in the DataFusion Physical Plan.
@@ -721,6 +722,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         _preserve_order: bool,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         None
+    }
+
+    fn dynamic_filters(&self) -> Vec<Arc<DynamicFilterPhysicalExpr>> {
+        vec![]
     }
 }
 

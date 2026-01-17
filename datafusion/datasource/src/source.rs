@@ -37,8 +37,10 @@ use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
@@ -409,6 +411,30 @@ impl ExecutionPlan for DataSourceExec {
                 Arc::new(self.clone().with_data_source(new_data_source))
                     as Arc<dyn ExecutionPlan>
             })
+    }
+
+    fn dynamic_filters(&self) -> Vec<Arc<DynamicFilterPhysicalExpr>> {
+        let Some(node) = self.data_source.as_any().downcast_ref::<FileScanConfig>()
+        else {
+            return vec![];
+        };
+
+        let Some(filter) = node.file_source.filter() else {
+            return vec![];
+        };
+
+        let mut filters = vec![];
+        let _ = filter.transform_down(|expr| {
+            if let Ok(dynamic_filter) =
+                Arc::downcast::<DynamicFilterPhysicalExpr>(Arc::clone(&expr) as _)
+            {
+                filters.push(dynamic_filter);
+            };
+
+            Ok(Transformed::no(expr))
+        });
+
+        filters
     }
 }
 

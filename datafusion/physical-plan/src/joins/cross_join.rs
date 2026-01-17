@@ -206,7 +206,7 @@ async fn load_left_input(
     let (batches, _metrics, reservation) = stream
         .try_fold(
             (Vec::new(), metrics, reservation),
-            |(mut batches, metrics, mut reservation), batch| async {
+            |(mut batches, metrics, reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
                 reservation.try_grow(batch_size)?;
