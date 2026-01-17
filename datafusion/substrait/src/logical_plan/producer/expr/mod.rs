@@ -169,7 +169,7 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::from_substrait_extended_expr;
     use datafusion::arrow::datatypes::{DataType, Schema};
-    use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
+    use datafusion::common::{Column, DFSchema, DataFusionError, ScalarValue};
     use datafusion::execution::SessionStateBuilder;
 
     #[tokio::test]
@@ -192,8 +192,8 @@ mod tests {
         assert_eq!(rt_expr, &expr);
 
         // Multiple expressions, with column references
-        let expr1 = Expr::Column("c0".into());
-        let expr2 = Expr::Column("c1".into());
+        let expr1 = Expr::Column(Column::from_qualified_name("c0"));
+        let expr2 = Expr::Column(Column::from_qualified_name("c1"));
         let out1 = Field::new("out1", DataType::Int32, true);
         let out2 = Field::new("out2", DataType::Utf8, true);
         let input_schema = DFSchemaRef::new(DFSchema::try_from(Schema::new(vec![
@@ -229,7 +229,7 @@ mod tests {
         let state = SessionStateBuilder::default().build();
 
         // Not ok if input schema is missing field referenced by expr
-        let expr = Expr::Column("missing".into());
+        let expr = Expr::Column(Column::from_qualified_name("missing"));
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
 
