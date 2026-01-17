@@ -315,3 +315,8 @@ required-features = ["unicode_expressions"]
 harness = false
 name = "factorial"
 required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "floor_ceil"
+required-features = ["math_expressions"]
