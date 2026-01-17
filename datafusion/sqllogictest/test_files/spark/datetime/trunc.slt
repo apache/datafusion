@@ -15,28 +15,79 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# YEAR - truncate to first date of year
+query D
+SELECT trunc('2009-02-12'::date, 'YEAR'::string);
+----
+2009-01-01
 
-## Original Query: SELECT trunc('2009-02-12', 'MM');
-## PySpark 3.5.5 Result: {'trunc(2009-02-12, MM)': datetime.date(2009, 2, 1), 'typeof(trunc(2009-02-12, MM))': 'date', 'typeof(2009-02-12)': 'string', 'typeof(MM)': 'string'}
-#query
-#SELECT trunc('2009-02-12'::string, 'MM'::string);
+query D
+SELECT trunc('2009-02-12'::date, 'YYYY'::string);
+----
+2009-01-01
 
-## Original Query: SELECT trunc('2015-10-27', 'YEAR');
-## PySpark 3.5.5 Result: {'trunc(2015-10-27, YEAR)': datetime.date(2015, 1, 1), 'typeof(trunc(2015-10-27, YEAR))': 'date', 'typeof(2015-10-27)': 'string', 'typeof(YEAR)': 'string'}
-#query
-#SELECT trunc('2015-10-27'::string, 'YEAR'::string);
+query D
+SELECT trunc('2009-02-12'::date, 'YY'::string);
+----
+2009-01-01
 
-## Original Query: SELECT trunc('2019-08-04', 'quarter');
-## PySpark 3.5.5 Result: {'trunc(2019-08-04, quarter)': datetime.date(2019, 7, 1), 'typeof(trunc(2019-08-04, quarter))': 'date', 'typeof(2019-08-04)': 'string', 'typeof(quarter)': 'string'}
-#query
-#SELECT trunc('2019-08-04'::string, 'quarter'::string);
+# QUARTER - truncate to first date of quarter
+query D
+SELECT trunc('2009-02-12'::date, 'QUARTER'::string);
+----
+2009-01-01
 
-## Original Query: SELECT trunc('2019-08-04', 'week');
-## PySpark 3.5.5 Result: {'trunc(2019-08-04, week)': datetime.date(2019, 7, 29), 'typeof(trunc(2019-08-04, week))': 'date', 'typeof(2019-08-04)': 'string', 'typeof(week)': 'string'}
-#query
-#SELECT trunc('2019-08-04'::string, 'week'::string);
+# MONTH - truncate to first date of month
+query D
+SELECT trunc('2009-02-12'::date, 'MONTH'::string);
+----
+2009-02-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'MM'::string);
+----
+2009-02-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'MON'::string);
+----
+2009-02-01
+
+# WEEK - truncate to Monday of the week
+query D
+SELECT trunc('2009-02-12'::date, 'WEEK'::string);
+----
+2009-02-09
+
+# string input
+query D
+SELECT trunc('2009-02-12'::string, 'YEAR'::string);
+----
+2009-01-01
+
+query D
+SELECT trunc(column1, 'YEAR'::string)
+FROM VALUES
+('2009-02-12'::date),
+('2000-02-12'::date),
+('2042-02-12'::date),
+(NULL::date);
+----
+2009-01-01
+2000-01-01
+2042-01-01
+NULL
+
+# Null handling
+query D
+SELECT trunc(NULL::date, 'YEAR'::string);
+----
+NULL
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Second argument of `TRUNC` must be non-null scalar Utf8
+SELECT trunc('2009-02-12'::date, NULL::string);
+
+# incorrect format
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter.
+SELECT trunc('2009-02-12'::date, 'test'::string);
+
