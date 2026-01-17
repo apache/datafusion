@@ -2542,4 +2542,25 @@ mod tests {
             self.state.window_functions().keys().cloned().collect()
         }
     }
+
+    #[test]
+    #[cfg(feature = "spark")]
+    fn test_session_state_with_spark_features() {
+        let state = SessionStateBuilder::new().with_spark_features().build();
+
+        assert!(
+            state.scalar_functions().contains_key("sha2"),
+            "Apache Spark scalar function 'sha2' should be registered"
+        );
+
+        assert!(
+            state.aggregate_functions().contains_key("try_sum"),
+            "Apache Spark aggregate function 'try_sum' should be registered"
+        );
+
+        assert!(
+            !state.expr_planners().is_empty(),
+            "Apache Spark expr planners should be registered"
+        );
+    }
 }
