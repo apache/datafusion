@@ -15,48 +15,262 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+# YEAR
+query I
+SELECT date_part('YEAR'::string, '2000-01-01'::date);
+----
+2000
 
-## Original Query: SELECT date_part('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
-## PySpark 3.5.5 Result: {"date_part(MINUTE, INTERVAL '123 23:55:59.002001' DAY TO SECOND)": 55, "typeof(date_part(MINUTE, INTERVAL '123 23:55:59.002001' DAY TO SECOND))": 'tinyint', 'typeof(MINUTE)': 'string', "typeof(INTERVAL '123 23:55:59.002001' DAY TO SECOND)": 'interval day to second'}
-#query
-#SELECT date_part('MINUTE'::string, INTERVAL '123 23:55:59.002001' DAY TO SECOND::interval day to second);
+query I
+SELECT date_part('YEARS'::string, '2000-01-01'::date);
+----
+2000
 
-## Original Query: SELECT date_part('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
-## PySpark 3.5.5 Result: {"date_part(MONTH, INTERVAL '2021-11' YEAR TO MONTH)": 11, "typeof(date_part(MONTH, INTERVAL '2021-11' YEAR TO MONTH))": 'tinyint', 'typeof(MONTH)': 'string', "typeof(INTERVAL '2021-11' YEAR TO MONTH)": 'interval year to month'}
-#query
-#SELECT date_part('MONTH'::string, INTERVAL '2021-11' YEAR TO MONTH::interval year to month);
+query I
+SELECT date_part('Y'::string, '2000-01-01'::date);
+----
+2000
 
-## Original Query: SELECT date_part('SECONDS', timestamp'2019-10-01 00:00:01.000001');
-## PySpark 3.5.5 Result: {"date_part(SECONDS, TIMESTAMP '2019-10-01 00:00:01.000001')": Decimal('1.000001'), "typeof(date_part(SECONDS, TIMESTAMP '2019-10-01 00:00:01.000001'))": 'decimal(8,6)', 'typeof(SECONDS)': 'string', "typeof(TIMESTAMP '2019-10-01 00:00:01.000001')": 'timestamp'}
-#query
-#SELECT date_part('SECONDS'::string, TIMESTAMP '2019-10-01 00:00:01.000001'::timestamp);
+query I
+SELECT date_part('YR'::string, '2000-01-01'::date);
+----
+2000
 
-## Original Query: SELECT date_part('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
-## PySpark 3.5.5 Result: {"date_part(YEAR, TIMESTAMP '2019-08-12 01:00:00.123456')": 2019, "typeof(date_part(YEAR, TIMESTAMP '2019-08-12 01:00:00.123456'))": 'int', 'typeof(YEAR)': 'string', "typeof(TIMESTAMP '2019-08-12 01:00:00.123456')": 'timestamp'}
-#query
-#SELECT date_part('YEAR'::string, TIMESTAMP '2019-08-12 01:00:00.123456'::timestamp);
+query I
+SELECT date_part('YRS'::string, '2000-01-01'::date);
+----
+2000
 
-## Original Query: SELECT date_part('days', interval 5 days 3 hours 7 minutes);
-## PySpark 3.5.5 Result: {"date_part(days, INTERVAL '5 03:07' DAY TO MINUTE)": 5, "typeof(date_part(days, INTERVAL '5 03:07' DAY TO MINUTE))": 'int', 'typeof(days)': 'string', "typeof(INTERVAL '5 03:07' DAY TO MINUTE)": 'interval day to minute'}
-#query
-#SELECT date_part('days'::string, INTERVAL '5 03:07' DAY TO MINUTE::interval day to minute);
+# YEAROFWEEK
+query I
+SELECT date_part('YEAROFWEEK'::string, '2000-01-01'::date);
+----
+1999
 
-## Original Query: SELECT date_part('doy', DATE'2019-08-12');
-## PySpark 3.5.5 Result: {"date_part(doy, DATE '2019-08-12')": 224, "typeof(date_part(doy, DATE '2019-08-12'))": 'int', 'typeof(doy)': 'string', "typeof(DATE '2019-08-12')": 'date'}
-#query
-#SELECT date_part('doy'::string, DATE '2019-08-12'::date);
+# QUARTER
+query I
+SELECT date_part('QUARTER'::string, '2000-01-01'::date);
+----
+1
 
-## Original Query: SELECT date_part('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
-## PySpark 3.5.5 Result: {"date_part(seconds, INTERVAL '05:00:30.001001' HOUR TO SECOND)": Decimal('30.001001'), "typeof(date_part(seconds, INTERVAL '05:00:30.001001' HOUR TO SECOND))": 'decimal(8,6)', 'typeof(seconds)': 'string', "typeof(INTERVAL '05:00:30.001001' HOUR TO SECOND)": 'interval hour to second'}
-#query
-#SELECT date_part('seconds'::string, INTERVAL '05:00:30.001001' HOUR TO SECOND::interval hour to second);
+query I
+SELECT date_part('QTR'::string, '2000-01-01'::date);
+----
+1
 
-## Original Query: SELECT date_part('week', timestamp'2019-08-12 01:00:00.123456');
-## PySpark 3.5.5 Result: {"date_part(week, TIMESTAMP '2019-08-12 01:00:00.123456')": 33, "typeof(date_part(week, TIMESTAMP '2019-08-12 01:00:00.123456'))": 'int', 'typeof(week)': 'string', "typeof(TIMESTAMP '2019-08-12 01:00:00.123456')": 'timestamp'}
-#query
-#SELECT date_part('week'::string, TIMESTAMP '2019-08-12 01:00:00.123456'::timestamp);
+# MONTH
+query I
+SELECT date_part('MONTH'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MON'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MONS'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('MONTHS'::string, '2000-01-01'::date);
+----
+1
+
+# WEEK
+query I
+SELECT date_part('WEEK'::string, '2000-01-01'::date);
+----
+52
+
+query I
+SELECT date_part('WEEKS'::string, '2000-01-01'::date);
+----
+52
+
+query I
+SELECT date_part('W'::string, '2000-01-01'::date);
+----
+52
+
+# DAYS
+query I
+SELECT date_part('DAY'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('D'::string, '2000-01-01'::date);
+----
+1
+
+query I
+SELECT date_part('DAYS'::string, '2000-01-01'::date);
+----
+1
+
+# DAYOFWEEK
+query I
+SELECT date_part('DAYOFWEEK'::string, '2000-01-01'::date);
+----
+7
+
+query I
+SELECT date_part('DOW'::string, '2000-01-01'::date);
+----
+7
+
+# DAYOFWEEK_ISO
+query I
+SELECT date_part('DAYOFWEEK_ISO'::string, '2000-01-01'::date);
+----
+6
+
+query I
+SELECT date_part('DOW_ISO'::string, '2000-01-01'::date);
+----
+6
+
+# DOY
+query I
+SELECT date_part('DOY'::string, '2000-01-01'::date);
+----
+1
+
+# HOUR
+query I
+SELECT date_part('HOUR'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('H'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HOURS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HR'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+query I
+SELECT date_part('HRS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+12
+
+# MINUTE
+query I
+SELECT date_part('MINUTE'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('M'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MIN'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MINS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+query I
+SELECT date_part('MINUTES'::string, '2000-01-01 12:30:45'::timestamp);
+----
+30
+
+# SECOND
+query I
+SELECT date_part('SECOND'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('S'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SEC'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SECONDS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+query I
+SELECT date_part('SECS'::string, '2000-01-01 12:30:45'::timestamp);
+----
+45
+
+# NULL input
+query I
+SELECT date_part('year'::string, NULL::timestamp);
+----
+NULL
+
+query error Internal error: First argument of `DATE_PART` must be non-null scalar Utf8
+SELECT date_part(NULL::string, '2000-01-01'::date);
+
+# Invalid part
+query error DataFusion error: Execution error: Date part 'test' not supported
+SELECT date_part('test'::string, '2000-01-01'::date);
+
+query I
+SELECT date_part('year', column1)
+FROM VALUES
+('2022-03-15'::date),
+('1999-12-31'::date),
+('2000-01-01'::date),
+(NULL::date);
+----
+2022
+1999
+2000
+NULL
+
+query I
+SELECT date_part('minutes', column1)
+FROM VALUES
+('2022-03-15 12:30:45'::timestamp),
+('1999-12-31 12:32:45'::timestamp),
+('2000-01-01 12:00:45'::timestamp),
+(NULL::timestamp);
+----
+30
+32
+0
+NULL
+
+# alias datepart
+query I
+SELECT datepart('YEAR'::string, '2000-01-01'::date);
+----
+2000
+
+query I
+SELECT datepart('year', column1)
+FROM VALUES
+('2022-03-15'::date),
+('1999-12-31'::date),
+('2000-01-01'::date),
+(NULL::date);
+----
+2022
+1999
+2000
+NULL
