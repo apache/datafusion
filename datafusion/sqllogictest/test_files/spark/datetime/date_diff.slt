@@ -26,6 +26,39 @@ SELECT date_diff('2009-07-31'::date, '2009-07-30'::date);
 ----
 1
 
+query I
+SELECT date_diff('2009-07-31'::string, '2009-07-30'::date);
+----
+1
+
+query I
+SELECT date_diff('2009-07-31'::timestamp, '2009-07-30'::date);
+----
+1
+
+# Date64 input
+query I
+SELECT date_diff(arrow_cast('2009-07-31', 'Date64'), arrow_cast('2009-07-30', 'Date64'));
+----
+1
+
+query I
+SELECT date_diff(arrow_cast('2009-07-30', 'Date64'), arrow_cast('2009-07-31', 'Date64'));
+----
+-1
+
+# Mixed Date32 and Date64 input
+query I
+SELECT date_diff('2009-07-31'::date, arrow_cast('2009-07-30', 'Date64'));
+----
+1
+
+query I
+SELECT date_diff(arrow_cast('2009-07-31', 'Date64'), '2009-07-30'::date);
+----
+1
+
+
 # Same date returns 0
 query I
 SELECT date_diff('2009-07-30'::date, '2009-07-30'::date);
@@ -46,6 +79,11 @@ SELECT date_diff('2009-07-30 12:34:56'::timestamp, '2009-07-31 23:45:01'::timest
 
 query I
 SELECT date_diff('2009-07-31 23:45:01'::timestamp, '2009-07-30 12:34:56'::timestamp);
+----
+1
+
+query I
+SELECT date_diff('2009-07-31 23:45:01'::string, '2009-07-30 12:34:56'::timestamp);
 ----
 1
 

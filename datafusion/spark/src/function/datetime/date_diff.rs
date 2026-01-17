@@ -99,7 +99,7 @@ impl ScalarUDFImpl for SparkDateDiff {
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!(
-            "spark date_diff should have been simplified to standard subtraction"
+            "Apache Spark `date_diff` should have been simplified to standard subtraction"
         )
     }
 
@@ -109,10 +109,11 @@ impl ScalarUDFImpl for SparkDateDiff {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [end, start] = take_function_args(self.name(), args)?;
-        Ok(ExprSimplifyResult::Simplified(binary_expr(
-            end.cast_to(&DataType::Int32, info.schema())?,
-            Operator::Minus,
-            start.cast_to(&DataType::Int32, info.schema())?,
-        )))
+        let end = end.cast_to(&DataType::Date32, info.schema())?;
+        let start = start.cast_to(&DataType::Date32, info.schema())?;
+        Ok(ExprSimplifyResult::Simplified(
+            binary_expr(end, Operator::Minus, start)
+                .cast_to(&DataType::Int32, info.schema())?,
+        ))
     }
 }
