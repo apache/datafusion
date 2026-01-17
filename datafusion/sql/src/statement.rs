@@ -1390,14 +1390,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     exec_err!("Function name not provided")
                 }
             }
-            Statement::Truncate {
+            Statement::Truncate(ast::Truncate {
                 table_names,
                 partitions,
                 identity,
                 cascade,
                 on_cluster,
-                ..
-            } => {
+                table,
+            }) => {
+                let _ = table; // explicitly handled to satisfy full destructuring
                 if table_names.len() != 1 {
                     return not_impl_err!(
                         "TRUNCATE with multiple tables is not supported"
