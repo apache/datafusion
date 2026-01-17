@@ -188,8 +188,6 @@ pub fn cast_column(
     }
 }
 
-
-
 /// Validates compatibility between source and target struct fields for casting operations.
 ///
 /// This function implements comprehensive struct compatibility checking by examining:
