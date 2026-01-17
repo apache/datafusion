@@ -93,6 +93,34 @@
 //! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
+//!
+//! //! # Example: enabling Apache Spark features with SessionStateBuilder
+//!
+//! The recommended way to enable Apache Spark compatibility is to use the
+//! [`with_spark_features`] method on [`SessionStateBuilder`]. This registers all
+//! Apache Spark functions (scalar, aggregate, window, and table) as well as the Apache Spark
+//! expression planner.
+//!
+//! Note: This requires the `spark` feature to be enabled in the `datafusion` crate
+//!
+//! ```
+//! use datafusion::execution::session_state::SessionStateBuilder;
+//! use datafusion::prelude::SessionContext;
+//!
+//! // Create a SessionState with Apache Spark features enabled
+//! // note: the order matters here, `with_spark_features` should be
+//! // called after `with_default_features` to overwrite any existing functions
+//! let state = SessionStateBuilder::new()
+//!     .with_default_features()
+//!     .with_spark_features()
+//!     .build();
+//!
+//! // Create a SessionContext using this state
+//! let ctx = SessionContext::new_with_state(state);
+//! ```
+//!
+//! [`with_spark_features`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html#method.with_spark_features
+//! [`SessionStateBuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html
 
 pub mod function;
 pub mod planner;

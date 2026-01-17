@@ -97,6 +97,7 @@ serde = [
     # statements in `arrow-schema` crate
     "arrow-schema/serde",
 ]
+spark = ["datafusion-spark"]
 sql = [
     "datafusion-common/sql",
     "datafusion-functions-nested?/sql",
@@ -142,6 +143,7 @@ datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
+datafusion-spark = { workspace = true, optional = true }
 datafusion-sql = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 futures = { workspace = true }

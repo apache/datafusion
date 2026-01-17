@@ -726,6 +726,7 @@
 //! * [datafusion_physical_expr]: [`PhysicalExpr`] and related expressions
 //! * [datafusion_physical_plan]: [`ExecutionPlan`] and related expressions
 //! * [datafusion_physical_optimizer]: [`ExecutionPlan`] and related expressions
+//! * [datafusion_spark]: Apache Spark compatible functions
 //! * [datafusion_sql]: SQL planner ([`SqlToRel`])
 //!
 //! [`SchemaProvider`]: datafusion_catalog::SchemaProvider
@@ -872,6 +873,12 @@ pub mod functions {
 pub mod functions_nested {
     #[cfg(feature = "nested_expressions")]
     pub use datafusion_functions_nested::*;
+}
+
+/// re-export of [`datafusion_spark`] crate, if "spark" feature is enabled
+pub mod spark {
+    #[cfg(feature = "spark")]
+    pub use datafusion_spark::*;
 }
 
 /// re-export of [`datafusion_functions_aggregate`] crate
