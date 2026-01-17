@@ -54,5 +54,5 @@ RUN find /work -name "*.sh" -type f -exec sh -c 'tr -d "\r" < "$1" > "$1.tmp" &&
 WORKDIR /work/docs
 
 # Default command: build documentation
-# Fix line endings when running (for volume-mounted files from Windows) and then build
-CMD ["bash", "-c", "find /work -name '*.sh' -type f -exec sh -c 'tr -d \"\\r\" < \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"' _ {} \\; ; cd /work/docs && bash build.sh"]
+# Fix line endings when running (for volume-mounted files from Windows) only if needed, and then build
+CMD ["bash", "-c", "if find /work -name '*.sh' -type f -print0 | xargs -0 grep -Il $'\\r' >/dev/null 2>&1; then echo \"Converting CRLF to LF in shell scripts...\"; find /work -name '*.sh' -type f -exec sh -c 'tr -d \"\\r\" < \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"' _ {} \\; ; fi; cd /work/docs && bash build.sh"]
