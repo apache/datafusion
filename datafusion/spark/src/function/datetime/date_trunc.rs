@@ -133,7 +133,7 @@ impl ScalarUDFImpl for SparkDateTrunc {
             // Sub-second truncations don't need timezone adjustment
             (_, "second" | "millisecond" | "microsecond") => ts_expr,
 
-            // Timestamp with timezone: convert to session timezone, strip timezone and convert back to original timezone
+            // convert to session timezone, strip timezone and convert back to original timezone
             (DataType::Timestamp(unit, tz), _) => {
                 let ts_expr = match &session_tz {
                     Some(session_tz) => ts_expr.cast_to(
@@ -152,8 +152,12 @@ impl ScalarUDFImpl for SparkDateTrunc {
                 .cast_to(&DataType::Timestamp(*unit, tz.clone()), info.schema())?
             }
 
-            // Timestamp without timezone: use as-is
-            _ => ts_expr,
+            _ => {
+                return plan_err!(
+                    "Second argument of `DATE_TRUNC` must be Timestamp, got {}",
+                    ts_type
+                );
+            }
         };
 
         let fmt_expr = Expr::Literal(ScalarValue::new_utf8(fmt), None);
