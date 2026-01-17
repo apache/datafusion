@@ -42,6 +42,63 @@ physical_plan
 statement error DataFusion error: Error during planning: WITH query name "a" specified more than once
 WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a;
 
+statement ok
+CREATE TABLE orders AS VALUES (1), (2);
+
+##########
+## CTE Reference Resolution
+##########
+
+# These tests exercise CTE reference resolution with and without identifier
+# normalization. The session is configured with a strict catalog/schema provider
+# (see `datafusion/sqllogictest/src/test_context.rs`) that only provides the
+# `orders` table and panics on any unexpected table lookup.
+#
+# This makes it observable if DataFusion incorrectly treats a CTE reference as a
+# catalog lookup.
+#
+# Refs: https://github.com/apache/datafusion/issues/18932
+#
+# NOTE: This test relies on a strict catalog/schema provider registered in
+# `datafusion/sqllogictest/src/test_context.rs` that provides only the `orders`
+# table and panics on unexpected lookups.
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with BarBaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2
+
 # Test disabling recursive CTE
 statement ok
 set datafusion.execution.enable_recursive_ctes = false;
@@ -996,7 +1053,7 @@ query TT
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
 ----
 logical_plan
@@ -1021,7 +1078,7 @@ query TT
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
 ----
 logical_plan
@@ -1160,5 +1217,5 @@ query error DataFusion error: This feature is not implemented: Recursive CTEs ar
 explain WITH RECURSIVE numbers AS (
   select 1 as n
   UNION ALL
-  select n + 1 FROM numbers WHERE N < 10
+  select n + 1 FROM numbers WHERE n < 10
 ) select * from numbers;
