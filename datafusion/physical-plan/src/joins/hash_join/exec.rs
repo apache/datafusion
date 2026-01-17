@@ -62,7 +62,6 @@ use crate::{
 };
 
 use arrow::array::{ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -98,7 +97,7 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
 #[expect(clippy::too_many_arguments)]
-fn try_create_array_map(
+async fn try_create_array_map(
     bounds: &Option<PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -172,7 +171,11 @@ fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = concat_batches(schema, batches)?;
+    let batch = crate::parallel_concat::parallel_concat_batches(
+        schema,
+        &batches.iter().collect::<Vec<_>>(),
+    )
+    .await?;
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
     let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
@@ -1625,7 +1628,9 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_small_build_threshold,
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
-        )? {
+        )
+        .await?
+        {
             array_map_created_count.add(1);
             metrics.build_mem_used.add(array_map.size());
 
@@ -1676,7 +1681,12 @@ async fn collect_left_input(
             }
 
             // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+            let batches_to_concat: Vec<&RecordBatch> = batches_iter.clone().collect();
+            let batch = crate::parallel_concat::parallel_concat_batches(
+                &schema,
+                &batches_to_concat,
+            )
+            .await?;
 
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
