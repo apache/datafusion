@@ -97,7 +97,7 @@
 //! # Example: enabling Apache Spark features with SessionStateBuilder
 //!
 //! The recommended way to enable Apache Spark compatibility is to use the
-//! [`SessionStateBuilderSpark`] extension trait. This registers all
+//! `SessionStateBuilderSpark` extension trait. This registers all
 //! Apache Spark functions (scalar, aggregate, window, and table) as well as the Apache Spark
 //! expression planner.
 //!
@@ -119,8 +119,6 @@
 //!     .with_spark_features()
 //!     .build();
 //! ```
-//!
-//! [`SessionStateBuilderSpark`]: crate::SessionStateBuilderSpark
 
 pub mod function;
 pub mod planner;
