@@ -15,26 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Extension trait for adding Apache Spark features to [`SessionStateBuilder`].
-//!
-//! This module provides the [`SessionStateBuilderSpark`] trait which adds
-//! Apache Spark compatibility features to DataFusion's `SessionStateBuilder`.
-//!
-//! # Example
-//!
-//! ```rust
-//! use datafusion_core::execution::session_state::SessionStateBuilder;
-//! use datafusion_spark::SessionStateBuilderSpark;
-//!
-//! // Create a SessionState with Apache Spark features enabled
-//! // note: the order matters here, `with_spark_features` should be
-//! // called after `with_default_features` to overwrite any existing functions
-//! let state = SessionStateBuilder::new()
-//!     .with_default_features()
-//!     .with_spark_features()
-//!     .build();
-//! ```
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
