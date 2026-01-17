@@ -22,7 +22,6 @@ use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::iter::once;
-use std::ops::Range;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -41,9 +40,8 @@ pub use crate::joins::{JoinOn, JoinOnRef};
 
 use ahash::RandomState;
 use arrow::array::{
-    Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
-    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    Array, BooleanBufferBuilder, RecordBatch, RecordBatchOptions, UInt32Array,
+    UInt32Builder, UInt64Array, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -52,12 +50,9 @@ use arrow::array::{
     StringViewArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array,
 };
-use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::{self, FilterBuilder, and, take};
-use arrow::datatypes::{
-    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
-};
+use arrow::datatypes::{Field, Schema, SchemaBuilder};
 use arrow_ord::cmp::not_distinct;
 use arrow_schema::{ArrowError, DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
@@ -1035,320 +1030,6 @@ pub(crate) fn build_batch_from_indices(
     Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
 }
 
-/// Returns a new [RecordBatch] resulting of a join where the build/left side is empty.
-/// The resulting batch has [Schema] `schema`.
-pub(crate) fn build_batch_empty_build_side(
-    schema: &Schema,
-    build_batch: &RecordBatch,
-    probe_batch: &RecordBatch,
-    column_indices: &[ColumnIndex],
-    join_type: JoinType,
-) -> Result<RecordBatch> {
-    match join_type {
-        // these join types only return data if the left side is not empty, so we return an
-        // empty RecordBatch
-        JoinType::Inner
-        | JoinType::Left
-        | JoinType::LeftSemi
-        | JoinType::RightSemi
-        | JoinType::LeftAnti
-        | JoinType::LeftMark => Ok(RecordBatch::new_empty(Arc::new(schema.clone()))),
-
-        // the remaining joins will return data for the right columns and null for the left ones
-        JoinType::Right | JoinType::Full | JoinType::RightAnti | JoinType::RightMark => {
-            let num_rows = probe_batch.num_rows();
-            let mut columns: Vec<Arc<dyn Array>> =
-                Vec::with_capacity(schema.fields().len());
-
-            for column_index in column_indices {
-                let array = match column_index.side {
-                    // left -> null array
-                    JoinSide::Left => new_null_array(
-                        build_batch.column(column_index.index).data_type(),
-                        num_rows,
-                    ),
-                    // right -> respective right array
-                    JoinSide::Right => Arc::clone(probe_batch.column(column_index.index)),
-                    // right mark -> unset boolean array as there are no matches on the left side
-                    JoinSide::None => Arc::new(BooleanArray::new(
-                        BooleanBuffer::new_unset(num_rows),
-                        None,
-                    )),
-                };
-
-                columns.push(array);
-            }
-
-            Ok(RecordBatch::try_new(Arc::new(schema.clone()), columns)?)
-        }
-    }
-}
-
-/// The input is the matched indices for left and right and
-/// adjust the indices according to the join type
-pub(crate) fn adjust_indices_by_join_type(
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    adjust_range: Range<usize>,
-    join_type: JoinType,
-    preserve_order_for_right: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
-    match join_type {
-        JoinType::Inner => {
-            // matched
-            Ok((left_indices, right_indices))
-        }
-        JoinType::Left => {
-            // matched
-            Ok((left_indices, right_indices))
-            // unmatched left row will be produced in the end of loop, and it has been set in the left visited bitmap
-        }
-        JoinType::Right => {
-            // combine the matched and unmatched right result together
-            append_right_indices(
-                left_indices,
-                right_indices,
-                adjust_range,
-                preserve_order_for_right,
-            )
-        }
-        JoinType::Full => {
-            append_right_indices(left_indices, right_indices, adjust_range, false)
-        }
-        JoinType::RightSemi => {
-            // need to remove the duplicated record in the right side
-            let right_indices = get_semi_indices(adjust_range, &right_indices);
-            // the left_indices will not be used later for the `right semi` join
-            Ok((left_indices, right_indices))
-        }
-        JoinType::RightAnti => {
-            // need to remove the duplicated record in the right side
-            // get the anti index for the right side
-            let right_indices = get_anti_indices(adjust_range, &right_indices);
-            // the left_indices will not be used later for the `right anti` join
-            Ok((left_indices, right_indices))
-        }
-        JoinType::RightMark => {
-            let right_indices = get_mark_indices(&adjust_range, &right_indices);
-            let left_indices_vec: Vec<u64> = adjust_range.map(|i| i as u64).collect();
-            let left_indices = UInt64Array::from(left_indices_vec);
-            Ok((left_indices, right_indices))
-        }
-        JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            // matched or unmatched left row will be produced in the end of loop
-            // When visit the right batch, we can output the matched left row and don't need to wait the end of loop
-            Ok((
-                UInt64Array::from_iter_values(vec![]),
-                UInt32Array::from_iter_values(vec![]),
-            ))
-        }
-    }
-}
-
-/// Appends right indices to left indices based on the specified order mode.
-///
-/// The function operates in two modes:
-/// 1. If `preserve_order_for_right` is true, probe matched and unmatched indices
-///    are inserted in order using the `append_probe_indices_in_order()` method.
-/// 2. Otherwise, unmatched probe indices are simply appended after matched ones.
-///
-/// # Parameters
-/// - `left_indices`: UInt64Array of left indices.
-/// - `right_indices`: UInt32Array of right indices.
-/// - `adjust_range`: Range to adjust the right indices.
-/// - `preserve_order_for_right`: Boolean flag to determine the mode of operation.
-///
-/// # Returns
-/// A tuple of updated `UInt64Array` and `UInt32Array`.
-pub(crate) fn append_right_indices(
-    left_indices: UInt64Array,
-    right_indices: UInt32Array,
-    adjust_range: Range<usize>,
-    preserve_order_for_right: bool,
-) -> Result<(UInt64Array, UInt32Array)> {
-    if preserve_order_for_right {
-        Ok(append_probe_indices_in_order(
-            &left_indices,
-            &right_indices,
-            adjust_range,
-        ))
-    } else {
-        let right_unmatched_indices = get_anti_indices(adjust_range, &right_indices);
-
-        if right_unmatched_indices.is_empty() {
-            Ok((left_indices, right_indices))
-        } else {
-            // `into_builder()` can fail here when there is nothing to be filtered and
-            // left_indices or right_indices has the same reference to the cached indices.
-            // In that case, we use a slower alternative.
-
-            // the new left indices: left_indices + null array
-            let mut new_left_indices_builder =
-                left_indices.into_builder().unwrap_or_else(|left_indices| {
-                    let mut builder = UInt64Builder::with_capacity(
-                        left_indices.len() + right_unmatched_indices.len(),
-                    );
-                    debug_assert_eq!(
-                        left_indices.null_count(),
-                        0,
-                        "expected left indices to have no nulls"
-                    );
-                    builder.append_slice(left_indices.values());
-                    builder
-                });
-            new_left_indices_builder.append_nulls(right_unmatched_indices.len());
-            let new_left_indices = UInt64Array::from(new_left_indices_builder.finish());
-
-            // the new right indices: right_indices + right_unmatched_indices
-            let mut new_right_indices_builder = right_indices
-                .into_builder()
-                .unwrap_or_else(|right_indices| {
-                    let mut builder = UInt32Builder::with_capacity(
-                        right_indices.len() + right_unmatched_indices.len(),
-                    );
-                    debug_assert_eq!(
-                        right_indices.null_count(),
-                        0,
-                        "expected right indices to have no nulls"
-                    );
-                    builder.append_slice(right_indices.values());
-                    builder
-                });
-            debug_assert_eq!(
-                right_unmatched_indices.null_count(),
-                0,
-                "expected right unmatched indices to have no nulls"
-            );
-            new_right_indices_builder.append_slice(right_unmatched_indices.values());
-            let new_right_indices = UInt32Array::from(new_right_indices_builder.finish());
-
-            Ok((new_left_indices, new_right_indices))
-        }
-    }
-}
-
-/// Returns `range` indices which are not present in `input_indices`
-pub(crate) fn get_anti_indices<T: ArrowPrimitiveType>(
-    range: Range<usize>,
-    input_indices: &PrimitiveArray<T>,
-) -> PrimitiveArray<T>
-where
-    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
-{
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
-
-    // get the anti index
-    (range)
-        .filter_map(|idx| {
-            (!bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
-        })
-        .collect()
-}
-
-/// Returns intersection of `range` and `input_indices` omitting duplicates
-pub(crate) fn get_semi_indices<T: ArrowPrimitiveType>(
-    range: Range<usize>,
-    input_indices: &PrimitiveArray<T>,
-) -> PrimitiveArray<T>
-where
-    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
-{
-    let bitmap = build_range_bitmap(&range, input_indices);
-    let offset = range.start;
-    // get the semi index
-    (range)
-        .filter_map(|idx| {
-            (bitmap.get_bit(idx - offset)).then_some(T::Native::from_usize(idx))
-        })
-        .collect()
-}
-
-pub(crate) fn get_mark_indices<T: ArrowPrimitiveType>(
-    range: &Range<usize>,
-    input_indices: &PrimitiveArray<T>,
-) -> PrimitiveArray<UInt32Type>
-where
-    NativeAdapter<T>: From<<T as ArrowPrimitiveType>::Native>,
-{
-    let mut bitmap = build_range_bitmap(range, input_indices);
-    PrimitiveArray::new(
-        vec![0; range.len()].into(),
-        Some(NullBuffer::new(bitmap.finish())),
-    )
-}
-
-fn build_range_bitmap<T: ArrowPrimitiveType>(
-    range: &Range<usize>,
-    input: &PrimitiveArray<T>,
-) -> BooleanBufferBuilder {
-    let mut builder = BooleanBufferBuilder::new(range.len());
-    builder.append_n(range.len(), false);
-
-    input.iter().flatten().for_each(|v| {
-        let idx = v.as_usize();
-        if range.contains(&idx) {
-            builder.set_bit(idx - range.start, true);
-        }
-    });
-
-    builder
-}
-
-/// Appends probe indices in order by considering the given build indices.
-///
-/// This function constructs new build and probe indices by iterating through
-/// the provided indices, and appends any missing values between previous and
-/// current probe index with a corresponding null build index.
-///
-/// # Parameters
-///
-/// - `build_indices`: `PrimitiveArray` of `UInt64Type` containing build indices.
-/// - `probe_indices`: `PrimitiveArray` of `UInt32Type` containing probe indices.
-/// - `range`: The range of indices to consider.
-///
-/// # Returns
-///
-/// A tuple of two arrays:
-/// - A `PrimitiveArray` of `UInt64Type` with the newly constructed build indices.
-/// - A `PrimitiveArray` of `UInt32Type` with the newly constructed probe indices.
-fn append_probe_indices_in_order(
-    build_indices: &PrimitiveArray<UInt64Type>,
-    probe_indices: &PrimitiveArray<UInt32Type>,
-    range: Range<usize>,
-) -> (PrimitiveArray<UInt64Type>, PrimitiveArray<UInt32Type>) {
-    // Builders for new indices:
-    let mut new_build_indices = UInt64Builder::new();
-    let mut new_probe_indices = UInt32Builder::new();
-    // Set previous index as the start index for the initial loop:
-    let mut prev_index = range.start as u32;
-    // Zip the two iterators.
-    debug_assert!(build_indices.len() == probe_indices.len());
-    for (build_index, probe_index) in build_indices
-        .values()
-        .into_iter()
-        .zip(probe_indices.values().into_iter())
-    {
-        // Append values between previous and current probe index with null build index:
-        for value in prev_index..*probe_index {
-            new_probe_indices.append_value(value);
-            new_build_indices.append_null();
-        }
-        // Append current indices:
-        new_probe_indices.append_value(*probe_index);
-        new_build_indices.append_value(*build_index);
-        // Set current probe index as previous for the next iteration:
-        prev_index = probe_index + 1;
-    }
-    // Append remaining probe indices after the last valid probe index with null build index.
-    for value in prev_index..range.end as u32 {
-        new_probe_indices.append_value(value);
-        new_build_indices.append_null();
-    }
-    // Build arrays and return:
-    (new_build_indices.finish(), new_probe_indices.finish())
-}
-
 /// Metrics for build & probe joins
 #[derive(Clone, Debug)]
 pub(crate) struct BuildProbeJoinMetrics {
@@ -1369,8 +1050,6 @@ pub(crate) struct BuildProbeJoinMetrics {
     pub(crate) input_rows: metrics::Count,
     /// Fraction of probe rows that found more than one match
     pub(crate) probe_hit_rate: metrics::RatioMetrics,
-    /// Average number of build matches per matched probe row
-    pub(crate) avg_fanout: metrics::RatioMetrics,
 }
 
 // This Drop implementation updates the elapsed compute part of the metrics.
@@ -1418,10 +1097,6 @@ impl BuildProbeJoinMetrics {
             .with_type(MetricType::SUMMARY)
             .ratio_metrics("probe_hit_rate", partition);
 
-        let avg_fanout = MetricBuilder::new(metrics)
-            .with_type(MetricType::SUMMARY)
-            .ratio_metrics("avg_fanout", partition);
-
         Self {
             build_time,
             build_input_batches,
@@ -1432,7 +1107,6 @@ impl BuildProbeJoinMetrics {
             input_rows,
             baseline,
             probe_hit_rate,
-            avg_fanout,
         }
     }
 }

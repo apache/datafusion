@@ -3421,7 +3421,7 @@ physical_plan
 06)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
 07)------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
-09)------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
+09)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
 10)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 query TT
@@ -3863,10 +3863,10 @@ SELECT * FROM (
 ) AS rhs ON lhs.b=rhs.b
 ----
 11 1 21 1
-NULL NULL 22 4
 14 6 23 6
-NULL NULL 24 7
+NULL NULL 22 4
 15 8 25 8
+NULL NULL 24 7
 
 query TT
 EXPLAIN SELECT * FROM (
@@ -3917,9 +3917,9 @@ SELECT * FROM (
     LIMIT 10
 ) AS rhs ON lhs.b=rhs.b
 ----
-NULL NULL 21 4
 13 5 22 5
 14 5 22 5
+NULL NULL 21 4
 NULL NULL 23 6
 NULL NULL 24 7
 NULL NULL 25 8
