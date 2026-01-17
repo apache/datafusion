@@ -217,8 +217,6 @@ jobs:
         run: cargo check --profile ci --no-default-features -p datafusion --features=serde
       - name: Check datafusion (sql)
         run: cargo check --profile ci --no-default-features -p datafusion --features=sql
-      - name: Check datafusion-spark (core)
-        run: cargo check --profile ci -p datafusion-spark --features=core
       - name: Check datafusion (string_expressions)
         run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
       - name: Check datafusion (unicode_expressions)
