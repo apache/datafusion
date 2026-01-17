@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
-    binary::BinaryTypeCoercer, lit, or,
+    binary::BinaryTypeCoercer, interval_arithmetic::Interval, lit, or,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -51,13 +51,16 @@ use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionP
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
-use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::SimplifyContext;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::unwrap_cast::{
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary,
     is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist,
     unwrap_cast_in_comparison_for_binary,
+};
+use crate::{
+    analyzer::type_coercion::TypeCoercionRewriter,
+    simplify_expressions::udf_preimage::rewrite_with_preimage,
 };
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees_map;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
@@ -1969,9 +1972,95 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 }))
             }
 
+            // =======================================
+            // preimage_in_comparison
+            // =======================================
+            //
+            // For case:
+            // date_part(expr as 'YEAR') op literal
+            //
+            // Background:
+            // Datasources such as Parquet can prune partitions using simple predicates,
+            // but they cannot do so for complex expressions.
+            // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
+            // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
+            // NOTE: we only consider immutable UDFs with literal RHS values
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                use datafusion_expr::Operator::*;
+                let is_preimage_op = matches!(
+                    op,
+                    Eq | NotEq
+                        | Lt
+                        | LtEq
+                        | Gt
+                        | GtEq
+                        | IsDistinctFrom
+                        | IsNotDistinctFrom
+                );
+                if !is_preimage_op {
+                    return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op,
+                        right,
+                    })));
+                }
+
+                if let (Some(interval), Some(col_expr)) =
+                    get_preimage(left.as_ref(), right.as_ref(), info)?
+                {
+                    rewrite_with_preimage(info, interval, op, Box::new(col_expr))?
+                } else if let Some(swapped) = op.swap() {
+                    if let (Some(interval), Some(col_expr)) =
+                        get_preimage(right.as_ref(), left.as_ref(), info)?
+                    {
+                        rewrite_with_preimage(
+                            info,
+                            interval,
+                            swapped,
+                            Box::new(col_expr),
+                        )?
+                    } else {
+                        Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                    }
+                } else {
+                    Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
+                }
+            }
+
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+fn get_preimage(
+    left_expr: &Expr,
+    right_expr: &Expr,
+    info: &SimplifyContext,
+) -> Result<(Option<Interval>, Option<Expr>)> {
+    let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
+        return Ok((None, None));
+    };
+    if !is_literal_or_literal_cast(right_expr) {
+        return Ok((None, None));
+    }
+    if func.signature().volatility != Volatility::Immutable {
+        return Ok((None, None));
+    }
+    Ok((
+        func.preimage(args, right_expr, info)?,
+        func.column_expr(args),
+    ))
+}
+
+fn is_literal_or_literal_cast(expr: &Expr) -> bool {
+    match expr {
+        Expr::Literal(_, _) => true,
+        Expr::Cast(Cast { expr, .. }) => matches!(expr.as_ref(), Expr::Literal(_, _)),
+        Expr::TryCast(TryCast { expr, .. }) => {
+            matches!(expr.as_ref(), Expr::Literal(_, _))
+        }
+        _ => false,
     }
 }
 
