@@ -247,6 +247,7 @@ pub fn hash_join_exec(
         None,
         PartitionMode::Partitioned,
         NullEquality::NullEqualsNothing,
+        false,
     )?))
 }
 
