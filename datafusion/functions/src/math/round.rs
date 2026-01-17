@@ -536,12 +536,13 @@ mod test {
     #[test]
     fn test_round_scalar_f64() {
         // Test basic rounding
-        let result = round_scalar(ScalarValue::Float64(Some(3.14159)), Some(2)).unwrap();
-        assert_eq!(result, ScalarValue::Float64(Some(3.14)));
+        let result = round_scalar(ScalarValue::Float64(Some(125.2345)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(Some(125.23)));
 
         // Test negative value
-        let result = round_scalar(ScalarValue::Float64(Some(-3.14159)), Some(2)).unwrap();
-        assert_eq!(result, ScalarValue::Float64(Some(-3.14)));
+        let result =
+            round_scalar(ScalarValue::Float64(Some(-125.2345)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(Some(-125.23)));
 
         // Test negative decimal places
         let result =
@@ -556,12 +557,13 @@ mod test {
     #[test]
     fn test_round_scalar_f32() {
         // Test basic rounding
-        let result = round_scalar(ScalarValue::Float32(Some(3.14159)), Some(2)).unwrap();
-        assert_eq!(result, ScalarValue::Float32(Some(3.14)));
+        let result = round_scalar(ScalarValue::Float32(Some(125.2345)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float32(Some(125.23)));
 
         // Test negative value
-        let result = round_scalar(ScalarValue::Float32(Some(-3.14159)), Some(2)).unwrap();
-        assert_eq!(result, ScalarValue::Float32(Some(-3.14)));
+        let result =
+            round_scalar(ScalarValue::Float32(Some(-125.2345)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float32(Some(-125.23)));
 
         // Test null
         let result = round_scalar(ScalarValue::Float32(None), Some(2)).unwrap();
