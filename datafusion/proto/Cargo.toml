@@ -28,9 +28,6 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
-# Exclude proto files so crates.io consumers don't need protoc
-exclude = ["*.proto"]
-
 [package.metadata.docs.rs]
 all-features = true
 
