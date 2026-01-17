@@ -1368,8 +1368,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 identity,
                 cascade,
                 on_cluster,
-                ..
+                table,
             } => {
+                let _ = table; // explicitly handled to satisfy full destructuring
+
                 if table_names.len() != 1 {
                     return not_impl_err!(
                         "TRUNCATE with multiple tables is not supported"
@@ -1399,6 +1401,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let table = self.object_name_to_table_reference(target.name.clone())?;
                 let source = self.context_provider.get_table_source(table.clone())?;
 
+                // TRUNCATE does not operate on input rows. The EmptyRelation is a logical placeholder
+                // since the real operation is executed directly by the TableProvider's truncate() hook.
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table.clone(),
                     source,
