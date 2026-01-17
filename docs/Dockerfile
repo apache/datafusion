@@ -26,11 +26,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Rust 1.92.0
 ENV RUST_VERSION=1.92.0
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
-    --default-toolchain ${RUST_VERSION} \
-    --component rustfmt \
-    --profile minimal \
-    -y
+ENV RUSTUP_VERSION=1.27.1
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    case "${arch}" in \
+        x86_64) rustup_arch="x86_64-unknown-linux-gnu" ;; \
+        aarch64) rustup_arch="aarch64-unknown-linux-gnu" ;; \
+        *) echo "Unsupported architecture: ${arch}" >&2; exit 1 ;; \
+    esac; \
+    curl --proto '=https' --tlsv1.2 -sSf \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustup_arch}/rustup-init" \
+        -o rustup-init; \
+    chmod +x rustup-init; \
+    ./rustup-init \
+        --default-toolchain "${RUST_VERSION}" \
+        --component rustfmt \
+        --profile minimal \
+        -y; \
+    rm rustup-init
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
