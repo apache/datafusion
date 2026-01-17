@@ -709,7 +709,7 @@ impl ExternalSorter {
         &self,
         batch: RecordBatch,
         metrics: &BaselineMetrics,
-        mut reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(
             get_reserved_bytes_for_record_batch(&batch)?,
@@ -736,7 +736,7 @@ impl ExternalSorter {
         .then({
             move |batches| async move {
                 match batches {
-                    Ok((schema, sorted_batches, mut reservation)) => {
+                    Ok((schema, sorted_batches, reservation)) => {
                         // Calculate the total size of sorted batches
                         let total_sorted_size: usize = sorted_batches
                             .iter()
