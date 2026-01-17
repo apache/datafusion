@@ -107,6 +107,7 @@ async fn try_create_array_map(
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
+    parallel_concat: bool,
 ) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
     if on_left.len() != 1 {
         return Ok(None);
@@ -172,11 +173,15 @@ async fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = crate::parallel_concat::parallel_concat_batches(
-        schema,
-        &batches.iter().collect::<Vec<_>>(),
-    )
-    .await?;
+    let batch = if parallel_concat {
+        crate::parallel_concat::parallel_concat_batches(
+            schema,
+            &batches.iter().collect::<Vec<_>>(),
+        )
+        .await?
+    } else {
+        concat_batches(schema, batches.iter())?
+    };
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
 
     let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
@@ -1632,6 +1637,7 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_small_build_threshold,
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
+            parallel_concat,
         )
         .await?
         {
