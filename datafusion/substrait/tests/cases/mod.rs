@@ -20,6 +20,7 @@ mod builtin_expr_semantics_tests;
 mod consumer_integration;
 mod emit_kind_tests;
 mod function_test;
+mod local_files_tests;
 mod logical_plans;
 mod roundtrip_logical_plan;
 #[cfg(feature = "physical")]
