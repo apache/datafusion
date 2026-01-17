@@ -111,6 +111,23 @@ impl AggregateUDFImpl for ArrayAgg {
         ))))
     }
 
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Preserve the nullability of the input field in the list field
+        // If the input is non-nullable, the list itself is non-nullable
+        // If the input is nullable, the list is nullable
+        let input_field = &arg_fields[0];
+        let list_field = Field::new_list_field(
+            input_field.data_type().clone(),
+            true, // elements in the list can be null
+        );
+
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(Arc::new(list_field)),
+            input_field.is_nullable(), // preserve input field's nullability
+        )))
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             return Ok(vec![
@@ -169,6 +186,8 @@ impl AggregateUDFImpl for ArrayAgg {
         let field = &acc_args.expr_fields[0];
         let data_type = field.data_type();
         let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
+        // Determine if the result should be nullable based on input field nullability
+        let nullable_result = field.is_nullable();
 
         if acc_args.is_distinct {
             // Limitation similar to Postgres. The aggregation function can only mix
@@ -198,6 +217,7 @@ impl AggregateUDFImpl for ArrayAgg {
                 data_type,
                 sort_option,
                 ignore_nulls,
+                nullable_result,
             )?));
         }
 
@@ -205,6 +225,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(Box::new(ArrayAggAccumulator::try_new(
                 data_type,
                 ignore_nulls,
+                nullable_result,
             )?));
         };
 
@@ -220,6 +241,7 @@ impl AggregateUDFImpl for ArrayAgg {
             self.is_input_pre_ordered,
             acc_args.is_reversed,
             ignore_nulls,
+            nullable_result,
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -242,15 +264,22 @@ pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
     ignore_nulls: bool,
+    /// Whether the result can be null (for empty groups)
+    nullable_result: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
+    pub fn try_new(
+        datatype: &DataType,
+        ignore_nulls: bool,
+        nullable_result: bool,
+    ) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
             ignore_nulls,
+            nullable_result,
         })
     }
 
@@ -382,6 +411,13 @@ impl Accumulator for ArrayAggAccumulator {
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
+            // Return empty array instead of NULL when result is non-nullable
+            if !self.nullable_result {
+                return Ok(SingleRowListArrayBuilder::new(new_empty_array(
+                    &self.datatype,
+                ))
+                .build_list_scalar());
+            }
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
@@ -420,6 +456,8 @@ pub struct DistinctArrayAggAccumulator {
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
+    /// Whether the result can be null (for empty groups)
+    nullable_result: bool,
 }
 
 impl DistinctArrayAggAccumulator {
@@ -427,12 +465,14 @@ impl DistinctArrayAggAccumulator {
         datatype: &DataType,
         sort_options: Option<SortOptions>,
         ignore_nulls: bool,
+        nullable_result: bool,
     ) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
+            nullable_result,
         })
     }
 }
@@ -484,6 +524,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut values: Vec<ScalarValue> = self.values.iter().cloned().collect();
         if values.is_empty() {
+            // Return empty array instead of NULL when result is non-nullable
+            if !self.nullable_result {
+                let arr = ScalarValue::new_list(&[], &self.datatype, true);
+                return Ok(ScalarValue::List(arr));
+            }
             return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
         }
 
@@ -551,6 +596,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     reverse: bool,
     /// Whether the aggregation should ignore null values.
     ignore_nulls: bool,
+    /// Whether the result can be null (for empty groups)
+    nullable_result: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -563,6 +610,7 @@ impl OrderSensitiveArrayAggAccumulator {
         is_input_pre_ordered: bool,
         reverse: bool,
         ignore_nulls: bool,
+        nullable_result: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -574,6 +622,7 @@ impl OrderSensitiveArrayAggAccumulator {
             is_input_pre_ordered,
             reverse,
             ignore_nulls,
+            nullable_result,
         })
     }
 
@@ -753,6 +802,11 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         }
 
         if self.values.is_empty() {
+            // Return empty array instead of NULL when result is non-nullable
+            if !self.nullable_result {
+                let arr = ScalarValue::new_list(&[], &self.datatypes[0], true);
+                return Ok(ScalarValue::List(arr));
+            }
             return Ok(ScalarValue::new_null_list(
                 self.datatypes[0].clone(),
                 true,
@@ -1112,6 +1166,69 @@ mod tests {
 
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
+
+        Ok(())
+    }
+
+    #[test]
+    fn return_field_preserves_input_nullability() -> Result<()> {
+        let array_agg = ArrayAgg::default();
+
+        // Test with nullable input field
+        let nullable_field = Arc::new(Field::new("input", DataType::Int64, true));
+        let result_field = array_agg.return_field(&[nullable_field.clone()])?;
+        assert!(
+            result_field.is_nullable(),
+            "Result should be nullable when input is nullable"
+        );
+
+        // Test with non-nullable input field
+        let non_nullable_field = Arc::new(Field::new("input", DataType::Int64, false));
+        let result_field = array_agg.return_field(&[non_nullable_field])?;
+        assert!(
+            !result_field.is_nullable(),
+            "Result should be non-nullable when input is non-nullable"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_group_returns_empty_array_when_non_nullable() -> Result<()> {
+        // Test that when input is non-nullable, empty groups return empty array instead of NULL
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false, false)?;
+
+        // Don't add any values (simulate empty group)
+        let result = acc.evaluate()?;
+
+        // Should return an empty array, not NULL
+        match &result {
+            ScalarValue::List(arr) => {
+                assert!(
+                    !arr.is_null(0),
+                    "Result should not be null for non-nullable input"
+                );
+                assert_eq!(arr.value(0).len(), 0, "Result should be an empty array");
+            }
+            _ => panic!("Expected List scalar value"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_group_returns_null_when_nullable() -> Result<()> {
+        // Test that when input is nullable, empty groups return NULL
+        let mut acc = ArrayAggAccumulator::try_new(&DataType::Utf8, false, true)?;
+
+        // Don't add any values (simulate empty group)
+        let result = acc.evaluate()?;
+
+        // Should return NULL for nullable input
+        assert!(
+            result.is_null(),
+            "Result should be null for nullable input with empty group"
+        );
 
         Ok(())
     }

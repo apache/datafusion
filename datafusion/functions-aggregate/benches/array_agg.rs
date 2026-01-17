@@ -45,7 +45,7 @@ fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
             black_box(
-                ArrayAggAccumulator::try_new(&list_item_data_type, false)
+                ArrayAggAccumulator::try_new(&list_item_data_type, false, true)
                     .unwrap()
                     .merge_batch(std::slice::from_ref(&values))
                     .unwrap(),
