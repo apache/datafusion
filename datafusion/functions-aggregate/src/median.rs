@@ -85,18 +85,9 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Median {
     signature: Signature,
-}
-
-impl Debug for Median {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("Median")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Median {

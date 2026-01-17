@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::align_of_val;
 use std::sync::Arc;
@@ -26,8 +26,8 @@ use std::sync::Arc;
 use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use datafusion_common::ScalarValue;
 use datafusion_common::{Result, internal_err, not_impl_err};
-use datafusion_common::{ScalarValue, plan_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -62,19 +62,10 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Stddev {
     signature: Signature,
     alias: Vec<String>,
-}
-
-impl Debug for Stddev {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Stddev")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Stddev {
@@ -87,7 +78,7 @@ impl Stddev {
     /// Create a new STDDEV aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
             alias: vec!["stddev_samp".to_string()],
         }
     }
@@ -180,18 +171,9 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression",)
 )]
 /// STDDEV_POP population aggregate expression
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct StddevPop {
     signature: Signature,
-}
-
-impl Debug for StddevPop {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StddevPop")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for StddevPop {
@@ -204,7 +186,7 @@ impl StddevPop {
     /// Create a new STDDEV_POP aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::exact(vec![DataType::Float64], Volatility::Immutable),
         }
     }
 }
@@ -249,11 +231,7 @@ impl AggregateUDFImpl for StddevPop {
         Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("StddevPop requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -318,13 +296,8 @@ impl Accumulator for StddevAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let variance = self.variance.evaluate()?;
         match variance {
-            ScalarValue::Float64(e) => {
-                if e.is_none() {
-                    Ok(ScalarValue::Float64(None))
-                } else {
-                    Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
-                }
-            }
+            ScalarValue::Float64(None) => Ok(ScalarValue::Float64(None)),
+            ScalarValue::Float64(Some(f)) => Ok(ScalarValue::Float64(Some(f.sqrt()))),
             _ => internal_err!("Variance should be f64"),
         }
     }
