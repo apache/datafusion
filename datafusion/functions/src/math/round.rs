@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -141,7 +141,67 @@ impl ScalarUDFImpl for RoundFunc {
             &default_decimal_places
         };
 
-        round_columnar(&args.args[0], decimal_places, args.number_rows)
+        // Scalar fast path for float and decimal types - avoid array conversion overhead
+        if let (ColumnarValue::Scalar(value_scalar), ColumnarValue::Scalar(dp_scalar)) =
+            (&args.args[0], decimal_places)
+        {
+            if value_scalar.is_null() || dp_scalar.is_null() {
+                return ColumnarValue::Scalar(ScalarValue::Null)
+                    .cast_to(args.return_type(), None);
+            }
+
+            let dp = if let ScalarValue::Int32(Some(dp)) = dp_scalar {
+                *dp
+            } else {
+                return internal_err!(
+                    "Unexpected datatype for decimal_places: {}",
+                    dp_scalar.data_type()
+                );
+            };
+
+            match value_scalar {
+                ScalarValue::Float32(Some(v)) => {
+                    let rounded = round_float(*v, dp)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
+                }
+                ScalarValue::Float64(Some(v)) => {
+                    let rounded = round_float(*v, dp)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
+                }
+                ScalarValue::Decimal128(Some(v), precision, scale) => {
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal128(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
+                }
+                ScalarValue::Decimal256(Some(v), precision, scale) => {
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal256(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
+                }
+                ScalarValue::Decimal64(Some(v), precision, scale) => {
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal64(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
+                }
+                ScalarValue::Decimal32(Some(v), precision, scale) => {
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal32(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
+                }
+                _ => {
+                    internal_err!(
+                        "Unexpected datatype for value: {}",
+                        value_scalar.data_type()
+                    )
+                }
+            }
+        } else {
+            round_columnar(&args.args[0], decimal_places, args.number_rows)
+        }
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
