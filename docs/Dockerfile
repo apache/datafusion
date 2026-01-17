@@ -60,12 +60,15 @@ RUN pip install --no-cache-dir -r /work/docs/requirements.txt
 # Copy the entire repository
 COPY . /work
 
-# Fix line endings for shell scripts (convert CRLF to LF)
+# Copy and set up the entrypoint script
+COPY docs/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Fix line endings for shell scripts at build time (convert CRLF to LF)
 RUN find /work -name "*.sh" -type f -exec sh -c 'tr -d "\r" < "$1" > "$1.tmp" && mv "$1.tmp" "$1"' _ {} \;
 
 # Set working directory to docs for build
 WORKDIR /work/docs
 
-# Default command: build documentation
-# Fix line endings when running (for volume-mounted files from Windows) only if needed, and then build
-CMD ["bash", "-c", "if find /work -name '*.sh' -type f -print0 | xargs -0 grep -Il $'\\r' >/dev/null 2>&1; then echo \"Converting CRLF to LF in shell scripts...\"; find /work -name '*.sh' -type f -exec sh -c 'tr -d \"\\r\" < \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"' _ {} \\; ; fi; cd /work/docs && bash build.sh"]
+# Use entrypoint script for better readability and maintainability
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
