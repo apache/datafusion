@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod date_add;
+pub mod date_diff;
 pub mod date_sub;
 pub mod extract;
 pub mod last_day;
@@ -36,6 +37,7 @@ make_udf_function!(last_day::SparkLastDay, last_day);
 make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
 make_udf_function!(next_day::SparkNextDay, next_day);
+make_udf_function!(date_diff::SparkDateDiff, date_diff);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -83,6 +85,11 @@ pub mod expr_fn {
         "Returns the first date which is later than start_date and named as indicated. The function returns NULL if at least one of the input parameters is NULL.",
         arg1 arg2
     ));
+    export_functions!((
+        date_diff,
+        "Returns the number of days from start `start` to end `end`.",
+        end start
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -96,5 +103,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         make_dt_interval(),
         make_interval(),
         next_day(),
+        date_diff(),
     ]
 }
