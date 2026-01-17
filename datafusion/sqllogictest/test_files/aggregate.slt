@@ -7730,7 +7730,8 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT 1) as sum(DISTINCT Int64(1))]
+, ordering_mode=Sorted
 03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
 04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
 05)--------UnionExec
@@ -7856,7 +7857,7 @@ logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 02)--TableScan: t projection=[]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
+01)AggregateExec: mode=Single, gby=[], aggr=[count(1) as count(Int64(1)), count(2) as count(Int64(2))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II

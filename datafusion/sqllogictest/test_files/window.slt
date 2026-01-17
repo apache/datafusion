@@ -504,7 +504,7 @@ LIMIT 5
 #//     let actual = execute_to_batches(&ctx, sql).await;
 #//     let expected = vec![
 #//         "+----------------------------+-----------------+",
-#//         "| SUM(aggregate_test_100.c4) | COUNT(Int64(1)) |",
+#//         "| SUM(aggregate_test_100.c4) | count(1) as count(Int64(1))|",
 #//         "+----------------------------+-----------------+",
 #//         "| -33822      | 3|",
 #//         "| 20808       | 3|",
