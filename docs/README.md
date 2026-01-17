@@ -30,12 +30,14 @@ https://datafusion.apache.org/ as part of the release process.
 If you have Docker installed, you can build the docs without installing any dependencies on your system:
 
 ```sh
-# Using docker-compose (simplest)
+# Using docker-compose (simplest) (POSIX shells: bash, zsh, etc.)
 docker-compose run --rm docs bash build.sh
 
-# Or using docker directly
+# Or using docker directly (POSIX shells: bash, zsh, etc.)
 docker build -t datafusion-docs -f docs/Dockerfile .
 docker run --rm -v $(pwd):/work datafusion-docs bash build.sh
+# On Windows PowerShell, use:
+# docker run --rm -v ${PWD}:/work datafusion-docs bash build.sh
 ```
 
 The built documentation will be available in `docs/build/html/`.
