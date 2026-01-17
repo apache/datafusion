@@ -263,6 +263,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
+        | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::Unnest(_) => {
