@@ -31,7 +31,7 @@ use arrow::error::ArrowError;
 use datafusion_common::types::{
     NativeType, logical_float32, logical_float64, logical_int32,
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -145,132 +145,63 @@ impl ScalarUDFImpl for RoundFunc {
         if let (ColumnarValue::Scalar(value_scalar), ColumnarValue::Scalar(dp_scalar)) =
             (&args.args[0], decimal_places)
         {
-            // Extract decimal places as i32
-            // Note: decimal_places is coerced to Int32 by the signature, so the non-Int32
-            // arm should be unreachable in normal execution.
-            let dp = match dp_scalar {
-                ScalarValue::Int32(Some(dp)) => *dp,
-                ScalarValue::Int32(None) => {
-                    // Return null with correct type for null decimal_places
-                    return match value_scalar {
-                        ScalarValue::Float32(_) => {
-                            Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)))
-                        }
-                        ScalarValue::Decimal128(_, p, s) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal128(None, *p, *s),
-                        )),
-                        ScalarValue::Decimal256(_, p, s) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal256(None, *p, *s),
-                        )),
-                        ScalarValue::Decimal64(_, p, s) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal64(None, *p, *s),
-                        )),
-                        ScalarValue::Decimal32(_, p, s) => Ok(ColumnarValue::Scalar(
-                            ScalarValue::Decimal32(None, *p, *s),
-                        )),
-                        _ => Ok(ColumnarValue::Scalar(ScalarValue::Float64(None))),
-                    };
-                }
-                _ => {
-                    return exec_err!(
-                        "Internal error: round decimal_places should be Int32, got {:?}",
-                        dp_scalar
-                    );
-                }
+            if value_scalar.is_null() || dp_scalar.is_null() {
+                return ColumnarValue::Scalar(ScalarValue::Null)
+                    .cast_to(args.return_type(), None);
+            }
+
+            let dp = if let ScalarValue::Int32(Some(dp)) = dp_scalar {
+                *dp
+            } else {
+                return internal_err!(
+                    "Unexpected datatype for decimal_places: {}",
+                    dp_scalar.data_type()
+                );
             };
 
             match value_scalar {
-                ScalarValue::Float64(Some(v)) => {
-                    return round_float(*v, dp)
-                        .map(|r| ColumnarValue::Scalar(ScalarValue::Float64(Some(r))))
-                        .map_err(DataFusionError::from);
-                }
-                ScalarValue::Float64(None) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(None)));
-                }
                 ScalarValue::Float32(Some(v)) => {
-                    return round_float(*v, dp)
-                        .map(|r| ColumnarValue::Scalar(ScalarValue::Float32(Some(r))))
-                        .map_err(DataFusionError::from);
+                    let rounded = round_float(*v, dp)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
                 }
-                ScalarValue::Float32(None) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(None)));
+                ScalarValue::Float64(Some(v)) => {
+                    let rounded = round_float(*v, dp)?;
+                    Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
                 }
                 ScalarValue::Decimal128(Some(v), precision, scale) => {
-                    return round_decimal(*v, *scale, dp)
-                        .map(|r| {
-                            ColumnarValue::Scalar(ScalarValue::Decimal128(
-                                Some(r),
-                                *precision,
-                                *scale,
-                            ))
-                        })
-                        .map_err(DataFusionError::from);
-                }
-                ScalarValue::Decimal128(None, precision, scale) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
-                        None, *precision, *scale,
-                    )));
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal128(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal256(Some(v), precision, scale) => {
-                    return round_decimal(*v, *scale, dp)
-                        .map(|r| {
-                            ColumnarValue::Scalar(ScalarValue::Decimal256(
-                                Some(r),
-                                *precision,
-                                *scale,
-                            ))
-                        })
-                        .map_err(DataFusionError::from);
-                }
-                ScalarValue::Decimal256(None, precision, scale) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Decimal256(
-                        None, *precision, *scale,
-                    )));
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal256(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal64(Some(v), precision, scale) => {
-                    return round_decimal(*v, *scale, dp)
-                        .map(|r| {
-                            ColumnarValue::Scalar(ScalarValue::Decimal64(
-                                Some(r),
-                                *precision,
-                                *scale,
-                            ))
-                        })
-                        .map_err(DataFusionError::from);
-                }
-                ScalarValue::Decimal64(None, precision, scale) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Decimal64(
-                        None, *precision, *scale,
-                    )));
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal64(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal32(Some(v), precision, scale) => {
-                    return round_decimal(*v, *scale, dp)
-                        .map(|r| {
-                            ColumnarValue::Scalar(ScalarValue::Decimal32(
-                                Some(r),
-                                *precision,
-                                *scale,
-                            ))
-                        })
-                        .map_err(DataFusionError::from);
+                    let rounded = round_decimal(*v, *scale, dp)?;
+                    let scalar =
+                        ScalarValue::Decimal32(Some(rounded), *precision, *scale);
+                    Ok(ColumnarValue::Scalar(scalar))
                 }
-                ScalarValue::Decimal32(None, precision, scale) => {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Decimal32(
-                        None, *precision, *scale,
-                    )));
-                }
-                // All supported scalar types are handled above
                 _ => {
-                    return exec_err!(
-                        "Internal error: unexpected scalar type for round: {:?}",
-                        value_scalar
-                    );
+                    internal_err!(
+                        "Unexpected datatype for value: {}",
+                        value_scalar.data_type()
+                    )
                 }
             }
+        } else {
+            round_columnar(&args.args[0], decimal_places, args.number_rows)
         }
-
-        round_columnar(&args.args[0], decimal_places, args.number_rows)
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
@@ -562,5 +493,139 @@ mod test {
             result,
             Err(DataFusionError::ArrowError(_, _)) | Err(DataFusionError::Execution(_))
         ));
+    }
+
+    // Tests for scalar fast path
+    use super::RoundFunc;
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
+
+    fn round_scalar(
+        value: ScalarValue,
+        decimal_places: Option<i32>,
+    ) -> Result<ScalarValue, DataFusionError> {
+        let round_func = RoundFunc::new();
+        let config_options = Arc::new(ConfigOptions::default());
+
+        let dp = decimal_places.unwrap_or(0);
+        let args = vec![
+            ColumnarValue::Scalar(value.clone()),
+            ColumnarValue::Scalar(ScalarValue::Int32(Some(dp))),
+        ];
+
+        let return_type = round_func.return_type(&[value.data_type()])?;
+
+        let result = round_func.invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields: vec![
+                Field::new("a", value.data_type(), true).into(),
+                Field::new("b", DataType::Int32, false).into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new("f", return_type, true).into(),
+            config_options,
+        })?;
+
+        match result {
+            ColumnarValue::Scalar(s) => Ok(s),
+            ColumnarValue::Array(a) => ScalarValue::try_from_array(&a, 0),
+        }
+    }
+
+    #[test]
+    fn test_round_scalar_f64() {
+        // Test basic rounding
+        let result = round_scalar(ScalarValue::Float64(Some(3.14159)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(Some(3.14)));
+
+        // Test negative value
+        let result = round_scalar(ScalarValue::Float64(Some(-3.14159)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(Some(-3.14)));
+
+        // Test negative decimal places
+        let result =
+            round_scalar(ScalarValue::Float64(Some(12345.55)), Some(-1)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(Some(12350.0)));
+
+        // Test null
+        let result = round_scalar(ScalarValue::Float64(None), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float64(None));
+    }
+
+    #[test]
+    fn test_round_scalar_f32() {
+        // Test basic rounding
+        let result = round_scalar(ScalarValue::Float32(Some(3.14159)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float32(Some(3.14)));
+
+        // Test negative value
+        let result = round_scalar(ScalarValue::Float32(Some(-3.14159)), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float32(Some(-3.14)));
+
+        // Test null
+        let result = round_scalar(ScalarValue::Float32(None), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Float32(None));
+    }
+
+    #[test]
+    fn test_round_scalar_decimal128() {
+        // Test basic rounding - 314159 with scale 5 = 3.14159, rounds to 3.14 = 314000
+        let result =
+            round_scalar(ScalarValue::Decimal128(Some(314159), 10, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal128(Some(314000), 10, 5));
+
+        // Test negative value - -3.14159 rounds to -3.14 = -314000
+        let result =
+            round_scalar(ScalarValue::Decimal128(Some(-314159), 10, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal128(Some(-314000), 10, 5));
+
+        // Test null
+        let result = round_scalar(ScalarValue::Decimal128(None, 10, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal128(None, 10, 5));
+    }
+
+    #[test]
+    fn test_round_scalar_decimal256() {
+        use arrow::datatypes::i256;
+
+        // Test basic rounding - 314159 with scale 5 = 3.14159, rounds to 3.14 = 314000
+        let result = round_scalar(
+            ScalarValue::Decimal256(Some(i256::from(314159)), 50, 5),
+            Some(2),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            ScalarValue::Decimal256(Some(i256::from(314000)), 50, 5)
+        );
+
+        // Test null
+        let result = round_scalar(ScalarValue::Decimal256(None, 50, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal256(None, 50, 5));
+    }
+
+    #[test]
+    fn test_round_scalar_decimal64() {
+        // Test basic rounding - 314159 with scale 5 = 3.14159, rounds to 3.14 = 314000
+        let result =
+            round_scalar(ScalarValue::Decimal64(Some(314159), 10, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal64(Some(314000), 10, 5));
+
+        // Test null
+        let result = round_scalar(ScalarValue::Decimal64(None, 10, 5), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal64(None, 10, 5));
+    }
+
+    #[test]
+    fn test_round_scalar_decimal32() {
+        // Test basic rounding - 31416 with scale 4 = 3.1416, rounds to 3.14 = 31400
+        let result =
+            round_scalar(ScalarValue::Decimal32(Some(31416), 7, 4), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal32(Some(31400), 7, 4));
+
+        // Test null
+        let result = round_scalar(ScalarValue::Decimal32(None, 7, 4), Some(2)).unwrap();
+        assert_eq!(result, ScalarValue::Decimal32(None, 7, 4));
     }
 }
