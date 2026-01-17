@@ -20,8 +20,7 @@ use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::ReturnFieldArgs;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::string::concat::ConcatFunc;
 use std::any::Any;
@@ -54,10 +53,7 @@ impl Default for SparkConcat {
 impl SparkConcat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
