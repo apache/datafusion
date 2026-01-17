@@ -481,7 +481,8 @@ fn test_filter_with_projection() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
         FilterExecBuilder::new(predicate, Arc::clone(&scan))
-            .with_projection(Some(projection))
+            .apply_projection(Some(projection))
+            .unwrap()
             .build()
             .unwrap(),
     );
@@ -506,7 +507,8 @@ fn test_filter_with_projection() {
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
         FilterExecBuilder::new(predicate, scan)
-            .with_projection(Some(projection))
+            .apply_projection(Some(projection))
+            .unwrap()
             .build()
             .unwrap(),
     );

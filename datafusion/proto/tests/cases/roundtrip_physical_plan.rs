@@ -1825,7 +1825,7 @@ async fn roundtrip_projection_source() -> Result<()> {
             Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
             DataSourceExec::from_data_source(scan_config),
         )
-        .with_projection(Some(vec![0, 1]))
+        .apply_projection(Some(vec![0, 1]))?
         .build()?,
     );
 

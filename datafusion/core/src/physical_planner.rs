@@ -959,9 +959,9 @@ impl DefaultPhysicalPlanner {
                         )
                         // project the output columns excluding the async functions
                         // The async functions are always appended to the end of the schema.
-                        .with_projection(Some(
+                        .apply_projection(Some(
                             (0..input.schema().fields().len()).collect(),
-                        ))
+                        ))?
                         .with_batch_size(session_state.config().batch_size())
                         .build()?
                     }
