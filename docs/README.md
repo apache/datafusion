@@ -25,11 +25,29 @@ https://datafusion.apache.org/ as part of the release process.
 
 ## Dependencies
 
+### Option 1: Docker (Recommended)
+
+If you have Docker installed, you can build the docs without installing any dependencies on your system:
+
+```sh
+# Using docker-compose (simplest)
+docker-compose run --rm docs bash build.sh
+
+# Or using docker directly
+docker build -t datafusion-docs -f docs/Dockerfile .
+docker run --rm -v $(pwd):/work datafusion-docs bash build.sh
+```
+
+The built documentation will be available in `docs/build/html/`.
+
+### Option 2: Local Installation
+
 It's recommended to install build dependencies and build the documentation
 inside a Python virtualenv.
 
 ```sh
 python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -39,6 +57,11 @@ needing to create a virtual environment:
 ```sh
 uv run --with-requirements requirements.txt bash build.sh
 ```
+
+The docs build regenerates the workspace dependency graph via
+`docs/scripts/generate_dependency_graph.sh`, so ensure `cargo`, `cargo-depgraph`
+(`cargo install cargo-depgraph --version ^1.6 --locked`), and Graphviz `dot`
+(`brew install graphviz` or `sudo apt-get install -y graphviz`) are available.
 
 ## Build & Preview
 
