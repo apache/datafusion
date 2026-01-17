@@ -27,7 +27,9 @@ use std::task::Poll;
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::JoinLeftData;
+use crate::joins::hash_join::exec::{
+    JoinLeftData, PartitionFilter, filter_batch_by_partition,
+};
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
@@ -227,6 +229,8 @@ pub(super) struct HashJoinStream {
     output_buffer: Box<BatchCoalescer>,
     /// Whether this is a null-aware anti join
     null_aware: bool,
+    /// Optional partition filter for LazyPartitioned mode - filters probe rows by hash
+    probe_partition_filter: Option<PartitionFilter>,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -375,6 +379,7 @@ impl HashJoinStream {
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
         null_aware: bool,
+        probe_partition_filter: Option<PartitionFilter>,
     ) -> Self {
         // Create output buffer with coalescing.
         // Use biggest_coalesce_batch_size to bypass coalescing for batches
@@ -407,6 +412,7 @@ impl HashJoinStream {
             mode,
             output_buffer,
             null_aware,
+            probe_partition_filter,
         }
     }
 
@@ -502,7 +508,9 @@ impl HashJoinStream {
             let build_accumulator = Arc::clone(build_accumulator);
 
             let left_side_partition_id = match self.mode {
-                PartitionMode::Partitioned => self.partition,
+                PartitionMode::Partitioned | PartitionMode::LazyPartitioned => {
+                    self.partition
+                }
                 PartitionMode::CollectLeft => 0,
                 PartitionMode::Auto => unreachable!(
                     "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
@@ -514,14 +522,16 @@ impl HashJoinStream {
 
             // Construct the appropriate build data enum variant based on partition mode
             let build_data = match self.mode {
-                PartitionMode::Partitioned => PartitionBuildData::Partitioned {
-                    partition_id: left_side_partition_id,
-                    pushdown,
-                    bounds: left_data
-                        .bounds
-                        .clone()
-                        .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                },
+                PartitionMode::Partitioned | PartitionMode::LazyPartitioned => {
+                    PartitionBuildData::Partitioned {
+                        partition_id: left_side_partition_id,
+                        pushdown,
+                        bounds: left_data
+                            .bounds
+                            .clone()
+                            .unwrap_or_else(|| PartitionBounds::new(vec![])),
+                    }
+                }
                 PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
                     pushdown,
                     bounds: left_data
@@ -559,6 +569,19 @@ impl HashJoinStream {
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {
+                // For LazyPartitioned mode, filter probe batch to only keep rows
+                // belonging to this partition based on hash(join_keys) % num_partitions
+                let batch = if let Some(ref filter) = self.probe_partition_filter {
+                    filter_batch_by_partition(&batch, &self.on_right, filter)?
+                } else {
+                    batch
+                };
+
+                // Skip empty batches after filtering
+                if batch.num_rows() == 0 {
+                    return Poll::Ready(Ok(StatefulStreamResult::Continue));
+                }
+
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 

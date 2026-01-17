@@ -314,6 +314,10 @@ impl SharedBuildAccumulator {
             PartitionMode::Partitioned => {
                 left_child.output_partitioning().partition_count()
             }
+            // LazyPartitioned: each probe partition builds its own data from filtered build rows
+            PartitionMode::LazyPartitioned => {
+                right_child.output_partitioning().partition_count()
+            }
             // Default value, will be resolved during optimization (does not exist once `execute()` is called; will be replaced by one of the other two)
             PartitionMode::Auto => unreachable!(
                 "PartitionMode::Auto should not be present at execution time. This is a bug in DataFusion, please report it!"
@@ -325,6 +329,12 @@ impl SharedBuildAccumulator {
                 partitions: vec![
                     None;
                     left_child.output_partitioning().partition_count()
+                ],
+            },
+            PartitionMode::LazyPartitioned => AccumulatedBuildData::Partitioned {
+                partitions: vec![
+                    None;
+                    right_child.output_partitioning().partition_count()
                 ],
             },
             PartitionMode::CollectLeft => {
