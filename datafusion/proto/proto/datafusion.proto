@@ -278,6 +278,7 @@ message DmlNode{
     INSERT_APPEND = 3;
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
+    TRUNCATE = 6;
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;

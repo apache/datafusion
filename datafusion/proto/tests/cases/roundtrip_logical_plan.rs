@@ -413,6 +413,7 @@ async fn roundtrip_logical_plan_dml() -> Result<()> {
         "DELETE FROM T1",
         "UPDATE T1 SET a = 1",
         "CREATE TABLE T2 AS SELECT * FROM T1",
+        "TRUNCATE TABLE T1",
     ];
     for query in queries {
         let plan = ctx.sql(query).await?.into_optimized_plan()?;

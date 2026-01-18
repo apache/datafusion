@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Truncate Tests
+##########
+
+statement ok
+create table t1(a int, b varchar, c double, d int);
+
+statement ok
+insert into t1 values (1, 'abc', 3.14, 4), (2, 'def', 2.71, 5);
+
+# Truncate all rows from table
+query TT
+explain truncate table t1;
+----
+logical_plan
+01)Dml: op=[Truncate] table=[t1]
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base table
+
+# Test TRUNCATE with fully qualified table name
+statement ok
+create schema test_schema;
+
+statement ok
+create table test_schema.t5(a int);
+
+query TT
+explain truncate table test_schema.t5;
+----
+logical_plan
+01)Dml: op=[Truncate] table=[test_schema.t5]
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 'test_schema.t5'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base table
+
+# Test TRUNCATE with CASCADE option
+statement error TRUNCATE with CASCADE/RESTRICT is not supported
+TRUNCATE TABLE t1 CASCADE;
+
+# Test TRUNCATE with multiple tables
+statement error TRUNCATE with multiple tables is not supported
+TRUNCATE TABLE t1, t2;
+
+statement error TRUNCATE with PARTITION is not supported
+TRUNCATE TABLE t1 PARTITION (p1);
+
+statement error TRUNCATE with ONLY is not supported
+TRUNCATE ONLY t1;
+
+statement error TRUNCATE with RESTART/CONTINUE IDENTITY is not supported
+TRUNCATE TABLE t1 RESTART IDENTITY;
+
+# Test TRUNCATE without TABLE keyword
+query TT
+explain truncate t1;
+----
+logical_plan
+01)Dml: op=[Truncate] table=[t1]
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base table
