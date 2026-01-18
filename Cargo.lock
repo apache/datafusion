@@ -2567,6 +2567,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "criterion",
+ "datafusion",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-execution",

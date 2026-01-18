@@ -93,9 +93,41 @@
 //! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
+//!
+//! # Example: enabling Apache Spark features with SessionStateBuilder
+//!
+//! The recommended way to enable Apache Spark compatibility is to use the
+//! `SessionStateBuilderSpark` extension trait. This registers all
+//! Apache Spark functions (scalar, aggregate, window, and table) as well as the Apache Spark
+//! expression planner.
+//!
+//! Enable the `core` feature in your `Cargo.toml`:
+//! ```toml
+//! datafusion-spark = { version = "X", features = ["core"] }
+//! ```
+//!
+//! Then use the extension trait:
+//! ```ignore
+//! use datafusion_core::execution::SessionStateBuilder;
+//! use datafusion_spark::SessionStateBuilderSpark;
+//!
+//! // Create a SessionState with Apache Spark features enabled
+//! // note: the order matters here, `with_spark_features` should be
+//! // called after `with_default_features` to overwrite any existing functions
+//! let state = SessionStateBuilder::new()
+//!     .with_default_features()
+//!     .with_spark_features()
+//!     .build();
+//! ```
 
 pub mod function;
 pub mod planner;
+
+#[cfg(feature = "core")]
+mod session_state;
+
+#[cfg(feature = "core")]
+pub use session_state::SessionStateBuilderSpark;
 
 use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
