@@ -57,6 +57,7 @@ sha1 = "0.10"
 url = { workspace = true }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 
 [[bench]]
@@ -74,3 +75,7 @@ name = "hex"
 [[bench]]
 harness = false
 name = "slice"
+
+[[bench]]
+harness = false
+name = "substring"
