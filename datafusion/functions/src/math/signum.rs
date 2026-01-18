@@ -98,7 +98,7 @@ impl ScalarUDFImpl for SignumFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg = &args.args[0];
+        let arg = take_function_args(self.name(), args.args)?;
 
         // Scalar fast path for float types - avoid array conversion overhead
         if let ColumnarValue::Scalar(scalar) = arg {
