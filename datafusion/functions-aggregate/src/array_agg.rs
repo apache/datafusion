@@ -401,11 +401,30 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
+        // State uses nullable inner elements to match state_fields() schema
+        // This is required for proper merging across partitions
+        let element_arrays: Vec<&dyn Array> =
+            self.values.iter().map(|a| a.as_ref()).collect();
+
+        if element_arrays.is_empty() {
+            return Ok(vec![ScalarValue::new_null_list(
+                self.datatype.clone(),
+                true, // state always uses nullable inner
+                1,
+            )]);
+        }
+
+        let concated_array = arrow::compute::concat(&element_arrays)?;
+
+        Ok(vec![
+            SingleRowListArrayBuilder::new(concated_array)
+                .with_nullable(true) // state always uses nullable inner
+                .build_list_scalar(),
+        ])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Transform Vec<ListArr> to ListArr
+        // Final output uses input_nullable to preserve nullability from input
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 
@@ -477,7 +496,46 @@ impl DistinctArrayAggAccumulator {
 
 impl Accumulator for DistinctArrayAggAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
+        // State uses nullable inner elements to match state_fields() schema
+        let mut values: Vec<ScalarValue> = self.values.iter().cloned().collect();
+        if values.is_empty() {
+            return Ok(vec![ScalarValue::new_null_list(
+                self.datatype.clone(),
+                true, // state always uses nullable inner
+                1,
+            )]);
+        }
+
+        // Sort if needed (same logic as evaluate)
+        if let Some(opts) = self.sort_options {
+            let mut delayed_cmp_err = Ok(());
+            values.sort_by(|a, b| {
+                if a.is_null() {
+                    return match opts.nulls_first {
+                        true => Ordering::Less,
+                        false => Ordering::Greater,
+                    };
+                }
+                if b.is_null() {
+                    return match opts.nulls_first {
+                        true => Ordering::Greater,
+                        false => Ordering::Less,
+                    };
+                }
+                match opts.descending {
+                    true => b.try_cmp(a),
+                    false => a.try_cmp(b),
+                }
+                .unwrap_or_else(|err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                })
+            });
+            delayed_cmp_err?;
+        }
+
+        let arr = ScalarValue::new_list(&values, &self.datatype, true); // state always uses nullable inner
+        Ok(vec![ScalarValue::List(arr)])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -787,13 +845,39 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             self.sort();
         }
 
-        let mut result = vec![self.evaluate()?];
+        // State uses nullable inner elements to match state_fields() schema
+        let state_value = if self.values.is_empty() {
+            ScalarValue::new_null_list(
+                self.datatypes[0].clone(),
+                true, // state always uses nullable inner
+                1,
+            )
+        } else {
+            let values = self.values.clone();
+            let array = if self.reverse {
+                ScalarValue::new_list_from_iter(
+                    values.into_iter().rev(),
+                    &self.datatypes[0],
+                    true, // state always uses nullable inner
+                )
+            } else {
+                ScalarValue::new_list_from_iter(
+                    values.into_iter(),
+                    &self.datatypes[0],
+                    true, // state always uses nullable inner
+                )
+            };
+            ScalarValue::List(array)
+        };
+
+        let mut result = vec![state_value];
         result.push(self.evaluate_orderings()?);
 
         Ok(result)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        // Final output uses input_nullable to preserve nullability from input
         if !self.is_input_pre_ordered {
             self.sort();
         }
@@ -1171,8 +1255,8 @@ mod tests {
         let array_agg = ArrayAgg::default();
 
         // Test with nullable input field
-        let nullable_field = Arc::new(Field::new("input", DataType::Int64, true));
-        let result_field = array_agg.return_field(&[nullable_field.clone()])?;
+        let nullable_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, true));
+        let result_field = array_agg.return_field(std::slice::from_ref(&nullable_field))?;
         // List itself should always be nullable (NULL for empty groups)
         assert!(
             result_field.is_nullable(),
@@ -1190,8 +1274,8 @@ mod tests {
         }
 
         // Test with non-nullable input field
-        let non_nullable_field = Arc::new(Field::new("input", DataType::Int64, false));
-        let result_field = array_agg.return_field(&[non_nullable_field])?;
+        let non_nullable_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, false));
+        let result_field = array_agg.return_field(std::slice::from_ref(&non_nullable_field))?;
         // List itself should still be nullable
         assert!(
             result_field.is_nullable(),
@@ -1225,9 +1309,9 @@ mod tests {
 
         // Get the expected return field
         let array_agg = ArrayAgg::default();
-        let input_field: Arc<Field> =
-            Arc::new(Field::new("input", DataType::Int64, false));
-        let expected_return_field = array_agg.return_field(&[input_field.clone()])?;
+        let input_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, false));
+        let expected_return_field =
+            array_agg.return_field(std::slice::from_ref(&input_field))?;
 
         // Verify the expected field has non-nullable inner
         if let DataType::List(inner) = expected_return_field.data_type() {
