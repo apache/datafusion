@@ -31,7 +31,7 @@ CREATE EXTERNAL TABLE alltypes_plain (
   float_col FLOAT NOT NULL,
   double_col DOUBLE NOT NULL,
   date_string_col BYTEA NOT NULL,
-  string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
@@ -48,7 +48,7 @@ CREATE EXTERNAL TABLE alltypes_plain_snappy (
   float_col FLOAT NOT NULL,
   double_col DOUBLE NOT NULL,
   date_string_col BYTEA NOT NULL,
-  string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
@@ -65,7 +65,7 @@ CREATE EXTERNAL TABLE alltypes_plain_bzip2 (
   float_col FLOAT NOT NULL,
   double_col DOUBLE NOT NULL,
   date_string_col BYTEA NOT NULL,
-  string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
@@ -82,7 +82,7 @@ CREATE EXTERNAL TABLE alltypes_plain_xz (
   float_col FLOAT NOT NULL,
   double_col DOUBLE NOT NULL,
   date_string_col BYTEA NOT NULL,
-  string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
@@ -99,7 +99,7 @@ CREATE EXTERNAL TABLE alltypes_plain_zstandard (
   float_col FLOAT NOT NULL,
   double_col DOUBLE NOT NULL,
   date_string_col BYTEA NOT NULL,
-  string_col BYTEA NOT NULL,
+  string_col VARCHAR NOT NULL,
   timestamp_col TIMESTAMP NOT NULL,
 )
 STORED AS AVRO
@@ -107,7 +107,7 @@ LOCATION '../../testing/data/avro/alltypes_plain.zstandard.avro';
 
 statement ok
 CREATE EXTERNAL TABLE single_nan (
-  mycol DOUBLE
+  mycol FLOAT
 )
 STORED AS AVRO
 LOCATION '../../testing/data/avro/single_nan.avro';
@@ -260,7 +260,7 @@ physical_plan
 
 # test column projection order from avro file
 query ITII
-SELECT id, CAST(string_col AS varchar), int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT 5
+SELECT id, string_col, int_col, bigint_col FROM alltypes_plain ORDER BY id LIMIT 5
 ----
 0 0 0 0
 1 1 1 10

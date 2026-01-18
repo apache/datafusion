@@ -48,10 +48,10 @@ pub fn read_avro_schema_from_reader<R: Read>(
 #[cfg(test)]
 mod test {
     use super::*;
-    use datafusion_common::test_util::arrow_test_data;
-    use datafusion_common::Result as DFResult;
-    use std::fs::File;
     use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::Result as DFResult;
+    use datafusion_common::test_util::arrow_test_data;
+    use std::fs::File;
 
     fn avro_test_file(name: &str) -> String {
         format!("{}/avro/{name}", arrow_test_data())

@@ -23,12 +23,11 @@ use std::sync::Arc;
 use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::AvroSchema;
 use datafusion_common::error::Result;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::TableSchema;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
@@ -41,7 +40,6 @@ pub struct AvroSource {
     batch_size: Option<usize>,
     projection: SplitProjection,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
 }
 
 impl AvroSource {
@@ -53,19 +51,19 @@ impl AvroSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
         }
     }
 
     fn open<R: std::io::BufRead>(&self, reader: R) -> Result<Reader<R>> {
         ReaderBuilder::new()
-            .with_reader_schema(AvroSchema::try_from(self.table_schema.file_schema().as_ref()).unwrap())
+            .with_reader_schema(
+                AvroSchema::try_from(self.table_schema.file_schema().as_ref()).unwrap(),
+            )
             .with_batch_size(self.batch_size.expect("Batch size must set before open"))
             .with_projection(self.projection.file_indices.clone())
             .build(reader)
             .map_err(Into::into)
     }
-
 }
 
 impl FileSource for AvroSource {
@@ -124,20 +122,6 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
-    }
 }
 
 mod private {
@@ -145,7 +129,7 @@ mod private {
     use std::io::BufReader;
 
     use bytes::Buf;
-    use datafusion_datasource::{file_stream::FileOpenFuture, PartitionedFile};
+    use datafusion_datasource::{PartitionedFile, file_stream::FileOpenFuture};
     use futures::StreamExt;
     use object_store::{GetResultPayload, ObjectStore};
 
@@ -189,18 +173,20 @@ mod tests {
     use arrow::array::*;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-        TimestampMicrosecondArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray,
     };
-    use arrow::datatypes::{DataType, Field};
     use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{DataType, Field};
     use std::fs::File;
     use std::io::BufReader;
 
-    fn build_reader(name: &'_ str, projection : Option<Vec<usize>>) -> Reader<BufReader<File>> {
+    fn build_reader(
+        name: &'_ str,
+        projection: Option<Vec<usize>>,
+    ) -> Reader<BufReader<File>> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
-        let mut builder = ReaderBuilder::new()
-            .with_batch_size(64);
+        let mut builder = ReaderBuilder::new().with_batch_size(64);
         if let Some(proj) = projection {
             builder = builder.with_projection(proj);
         }
@@ -310,8 +296,7 @@ mod tests {
         // Test projection to filter and reorder columns
         let projection = vec![9, 7, 1]; // string_col, double_col, bool_col
 
-        let mut reader =
-            build_reader("alltypes_dictionary.avro", Some(projection));
+        let mut reader = build_reader("alltypes_dictionary.avro", Some(projection));
         let batch = reader.next().unwrap().unwrap();
 
         // Only 3 columns should be present (not all 11)
@@ -355,5 +340,75 @@ mod tests {
             .unwrap();
         assert!(col.value(0));
         assert!(!col.value(1));
+    }
+
+    #[test]
+    fn test_avro_timestamp_logical_types() {
+        let mut reader = build_reader("timestamp_logical_types.avro", None);
+        let batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(7, batch.num_columns());
+        assert_eq!(2, batch.num_rows());
+
+        let schema = reader.schema();
+        let ts_millis = schema.column_with_name("ts_millis").unwrap();
+        assert_eq!(1, ts_millis.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+            ts_millis.1.data_type()
+        );
+        let col = get_col::<TimestampMillisecondArray>(&batch, ts_millis).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000, col.value(1));
+
+        let ts_micros = schema.column_with_name("ts_micros").unwrap();
+        assert_eq!(2, ts_micros.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            ts_micros.1.data_type()
+        );
+        let col = get_col::<TimestampMicrosecondArray>(&batch, ts_micros).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000_000, col.value(1));
+
+        let ts_nanos = schema.column_with_name("ts_nanos").unwrap();
+        assert_eq!(3, ts_nanos.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            ts_nanos.1.data_type()
+        );
+        let col = get_col::<TimestampNanosecondArray>(&batch, ts_nanos).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000_000_000, col.value(1));
+
+        let local_ts_millis = schema.column_with_name("local_ts_millis").unwrap();
+        assert_eq!(4, local_ts_millis.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Millisecond, None),
+            local_ts_millis.1.data_type()
+        );
+        let col = get_col::<TimestampMillisecondArray>(&batch, local_ts_millis).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000, col.value(1));
+
+        let local_ts_micros = schema.column_with_name("local_ts_micros").unwrap();
+        assert_eq!(5, local_ts_micros.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Microsecond, None),
+            local_ts_micros.1.data_type()
+        );
+        let col = get_col::<TimestampMicrosecondArray>(&batch, local_ts_micros).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000_000, col.value(1));
+
+        let local_ts_nanos = schema.column_with_name("local_ts_nanos").unwrap();
+        assert_eq!(6, local_ts_nanos.0);
+        assert_eq!(
+            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            local_ts_nanos.1.data_type()
+        );
+        let col = get_col::<TimestampNanosecondArray>(&batch, local_ts_nanos).unwrap();
+        assert_eq!(0, col.value(0));
+        assert_eq!(1_000_000_000, col.value(1));
     }
 }
