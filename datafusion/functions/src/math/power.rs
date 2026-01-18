@@ -20,7 +20,9 @@ use std::any::Any;
 
 use super::log::LogFunc;
 
-use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
+use crate::utils::{
+    calculate_binary_math, calculate_binary_math_decimal, calculate_binary_math_numeric,
+};
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::i256;
 use arrow::datatypes::{
@@ -437,25 +439,30 @@ impl ScalarUDFImpl for PowerFunc {
             return pow_decimal_with_float_fallback(&base, exponent, args.number_rows);
         }
 
+        let out_type = base.data_type();
+        // Safety: all `dec_scale.expect` calls below are infallible since the left argument
+        // is decimal array as per `calculate_binary_math` contract.
         let arr: ArrayRef = match (base.data_type(), exponent.data_type()) {
             (DataType::Float64, DataType::Float64) => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                calculate_binary_math_numeric::<Float64Type, Float64Type, Float64Type, _>(
                     &base,
                     exponent,
-                    |b, e| Ok(f64::powf(b, e)),
+                    |b, e, _| Ok(f64::powf(b, e)),
+                    out_type,
                 )?
             }
-            (DataType::Decimal32(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<Decimal32Type, Int64Type, Decimal32Type, _>(
+            (DataType::Decimal32(_, _), DataType::Int64) => {
+                calculate_binary_math_decimal::<Decimal32Type, Int64Type, Decimal32Type, _>(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_int(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal32(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal32(_, _), DataType::Float64) => {
+                calculate_binary_math_decimal::<
                     Decimal32Type,
                     Float64Type,
                     Decimal32Type,
@@ -463,22 +470,24 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_float(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal64(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<Decimal64Type, Int64Type, Decimal64Type, _>(
+            (DataType::Decimal64(_, _), DataType::Int64) => {
+                calculate_binary_math_decimal::<Decimal64Type, Int64Type, Decimal64Type, _>(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_int(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal64(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal64(_, _), DataType::Float64) => {
+                calculate_binary_math_decimal::<
                     Decimal64Type,
                     Float64Type,
                     Decimal64Type,
@@ -486,13 +495,14 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_float(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal128(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal128(_, _), DataType::Int64) => {
+                calculate_binary_math_decimal::<
                     Decimal128Type,
                     Int64Type,
                     Decimal128Type,
@@ -500,13 +510,14 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_int(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_int(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal128(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal128(_, _), DataType::Float64) => {
+                calculate_binary_math_decimal::<
                     Decimal128Type,
                     Float64Type,
                     Decimal128Type,
@@ -514,13 +525,14 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal_float(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal_float(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal256(precision, scale), DataType::Int64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal256(_, _), DataType::Int64) => {
+                calculate_binary_math_decimal::<
                     Decimal256Type,
                     Int64Type,
                     Decimal256Type,
@@ -528,13 +540,14 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal256_int(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal256_int(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
-            (DataType::Decimal256(precision, scale), DataType::Float64) => {
-                calculate_binary_decimal_math::<
+            (DataType::Decimal256(_, _), DataType::Float64) => {
+                calculate_binary_math_decimal::<
                     Decimal256Type,
                     Float64Type,
                     Decimal256Type,
@@ -542,9 +555,10 @@ impl ScalarUDFImpl for PowerFunc {
                 >(
                     &base,
                     exponent,
-                    |b, e| pow_decimal256_float(b, *scale, e),
-                    *precision,
-                    *scale,
+                    |b, e, dec_scale| {
+                        pow_decimal256_float(b, dec_scale.expect("left is decimal").1, e)
+                    },
+                    out_type,
                 )?
             }
             (base_type, exp_type) => {

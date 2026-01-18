@@ -1165,6 +1165,29 @@ SELECT power(2.0, null)
 ----
 NULL
 
+# Different scales for arguments
+query R
+SELECT power(100::decimal(38, 5), 3::decimal(38, 2))
+----
+1000000
+
+query R
+SELECT power(100::decimal(72, 10), 3::decimal(38, 2))
+----
+1000000
+
+query R
+SELECT power(100::decimal(38, 5), 3)
+----
+1000000
+
+query R
+SELECT power(arrow_cast(100, 'Decimal128(38, 5)'), 3)
+----
+1000000
+
+
+
 # Array variants of power function
 query RR rowsort
 SELECT distinct c1*100000, power(c1*100000, 2) from decimal_simple;
