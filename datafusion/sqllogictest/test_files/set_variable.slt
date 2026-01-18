@@ -352,6 +352,12 @@ statement ok
 EXPLAIN ANALYZE SELECT * FROM generate_series(1, 1000) AS t1(v1) ORDER BY v1
 
 statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '1K'
+
+statement ok
+RESET datafusion.runtime.file_statistics_cache_limit
+
+statement ok
 SET datafusion.runtime.list_files_cache_limit = '1K'
 
 statement ok
@@ -407,6 +413,15 @@ SHOW datafusion.runtime.max_temp_directory_size
 ----
 datafusion.runtime.max_temp_directory_size 10G
 
+# Test SET and SHOW rruntime.file_statistics_cache_limit
+statement ok
+SET datafusion.runtime.file_statistics_cache_limit = '42M'
+
+query TT
+SHOW datafusion.runtime.file_statistics_cache_limit
+----
+datafusion.runtime.file_statistics_cache_limit 42M
+
 # Test SET and SHOW runtime.metadata_cache_limit
 statement ok
 SET datafusion.runtime.metadata_cache_limit = '200M'
@@ -441,6 +456,7 @@ datafusion.runtime.list_files_cache_ttl 1m30s
 query T
 SELECT name FROM information_schema.df_settings WHERE name LIKE 'datafusion.runtime.%' ORDER BY name
 ----
+datafusion.runtime.file_statistics_cache_limit
 datafusion.runtime.list_files_cache_limit
 datafusion.runtime.list_files_cache_ttl
 datafusion.runtime.max_temp_directory_size
