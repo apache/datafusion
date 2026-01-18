@@ -23,6 +23,7 @@ use arrow::{
     util::bench_util::create_primitive_array,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::signum;
@@ -82,6 +83,51 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: batch_len,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+
+        // Scalar benchmarks (the optimization we added)
+        let scalar_f32_args =
+            vec![ColumnarValue::Scalar(ScalarValue::Float32(Some(-42.5)))];
+        let scalar_f32_arg_fields =
+            vec![Field::new("a", DataType::Float32, false).into()];
+        let return_field_f32 = Field::new("f", DataType::Float32, false).into();
+
+        c.bench_function(&format!("signum f32 scalar: {size}"), |b| {
+            b.iter(|| {
+                black_box(
+                    signum
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: scalar_f32_args.clone(),
+                            arg_fields: scalar_f32_arg_fields.clone(),
+                            number_rows: 1,
+                            return_field: Arc::clone(&return_field_f32),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+
+        let scalar_f64_args =
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(-42.5)))];
+        let scalar_f64_arg_fields =
+            vec![Field::new("a", DataType::Float64, false).into()];
+        let return_field_f64 = Field::new("f", DataType::Float64, false).into();
+
+        c.bench_function(&format!("signum f64 scalar: {size}"), |b| {
+            b.iter(|| {
+                black_box(
+                    signum
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: scalar_f64_args.clone(),
+                            arg_fields: scalar_f64_arg_fields.clone(),
+                            number_rows: 1,
+                            return_field: Arc::clone(&return_field_f64),
                             config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),

@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -98,6 +98,34 @@ impl ScalarUDFImpl for SignumFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let arg = &args.args[0];
+
+        // Scalar fast path for float types - avoid array conversion overhead
+        if let ColumnarValue::Scalar(scalar) = arg {
+            if scalar.is_null() {
+                return ColumnarValue::Scalar(ScalarValue::Null)
+                    .cast_to(args.return_type(), None);
+            }
+
+            match scalar {
+                ScalarValue::Float64(Some(v)) => {
+                    let result = if *v == 0.0 { 0.0 } else { v.signum() };
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))));
+                }
+                ScalarValue::Float32(Some(v)) => {
+                    let result = if *v == 0.0 { 0.0 } else { v.signum() };
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))));
+                }
+                _ => {
+                    return internal_err!(
+                        "Unexpected scalar type for signum: {:?}",
+                        scalar.data_type()
+                    );
+                }
+            }
+        }
+
+        // Array path
         make_scalar_function(signum, vec![])(&args.args)
     }
 
