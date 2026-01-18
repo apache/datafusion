@@ -17,10 +17,14 @@
 
 use crate::cache::CacheAccessor;
 use crate::cache::DefaultListFilesCache;
-use crate::cache::cache_unit::DefaultFilesMetadataCache;
+use crate::cache::cache_unit::{
+    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT, DefaultFileStatisticsCache,
+    DefaultFilesMetadataCache,
+};
 use crate::cache::list_files_cache::ListFilesEntry;
 use crate::cache::list_files_cache::TableScopedPath;
 use datafusion_common::TableReference;
+use datafusion_common::heap_size::DFHeapSize;
 use datafusion_common::stats::Precision;
 use datafusion_common::{Result, Statistics};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -41,7 +45,7 @@ pub use super::list_files_cache::{
 ///
 /// This struct embeds the [`ObjectMeta`] used for cache validation,
 /// along with the cached statistics and ordering information.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedFileMetadata {
     /// File metadata used for cache validation (size, last_modified).
     pub meta: ObjectMeta,
@@ -81,7 +85,7 @@ impl CachedFileMetadata {
 /// - Statistics for the file
 /// - Ordering information for the file
 ///
-/// If enabled via [`CacheManagerConfig::with_files_statistics_cache`] this
+/// If enabled via [`CacheManagerConfig::with_file_statistics_cache`] this
 /// cache avoids inferring the same file statistics repeatedly during the
 /// session lifetime.
 ///
@@ -92,8 +96,24 @@ impl CachedFileMetadata {
 ///
 /// See [`crate::runtime_env::RuntimeEnv`] for more details
 pub trait FileStatisticsCache: CacheAccessor<Path, CachedFileMetadata> {
+    fn cache_limit(&self) -> usize;
+
+    /// Updates the cache with a new memory limit in bytes.
+    fn update_cache_limit(&self, limit: usize);
+
     /// Retrieves the information about the entries currently cached.
     fn list_entries(&self) -> HashMap<Path, FileStatisticsCacheEntry>;
+}
+
+impl DFHeapSize for CachedFileMetadata {
+    fn heap_size(&self) -> usize {
+        self.meta.size.heap_size()
+            + self.meta.last_modified.heap_size()
+            + self.meta.version.heap_size()
+            + self.meta.e_tag.heap_size()
+            + self.meta.location.as_ref().heap_size()
+            + self.statistics.heap_size()
+    }
 }
 
 /// Represents information about a cached statistics entry.
@@ -330,8 +350,19 @@ pub struct CacheManager {
 
 impl CacheManager {
     pub fn try_new(config: &CacheManagerConfig) -> Result<Arc<Self>> {
-        let file_statistic_cache =
-            config.table_files_statistics_cache.as_ref().map(Arc::clone);
+        let file_statistic_cache = match &config.file_statistics_cache {
+            Some(fsc) if config.file_statistics_cache_limit > 0 => {
+                fsc.update_cache_limit(config.file_statistics_cache_limit);
+                Some(Arc::clone(fsc))
+            }
+            None if config.file_statistics_cache_limit > 0 => {
+                let fsc: Arc<dyn FileStatisticsCache> = Arc::new(
+                    DefaultFileStatisticsCache::new(config.file_statistics_cache_limit),
+                );
+                Some(fsc)
+            }
+            _ => None,
+        };
 
         let list_files_cache = match &config.list_files_cache {
             Some(lfc) if config.list_files_cache_limit > 0 => {
@@ -371,9 +402,16 @@ impl CacheManager {
         }))
     }
 
-    /// Get the cache of listing files statistics.
+    /// Get the file statistics cache.
     pub fn get_file_statistic_cache(&self) -> Option<Arc<dyn FileStatisticsCache>> {
         self.file_statistic_cache.clone()
+    }
+
+    /// Get the memory limit of the file statistics cache.
+    pub fn get_file_statistic_cache_limit(&self) -> usize {
+        self.file_statistic_cache
+            .as_ref()
+            .map_or(0, |c| c.cache_limit())
     }
 
     /// Get the cache for storing the result of listing [`ObjectMeta`]s under the same path.
@@ -411,7 +449,9 @@ pub struct CacheManagerConfig {
     /// Enable caching of file statistics when listing files.
     /// Enabling the cache avoids repeatedly reading file statistics in a DataFusion session.
     /// Default is disabled. Currently only Parquet files are supported.
-    pub table_files_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
+    pub file_statistics_cache: Option<Arc<dyn FileStatisticsCache>>,
+    /// Limit of the file statistics cache, in bytes. Default: 1MiB.
+    pub file_statistics_cache_limit: usize,
     /// Enable caching of file metadata when listing files.
     /// Enabling the cache avoids repeat list and object metadata fetch operations, which may be
     /// expensive in certain situations (e.g. remote object storage), for objects under paths that
@@ -437,7 +477,8 @@ pub struct CacheManagerConfig {
 impl Default for CacheManagerConfig {
     fn default() -> Self {
         Self {
-            table_files_statistics_cache: Default::default(),
+            file_statistics_cache: Default::default(),
+            file_statistics_cache_limit: DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
             list_files_cache: Default::default(),
             list_files_cache_limit: DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT,
             list_files_cache_ttl: DEFAULT_LIST_FILES_CACHE_TTL,
@@ -448,14 +489,19 @@ impl Default for CacheManagerConfig {
 }
 
 impl CacheManagerConfig {
-    /// Set the cache for files statistics.
+    /// Set the cache for file statistics.
     ///
     /// Default is `None` (disabled).
-    pub fn with_files_statistics_cache(
+    pub fn with_file_statistics_cache(
         mut self,
         cache: Option<Arc<dyn FileStatisticsCache>>,
     ) -> Self {
-        self.table_files_statistics_cache = cache;
+        self.file_statistics_cache = cache;
+        self
+    }
+
+    pub fn with_file_statistics_cache_limit(mut self, limit: usize) -> Self {
+        self.file_statistics_cache_limit = limit;
         self
     }
 

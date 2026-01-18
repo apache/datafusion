@@ -101,6 +101,7 @@ use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_execution::cache::cache_unit::DEFAULT_FILE_STATISTICS_MEMORY_LIMIT;
 use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
@@ -1187,6 +1188,10 @@ impl SessionContext {
                 let duration = Self::parse_duration(value)?;
                 builder.with_object_list_cache_ttl(Some(duration))
             }
+            "file_statistics_cache_limit" => {
+                let limit = Self::parse_memory_limit(value)?;
+                builder.with_file_statistics_cache_limit(limit)
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
             // Remember to update `reset_runtime_variable()` when adding new options
         };
@@ -1226,9 +1231,13 @@ impl SessionContext {
                 builder =
                     builder.with_object_list_cache_ttl(DEFAULT_LIST_FILES_CACHE_TTL);
             }
+            "file_statistics_cache_limit" => {
+                builder = builder.with_file_statistics_cache_limit(
+                    DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
+                );
+            }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
         };
-
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();

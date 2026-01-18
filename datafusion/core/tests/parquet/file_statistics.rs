@@ -276,7 +276,7 @@ fn get_cache_runtime_state() -> (
     let list_file_cache = Arc::new(DefaultListFilesCache::default());
 
     let cache_config = cache_config
-        .with_files_statistics_cache(Some(file_static_cache.clone()))
+        .with_file_statistics_cache(Some(file_static_cache.clone()))
         .with_list_files_cache(Some(list_file_cache.clone()));
 
     let rt = RuntimeEnvBuilder::new()

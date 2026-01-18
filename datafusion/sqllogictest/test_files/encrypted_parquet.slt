@@ -77,6 +77,10 @@ ORDER BY double_field
 3 4
 5 6
 
+# Disable file statistics cache because file statistics have been previously created
+statement ok
+set datafusion.runtime.file_statistics_cache_limit = "0K";
+
 statement count 0
 CREATE EXTERNAL TABLE parquet_table
 (
