@@ -71,3 +71,15 @@ TRUNCATE ONLY t1;
 
 statement error TRUNCATE with RESTART/CONTINUE IDENTITY is not supported
 TRUNCATE TABLE t1 RESTART IDENTITY;
+
+# Test TRUNCATE without TABLE keyword
+query TT
+explain truncate t1;
+----
+logical_plan
+01)Dml: op=[Truncate] table=[t1]
+02)--EmptyRelation: rows=0
+physical_plan_error
+01)TRUNCATE operation on table 't1'
+02)caused by
+03)This feature is not implemented: TRUNCATE not supported for Base table

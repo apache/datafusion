@@ -356,7 +356,7 @@ pub trait TableProvider: Debug + Sync + Send {
 
     /// Remove all rows from the table.
     ///
-    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64),
+    /// Should return an [ExecutionPlan] producing a single row with count (UInt64),
     /// representing the number of rows removed.
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {} table", self.table_type())

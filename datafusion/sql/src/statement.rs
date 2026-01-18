@@ -1398,7 +1398,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 on_cluster,
                 table,
             }) => {
-                let _ = table; // explicitly handled to satisfy full destructuring
+                let _ = table; // Support TRUNCATE TABLE and TRUNCATE syntax
                 if table_names.len() != 1 {
                     return not_impl_err!(
                         "TRUNCATE with multiple tables is not supported"
