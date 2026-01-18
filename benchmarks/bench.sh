@@ -683,7 +683,7 @@ run_tpch_mem() {
 
 # Runs the tpcds benchmark
 run_tpcds() {
-    TPCDS_DIR="${DATA_DIR}"
+    TPCDS_DIR="${DATA_DIR}/tpcds_sf1"
 
     # Check if TPCDS data directory and representative file exists
     if [ ! -f "${TPCDS_DIR}/web_site.parquet" ]; then

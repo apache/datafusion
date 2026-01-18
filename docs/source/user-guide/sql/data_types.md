@@ -25,6 +25,11 @@ execution. The SQL types from
 are mapped to [Arrow data types](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) according to the following table.
 This mapping occurs when defining the schema in a `CREATE EXTERNAL TABLE` command or when performing a SQL `CAST` operation.
 
+For background on extension types and custom metadata, see the
+[Implementing User Defined Types and Custom Metadata in DataFusion] blog.
+
+[implementing user defined types and custom metadata in datafusion]: https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata
+
 You can see the corresponding Arrow type for any SQL expression using
 the `arrow_typeof` function. For example:
 

@@ -24,6 +24,7 @@ mod list_files_cache;
 
 pub use file_metadata_cache::DefaultFilesMetadataCache;
 pub use list_files_cache::DefaultListFilesCache;
+pub use list_files_cache::ListFilesEntry;
 pub use list_files_cache::TableScopedPath;
 
 /// Base trait for cache implementations with common operations.

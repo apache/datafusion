@@ -1111,6 +1111,7 @@ message HashJoinExecNode {
   datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
+  bool null_aware = 10;
 }
 
 enum StreamPartitionMode {

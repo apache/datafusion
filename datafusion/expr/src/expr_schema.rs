@@ -195,6 +195,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNull(_)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -372,6 +373,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
+            Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -626,6 +628,7 @@ impl ExprSchemable for Expr {
             | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)

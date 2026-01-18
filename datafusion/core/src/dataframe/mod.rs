@@ -447,15 +447,31 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
+    pub fn drop_columns<T>(self, columns: &[T]) -> Result<DataFrame>
+    where
+        T: Into<Column> + Clone,
+    {
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
+            .flat_map(|col| {
+                let column: Column = col.clone().into();
+                match column.relation.as_ref() {
+                    Some(_) => {
+                        // qualified_field_from_column returns Result<(Option<&TableReference>, &FieldRef)>
+                        vec![self.plan.schema().qualified_field_from_column(&column)]
+                    }
+                    None => {
+                        // qualified_fields_with_unqualified_name returns Vec<(Option<&TableReference>, &FieldRef)>
+                        self.plan
+                            .schema()
+                            .qualified_fields_with_unqualified_name(&column.name)
+                            .into_iter()
+                            .map(Ok)
+                            .collect::<Vec<_>>()
+                    }
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         let expr: Vec<Expr> = self
             .plan
             .schema()
@@ -2460,6 +2476,48 @@ impl DataFrame {
                 schema
                     .field_with_name(None, name)
                     .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
+    }
+
+    /// Find qualified columns for this dataframe from names
+    ///
+    /// # Arguments
+    /// * `names` - Unqualified names to find.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// ctx.register_csv("first_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df = ctx.table("first_table").await?;
+    /// ctx.register_csv("second_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df2 = ctx.table("second_table").await?;
+    /// let join_expr = df.find_qualified_columns(&["a"])?.iter()
+    ///     .zip(df2.find_qualified_columns(&["a"])?.iter())
+    ///     .map(|(col1, col2)| col(*col1).eq(col(*col2)))
+    ///     .collect::<Vec<Expr>>();
+    /// let df3 = df.join_on(df2, JoinType::Inner, join_expr)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn find_qualified_columns(
+        &self,
+        names: &[&str],
+    ) -> Result<Vec<(Option<&TableReference>, &FieldRef)>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                schema
+                    .qualified_field_from_column(&Column::from_name(*name))
                     .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()

@@ -1,0 +1,453 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#############
+## Null-Aware Anti Join Tests
+## Tests for automatic null-aware semantics in NOT IN subqueries
+#############
+
+statement ok
+CREATE TABLE outer_table(id INT, value TEXT) AS VALUES
+(1, 'a'),
+(2, 'b'),
+(3, 'c'),
+(4, 'd'),
+(NULL, 'e');
+
+statement ok
+CREATE TABLE inner_table_no_null(id INT, value TEXT) AS VALUES
+(2, 'x'),
+(4, 'y');
+
+statement ok
+CREATE TABLE inner_table_with_null(id INT, value TEXT) AS VALUES
+(2, 'x'),
+(NULL, 'y');
+
+#############
+## Test 1: NOT IN with no NULLs - should behave like regular anti join
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
+----
+1 a
+3 c
+
+# Verify the plan uses LeftAnti join
+query TT
+EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
+----
+logical_plan
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+02)--TableScan: outer_table projection=[id, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: inner_table_no_null projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 2: NOT IN with NULL in subquery - should return 0 rows (null-aware semantics)
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+# Verify the result is empty even though there are rows in outer_table
+# that don't match the non-NULL value (2) in the subquery.
+# This is correct null-aware behavior: if subquery contains NULL, result is unknown.
+
+#############
+## Test 3: NOT IN with NULL in outer table but not in subquery
+## NULL rows from outer should not appear in output
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null) AND id IS NOT NULL;
+----
+1 a
+3 c
+
+#############
+## Test 4: Test with all NULL subquery
+#############
+
+statement ok
+CREATE TABLE all_null_table(id INT) AS VALUES (NULL), (NULL);
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM all_null_table);
+----
+
+#############
+## Test 5: Test with empty subquery - should return all rows
+#############
+
+statement ok
+CREATE TABLE empty_table(id INT, value TEXT);
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM empty_table);
+----
+1 a
+2 b
+3 c
+4 d
+NULL e
+
+#############
+## Test 6: NOT IN with complex expression
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id + 1 NOT IN (SELECT id FROM inner_table_no_null);
+----
+2 b
+4 d
+
+#############
+## Test 7: NOT IN with complex expression and NULL in subquery
+#############
+
+query IT rowsort
+SELECT * FROM outer_table WHERE id + 1 NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+#############
+## Test 8: Multiple NOT IN conditions (AND)
+#############
+
+statement ok
+CREATE TABLE inner_table2(id INT) AS VALUES (1), (3);
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_no_null)
+  AND id NOT IN (SELECT id FROM inner_table2);
+----
+
+#############
+## Test 9: Multiple NOT IN conditions (OR)
+#############
+
+# KNOWN LIMITATION: Mark joins used for OR conditions don't support null-aware semantics.
+# The NULL row is incorrectly returned here. According to SQL semantics:
+# - NULL NOT IN (2, 4) = UNKNOWN
+# - NULL NOT IN (1, 3) = UNKNOWN
+# - UNKNOWN OR UNKNOWN = UNKNOWN (should be filtered out)
+# But mark joins treat NULL keys as non-matching (FALSE), so:
+# - NULL mark column = FALSE
+# - NOT FALSE OR NOT FALSE = TRUE OR TRUE = TRUE (incorrectly included)
+# TODO: Implement null-aware support for mark joins to fix this
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_no_null)
+   OR id NOT IN (SELECT id FROM inner_table2);
+----
+1 a
+2 b
+3 c
+4 d
+NULL e
+
+#############
+## Test 10: NOT IN with WHERE clause in subquery
+#############
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT id FROM inner_table_with_null WHERE value = 'x');
+----
+1 a
+3 c
+4 d
+
+# Note: The NULL row from inner_table_with_null is filtered out by WHERE clause,
+# so this behaves like regular anti join (not null-aware)
+
+#############
+## Test 11: Verify NULL-aware flag is set for LeftAnti joins
+#############
+
+# Check that the physical plan shows null-aware anti join
+# Note: The exact format may vary, but we should see LeftAnti join type
+query TT
+EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+logical_plan
+01)LeftAnti Join: outer_table.id = __correlated_sq_1.id
+02)--TableScan: outer_table projection=[id, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: inner_table_with_null projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 12: Correlated NOT IN subquery with NULL
+#############
+
+statement ok
+CREATE TABLE orders(order_id INT, customer_id INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, 300);
+
+statement ok
+CREATE TABLE payments(payment_id INT, order_id INT) AS VALUES
+(1, 1),
+(2, NULL);
+
+# Find orders that don't have payments
+# Should return empty because there's a NULL in payments.order_id
+query I rowsort
+SELECT order_id FROM orders
+WHERE order_id NOT IN (SELECT order_id FROM payments);
+----
+
+#############
+## Test 13: NOT IN with DISTINCT in subquery
+#############
+
+statement ok
+CREATE TABLE duplicates_with_null(id INT) AS VALUES
+(2),
+(2),
+(NULL),
+(NULL);
+
+query IT rowsort
+SELECT * FROM outer_table
+WHERE id NOT IN (SELECT DISTINCT id FROM duplicates_with_null);
+----
+
+#############
+## Test 14: NOT EXISTS vs NOT IN - Demonstrating the difference
+#############
+
+# NOT EXISTS should NOT use null-aware semantics
+# It uses two-valued logic (TRUE/FALSE), not three-valued logic (TRUE/FALSE/UNKNOWN)
+
+# Setup tables for comparison
+statement ok
+CREATE TABLE customers(id INT, name TEXT) AS VALUES
+(1, 'Alice'),
+(2, 'Bob'),
+(3, 'Charlie'),
+(NULL, 'Dave');
+
+statement ok
+CREATE TABLE banned(id INT) AS VALUES
+(2),
+(NULL);
+
+# Test 14a: NOT IN with NULL in subquery - Returns EMPTY (null-aware)
+query IT rowsort
+SELECT * FROM customers WHERE id NOT IN (SELECT id FROM banned);
+----
+
+# Test 14b: NOT EXISTS with NULL in subquery - Returns rows (NOT null-aware)
+# This should return (1, 'Alice'), (3, 'Charlie'), (NULL, 'Dave')
+# Because NOT EXISTS uses two-valued logic: NULL = NULL is FALSE, so no match found
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE c.id = b.id);
+----
+1 Alice
+3 Charlie
+NULL Dave
+
+# Test 14c: Verify with EXPLAIN that NOT EXISTS doesn't use null-aware
+query TT
+EXPLAIN SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM banned b WHERE c.id = b.id);
+----
+logical_plan
+01)LeftAnti Join: c.id = __correlated_sq_1.id
+02)--SubqueryAlias: c
+03)----TableScan: customers projection=[id, name]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: b
+06)------TableScan: banned projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 15: NOT EXISTS - No NULLs
+#############
+
+statement ok
+CREATE TABLE active_customers(id INT) AS VALUES (1), (3);
+
+# Should return only Bob (id=2) and Dave (id=NULL)
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM active_customers a WHERE c.id = a.id);
+----
+2 Bob
+NULL Dave
+
+#############
+## Test 16: NOT EXISTS - Correlated subquery
+#############
+
+statement ok
+CREATE TABLE orders_test(order_id INT, customer_id INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, NULL);
+
+statement ok
+CREATE TABLE customers_test(customer_id INT, name TEXT) AS VALUES
+(100, 'Alice'),
+(200, 'Bob'),
+(300, 'Charlie'),
+(NULL, 'Unknown');
+
+# Find customers with no orders
+# Should return Charlie (300) and Unknown (NULL)
+query IT rowsort
+SELECT * FROM customers_test c
+WHERE NOT EXISTS (
+    SELECT 1 FROM orders_test o WHERE o.customer_id = c.customer_id
+);
+----
+300 Charlie
+NULL Unknown
+
+#############
+## Test 17: NOT EXISTS with all NULL subquery
+#############
+
+statement ok
+CREATE TABLE all_null_banned(id INT) AS VALUES (NULL), (NULL);
+
+# NOT EXISTS should return all rows because NULL = NULL is FALSE (no matches)
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (SELECT 1 FROM all_null_banned b WHERE c.id = b.id);
+----
+1 Alice
+2 Bob
+3 Charlie
+NULL Dave
+
+# Compare with NOT IN which returns empty
+query IT rowsort
+SELECT * FROM customers WHERE id NOT IN (SELECT id FROM all_null_banned);
+----
+
+#############
+## Test 18: Nested NOT EXISTS and NOT IN
+#############
+
+# NOT EXISTS outside, NOT IN inside - should work correctly
+query IT rowsort
+SELECT * FROM customers c
+WHERE NOT EXISTS (
+    SELECT 1 FROM banned b
+    WHERE c.id = b.id
+    AND b.id NOT IN (SELECT id FROM active_customers)
+);
+----
+1 Alice
+3 Charlie
+NULL Dave
+
+#############
+## Test from GitHub issue #10583
+## Tests NOT IN with NULL in subquery result - should return empty result
+#############
+
+statement ok
+CREATE TABLE test_table(c1 INT, c2 INT) AS VALUES
+(1, 1),
+(2, 2),
+(3, 3),
+(4, NULL),
+(NULL, 0);
+
+# When subquery contains NULL, NOT IN should return empty result
+# because NULL NOT IN (values including NULL) is UNKNOWN for all rows
+query II rowsort
+SELECT * FROM test_table WHERE (c1 NOT IN (SELECT c2 FROM test_table)) = true;
+----
+
+# NOTE: The correlated subquery version from issue #10583:
+# SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE t1.c1 = t2.c1)
+# is not yet supported because it creates a multi-column join (correlation + NOT IN condition).
+# This is a known limitation - currently only supports single column null-aware anti joins.
+# This will be addressed in next Phase (multi-column support).
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE test_table;
+
+statement ok
+DROP TABLE outer_table;
+
+statement ok
+DROP TABLE inner_table_no_null;
+
+statement ok
+DROP TABLE inner_table_with_null;
+
+statement ok
+DROP TABLE all_null_table;
+
+statement ok
+DROP TABLE empty_table;
+
+statement ok
+DROP TABLE inner_table2;
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE payments;
+
+statement ok
+DROP TABLE duplicates_with_null;
+
+statement ok
+DROP TABLE customers;
+
+statement ok
+DROP TABLE banned;
+
+statement ok
+DROP TABLE active_customers;
+
+statement ok
+DROP TABLE orders_test;
+
+statement ok
+DROP TABLE customers_test;
+
+statement ok
+DROP TABLE all_null_banned;

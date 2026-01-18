@@ -176,7 +176,7 @@ fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
 // `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
 // `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
 // `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
-fn get_true_start_end(
+pub fn get_true_start_end(
     input: &str,
     start: i64,
     count: Option<u64>,
@@ -235,7 +235,7 @@ fn get_true_start_end(
 // string, such as `substr(long_str_with_1k_chars, 1, 32)`.
 // In such case the overhead of ASCII-validation may not be worth it, so
 // skip the validation for short prefix for now.
-fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
+pub fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
     string_array: &V,
     start: &Int64Array,
     count: Option<&Int64Array>,

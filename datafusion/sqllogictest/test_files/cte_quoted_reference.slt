@@ -1,0 +1,70 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## CTE Reference Resolution
+##########
+
+# These tests exercise CTE reference resolution with and without identifier
+# normalization. The session is configured with a strict catalog/schema provider
+# (see `datafusion/sqllogictest/src/test_context.rs`) that only provides the
+# `orders` table and panics on any unexpected table lookup.
+#
+# This makes it observable if DataFusion incorrectly treats a CTE reference as a
+# catalog lookup.
+#
+# Refs: https://github.com/apache/datafusion/issues/18932
+#
+# NOTE: This test relies on a strict catalog/schema provider registered in
+# `datafusion/sqllogictest/src/test_context.rs` that provides only the `orders`
+# table and panics on unexpected lookups.
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with BarBaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2
+
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+query I
+with barbaz as (select * from orders) select * from "barbaz";
+----
+1
+2
+
+query I
+with barbaz as (select * from orders) select * from barbaz;
+----
+1
+2

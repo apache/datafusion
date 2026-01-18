@@ -1,0 +1,81 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+
+statement ok
+CREATE TABLE tracking_data AS VALUES
+-- ***** Row Group 0 *****
+  ('Anow Vole', 7),
+  ('Brown Bear', 133),
+  ('Gray Wolf', 82),
+-- ***** Row Group 1 *****
+  ('Lynx', 71),
+  ('Red Fox', 40),
+  ('Alpine Bat', 6),
+-- ***** Row Group 2 *****
+  ('Nlpine Ibex', 101),
+  ('Nlpine Goat', 76),
+  ('Nlpine Sheep', 83),
+-- ***** Row Group 3 *****
+  ('Europ. Mole', 4),
+  ('Polecat', 16),
+  ('Alpine Ibex', 97);
+
+statement ok
+COPY (SELECT column1 as species, column2 as s FROM tracking_data)
+TO 'test_files/scratch/limit_pruning/data.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '3'
+);
+
+statement ok
+drop table tracking_data;
+
+statement ok
+CREATE EXTERNAL TABLE tracking_data
+STORED AS PARQUET
+LOCATION 'test_files/scratch/limit_pruning/data.parquet';
+
+
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+# row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched
+# limit_pruned_row_groups=2 total → 0 matched
+query TT
+explain analyze select * from tracking_data where species > 'M' AND s >= 50 limit 3;
+----
+Plan with Metrics DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/data.parquet]]}, projection=[species, s], limit=3, file_type=parquet, predicate=species@0 > M AND s@1 >= 50, pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_rows_pruned=3 total → 3 matched, limit_pruned_row_groups=2 total → 0 matched, bytes_scanned=<slt:ignore>, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore> (171/2.35 K)]
+
+# limit_pruned_row_groups=0 total → 0 matched
+# because of order by, scan needs to preserve sort, so limit pruning is disabled
+query TT
+explain analyze select * from tracking_data where species > 'M' AND s >= 50 order by species limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[species@0 ASC NULLS LAST], preserve_partitioning=[false], filter=[species@0 < Nlpine Sheep], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/limit_pruning/data.parquet]]}, projection=[species, s], file_type=parquet, predicate=species@0 > M AND s@1 >= 50 AND DynamicFilter [ species@0 < Nlpine Sheep ], pruning_predicate=species_null_count@1 != row_count@2 AND species_max@0 > M AND s_null_count@4 != row_count@2 AND s_max@3 >= 50 AND species_null_count@1 != row_count@2 AND species_min@5 < Nlpine Sheep, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 3 matched -> 1 fully matched, row_groups_pruned_bloom_filter=3 total → 3 matched, page_index_rows_pruned=9 total → 9 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=<slt:ignore>, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore> (521/2.35 K)]
+
+statement ok
+drop table tracking_data;
+
+statement ok
+reset datafusion.explain.analyze_level;

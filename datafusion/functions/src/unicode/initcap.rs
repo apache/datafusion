@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -99,6 +99,39 @@ impl ScalarUDFImpl for InitcapFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let arg = &args.args[0];
+
+        // Scalar fast path - handle directly without array conversion
+        if let ColumnarValue::Scalar(scalar) = arg {
+            return match scalar {
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None) => Ok(arg.clone()),
+                ScalarValue::Utf8(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                }
+                ScalarValue::LargeUtf8(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                }
+                ScalarValue::Utf8View(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                }
+                other => {
+                    exec_err!(
+                        "Unsupported data type {:?} for function `initcap`",
+                        other.data_type()
+                    )
+                }
+            };
+        }
+
+        // Array path
         let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),

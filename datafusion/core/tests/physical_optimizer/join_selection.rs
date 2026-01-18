@@ -222,6 +222,7 @@ async fn test_join_with_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -284,6 +285,7 @@ async fn test_left_join_no_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -333,6 +335,7 @@ async fn test_join_with_swap_semi() {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap();
 
@@ -388,6 +391,7 @@ async fn test_join_with_swap_mark() {
             None,
             PartitionMode::Partitioned,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap();
 
@@ -461,6 +465,7 @@ async fn test_nested_join_swap() {
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
+        false,
     )
     .unwrap();
     let child_schema = child_join.schema();
@@ -478,6 +483,7 @@ async fn test_nested_join_swap() {
         None,
         PartitionMode::CollectLeft,
         NullEquality::NullEqualsNothing,
+        false,
     )
     .unwrap();
 
@@ -518,6 +524,7 @@ async fn test_join_no_swap() {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -745,6 +752,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
         Some(projection),
         PartitionMode::Partitioned,
         NullEquality::NullEqualsNothing,
+        false,
     )?);
 
     let swapped = join
@@ -906,6 +914,7 @@ fn check_join_partition_mode(
             None,
             PartitionMode::Auto,
             NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1554,6 +1563,7 @@ async fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         None,
         t.initial_mode,
         NullEquality::NullEqualsNothing,
+        false,
     )?) as _;
 
     let optimized_join_plan =

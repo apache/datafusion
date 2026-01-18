@@ -37,6 +37,34 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2026-01-12** [Blog: Extending SQL in DataFusion: from ->> to TABLESAMPLE](https://datafusion.apache.org/blog/2026/01/12/extending-sql)
+
+- **2025-12-15** [Blog: Optimizing Repartitions in DataFusion: How I Went From Database Noob to Core Contribution](https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions)
+
+- **2025-09-21** [Blog: Implementing User Defined Types and Custom Metadata in DataFusion](https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata)
+
+- **2025-09-10** [Blog: Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries](https://datafusion.apache.org/blog/2025/09/10/dynamic-filters)
+
+- **2025-08-15** [Blog: Using External Indexes, Metadata Stores, Catalogs and Caches to Accelerate Queries on Apache Parquet](https://datafusion.apache.org/blog/2025/08/15/external-parquet-indexes)
+
+- **2025-07-14** [Blog: Embedding User-Defined Indexes in Apache Parquet Files](https://datafusion.apache.org/blog/2025/07/14/user-defined-parquet-indexes)
+
+- **2025-06-30** [Blog: Using Rust async for Query Execution and Cancelling Long-Running Queries](https://datafusion.apache.org/blog/2025/06/30/cancellation)
+
+- **2025-06-15** [Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 1: Query Optimization Overview](https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one)
+
+- **2025-06-15** [Blog: Optimizing SQL (and DataFrames) in DataFusion, Part 2: Optimizers in Apache DataFusion](https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two)
+
+- **2025-04-19** [Blog: User defined Window Functions in DataFusion](https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions)
+
+- **2025-04-10** [Blog: tpchgen-rs World's fastest open source TPC-H data generator, written in Rust](https://datafusion.apache.org/blog/2025/04/10/fastest-tpch-generator)
+
+- **2025-03-11** [Blog: Using Ordering for Better Plans in Apache DataFusion](https://datafusion.apache.org/blog/2025/03/11/ordering-analysis)
+
+- **2024-05-07** [Blog: Announcing Apache Arrow DataFusion is now Apache DataFusion](https://datafusion.apache.org/blog/2024/05/07/datafusion-tlp)
+
+- **2024-03-06** [Blog: Announcing Apache Arrow DataFusion Comet](https://datafusion.apache.org/blog/2024/03/06/comet-donation)
+
 - **2025-03-21** [Blog: Efficient Filter Pushdown in Parquet](https://datafusion.apache.org/blog/2025/03/21/parquet-pushdown/)
 
 - **2025-03-20** [Blog: Parquet Pruning in DataFusion: Read Only What Matters](https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/)

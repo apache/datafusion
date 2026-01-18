@@ -341,6 +341,7 @@ fn find_inner_join(
                 filter: None,
                 schema: join_schema,
                 null_equality,
+                null_aware: false,
             }));
         }
     }
@@ -363,6 +364,7 @@ fn find_inner_join(
         join_type: JoinType::Inner,
         join_constraint: JoinConstraint::On,
         null_equality,
+        null_aware: false,
     }))
 }
 
@@ -1367,6 +1369,7 @@ mod tests {
             filter: None,
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull, // Test preservation
+            null_aware: false,
         });
 
         // Apply filter that can create join conditions

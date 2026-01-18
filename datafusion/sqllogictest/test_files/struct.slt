@@ -492,8 +492,17 @@ Struct("r": Utf8, "c": Float64)
 statement ok
 drop table t;
 
-query error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'a' to value of Float64 type
+statement ok
 create table t as values({r: 'a', c: 1}), ({c: 2.3, r: 'b'});
+
+query ?
+select * from t;
+----
+{c: 1.0, r: a}
+{c: 2.3, r: b}
+
+statement ok
+drop table t;
 
 ##################################
 ## Test Coalesce with Struct
@@ -560,9 +569,17 @@ create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as valu
     (row('purple', 1), row('green', 2.3));
 
 # out of order struct literal
-# TODO: This query should not fail
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'b' to value of Int32 type
+statement ok
 create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
+
+query ?
+select * from t;
+----
+{r: a, c: 1}
+{r: b, c: 2}
+
+statement ok
+drop table t;
 
 ##################################
 ## Test Array of Struct
@@ -573,9 +590,11 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 ----
 [{r: a, c: 1}, {r: b, c: 2}]
 
-# Can't create a list of struct with different field types
-query error
+# Create a list of struct with different field types
+query ?
 select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
+----
+[{c: 1, r: a}, {c: 2, r: b}]
 
 statement ok
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
@@ -592,9 +611,11 @@ drop table t;
 statement ok
 create table t(a struct(r varchar, c int), b struct(c float, r varchar)) as values (row('a', 1), row(2.3, 'b'));
 
-# create array with different struct type is not valid
-query error
+# create array with different struct type should be cast
+query T
 select arrow_typeof([a, b]) from t;
+----
+List(Struct("c": Float32, "r": Utf8View))
 
 statement ok
 drop table t;
@@ -602,13 +623,13 @@ drop table t;
 statement ok
 create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (row('a', 1, 2.3), row('b', 2.3, 2));
 
-# type of each column should not coerced but perserve as it is
+# type of each column should not coerced but preserve as it is
 query T
 select arrow_typeof(a) from t;
 ----
 Struct("r": Utf8View, "c": Int32, "g": Float32)
 
-# type of each column should not coerced but perserve as it is
+# type of each column should not coerced but preserve as it is
 query T
 select arrow_typeof(b) from t;
 ----

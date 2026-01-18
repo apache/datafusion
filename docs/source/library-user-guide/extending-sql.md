@@ -27,6 +27,11 @@ need to:
 - Add custom data types not natively supported
 - Implement SQL constructs like `TABLESAMPLE`, `PIVOT`/`UNPIVOT`, or `MATCH_RECOGNIZE`
 
+You can read more about this topic in the [Extending SQL in DataFusion: from ->>
+to TABLESAMPLE] blog.
+
+[extending sql in datafusion: from ->> to tablesample]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
+
 ## Architecture Overview
 
 When DataFusion processes a SQL query, it goes through these stages:

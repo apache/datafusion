@@ -51,6 +51,10 @@ impl FilterState {
 /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
+///
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.

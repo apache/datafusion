@@ -19,8 +19,8 @@
 
 use arrow::{
     array::{
-        Array, ArrayRef, AsArray, BinaryArrayType, FixedSizeBinaryArray,
-        GenericBinaryArray, GenericStringArray, OffsetSizeTrait,
+        Array, ArrayRef, AsArray, BinaryArrayType, GenericBinaryArray,
+        GenericStringArray, OffsetSizeTrait,
     },
     datatypes::DataType,
 };
@@ -239,7 +239,7 @@ fn encode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
             encoding.encode_array::<_, i64>(&array.as_binary::<i64>())
         }
         DataType::FixedSizeBinary(_) => {
-            encoding.encode_fsb_array(array.as_fixed_size_binary())
+            encoding.encode_array::<_, i32>(&array.as_fixed_size_binary())
         }
         dt => {
             internal_err!("Unexpected data type for encode: {dt}")
@@ -307,7 +307,7 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
             let array = array.as_fixed_size_binary();
             // TODO: could we be more conservative by accounting for nulls?
             let estimate = array.len().saturating_mul(*size as usize);
-            encoding.decode_fsb_array(array, estimate)
+            encoding.decode_array::<_, i32>(&array, estimate)
         }
         dt => {
             internal_err!("Unexpected data type for decode: {dt}")
@@ -404,24 +404,6 @@ impl Encoding {
         }
     }
 
-    // TODO: refactor this away once https://github.com/apache/arrow-rs/pull/8993 lands
-    fn encode_fsb_array(self, array: &FixedSizeBinaryArray) -> Result<ArrayRef> {
-        match self {
-            Self::Base64 => {
-                let array: GenericStringArray<i32> = array
-                    .iter()
-                    .map(|x| x.map(|x| BASE64_ENGINE.encode(x)))
-                    .collect();
-                Ok(Arc::new(array))
-            }
-            Self::Hex => {
-                let array: GenericStringArray<i32> =
-                    array.iter().map(|x| x.map(hex::encode)).collect();
-                Ok(Arc::new(array))
-            }
-        }
-    }
-
     // OutputOffset important to ensure Large types output Large arrays
     fn decode_array<'a, InputBinaryArray, OutputOffset>(
         self,
@@ -458,73 +440,6 @@ impl Encoding {
                 // So the upper bound is half the length of the input values.
                 let upper_bound = approx_data_size / 2;
                 delegated_decode::<_, _, OutputOffset>(hex_decode, value, upper_bound)
-            }
-        }
-    }
-
-    // TODO: refactor this away once https://github.com/apache/arrow-rs/pull/8993 lands
-    fn decode_fsb_array(
-        self,
-        value: &FixedSizeBinaryArray,
-        approx_data_size: usize,
-    ) -> Result<ArrayRef> {
-        fn hex_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-            // only write input / 2 bytes to buf
-            let out_len = input.len() / 2;
-            let buf = &mut buf[..out_len];
-            hex::decode_to_slice(input, buf)
-                .map_err(|e| exec_datafusion_err!("Failed to decode from hex: {e}"))?;
-            Ok(out_len)
-        }
-
-        fn base64_decode(input: &[u8], buf: &mut [u8]) -> Result<usize> {
-            BASE64_ENGINE
-                .decode_slice(input, buf)
-                .map_err(|e| exec_datafusion_err!("Failed to decode from base64: {e}"))
-        }
-
-        fn delegated_decode<DecodeFunction>(
-            decode: DecodeFunction,
-            input: &FixedSizeBinaryArray,
-            conservative_upper_bound_size: usize,
-        ) -> Result<ArrayRef>
-        where
-            DecodeFunction: Fn(&[u8], &mut [u8]) -> Result<usize>,
-        {
-            let mut values = vec![0; conservative_upper_bound_size];
-            let mut offsets = OffsetBufferBuilder::new(input.len());
-            let mut total_bytes_decoded = 0;
-            for v in input.iter() {
-                if let Some(v) = v {
-                    let cursor = &mut values[total_bytes_decoded..];
-                    let decoded = decode(v, cursor)?;
-                    total_bytes_decoded += decoded;
-                    offsets.push_length(decoded);
-                } else {
-                    offsets.push_length(0);
-                }
-            }
-            // We reserved an upper bound size for the values buffer, but we only use the actual size
-            values.truncate(total_bytes_decoded);
-            let binary_array = GenericBinaryArray::<i32>::try_new(
-                offsets.finish(),
-                Buffer::from_vec(values),
-                input.nulls().cloned(),
-            )?;
-            Ok(Arc::new(binary_array))
-        }
-
-        match self {
-            Self::Base64 => {
-                let upper_bound = base64::decoded_len_estimate(approx_data_size);
-                delegated_decode(base64_decode, value, upper_bound)
-            }
-            Self::Hex => {
-                // Calculate the upper bound for decoded byte size
-                // For hex encoding, each pair of hex characters (2 bytes) represents 1 byte when decoded
-                // So the upper bound is half the length of the input values.
-                let upper_bound = approx_data_size / 2;
-                delegated_decode(hex_decode, value, upper_bound)
             }
         }
     }

@@ -22,9 +22,14 @@
 //! A single call to `poll_next` on a top-level [`Stream`] may potentially perform a lot of work
 //! before it returns a `Poll::Pending`. Think for instance of calculating an aggregation over a
 //! large dataset.
+//!
 //! If a `Stream` runs for a long period of time without yielding back to the Tokio executor,
 //! it can starve other tasks waiting on that executor to execute them.
 //! Additionally, this prevents the query execution from being cancelled.
+//!
+//! For more background, please also see the [Using Rust async for Query Execution and Cancelling Long-Running Queries blog]
+//!
+//! [Using Rust async for Query Execution and Cancelling Long-Running Queries blog]: https://datafusion.apache.org/blog/2025/06/30/cancellation
 //!
 //! To ensure that `Stream` implementations yield regularly, operators can insert explicit yield
 //! points using the utilities in this module. For most operators this is **not** necessary. The

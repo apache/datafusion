@@ -171,6 +171,10 @@ pub fn format_type_and_metadata(
 /// // Add any metadata from `FieldMetadata` to `Field`
 /// let updated_field = metadata.add_to_field(field);
 /// ```
+///
+/// For more background, please also see the [Implementing User Defined Types and Custom Metadata in DataFusion blog]
+///
+/// [Implementing User Defined Types and Custom Metadata in DataFusion blog]: https://datafusion.apache.org/blog/2025/09/21/custom-types-using-metadata
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string

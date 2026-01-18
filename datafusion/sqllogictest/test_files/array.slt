@@ -4770,12 +4770,12 @@ select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([[
 query ?
 select array_union(null, []);
 ----
-[]
+NULL
 
 query ?
 select array_union(null, arrow_cast([], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 # array_union scalar function #10
 query ?
@@ -4787,23 +4787,23 @@ NULL
 query ?
 select array_union([1, 1, 2, 2, 3, 3], null);
 ----
-[1, 2, 3]
+NULL
 
 query ?
 select array_union(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
 ----
-[1, 2, 3]
+NULL
 
 # array_union scalar function #12
 query ?
 select array_union(null, [1, 1, 2, 2, 3, 3]);
 ----
-[1, 2, 3]
+NULL
 
 query ?
 select array_union(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
 ----
-[1, 2, 3]
+NULL
 
 # array_union scalar function #13
 query ?
@@ -4836,6 +4836,36 @@ from array_intersect_table_1D_NULL;
 [3, 4]
 NULL
 NULL
+NULL
+
+query ?
+select array_union(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_union([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_intersect(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_intersect([1, 2], arrow_cast(null, 'List(Int64)'));
+----
+NULL
+
+query ?
+select array_except(arrow_cast(null, 'List(Int64)'), [1, 2]);
+----
+NULL
+
+query ?
+select array_except([1, 2], arrow_cast(null, 'List(Int64)'));
+----
 NULL
 
 # list_to_string scalar function #4 (function alias `array_to_string`)
@@ -6888,27 +6918,27 @@ select array_intersect(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'Large
 query ?
 select array_intersect([1, 1, 2, 2, 3, 3], null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'), null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, [1, 1, 2, 2, 3, 3]);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, arrow_cast([1, 1, 2, 2, 3, 3], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 query ?
 select array_intersect([], null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect([[1,2,3]], [[]]);
@@ -6923,17 +6953,17 @@ select array_intersect([[null]], [[]]);
 query ?
 select array_intersect(arrow_cast([], 'LargeList(Int64)'), null);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, []);
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, arrow_cast([], 'LargeList(Int64)'));
 ----
-[]
+NULL
 
 query ?
 select array_intersect(null, null);
@@ -7476,7 +7506,7 @@ select array_except(column1, column2) from array_except_table;
 [2]
 []
 NULL
-[1, 2]
+NULL
 NULL
 
 statement ok
@@ -7497,7 +7527,7 @@ select array_except(column1, column2) from array_except_nested_list_table;
 ----
 [[1, 2]]
 [[3]]
-[[1, 2], [3]]
+NULL
 NULL
 []
 
@@ -7536,7 +7566,7 @@ select array_except(column1, column2) from array_except_table_ut8;
 ----
 [b, c]
 [a, bc]
-[a, bc, def]
+NULL
 NULL
 
 statement ok
@@ -7558,7 +7588,7 @@ select array_except(column1, column2) from array_except_table_bool;
 [true]
 [true]
 [false]
-[true, false]
+NULL
 NULL
 
 statement ok
@@ -7567,7 +7597,7 @@ drop table array_except_table_bool;
 query ?
 select array_except([], null);
 ----
-[]
+NULL
 
 query ?
 select array_except([], []);

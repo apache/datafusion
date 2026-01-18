@@ -290,6 +290,54 @@ pub fn is_lit(expr: &Expr) -> bool {
     matches!(expr, Expr::Literal(_, _))
 }
 
+/// Checks if `eq_expr` is `A = L1` and `ne_expr` is `A != L2` where L1 != L2.
+/// This pattern can be simplified to just `A = L1` since if A equals L1
+/// and L1 is different from L2, then A is automatically not equal to L2.
+pub fn is_eq_and_ne_with_different_literal(eq_expr: &Expr, ne_expr: &Expr) -> bool {
+    fn extract_var_and_literal(expr: &Expr) -> Option<(&Expr, &Expr)> {
+        match expr {
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Eq,
+                right,
+            })
+            | Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::NotEq,
+                right,
+            }) => match (left.as_ref(), right.as_ref()) {
+                (Expr::Literal(_, _), var) => Some((var, left)),
+                (var, Expr::Literal(_, _)) => Some((var, right)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    match (eq_expr, ne_expr) {
+        (
+            Expr::BinaryExpr(BinaryExpr {
+                op: Operator::Eq, ..
+            }),
+            Expr::BinaryExpr(BinaryExpr {
+                op: Operator::NotEq,
+                ..
+            }),
+        ) => {
+            // Check if both compare the same expression against different literals
+            if let (Some((var1, lit1)), Some((var2, lit2))) = (
+                extract_var_and_literal(eq_expr),
+                extract_var_and_literal(ne_expr),
+            ) && var1 == var2
+                && lit1 != lit2
+            {
+                return true;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 /// negate a Not clause
 /// input is the clause to be negated.(args of Not clause)
 /// For BinaryExpr, use the negation of op instead.

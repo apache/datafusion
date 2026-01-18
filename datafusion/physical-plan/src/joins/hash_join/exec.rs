@@ -17,7 +17,7 @@
 
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::{any::Any, vec};
 
@@ -206,6 +206,11 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
+    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti joins)
+    /// This is shared across all probe partitions to provide global knowledge
+    pub(super) probe_side_non_empty: AtomicBool,
+    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
+    pub(super) probe_side_has_null: AtomicBool,
 }
 
 impl JoinLeftData {
@@ -466,6 +471,8 @@ pub struct HashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// The equality null-handling behavior of the join algorithm.
     pub null_equality: NullEquality,
+    /// Flag to indicate if this is a null-aware anti join
+    pub null_aware: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     /// Dynamic filter for pushing down to the probe side
@@ -526,6 +533,7 @@ impl HashJoinExec {
         projection: Option<Vec<usize>>,
         partition_mode: PartitionMode,
         null_equality: NullEquality,
+        null_aware: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -534,6 +542,21 @@ impl HashJoinExec {
         }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
+
+        // Validate null_aware flag
+        if null_aware {
+            if !matches!(join_type, JoinType::LeftAnti) {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins, got {join_type}"
+                );
+            }
+            if on.len() != 1 {
+                return plan_err!(
+                    "null_aware anti join only supports single column join key, got {} columns",
+                    on.len()
+                );
+            }
+        }
 
         let (join_schema, column_indices) =
             build_join_schema(&left_schema, &right_schema, join_type);
@@ -572,6 +595,7 @@ impl HashJoinExec {
             projection,
             column_indices,
             null_equality,
+            null_aware,
             cache,
             dynamic_filter: None,
         })
@@ -681,6 +705,7 @@ impl HashJoinExec {
             projection,
             self.mode,
             self.null_equality,
+            self.null_aware,
         )
     }
 
@@ -804,6 +829,7 @@ impl HashJoinExec {
             ),
             partition_mode,
             self.null_equality(),
+            self.null_aware,
         )?;
         // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
         if matches!(
@@ -986,6 +1012,7 @@ impl ExecutionPlan for HashJoinExec {
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
+            null_aware: self.null_aware,
             cache: Self::compute_properties(
                 &children[0],
                 &children[1],
@@ -1016,6 +1043,7 @@ impl ExecutionPlan for HashJoinExec {
             projection: self.projection.clone(),
             column_indices: self.column_indices.clone(),
             null_equality: self.null_equality,
+            null_aware: self.null_aware,
             cache: self.cache.clone(),
             // Reset dynamic filter and bounds accumulator to initial state
             dynamic_filter: None,
@@ -1185,6 +1213,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
+            self.null_aware,
         )))
     }
 
@@ -1250,6 +1279,7 @@ impl ExecutionPlan for HashJoinExec {
                 None,
                 *self.partition_mode(),
                 self.null_equality,
+                self.null_aware,
             )?)))
         } else {
             try_embed_projection(projection, self)
@@ -1342,6 +1372,7 @@ impl ExecutionPlan for HashJoinExec {
                     projection: self.projection.clone(),
                     column_indices: self.column_indices.clone(),
                     null_equality: self.null_equality,
+                    null_aware: self.null_aware,
                     cache: self.cache.clone(),
                     dynamic_filter: Some(HashJoinExecDynamicFilter {
                         filter: dynamic_filter,
@@ -1706,6 +1737,8 @@ async fn collect_left_input(
         _reservation: reservation,
         bounds,
         membership,
+        probe_side_non_empty: AtomicBool::new(false),
+        probe_side_has_null: AtomicBool::new(false),
     };
 
     Ok(data)
@@ -1829,6 +1862,26 @@ mod tests {
         TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
+    /// Build a table with two columns supporting nullable values
+    fn build_table_two_cols(
+        a: (&str, &Vec<Option<i32>>),
+        b: (&str, &Vec<Option<i32>>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(a.0, DataType::Int32, true),
+            Field::new(b.0, DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(a.1.clone())),
+                Arc::new(Int32Array::from(b.1.clone())),
+            ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
     fn join(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -1845,6 +1898,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             null_equality,
+            false,
         )
     }
 
@@ -1865,6 +1919,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             null_equality,
+            false,
         )
     }
 
@@ -1963,6 +2018,7 @@ mod tests {
             None,
             partition_mode,
             null_equality,
+            false,
         )?;
 
         let columns = columns(&join.schema());
@@ -4846,6 +4902,7 @@ mod tests {
                 None,
                 PartitionMode::Partitioned,
                 NullEquality::NullEqualsNothing,
+                false,
             )?;
 
             let stream = join.execute(1, task_ctx)?;
@@ -5036,6 +5093,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         join.dynamic_filter = Some(HashJoinExecDynamicFilter {
             filter: dynamic_filter,
@@ -5089,6 +5147,7 @@ mod tests {
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
+            false,
         )?;
         join.dynamic_filter = Some(HashJoinExecDynamicFilter {
             filter: dynamic_filter,
@@ -5319,5 +5378,236 @@ mod tests {
         assert_phj_used(&metrics, false);
 
         Ok(())
+    }
+
+    /// Test null-aware anti join when probe side (right) contains NULL
+    /// Expected: no rows should be output (NULL in subquery means all results are unknown)
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_null(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (rows to potentially output)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(2), Some(3), Some(4)]),
+            ("dummy", &vec![Some(10), Some(20), Some(30), Some(40)]),
+        );
+
+        // Build right table (subquery with NULL)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), Some(3), None]),
+            ("dummy", &vec![Some(100), Some(200), Some(300), Some(400)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: empty result (probe side has NULL, so no rows should be output)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware anti join when build side (left) contains NULL keys
+    /// Expected: rows with NULL keys should not be output
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_build_null(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table with NULL key (this row should not be output)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(4), None]),
+            ("dummy", &vec![Some(10), Some(40), Some(0)]),
+        );
+
+        // Build right table (no NULL, so probe-side check passes)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), Some(3)]),
+            ("dummy", &vec![Some(100), Some(200), Some(300)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: only c1=4 (not c1=1 which matches, not c1=NULL)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c1 | dummy |
+            +----+-------+
+            | 4  | 40    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware anti join with no NULLs (should work like regular anti join)
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_no_nulls(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (no NULLs)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(2), Some(4), Some(5)]),
+            ("dummy", &vec![Some(10), Some(20), Some(40), Some(50)]),
+        );
+
+        // Build right table (no NULLs)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), Some(3)]),
+            ("dummy", &vec![Some(100), Some(200), Some(300)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Create null-aware anti join
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: c1=4 and c1=5 (they don't match anything in right)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c1 | dummy |
+            +----+-------+
+            | 4  | 40    |
+            | 5  | 50    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test that null_aware validation rejects non-LeftAnti join types
+    #[tokio::test]
+    async fn test_null_aware_validation_wrong_join_type() {
+        let left =
+            build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+        let right =
+            build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
+        )];
+
+        // Try to create null-aware Inner join (should fail)
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true (invalid for Inner join)
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware can only be true for LeftAnti joins")
+        );
+    }
+
+    /// Test that null_aware validation rejects multi-column joins
+    #[tokio::test]
+    async fn test_null_aware_validation_multi_column() {
+        let left = build_table(("a", &vec![1]), ("b", &vec![2]), ("c", &vec![3]));
+        let right = build_table(("x", &vec![1]), ("y", &vec![2]), ("z", &vec![3]));
+
+        // Try multi-column join
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("x", &right.schema()).unwrap()) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("y", &right.schema()).unwrap()) as _,
+            ),
+        ];
+
+        // Try to create null-aware anti join with 2 columns (should fail)
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true (invalid for multi-column)
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware anti join only supports single column join key")
+        );
     }
 }

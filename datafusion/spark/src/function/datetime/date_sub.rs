@@ -75,12 +75,7 @@ impl ScalarUDFImpl for SparkDateSub {
     }
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let nullable = args.arg_fields.iter().any(|f| f.is_nullable())
-            || args
-                .scalar_arguments
-                .iter()
-                .any(|arg| matches!(arg, Some(sv) if sv.is_null()));
-
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::Date32,
@@ -139,7 +134,6 @@ fn spark_date_sub(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_common::ScalarValue;
 
     #[test]
     fn test_date_sub_nullability_non_nullable_args() {
@@ -168,24 +162,6 @@ mod tests {
             .return_field_from_args(ReturnFieldArgs {
                 arg_fields: &[date_field, nullable_days_field],
                 scalar_arguments: &[None, None],
-            })
-            .unwrap();
-
-        assert!(result.is_nullable());
-        assert_eq!(result.data_type(), &DataType::Date32);
-    }
-
-    #[test]
-    fn test_date_sub_nullability_scalar_null_argument() {
-        let udf = SparkDateSub::new();
-        let date_field = Arc::new(Field::new("d", DataType::Date32, false));
-        let days_field = Arc::new(Field::new("n", DataType::Int32, false));
-        let null_scalar = ScalarValue::Int32(None);
-
-        let result = udf
-            .return_field_from_args(ReturnFieldArgs {
-                arg_fields: &[date_field, days_field],
-                scalar_arguments: &[None, Some(&null_scalar)],
             })
             .unwrap();
 

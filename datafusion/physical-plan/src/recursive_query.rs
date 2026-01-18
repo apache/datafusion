@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 use super::work_table::{ReservedBatches, WorkTable};
 use crate::aggregates::group_values::{GroupValues, new_group_values};
 use crate::aggregates::order::GroupOrdering;
-use crate::execution_plan::{Boundedness, EmissionType};
+use crate::execution_plan::{Boundedness, EmissionType, reset_plan_states};
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -383,20 +383,6 @@ fn assign_work_table(
         } else {
             Ok(Transformed::no(plan))
         }
-    })
-    .data()
-}
-
-/// Some plans will change their internal states after execution, making them unable to be executed again.
-/// This function uses [`ExecutionPlan::reset_state`] to reset any internal state within the plan.
-///
-/// An example is `CrossJoinExec`, which loads the left table into memory and stores it in the plan.
-/// However, if the data of the left table is derived from the work table, it will become outdated
-/// as the work table changes. When the next iteration executes this plan again, we must clear the left table.
-fn reset_plan_states(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
-    plan.transform_up(|plan| {
-        let new_plan = Arc::clone(&plan).reset_state()?;
-        Ok(Transformed::yes(new_plan))
     })
     .data()
 }

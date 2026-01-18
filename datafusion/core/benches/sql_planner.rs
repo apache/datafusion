@@ -118,6 +118,11 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
 
     let sql = format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{path}'");
 
+    // ClickBench partitioned dataset was written by an ancient version of pyarrow that
+    // that wrote strings with the wrong logical type. To read it correctly, we must
+    // automatically convert binary to string.
+    rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string  = true;"))
+        .unwrap();
     rt.block_on(ctx.sql(&sql)).unwrap();
 
     let count =

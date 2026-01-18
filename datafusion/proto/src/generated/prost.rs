@@ -1688,6 +1688,8 @@ pub struct HashJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(bool, tag = "10")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {

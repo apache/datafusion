@@ -633,6 +633,7 @@ impl ConstEvaluator {
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::GroupingSet(_)
@@ -1044,6 +1045,22 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         "can_reduce_to_equal_statement should only be called with a BinaryExpr"
                     );
                 }
+            }
+            // A = L1 AND A != L2 --> A = L1 (when L1 != L2)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_eq_and_ne_with_different_literal(&left, &right) => {
+                Transformed::yes(*left)
+            }
+            // A != L2 AND A = L1 --> A = L1 (when L1 != L2)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if is_eq_and_ne_with_different_literal(&right, &left) => {
+                Transformed::yes(*right)
             }
 
             //
@@ -2396,6 +2413,27 @@ mod tests {
 
         assert_eq!(simplify(expr_a), expected);
         assert_eq!(simplify(expr_b), expected);
+    }
+
+    #[test]
+    fn test_simplify_eq_and_neq_with_different_literals() {
+        // A = 1 AND A != 0 --> A = 1 (when 1 != 0)
+        let expr = col("c2").eq(lit(1)).and(col("c2").not_eq(lit(0)));
+        let expected = col("c2").eq(lit(1));
+        assert_eq!(simplify(expr), expected);
+
+        // A != 0 AND A = 1 --> A = 1 (when 1 != 0)
+        let expr = col("c2").not_eq(lit(0)).and(col("c2").eq(lit(1)));
+        let expected = col("c2").eq(lit(1));
+        assert_eq!(simplify(expr), expected);
+
+        // Should NOT simplify when literals are the same (A = 1 AND A != 1)
+        // This is a contradiction but handled by other rules
+        let expr = col("c2").eq(lit(1)).and(col("c2").not_eq(lit(1)));
+        // Should not be simplified by this rule (left unchanged or handled elsewhere)
+        let result = simplify(expr.clone());
+        // The expression should not have been simplified
+        assert_eq!(result, expr);
     }
 
     #[test]

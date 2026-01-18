@@ -196,6 +196,7 @@ pub trait ListFilesCache: CacheAccessor<TableScopedPath, CachedFileList> {
     /// Retrieves the information about the entries currently cached.
     fn list_entries(&self) -> HashMap<TableScopedPath, ListFilesEntry>;
 
+    /// Drop all entries for the given table reference.
     fn drop_table_entries(&self, table_ref: &Option<TableReference>) -> Result<()>;
 }
 
