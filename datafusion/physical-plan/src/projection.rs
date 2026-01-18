@@ -20,7 +20,7 @@
 //! of a projection on table `t1` where the expressions `a`, `b`, and `a+b` are the
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
-use super::expressions::{Column, Literal};
+use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -255,18 +255,10 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs =
-            self.projector
-                .projection()
-                .as_ref()
-                .iter()
-                .all(|proj_expr| {
-                    proj_expr.expr.as_any().is::<Column>()
-                        || proj_expr.expr.as_any().is::<Literal>()
-                });
-        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
-        // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        vec![!all_simple_exprs]
+        // If expressions are all trivial (columns, literals, or field accessors),
+        // then all computations in this projection are reorder or rename,
+        // and projection would not benefit from the repartition.
+        vec![!self.projection_expr().is_trivial()]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -713,13 +705,6 @@ pub fn make_with_child(
         .map(|e| Arc::new(e) as _)
 }
 
-/// Returns `true` if all the expressions in the argument are `Column`s.
-pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
-    exprs
-        .iter()
-        .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
-}
-
 /// Updates the given lexicographic ordering according to given projected
 /// expressions using the [`update_expr`] function.
 pub fn update_ordering(
@@ -962,7 +947,7 @@ fn try_unifying_projections(
     // beneficial as caching mechanism for non-trivial computations.
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].expr))
+        *count > 1 && !&child.expr()[column.index()].expr.is_trivial()
     }) {
         return Ok(None);
     }
@@ -1070,13 +1055,6 @@ fn new_columns_for_join_on(
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
-}
-
-/// Checks if the given expression is trivial.
-/// An expression is considered trivial if it is either a `Column` or a `Literal`.
-fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().downcast_ref::<Column>().is_some()
-        || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
 #[cfg(test)]

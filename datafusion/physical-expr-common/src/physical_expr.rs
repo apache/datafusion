@@ -430,6 +430,20 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn is_volatile_node(&self) -> bool {
         false
     }
+
+    /// Returns true if this expression is trivial (cheap to evaluate).
+    ///
+    /// Trivial expressions include:
+    /// - Column references
+    /// - Literal values
+    /// - Struct field access via `get_field`
+    /// - Nested combinations of field accessors (e.g., `col['a']['b']`)
+    ///
+    /// This is used to identify expressions that are cheap to duplicate or
+    /// don't benefit from caching/partitioning optimizations.
+    fn is_trivial(&self) -> bool {
+        false
+    }
 }
 
 #[deprecated(

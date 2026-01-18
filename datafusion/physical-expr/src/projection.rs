@@ -37,6 +37,7 @@ use datafusion_physical_expr_common::metrics::ExpressionEvaluatorMetrics;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays_with_metrics;
+use hashbrown::HashSet;
 use indexmap::IndexMap;
 use itertools::Itertools;
 
@@ -126,6 +127,49 @@ impl From<ProjectionExpr> for (Arc<dyn PhysicalExpr>, String) {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionExprs {
     exprs: Vec<ProjectionExpr>,
+}
+
+/// Classification of how beneficial a projection expression is for pushdown.
+///
+/// This is used to determine whether an expression should be pushed down
+/// below other operators in the query plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushdownBenefit {
+    /// Field accessors - reduce data size, should be pushed down.
+    /// Examples: `struct_col['field']`, nested field access.
+    Beneficial,
+    /// Column references - neutral, can be pushed if needed.
+    /// Examples: `col_a`, `col_b@1`
+    Neutral,
+    /// Literals and computed expressions - add data, should NOT be pushed down.
+    /// Examples: `42`, `'hello'`, `a + b`
+    NonBeneficial,
+}
+
+/// Result of splitting a projection for optimized pushdown.
+///
+/// When a projection contains a mix of beneficial and non-beneficial expressions,
+/// we can split it into two projections:
+/// - `inner`: Pushed down below operators (contains beneficial exprs + needed columns)
+/// - `outer`: Stays above operators (references inner outputs + adds non-beneficial exprs)
+///
+/// Example:
+/// ```text
+/// -- Original:
+/// Projection: struct['a'] AS f1, 42 AS const, col_b
+///   FilterExec: predicate
+///
+/// -- After splitting:
+/// Projection: f1, 42 AS const, col_b       <- outer (keeps literal, refs inner)
+///   Projection: struct['a'] AS f1, col_b   <- inner (pushed down)
+///     FilterExec: predicate
+/// ```
+#[derive(Debug, Clone)]
+pub struct ProjectionSplit {
+    /// The inner projection to be pushed down (beneficial exprs + columns needed by outer)
+    pub inner: ProjectionExprs,
+    /// The outer projection to keep above (refs to inner outputs + non-beneficial exprs)
+    pub outer: ProjectionExprs,
 }
 
 impl std::fmt::Display for ProjectionExprs {
@@ -231,6 +275,276 @@ impl ProjectionExprs {
     /// Returns an iterator over the projection expressions
     pub fn iter(&self) -> impl Iterator<Item = &ProjectionExpr> {
         self.exprs.iter()
+    }
+
+    /// Checks if all of the projection expressions are trivial.
+    pub fn is_trivial(&self) -> bool {
+        self.exprs.iter().all(|p| p.expr.is_trivial())
+    }
+
+    /// Classifies a single expression for pushdown benefit.
+    ///
+    /// - Literals are `NonBeneficial` (they add data)
+    /// - Non-trivial expressions are `NonBeneficial` (they add computation)
+    /// - Column references are `Neutral` (no cost/benefit)
+    /// - Trivial non-column expressions (e.g., field accessors) are `Beneficial`
+    fn classify_expr(expr: &Arc<dyn PhysicalExpr>) -> PushdownBenefit {
+        // Literals add data size downstream - don't push
+        if expr.as_any().is::<Literal>() {
+            return PushdownBenefit::NonBeneficial;
+        }
+        // Column references are neutral
+        if expr.as_any().is::<Column>() {
+            return PushdownBenefit::Neutral;
+        }
+
+        if expr.is_trivial() {
+            // Trivial non-column expressions (field accessors) reduce data - push
+            PushdownBenefit::Beneficial
+        } else {
+            // Any other expression is considered non-beneficial
+            PushdownBenefit::NonBeneficial
+        }
+    }
+
+    /// Check if this projection benefits from being pushed down lower in the plan.
+    ///
+    /// The goal is to push down projections that reduce the amount of data processed
+    /// by subsequent operations and are "compute neutral" (i.e., do not add computation overhead).
+    ///
+    /// Some "compute neutral" projections include:
+    /// - Dropping unneeded columns (e.g., `SELECT a, b` from `a, b, c`). Subsequent filters or joins
+    ///   now process fewer columns.
+    /// - Struct field access (e.g., `SELECT struct_col.field1 AS f1`). This reduces the data size
+    ///   processed downstream and is a cheap reference / metadata only clone of the inner array.
+    ///
+    /// Examples of projections that do NOT benefit from pushdown:
+    /// - Literal projections (e.g., `SELECT 42 AS const_col`). These add constant columns
+    ///   that increase data size downstream.
+    /// - Computed expressions (e.g., `SELECT a + b AS sum_ab`). These add computation overhead
+    ///   and may increase data size downstream, so they should be applied after filters or joins.
+    pub fn benefits_from_pushdown(&self) -> bool {
+        // All expressions must be trivial for pushdown to be beneficial
+        if !self.is_trivial() {
+            // Contains computed expressions, function calls, etc. - do not push down
+            return false;
+        }
+
+        // Check if all expressions are just columns or literals (no field accessors)
+        // If so, there's no benefit to pushing down because:
+        // - Columns are just references (no data reduction)
+        // - Literals add data (definitely don't want to push down)
+        let all_columns_or_literals = self
+            .exprs
+            .iter()
+            .all(|p| p.expr.as_any().is::<Column>() || p.expr.as_any().is::<Literal>());
+
+        // Only benefit from pushdown if we have field accessors (or other beneficial trivial exprs)
+        !all_columns_or_literals
+    }
+
+    /// Determines whether this projection should be pushed through an operator.
+    ///
+    /// A projection should be pushed through when it is:
+    /// 1. Trivial (no expensive computations to duplicate)
+    /// 2. AND provides some benefit:
+    ///    - Either narrows the schema (fewer output columns than input columns)
+    ///    - Or has beneficial expressions like field accessors that reduce data size
+    ///    - Or has literal expressions that can be absorbed by the datasource
+    ///
+    /// Column-only projections that just rename without narrowing the schema are NOT
+    /// pushed through, as they provide no benefit.
+    ///
+    /// # Arguments
+    /// * `input_field_count` - Number of fields in the input schema
+    pub fn should_push_through_operator(&self, input_field_count: usize) -> bool {
+        // Must be trivial (no expensive computations)
+        if !self.is_trivial() {
+            return false;
+        }
+
+        // Must provide some benefit:
+        // - Either narrows schema (fewer output columns than input columns)
+        // - Or has field accessors that reduce data size
+        // - Or has literals that can be absorbed by datasource
+        let narrows_schema = self.exprs.len() < input_field_count;
+        let has_beneficial_exprs = self.benefits_from_pushdown();
+        let has_literals = self.exprs.iter().any(|p| p.expr.as_any().is::<Literal>());
+
+        narrows_schema || has_beneficial_exprs || has_literals
+    }
+
+    /// Attempts to split this projection into beneficial and non-beneficial parts.
+    ///
+    /// When a projection contains both beneficial expressions (field accessors) and
+    /// non-beneficial expressions (literals), this method splits it so that the
+    /// beneficial parts can be pushed down while non-beneficial parts stay above.
+    ///
+    /// # Returns
+    /// - `Ok(Some(split))` - The projection was split successfully
+    /// - `Ok(None)` - No split needed (all expressions are the same category)
+    ///
+    /// # Arguments
+    /// * `input_schema` - The schema of the input to this projection
+    pub fn split_for_pushdown(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<Option<ProjectionSplit>> {
+        // Classify all expressions
+        let classifications: Vec<_> = self
+            .exprs
+            .iter()
+            .map(|p| (p, Self::classify_expr(&p.expr)))
+            .collect();
+
+        let has_beneficial = classifications
+            .iter()
+            .any(|(_, c)| *c == PushdownBenefit::Beneficial);
+        let has_non_beneficial = classifications
+            .iter()
+            .any(|(_, c)| *c == PushdownBenefit::NonBeneficial);
+
+        // If no beneficial expressions, nothing to push down
+        if !has_beneficial {
+            return Ok(None);
+        }
+
+        // If no non-beneficial expressions, push the entire projection (no split needed)
+        if !has_non_beneficial {
+            return Ok(None);
+        }
+
+        // We need to split: beneficial + columns needed by non-beneficial go to inner,
+        // references to inner + non-beneficial expressions go to outer
+
+        // Collect columns needed by non-beneficial expressions
+        let mut columns_needed_by_outer: HashSet<usize> = HashSet::new();
+        for (proj, class) in &classifications {
+            if *class == PushdownBenefit::NonBeneficial {
+                for col in collect_columns(&proj.expr) {
+                    columns_needed_by_outer.insert(col.index());
+                }
+            }
+        }
+
+        // Build inner projection: beneficial exprs + columns needed by outer
+        let mut inner_exprs: Vec<ProjectionExpr> = Vec::new();
+        // Track where each original expression ends up in inner projection
+        // Maps original index -> inner index (if it goes to inner)
+        let mut original_to_inner: IndexMap<usize, usize> = IndexMap::new();
+
+        // First add beneficial expressions
+        for (orig_idx, (proj, class)) in classifications.iter().enumerate() {
+            if *class == PushdownBenefit::Beneficial || *class == PushdownBenefit::Neutral
+            {
+                original_to_inner.insert(orig_idx, inner_exprs.len());
+                inner_exprs.push((*proj).clone());
+            }
+        }
+
+        // Add columns needed by non-beneficial expressions (if not already present)
+        // Build mapping from input column index -> inner projection index
+        let mut col_index_to_inner: IndexMap<usize, usize> = IndexMap::new();
+        for (proj_idx, (proj, _)) in classifications.iter().enumerate() {
+            if let Some(col) = proj.expr.as_any().downcast_ref::<Column>()
+                && let Some(&inner_idx) = original_to_inner.get(&proj_idx)
+            {
+                col_index_to_inner.insert(col.index(), inner_idx);
+            }
+        }
+
+        // Track columns we need to add to inner for outer's non-beneficial exprs
+        for col_idx in &columns_needed_by_outer {
+            if !col_index_to_inner.contains_key(col_idx) {
+                // Add this column to inner
+                let field = input_schema.field(*col_idx);
+                let col_expr = ProjectionExpr::new(
+                    Arc::new(Column::new(field.name(), *col_idx)),
+                    field.name().clone(),
+                );
+                col_index_to_inner.insert(*col_idx, inner_exprs.len());
+                inner_exprs.push(col_expr);
+            }
+        }
+
+        // Build inner schema (for rewriting outer expressions)
+        let inner_schema = self.build_schema_for_exprs(&inner_exprs, input_schema)?;
+
+        // Build outer projection: references to inner outputs + non-beneficial exprs
+        let mut outer_exprs: Vec<ProjectionExpr> = Vec::new();
+
+        for (orig_idx, (proj, class)) in classifications.iter().enumerate() {
+            match class {
+                PushdownBenefit::Beneficial | PushdownBenefit::Neutral => {
+                    // Reference the inner projection output
+                    let inner_idx = original_to_inner[&orig_idx];
+                    let col_expr = ProjectionExpr::new(
+                        Arc::new(Column::new(&proj.alias, inner_idx)),
+                        proj.alias.clone(),
+                    );
+                    outer_exprs.push(col_expr);
+                }
+                PushdownBenefit::NonBeneficial => {
+                    // Keep the expression but rewrite column references to point to inner
+                    let rewritten_expr = self.rewrite_columns_for_inner(
+                        &proj.expr,
+                        &col_index_to_inner,
+                        &inner_schema,
+                    )?;
+                    outer_exprs
+                        .push(ProjectionExpr::new(rewritten_expr, proj.alias.clone()));
+                }
+            }
+        }
+
+        Ok(Some(ProjectionSplit {
+            inner: ProjectionExprs::new(inner_exprs),
+            outer: ProjectionExprs::new(outer_exprs),
+        }))
+    }
+
+    /// Helper to build a schema from projection expressions
+    fn build_schema_for_exprs(
+        &self,
+        exprs: &[ProjectionExpr],
+        input_schema: &Schema,
+    ) -> Result<Schema> {
+        let fields: Result<Vec<Field>> = exprs
+            .iter()
+            .map(|p| {
+                let field = p.expr.return_field(input_schema)?;
+                Ok(Field::new(
+                    &p.alias,
+                    field.data_type().clone(),
+                    field.is_nullable(),
+                ))
+            })
+            .collect();
+        Ok(Schema::new(fields?))
+    }
+
+    /// Rewrite column references in an expression to point to inner projection outputs
+    fn rewrite_columns_for_inner(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        col_index_to_inner: &IndexMap<usize, usize>,
+        inner_schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Arc::clone(expr)
+            .transform(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>()
+                    && let Some(&inner_idx) = col_index_to_inner.get(&col.index())
+                {
+                    let inner_field = inner_schema.field(inner_idx);
+                    return Ok(Transformed::yes(Arc::new(Column::new(
+                        inner_field.name(),
+                        inner_idx,
+                    ))
+                        as Arc<dyn PhysicalExpr>));
+                }
+                Ok(Transformed::no(e))
+            })
+            .data()
     }
 
     /// Creates a ProjectionMapping from this projection
@@ -795,7 +1109,7 @@ pub fn update_expr(
     projected_exprs: &[ProjectionExpr],
     sync_with_child: bool,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
-    #[derive(Debug, PartialEq)]
+    #[derive(PartialEq)]
     enum RewriteState {
         /// The expression is unchanged.
         Unchanged,
@@ -806,10 +1120,48 @@ pub fn update_expr(
         RewrittenInvalid,
     }
 
-    let mut state = RewriteState::Unchanged;
+    // Track Arc pointers of columns created by pass 1.
+    // These should not be modified by pass 2.
+    // We use Arc pointer addresses (not name/index) to distinguish pass-1-created columns
+    // from original columns that happen to have the same name and index.
+    let mut pass1_created: HashSet<usize> = HashSet::new();
 
-    let new_expr = Arc::clone(expr)
-        .transform_up(|expr| {
+    // First pass: try to rewrite the expression in terms of the projected expressions.
+    // For example, if the expression is `a + b > 5` and the projection is `a + b AS sum_ab`,
+    // we can rewrite the expression to `sum_ab > 5` directly.
+    //
+    // This optimization only applies when sync_with_child=false, meaning we want the
+    // expression to use OUTPUT references (e.g., when pushing projection down and the
+    // expression will be above the projection). Pass 1 creates OUTPUT column references.
+    //
+    // When sync_with_child=true, we want INPUT references (expanding OUTPUT to INPUT),
+    // so pass 1 doesn't apply.
+    let new_expr = if !sync_with_child {
+        Arc::clone(expr)
+            .transform_down(&mut |expr: Arc<dyn PhysicalExpr>| {
+                // If expr is equal to one of the projected expressions, we can short-circuit the rewrite:
+                for (idx, projected_expr) in projected_exprs.iter().enumerate() {
+                    if expr.eq(&projected_expr.expr) {
+                        // Create new column and track its Arc pointer so pass 2 doesn't modify it
+                        let new_col = Arc::new(Column::new(&projected_expr.alias, idx))
+                            as Arc<dyn PhysicalExpr>;
+                        // Use data pointer for trait object (ignores vtable)
+                        pass1_created.insert(Arc::as_ptr(&new_col) as *const () as usize);
+                        return Ok(Transformed::yes(new_col));
+                    }
+                }
+                Ok(Transformed::no(expr))
+            })?
+            .data
+    } else {
+        Arc::clone(expr)
+    };
+
+    // Second pass: rewrite remaining column references based on the projection.
+    // Skip columns that were introduced by pass 1.
+    let mut state = RewriteState::Unchanged;
+    let new_expr = new_expr
+        .transform_up(&mut |expr: Arc<dyn PhysicalExpr>| {
             if state == RewriteState::RewrittenInvalid {
                 return Ok(Transformed::no(expr));
             }
@@ -817,6 +1169,16 @@ pub fn update_expr(
             let Some(column) = expr.as_any().downcast_ref::<Column>() else {
                 return Ok(Transformed::no(expr));
             };
+
+            // Skip columns introduced by pass 1 - they're already valid OUTPUT references.
+            // Mark state as valid since pass 1 successfully handled this column.
+            // We check the Arc pointer address to distinguish pass-1-created columns from
+            // original columns that might have the same name and index.
+            if pass1_created.contains(&(Arc::as_ptr(&expr) as *const () as usize)) {
+                state = RewriteState::RewrittenValid;
+                return Ok(Transformed::no(expr));
+            }
+
             if sync_with_child {
                 state = RewriteState::RewrittenValid;
                 // Update the index of `column`:
@@ -2421,6 +2783,291 @@ pub(crate) mod tests {
             .downcast_ref::<Column>()
             .expect("Right should be a Column");
         assert_eq!(right_col.index(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_matches_projected_expr() -> Result<()> {
+        // Test that when filter expression exactly matches a projected expression,
+        // update_expr short-circuits and rewrites to use the projected column.
+        // e.g., projection: a * 2 AS a_times_2, filter: a * 2 > 4
+        // should become: a_times_2 > 4
+
+        // Create the computed expression: a@0 * 2
+        let computed_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Multiply,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+        ));
+
+        // Create projection with the computed expression aliased as "a_times_2"
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&computed_expr),
+            alias: "a_times_2".to_string(),
+        }];
+
+        // Create filter predicate: a * 2 > 4 (same expression as projection)
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&computed_expr),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+        ));
+
+        // Update the expression - should rewrite a * 2 to a_times_2@0
+        // sync_with_child=false because we want OUTPUT references (filter will be above projection)
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        let binary = result_expr
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .expect("Should be a BinaryExpr");
+        // Left side should now be a column reference to a_times_2@0
+        let left_col = binary
+            .left()
+            .as_any()
+            .downcast_ref::<Column>()
+            .expect("Left should be rewritten to a Column");
+        assert_eq!(left_col.name(), "a_times_2");
+        assert_eq!(left_col.index(), 0);
+
+        // Right side should still be the literal 4
+        let right_lit = binary
+            .right()
+            .as_any()
+            .downcast_ref::<Literal>()
+            .expect("Right should be a Literal");
+        assert_eq!(right_lit.value(), &ScalarValue::Int32(Some(4)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_partial_match() -> Result<()> {
+        // Test that when only part of an expression matches, we still handle
+        // the rest correctly. e.g., `a + b > 2 AND c > 3` with projection
+        // `a + b AS sum_ab, c AS c_out` should become `sum_ab > 2 AND c_out > 3`
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab, c AS c_out]
+        let projection = vec![
+            ProjectionExpr {
+                expr: Arc::clone(&sum_expr),
+                alias: "sum_ab".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                alias: "c_out".to_string(),
+            },
+        ];
+
+        // Filter: (a + b > 2) AND (c > 3)
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+            )),
+        ));
+
+        // With sync_with_child=false: columns reference input schema, need to map to output
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        // Should be: sum_ab@0 > 2 AND c_out@1 > 3
+        assert_eq!(result_expr.to_string(), "sum_ab@0 > 2 AND c_out@1 > 3");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_partial_match_with_unresolved_column() -> Result<()> {
+        // Test that when part of an expression matches but other columns can't be
+        // resolved, we return None. e.g., `a + b > 2 AND c > 3` with projection
+        // `a + b AS sum_ab` (note: no 'c' column!) should return None.
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab] - note: NO 'c' column!
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&sum_expr),
+            alias: "sum_ab".to_string(),
+        }];
+
+        // Filter: (a + b > 2) AND (c > 3) - 'c' is not in projection!
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("c", 2)),
+                Operator::Gt,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(3)))),
+            )),
+        ));
+
+        // With sync_with_child=false: should return None because 'c' can't be mapped
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when some columns can't be resolved"
+        );
+
+        // On the other hand if the projection is `c AS c_out, a + b AS sum_ab` we should succeed
+        let projection = vec![
+            ProjectionExpr {
+                expr: Arc::new(Column::new("c", 2)),
+                alias: "c_out".to_string(),
+            },
+            ProjectionExpr {
+                expr: Arc::clone(&sum_expr),
+                alias: "sum_ab".to_string(),
+            },
+        ];
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid now");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_nested_match() -> Result<()> {
+        // Test matching a sub-expression within a larger expression.
+        // e.g., `(a + b) * 2 > 10` with projection `a + b AS sum_ab`
+        // should become `sum_ab * 2 > 10`
+
+        // Create computed expression: a@0 + b@1
+        let sum_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Plus,
+            Arc::new(Column::new("b", 1)),
+        ));
+
+        // Projection: [a + b AS sum_ab]
+        let projection = vec![ProjectionExpr {
+            expr: Arc::clone(&sum_expr),
+            alias: "sum_ab".to_string(),
+        }];
+
+        // Filter: (a + b) * 2 > 10
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&sum_expr),
+                Operator::Multiply,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+            )),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+
+        // With sync_with_child=false: should rewrite a+b to sum_ab
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(result.is_some(), "Filter predicate should be valid");
+
+        let result_expr = result.unwrap();
+        // Should be: sum_ab@0 * 2 > 10
+        assert_eq!(result_expr.to_string(), "sum_ab@0 * 2 > 10");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_no_match_returns_none() -> Result<()> {
+        // Test that when columns can't be resolved, we return None (with sync_with_child=false)
+
+        // Projection: [a AS a_out]
+        let projection = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("a", 0)),
+            alias: "a_out".to_string(),
+        }];
+
+        // Filter references column 'd' which is not in projection
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("d", 3)), // Not in projection
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        ));
+
+        // With sync_with_child=false: should return None because 'd' can't be mapped
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when column can't be resolved"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_expr_column_name_collision() -> Result<()> {
+        // Regression test for a bug where an original column with the same (name, index)
+        // as a pass-1-rewritten column would incorrectly be considered "already handled".
+        //
+        // Example from SQLite tests:
+        // - Input schema: [col0, col1, col2]
+        // - Projection: [col2 AS col0]  (col2@2 becomes col0@0)
+        // - Filter: col0 - col2 <= col2 / col2
+        //
+        // The bug: when pass 1 rewrites col2@2 to col0@0, it added ("col0", 0) to
+        // valid_columns. Then in pass 2, the ORIGINAL col0@0 in the filter would
+        // match ("col0", 0) and be incorrectly skipped, resulting in:
+        //   col0 - col0 <= col0 / col0 = 0 - 0 <= 0 / 0 = always true (or NaN)
+        // instead of flagging the expression as invalid.
+
+        // Projection: [col2 AS col0] - note the alias matches another input column's name!
+        let projection = vec![ProjectionExpr {
+            expr: Arc::new(Column::new("col2", 2)),
+            alias: "col0".to_string(), // Alias collides with original col0!
+        }];
+
+        // Filter: col0@0 - col2@2 <= col2@2 / col2@2
+        // After correct rewrite, col2@2 becomes col0@0 (via pass 1 match)
+        // But col0@0 (the original) can't be resolved since the projection
+        // doesn't include it - should return None
+        let filter_predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col0", 0)), // Original col0 - NOT in projection!
+                Operator::Minus,
+                Arc::new(Column::new("col2", 2)), // This will be rewritten to col0@0
+            )),
+            Operator::LtEq,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("col2", 2)),
+                Operator::Divide,
+                Arc::new(Column::new("col2", 2)),
+            )),
+        ));
+
+        // With sync_with_child=false: should return None because original col0@0
+        // can't be resolved (only col2 is in projection, aliased as col0)
+        let result = update_expr(&filter_predicate, &projection, false)?;
+        assert!(
+            result.is_none(),
+            "Should return None when original column collides with rewritten alias but isn't in projection"
+        );
 
         Ok(())
     }

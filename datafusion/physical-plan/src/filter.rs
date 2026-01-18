@@ -466,8 +466,12 @@ impl ExecutionPlan for FilterExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down:
-        if projection.expr().len() < projection.input().schema().fields().len() {
+        // Only push down projections that are trivial AND provide benefit (narrow schema or have field accessors)
+        let input_field_count = projection.input().schema().fields().len();
+        if projection
+            .projection_expr()
+            .should_push_through_operator(input_field_count)
+        {
             // Each column in the predicate expression must exist after the projection.
             if let Some(new_predicate) =
                 update_expr(self.predicate(), projection.expr(), false)?
