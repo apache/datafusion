@@ -29,8 +29,9 @@ use arrow::compute::{SlicesIterator, cast, filter_record_batch};
 use arrow::datatypes::*;
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
-
+use datafusion_common::{
+    Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
+};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -41,6 +42,11 @@ use datafusion_expr::statistics::{
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
+use datafusion_physical_expr_common::physical_expr::{
+    ColumnStats, NullStats, PropagatedIntermediate, PruningContext, PruningOutcome,
+    PruningResults,
+};
+use std::cmp::Ordering;
 
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -391,6 +397,20 @@ impl PhysicalExpr for BinaryExpr {
             .map(ColumnarValue::Array)
     }
 
+    fn evaluate_statistics_vectorized(
+        &self,
+        ctx: Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        use Operator::*;
+
+        let is_cmp = matches!(self.op, Eq | NotEq | Lt | LtEq | Gt | GtEq);
+        if is_cmp {
+            return self.evaluate_cmp_pruning(ctx);
+        }
+
+        self.evaluate_statistics_vectorized_binary_op_default(&ctx)
+    }
+
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
         vec![&self.left, &self.right]
     }
@@ -723,6 +743,205 @@ impl BinaryExpr {
             }
         }
     }
+
+    /// Evaluates pruning for operators:
+    ///     Eq, NotEq, Lt, LtEq, Gt, GtEq
+    ///
+    /// # Errors
+    /// Returns internal error if `self` is a not supported operator, or other sanity
+    /// check fails.
+    fn evaluate_cmp_pruning(
+        &self,
+        ctx: Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        let left = self.left.evaluate_statistics_vectorized(Arc::clone(&ctx))?;
+        let right = self.right.evaluate_statistics_vectorized(ctx)?;
+
+        let (left_stats, right_stats) = match (left, right) {
+            (
+                Some(PropagatedIntermediate::IntermediateStats(ls)),
+                Some(PropagatedIntermediate::IntermediateStats(rs)),
+            ) => (ls, rs),
+            (None, _) | (_, None) => return Ok(None),
+            (left_child, right_child) => {
+                return internal_err!(
+                    "For cmp operators (e.g. >), both of its child must be `PropagatedIntermediate::IntermediateStats`, got left child {:?}, right child {:?}",
+                    left_child,
+                    right_child
+                );
+            }
+        };
+        let num_containers = left_stats.len();
+        debug_assert_eq!(num_containers, right_stats.len());
+
+        // -------------------
+        // Step 1:
+        // Evaluate null stats
+        // -------------------
+        let (left_null, right_null) = (left_stats.null_stats(), right_stats.null_stats());
+        // compute the result null stat after (l op r)
+        let result_null_stat = NullStats::combine_for_cmp(left_null, right_null)?;
+
+        // -------------------
+        // Step 2:
+        // Evaluate range stats
+        // -------------------
+
+        // If either side has missing range stats, the result stat should also be
+        // missing for all containers
+        let Some(left_range) = left_stats.range_stats() else {
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
+                PruningResults::unknown(num_containers),
+            )));
+        };
+        let Some(right_range) = right_stats.range_stats() else {
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
+                PruningResults::unknown(num_containers),
+            )));
+        };
+
+        let (l_mins, l_maxs) = left_range.normalize_to_arrays()?;
+        let (r_mins, r_maxs) = right_range.normalize_to_arrays()?;
+
+        // It only implements the case that all bound stats are available now
+        // TODO: Implement pruning evaluation for partially missing stats
+        let (Some(l_mins), Some(l_maxs), Some(r_mins), Some(r_maxs)) =
+            (l_mins, l_maxs, r_mins, r_maxs)
+        else {
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
+                PruningResults::unknown(num_containers),
+            )));
+        };
+
+        assert_or_internal_err!(
+            (l_mins.len() == l_maxs.len())
+                && (r_mins.len() == r_maxs.len())
+                && (l_mins.len() == r_maxs.len()),
+            "Input stats have in consistent length"
+        );
+
+        // This logic is tricky to get right, given edge cases like inf, NaN,
+        // Null, etc., even after implementing it carefully and trying to test it
+        // comprehensively.
+        //
+        // As a result, using naive iteration based implementation for clarity.
+        //
+        // An Arrow kernel based implementation can be faster/shorter, but would
+        // be hard to read and maintain. Once the stats propagation based pruning
+        // feature gets mature and with better fuzzing coverage, potentially
+        // switch to the vectorized implementation.
+        let len = l_mins.len();
+        // Encode pruning outcome into the `BooleanArray` stored in `PruningResults`
+        let mut results: Vec<Option<bool>> = Vec::with_capacity(len);
+        for idx in 0..len {
+            let lmin = ScalarValue::try_from_array(l_mins.as_ref(), idx)?;
+            let lmax = ScalarValue::try_from_array(l_maxs.as_ref(), idx)?;
+            let rmin = ScalarValue::try_from_array(r_mins.as_ref(), idx)?;
+            let rmax = ScalarValue::try_from_array(r_maxs.as_ref(), idx)?;
+
+            // See comments in `compare_ranges` for why outer Options
+            let lmin = (!lmin.is_null()).then_some(lmin);
+            let lmax = (!lmax.is_null()).then_some(lmax);
+            let rmin = (!rmin.is_null()).then_some(rmin);
+            let rmax = (!rmax.is_null()).then_some(rmax);
+
+            let res = compare_ranges(
+                &self.op,
+                lmin.as_ref(),
+                lmax.as_ref(),
+                rmin.as_ref(),
+                rmax.as_ref(),
+            )?;
+            results.push(res.into());
+        }
+
+        // --------------------------------------------------------------------------
+        // Step 3: Combine range stats with null stats to derive the final pruning
+        // decision.
+        //
+        // Later more stats type can be added, there will be a simple rule to combine
+        // all statistics types except null stat; below is the algorithm to:
+        //   combine(combined_non_null_stats, null_stats)
+        //
+        // Range-only results are partial: `SkipAll` means we can skip the non-null
+        // portion of the container. Null stats refine that into a final outcome:
+        //
+        // range_result + null_stat -> final
+        // - KeepAll + NoNull   -> KeepAll
+        // - SkipAll + NoNull   -> SkipAll
+        // - Unknown + NoNull   -> Unknown
+        // (No nulls exist, so the range decision already applies to all rows.)
+        //
+        // - KeepAll + Unknown  -> Unknown
+        // - SkipAll + Unknown  -> SkipAll
+        // - Unknown + Unknown  -> Unknown
+        // (Missing null info can only downgrade `KeepAll` to Unknown.)
+        //
+        // - KeepAll + AllNull  -> SkipAll
+        // - SkipAll + AllNull  -> SkipAll
+        // - Unknown + AllNull  -> SkipAll
+        // (All-null containers cannot satisfy any comparison, so we can skip.)
+        // --------------------------------------------------------------------------
+        let range_results = BooleanArray::from(results);
+        let combined_results = if let Some(null_stats) = result_null_stat {
+            assert_or_internal_err!(
+                range_results.len() == null_stats.len(),
+                "Pruning results length mismatch with null stats"
+            );
+
+            // Given result and null encoding (See `NullStats` and `PruningResults`
+            // comments), the implementation is a 'null-aware and'.
+            and_kleene(&range_results, null_stats.presence())?
+        } else {
+            // Null stats missing, it's equivalent to all container has unknown nulls
+            let unknown_nulls = BooleanArray::from(vec![None; range_results.len()]);
+            and_kleene(&range_results, &unknown_nulls)?
+        };
+
+        Ok(Some(PropagatedIntermediate::IntermediateResult(
+            PruningResults::new(combined_results),
+        )))
+    }
+
+    /// For all not-yet supported operators, return the default result (Unknown stat
+    /// for all containers)
+    fn evaluate_statistics_vectorized_binary_op_default(
+        &self,
+        ctx: &Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        use Operator::*;
+
+        let num_containers = ctx.statistics().num_containers();
+
+        let is_predicate = matches!(
+            self.op,
+            IsDistinctFrom
+                | IsNotDistinctFrom
+                | LikeMatch
+                | ILikeMatch
+                | NotLikeMatch
+                | NotILikeMatch
+                | RegexMatch
+                | RegexIMatch
+                | RegexNotMatch
+                | RegexNotIMatch
+        );
+
+        // TODO: make all unimplemented operators return None for consistency
+        if matches!(self.op, And | Or) {
+            return Ok(None);
+        }
+
+        if is_predicate {
+            return Ok(Some(PropagatedIntermediate::IntermediateResult(
+                PruningResults::unknown(num_containers),
+            )));
+        }
+
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
+            ColumnStats::new(None, None, num_containers),
+        )))
+    }
 }
 
 enum ShortCircuitStrategy<'a> {
@@ -737,13 +956,15 @@ enum ShortCircuitStrategy<'a> {
 /// the `RecordBatch` will be filtered in advance.
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
-/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
+/// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation
+/// based on the left-hand side (lhs) result.
 ///
 /// Short-circuiting occurs under these circumstances:
 /// - For `AND`:
 ///    - if LHS is all false => short-circuit → return LHS
 ///    - if LHS is all true  => short-circuit → return RHS
-///    - if LHS is mixed and true_count/sum_count <= [`PRE_SELECTION_THRESHOLD`] -> pre-selection
+///    - if LHS is mixed and true_count/sum_count <=
+///      [`PRE_SELECTION_THRESHOLD`] -> pre-selection
 /// - For `OR`:
 ///    - if LHS is all true  => short-circuit → return LHS
 ///    - if LHS is all false => short-circuit → return RHS
@@ -838,6 +1059,106 @@ fn check_short_circuit<'a>(
 
     // If we can't short-circuit, indicate that normal evaluation should continue
     ShortCircuitStrategy::None
+}
+
+/// For expressions like `left OP right`, calculate the `PruningOutcome` given child
+/// expression's range statistics, and operator type.
+///
+/// The supported operators are: >, <, =, >=, <=
+///
+/// Bounds encoding: each bound uses an `Option` to encode a NULL range value;
+/// `None` means the bound is NULL, and `Some` must contain a non-null `ScalarValue`.
+/// This is due to the existing ScalarValue comparison having unexpected null behavior:
+/// <https://github.com/apache/datafusion/issues/19579>
+///
+/// Type compatibility: if all bound data types are not equal, return
+/// `PruningOutcome::Unknown` as a safe fallback. For different but
+/// compatible types (e.g., lhs is Int32, rhs is Int64), the type coercion
+/// optimizer rule should already handle them before evaluating pruning.
+///
+/// # Errors
+/// Returns Internal Error if unsupported operator is provided.
+fn compare_ranges(
+    op: &Operator,
+    lmin: Option<&ScalarValue>,
+    lmax: Option<&ScalarValue>,
+    rmin: Option<&ScalarValue>,
+    rmax: Option<&ScalarValue>,
+) -> Result<PruningOutcome> {
+    use Operator::*;
+
+    let ord_lmin_rmax = lmin.zip(rmax).and_then(|(l, r)| l.partial_cmp(r));
+    let ord_lmax_rmin = lmax.zip(rmin).and_then(|(l, r)| l.partial_cmp(r));
+
+    match op {
+        Gt => {
+            if matches!(ord_lmin_rmax, Some(Ordering::Greater)) {
+                Ok(PruningOutcome::KeepAll)
+            } else if matches!(ord_lmax_rmin, Some(Ordering::Less | Ordering::Equal)) {
+                Ok(PruningOutcome::SkipAll)
+            } else {
+                Ok(PruningOutcome::Unknown)
+            }
+        }
+        GtEq => {
+            if matches!(ord_lmin_rmax, Some(Ordering::Greater | Ordering::Equal)) {
+                Ok(PruningOutcome::KeepAll)
+            } else if matches!(ord_lmax_rmin, Some(Ordering::Less)) {
+                Ok(PruningOutcome::SkipAll)
+            } else {
+                Ok(PruningOutcome::Unknown)
+            }
+        }
+        Lt => {
+            if matches!(ord_lmax_rmin, Some(Ordering::Less)) {
+                Ok(PruningOutcome::KeepAll)
+            } else if matches!(ord_lmin_rmax, Some(Ordering::Greater | Ordering::Equal)) {
+                Ok(PruningOutcome::SkipAll)
+            } else {
+                Ok(PruningOutcome::Unknown)
+            }
+        }
+        LtEq => {
+            if matches!(ord_lmax_rmin, Some(Ordering::Less | Ordering::Equal)) {
+                Ok(PruningOutcome::KeepAll)
+            } else if matches!(ord_lmin_rmax, Some(Ordering::Greater)) {
+                Ok(PruningOutcome::SkipAll)
+            } else {
+                Ok(PruningOutcome::Unknown)
+            }
+        }
+        Eq => {
+            if let (Some(lmin), Some(lmax), Some(rmin), Some(rmax)) =
+                (lmin, lmax, rmin, rmax)
+            {
+                if lmin == lmax && rmin == rmax && lmin == rmin {
+                    return Ok(PruningOutcome::KeepAll);
+                }
+                if matches!(lmax.partial_cmp(rmin), Some(Ordering::Less))
+                    || matches!(rmax.partial_cmp(lmin), Some(Ordering::Less))
+                {
+                    return Ok(PruningOutcome::SkipAll);
+                }
+            }
+            Ok(PruningOutcome::Unknown)
+        }
+        NotEq => {
+            if let (Some(lmin), Some(lmax), Some(rmin), Some(rmax)) =
+                (lmin, lmax, rmin, rmax)
+            {
+                if lmin == lmax && rmin == rmax && lmin == rmin {
+                    return Ok(PruningOutcome::SkipAll);
+                }
+                if matches!(lmax.partial_cmp(rmin), Some(Ordering::Less))
+                    || matches!(rmax.partial_cmp(lmin), Some(Ordering::Less))
+                {
+                    return Ok(PruningOutcome::KeepAll);
+                }
+            }
+            Ok(PruningOutcome::Unknown)
+        }
+        _ => internal_err!("Unsupported operator for range pruning: {op:?}"),
+    }
 }
 
 /// Creates a new boolean array based on the evaluation of the right expression,

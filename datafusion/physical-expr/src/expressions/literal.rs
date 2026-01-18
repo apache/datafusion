@@ -34,6 +34,10 @@ use datafusion_expr::Expr;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
+use datafusion_physical_expr_common::physical_expr::{
+    ColumnStats, NullPresence, NullStats, PropagatedIntermediate, PruningContext,
+    RangeStats,
+};
 
 /// Represents a literal value
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -110,6 +114,23 @@ impl PhysicalExpr for Literal {
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(self.value.clone()))
+    }
+
+    fn evaluate_statistics_vectorized(
+        &self,
+        ctx: Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        let length = ctx.statistics().num_containers();
+        let range = RangeStats::new_constant(self.value.clone(), length)?;
+
+        let null = match self.value().is_null() {
+            true => NullStats::from_uniform_presence(NullPresence::AllNull, length),
+            false => NullStats::from_uniform_presence(NullPresence::NoNull, length),
+        };
+
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
+            ColumnStats::new(Some(range), Some(null), length),
+        )))
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
