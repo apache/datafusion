@@ -23,6 +23,7 @@ use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
 };
+
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlannerContext, RelationPlanning,
@@ -181,6 +182,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
                     let cte = planner_context.get_cte(&table_name);
+
                     (
                         match (
                             cte,
@@ -194,11 +196,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             )?
                             .build(),
                             (None, Err(e)) => {
-                                let e = e.with_diagnostic(Diagnostic::new_error(
-                                    format!("table '{table_ref}' not found"),
+                                let input = table_ref.table().to_string();
+
+                                let diagnostic = Diagnostic::new_error(
+                                    format!("table '{input}' not found"),
                                     Span::try_from_sqlparser_span(relation_span),
-                                ));
-                                Err(e)
+                                );
+
+                                Err(e.with_diagnostic(diagnostic))
                             }
                         }?,
                         alias,
