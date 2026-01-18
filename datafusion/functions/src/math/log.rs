@@ -21,7 +21,7 @@ use std::any::Any;
 
 use super::power::PowerFunc;
 
-use crate::utils::calculate_binary_math;
+use crate::utils::calculate_binary_math_numeric;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
     DataType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Float16Type,
@@ -272,56 +272,84 @@ impl ScalarUDFImpl for LogFunc {
         };
         let value = value.to_array(args.number_rows)?;
 
+        // Get return type
+        let arg_types: Vec<DataType> =
+            args.args.iter().map(|arg| arg.data_type()).collect();
+        let out_type: &DataType = &self.return_type(&arg_types)?;
+
+        // Safety: all `dec_scale.expect` calls below are infallible since the left argument
+        // is decimal array as per `calculate_binary_math` contract.
         let output: ArrayRef = match value.data_type() {
             DataType::Float16 => {
-                calculate_binary_math::<Float16Type, Float16Type, Float16Type, _>(
+                calculate_binary_math_numeric::<Float16Type, Float16Type, Float16Type, _>(
                     &value,
                     &base,
-                    |value, base| Ok(value.log(base)),
+                    |value, base, _| Ok(value.log(base)),
+                    out_type,
                 )?
             }
             DataType::Float32 => {
-                calculate_binary_math::<Float32Type, Float32Type, Float32Type, _>(
+                calculate_binary_math_numeric::<Float32Type, Float32Type, Float32Type, _>(
                     &value,
                     &base,
-                    |value, base| Ok(value.log(base)),
+                    |value, base, _| Ok(value.log(base)),
+                    out_type,
                 )?
             }
             DataType::Float64 => {
-                calculate_binary_math::<Float64Type, Float64Type, Float64Type, _>(
+                calculate_binary_math_numeric::<Float64Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| Ok(value.log(base)),
+                    |value, base, _| Ok(value.log(base)),
+                    out_type,
                 )?
             }
-            DataType::Decimal32(_, scale) => {
-                calculate_binary_math::<Decimal32Type, Float64Type, Float64Type, _>(
+            DataType::Decimal32(_, _) => {
+                calculate_binary_math_numeric::<Decimal32Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal32(value, *scale, base),
+                    |value, base, dec_scale| {
+                        log_decimal32(value, dec_scale.expect("value is decimal").1, base)
+                    },
+                    out_type,
                 )?
             }
-            DataType::Decimal64(_, scale) => {
-                calculate_binary_math::<Decimal64Type, Float64Type, Float64Type, _>(
+            DataType::Decimal64(_, _) => {
+                calculate_binary_math_numeric::<Decimal64Type, Float64Type, Float64Type, _>(
                     &value,
                     &base,
-                    |value, base| log_decimal64(value, *scale, base),
+                    |value, base, dec_scale| {
+                        log_decimal64(value, dec_scale.expect("value is decimal").1, base)
+                    },
+                    out_type,
                 )?
             }
-            DataType::Decimal128(_, scale) => {
-                calculate_binary_math::<Decimal128Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| log_decimal128(value, *scale, base),
-                )?
-            }
-            DataType::Decimal256(_, scale) => {
-                calculate_binary_math::<Decimal256Type, Float64Type, Float64Type, _>(
-                    &value,
-                    &base,
-                    |value, base| log_decimal256(value, *scale, base),
-                )?
-            }
+            DataType::Decimal128(_, _) => calculate_binary_math_numeric::<
+                Decimal128Type,
+                Float64Type,
+                Float64Type,
+                _,
+            >(
+                &value,
+                &base,
+                |value, base, dec_scale| {
+                    log_decimal128(value, dec_scale.expect("value is decimal").1, base)
+                },
+                out_type,
+            )?,
+            DataType::Decimal256(_, _) => calculate_binary_math_numeric::<
+                Decimal256Type,
+                Float64Type,
+                Float64Type,
+                _,
+            >(
+                &value,
+                &base,
+                |value, base, dec_scale| {
+                    log_decimal256(value, dec_scale.expect("value is decimal").1, base)
+                },
+                out_type,
+            )?,
             other => {
                 return exec_err!("Unsupported data type {other:?} for function log");
             }
