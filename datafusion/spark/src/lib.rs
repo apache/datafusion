@@ -92,6 +92,24 @@
 //! let expr = sha2(col("my_data"), lit(256));
 //! ```
 //!
+//! # Example: using the Spark expression planner
+//!
+//! The [`planner::SparkFunctionPlanner`] provides Spark-compatible expression
+//! planning, such as mapping SQL `EXTRACT` expressions to Spark's `date_part`
+//! function. To use it, register it with your session context:
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use datafusion::prelude::SessionContext;
+//! use datafusion_spark::planner::SparkFunctionPlanner;
+//!
+//! let mut ctx = SessionContext::new();
+//! // Register the Spark expression planner
+//! ctx.register_expr_planner(Arc::new(SparkFunctionPlanner))?;
+//! // Now EXTRACT expressions will use Spark semantics
+//! let df = ctx.sql("SELECT EXTRACT(YEAR FROM timestamp_col) FROM my_table").await?;
+//! ```
+//!
 //![`Expr`]: datafusion_expr::Expr
 
 pub mod function;

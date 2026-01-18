@@ -19,6 +19,7 @@
 
 use crate::aggregates::group_values::GroupByMetrics;
 use crate::aggregates::topk::priority_map::PriorityMap;
+#[cfg(debug_assertions)]
 use crate::aggregates::topk_types_supported;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -33,6 +34,7 @@ use datafusion_common::Result;
 use datafusion_common::internal_datafusion_err;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::metrics::RecordOutput;
 use futures::stream::{Stream, StreamExt};
 use log::{Level, trace};
 use std::pin::Pin;
@@ -66,13 +68,27 @@ impl GroupedTopKAggregateStream {
         let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
         let aggregate_arguments =
             aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
-        let (val_field, desc) = aggr
-            .get_minmax_desc()
-            .ok_or_else(|| internal_datafusion_err!("Min/max required"))?;
 
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;
-        let vt = val_field.data_type().clone();
+
+        // Check if this is a MIN/MAX aggregate or a DISTINCT-like operation
+        let (vt, desc) = if let Some((val_field, desc)) = aggr.get_minmax_desc() {
+            // MIN/MAX case: use the aggregate output type
+            (val_field.data_type().clone(), desc)
+        } else {
+            // DISTINCT case: use the group key type and get ordering from limit_order_descending
+            // The ordering direction is set by the optimizer when it pushes down the limit
+            let desc = aggr
+                .limit_options()
+                .and_then(|config| config.descending)
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Ordering direction required for DISTINCT with limit"
+                    )
+                })?;
+            (kt.clone(), desc)
+        };
 
         // Type validation is performed by the optimizer and can_use_topk() check.
         // This debug assertion documents the contract without runtime overhead in release builds.
@@ -168,18 +184,21 @@ impl Stream for GroupedTopKAggregateStream {
                         "Exactly 1 group value required"
                     );
                     let group_by_values = Arc::clone(&group_by_values[0][0]);
-                    let input_values = {
-                        let _timer = (!self.aggregate_arguments.is_empty()).then(|| {
-                            self.group_by_metrics.aggregate_arguments_time.timer()
-                        });
-                        evaluate_many(
+                    let input_values = if self.aggregate_arguments.is_empty() {
+                        // DISTINCT case: use group key as both key and value
+                        Arc::clone(&group_by_values)
+                    } else {
+                        // MIN/MAX case: evaluate aggregate expressions
+                        let _timer =
+                            self.group_by_metrics.aggregate_arguments_time.timer();
+                        let input_values = evaluate_many(
                             &self.aggregate_arguments,
                             batches.first().unwrap(),
-                        )?
+                        )?;
+                        assert_eq!(input_values.len(), 1, "Exactly 1 input required");
+                        assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
+                        Arc::clone(&input_values[0][0])
                     };
-                    assert_eq!(input_values.len(), 1, "Exactly 1 input required");
-                    assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
-                    let input_values = Arc::clone(&input_values[0][0]);
 
                     // iterate over each column of group_by values
                     (*self).intern(&group_by_values, &input_values)?;
@@ -192,9 +211,15 @@ impl Stream for GroupedTopKAggregateStream {
                     }
                     let batch = {
                         let _timer = emitting_time.timer();
-                        let cols = self.priority_map.emit()?;
+                        let mut cols = self.priority_map.emit()?;
+                        // For DISTINCT case (no aggregate expressions), only use the group key column
+                        // since the schema only has one field and key/value are the same
+                        if self.aggregate_arguments.is_empty() {
+                            cols.truncate(1);
+                        }
                         RecordBatch::try_new(Arc::clone(&self.schema), cols)?
                     };
+                    let batch = batch.record_output(&self.baseline_metrics);
                     trace!(
                         "partition {} emit batch with {} rows",
                         self.partition,

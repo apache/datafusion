@@ -1832,6 +1832,9 @@ pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
     pub limit: u64,
+    /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+    #[prost(bool, optional, tag = "2")]
+    pub descending: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {

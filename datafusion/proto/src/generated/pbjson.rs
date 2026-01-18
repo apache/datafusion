@@ -9,11 +9,17 @@ impl serde::Serialize for AggLimit {
         if self.limit != 0 {
             len += 1;
         }
+        if self.descending.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimit", len)?;
         if self.limit != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("limit", ToString::to_string(&self.limit).as_str())?;
+        }
+        if let Some(v) = self.descending.as_ref() {
+            struct_ser.serialize_field("descending", v)?;
         }
         struct_ser.end()
     }
@@ -26,11 +32,13 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
     {
         const FIELDS: &[&str] = &[
             "limit",
+            "descending",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Limit,
+            Descending,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -53,6 +61,7 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                     {
                         match value {
                             "limit" => Ok(GeneratedField::Limit),
+                            "descending" => Ok(GeneratedField::Descending),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -73,6 +82,7 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut limit__ = None;
+                let mut descending__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Limit => {
@@ -83,10 +93,17 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Descending => {
+                            if descending__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("descending"));
+                            }
+                            descending__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(AggLimit {
                     limit: limit__.unwrap_or_default(),
+                    descending: descending__,
                 })
             }
         }
