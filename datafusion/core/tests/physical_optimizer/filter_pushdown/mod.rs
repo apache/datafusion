@@ -58,7 +58,7 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    filter::FilterExec,
+    filter::{FilterExec, FilterExecBuilder},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
@@ -233,6 +233,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -354,6 +355,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -418,6 +420,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -477,9 +480,10 @@ fn test_filter_with_projection() {
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+        FilterExecBuilder::new(predicate, Arc::clone(&scan))
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
 
@@ -502,9 +506,10 @@ fn test_filter_with_projection() {
     let projection = vec![1];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExecBuilder::new(predicate, scan)
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
     insta::assert_snapshot!(
@@ -561,9 +566,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), scan)
-            .unwrap()
+        FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan)
             .with_batch_size(10)
+            .build()
             .unwrap(),
     );
 
@@ -593,9 +598,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
 
     let predicate = col_lit_predicate("b", "bar", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, aggregate)
-            .unwrap()
+        FilterExecBuilder::new(predicate, aggregate)
             .with_batch_size(100)
+            .build()
             .unwrap(),
     );
 
@@ -981,6 +986,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1170,6 +1176,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1363,6 +1370,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1531,6 +1539,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1550,6 +1559,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1665,6 +1675,7 @@ async fn test_hashjoin_parent_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -2773,6 +2784,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -2901,6 +2913,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3051,6 +3064,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3201,6 +3215,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3335,6 +3350,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -3443,6 +3459,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
                 None,
                 PartitionMode::CollectLeft,
                 datafusion_common::NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;

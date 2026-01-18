@@ -210,6 +210,11 @@ pub trait DataSource: Send + Sync + Debug {
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
         Ok(SortOrderPushdownResult::Unsupported)
     }
+
+    /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
+    fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] that reads one or more files
@@ -391,6 +396,18 @@ impl ExecutionPlan for DataSourceExec {
             .try_map(|new_data_source| {
                 let new_exec = self.clone().with_data_source(new_data_source);
                 Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
+            })
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
             })
     }
 }
