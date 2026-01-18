@@ -1255,8 +1255,10 @@ mod tests {
         let array_agg = ArrayAgg::default();
 
         // Test with nullable input field
-        let nullable_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, true));
-        let result_field = array_agg.return_field(std::slice::from_ref(&nullable_field))?;
+        let nullable_field: FieldRef =
+            Arc::new(Field::new("input", DataType::Int64, true));
+        let result_field =
+            array_agg.return_field(std::slice::from_ref(&nullable_field))?;
         // List itself should always be nullable (NULL for empty groups)
         assert!(
             result_field.is_nullable(),
@@ -1274,8 +1276,10 @@ mod tests {
         }
 
         // Test with non-nullable input field
-        let non_nullable_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, false));
-        let result_field = array_agg.return_field(std::slice::from_ref(&non_nullable_field))?;
+        let non_nullable_field: FieldRef =
+            Arc::new(Field::new("input", DataType::Int64, false));
+        let result_field =
+            array_agg.return_field(std::slice::from_ref(&non_nullable_field))?;
         // List itself should still be nullable
         assert!(
             result_field.is_nullable(),
@@ -1327,7 +1331,7 @@ mod tests {
         let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("input", 0));
         let expr_field = expr.return_field(&input_schema)?;
         let mut acc = array_agg.accumulator(AccumulatorArgs {
-            return_field: expected_return_field.clone(),
+            return_field: Arc::clone(&expected_return_field),
             schema: &input_schema,
             expr_fields: &[expr_field],
             ignore_nulls: false,
