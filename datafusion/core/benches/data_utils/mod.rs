@@ -26,9 +26,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
+use rand::prelude::IndexedRandom;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use rand::{prelude::IndexedRandom, seq::SliceRandom};
 use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
 use std::fmt::Write;
@@ -275,44 +275,4 @@ fn test_schema(use_view: bool) -> SchemaRef {
             Field::new("timestamp_ms", DataType::Int64, false),
         ]))
     }
-}
-
-/// Create deterministic data for DISTINCT benchmarks with predictable trace_ids
-/// This ensures consistent results across benchmark runs
-#[allow(dead_code)]
-pub(crate) fn make_distinct_data(
-    partition_cnt: i32,
-    sample_cnt: i32,
-) -> Result<(Arc<Schema>, Vec<Vec<RecordBatch>>), DataFusionError> {
-    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
-    let total_samples = partition_cnt as usize * sample_cnt as usize;
-    let mut ids = Vec::new();
-    for i in 0..total_samples {
-        ids.push(i as i64);
-    }
-    ids.shuffle(&mut rng);
-
-    let mut global_idx = 0;
-    let schema = test_distinct_schema();
-    let mut partitions = vec![];
-    for _ in 0..partition_cnt {
-        let mut id_builder = Int64Builder::new();
-
-        for _ in 0..sample_cnt {
-            let id = ids[global_idx];
-            id_builder.append_value(id);
-            global_idx += 1;
-        }
-
-        let id_col = Arc::new(id_builder.finish());
-        let batch = RecordBatch::try_new(schema.clone(), vec![id_col])?;
-        partitions.push(vec![batch]);
-    }
-
-    Ok((schema, partitions))
-}
-
-/// Returns a Schema for distinct benchmarks with i64 trace_id
-fn test_distinct_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
 }

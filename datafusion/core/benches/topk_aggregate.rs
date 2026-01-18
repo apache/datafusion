@@ -17,6 +17,9 @@
 
 mod data_utils;
 
+use arrow::array::Int64Builder;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use criterion::{Criterion, criterion_group, criterion_main};
 use data_utils::make_data;
@@ -24,13 +27,52 @@ use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use datafusion_execution::config::SessionConfig;
+use rand::SeedableRng;
+use rand::seq::SliceRandom;
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-use crate::data_utils::make_distinct_data;
-
 const LIMIT: usize = 10;
+
+/// Create deterministic data for DISTINCT benchmarks with predictable trace_ids
+/// This ensures consistent results across benchmark runs
+fn make_distinct_data(
+    partition_cnt: i32,
+    sample_cnt: i32,
+) -> Result<(Arc<Schema>, Vec<Vec<RecordBatch>>)> {
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    let total_samples = partition_cnt as usize * sample_cnt as usize;
+    let mut ids = Vec::new();
+    for i in 0..total_samples {
+        ids.push(i as i64);
+    }
+    ids.shuffle(&mut rng);
+
+    let mut global_idx = 0;
+    let schema = test_distinct_schema();
+    let mut partitions = vec![];
+    for _ in 0..partition_cnt {
+        let mut id_builder = Int64Builder::new();
+
+        for _ in 0..sample_cnt {
+            let id = ids[global_idx];
+            id_builder.append_value(id);
+            global_idx += 1;
+        }
+
+        let id_col = Arc::new(id_builder.finish());
+        let batch = RecordBatch::try_new(schema.clone(), vec![id_col])?;
+        partitions.push(vec![batch]);
+    }
+
+    Ok((schema, partitions))
+}
+
+/// Returns a Schema for distinct benchmarks with i64 trace_id
+fn test_distinct_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]))
+}
 
 async fn create_context(
     partition_cnt: i32,
