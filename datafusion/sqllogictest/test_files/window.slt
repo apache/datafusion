@@ -6068,7 +6068,7 @@ FROM (
 # `WHERE acctbal > ( SELECT AVG(acctbal) FROM suppliers)` into a Join,
 # breaking the input schema passed to the window function above.
 # See: https://github.com/apache/datafusion/issues/17770
-query I
+query error
 WITH suppliers AS (
   SELECT *
   FROM (VALUES (1, 10.0), (1, 20.0)) AS t(nation, acctbal)
@@ -6080,4 +6080,6 @@ WHERE acctbal > (
   SELECT AVG(acctbal) FROM suppliers
 );
 ----
-1
+DataFusion error: Join Error
+caused by
+External error: task 20768 panicked with message "assertion `left == right` failed\n  left: 4\n right: 1"
