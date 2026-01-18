@@ -485,6 +485,35 @@
 </div>
 <p>See <a class="reference external" href="https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html"><code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> documentation</a> for more details.</p>
 </section>
+<section id="filterexec-builder-methods-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated<a class="headerlink" href="#filterexec-builder-methods-deprecated" title="Link to this heading">#</a></h3>
+<p>The following methods on <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> have been deprecated in favor of using <code class="docutils literal notranslate"><span class="pre">FilterExecBuilder</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">with_projection()</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">with_batch_size()</span></code></p></li>
+</ul>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users who create <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> instances and use these methods to configure them</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">FilterExecBuilder</span></code> instead of chaining method calls on <code class="docutils literal notranslate"><span class="pre">FilterExec</span></code>:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilterExec</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">)</span><span class="o">?</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_projection</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]))</span><span class="o">?</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_batch_size</span><span class="p">(</span><span class="mi">8192</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">filter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">FilterExecBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">predicate</span><span class="p">,</span><span class="w"> </span><span class="n">input</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_projection</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_batch_size</span><span class="p">(</span><span class="mi">8192</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The builder pattern is more efficient as it computes properties once during <code class="docutils literal notranslate"><span class="pre">build()</span></code> rather than recomputing them for each method call.</p>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">with_default_selectivity()</span></code> is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.</p>
+</section>
 </section>
 <section id="datafusion-52-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
@@ -2197,6 +2226,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
