@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::RecordBatch;
-use arrow::compute::BatchCoalescer;
+use arrow::compute::{filter_record_batch, BatchCoalescer};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_or_internal_err};
 
@@ -118,6 +118,22 @@ impl LimitedBatchCoalescer {
         self.inner.push_batch(batch)?;
 
         Ok(PushBatchStatus::Continue)
+    }
+
+    /// Pushes the batch into this coalescer, after applying the filter
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: RecordBatch,
+        filter: &arrow::array::BooleanArray,
+    ) -> Result<PushBatchStatus> {
+        // If there is a limit, fall back to the non-optimized path
+        if self.fetch.is_some() {
+            self.push_batch(filter_record_batch(&batch, filter)?)
+        } else {
+            // use optimized path when no fetch limit is set
+            self.inner.push_batch_with_filter(batch, filter)?;
+            Ok(PushBatchStatus::Continue)
+        }
     }
 
     /// Return true if there is no data buffered
