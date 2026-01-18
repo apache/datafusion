@@ -3688,7 +3688,23 @@ impl ScalarValue {
         }
 
         let scalar_array = self.to_array()?;
-        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
+
+        // For struct types, use name-based casting logic that matches fields by name
+        // and recursively casts nested structs. The field name wrapper is arbitrary
+        // since cast_column only uses the DataType::Struct field definitions inside.
+        let cast_arr = match target_type {
+            DataType::Struct(_) => {
+                // Field name is unused; only the struct's inner field names matter
+                let target_field = Field::new("_", target_type.clone(), true);
+                crate::nested_struct::cast_column(
+                    &scalar_array,
+                    &target_field,
+                    cast_options,
+                )?
+            }
+            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        };
+
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 

@@ -662,7 +662,16 @@ impl ExprSchemable for Expr {
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
 
-        if can_cast_types(&this_type, cast_to_type) {
+        // Special handling for struct-to-struct casts with name-based field matching
+        let can_cast = match (&this_type, cast_to_type) {
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                // Always allow struct-to-struct casts; field matching happens at runtime
+                true
+            }
+            _ => can_cast_types(&this_type, cast_to_type),
+        };
+
+        if can_cast {
             match self {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
