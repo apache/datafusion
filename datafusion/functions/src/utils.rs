@@ -433,7 +433,7 @@ where
         ColumnarValue::Scalar(scalar) if scalar.is_null() => {
             // Null scalar is castable to any numeric, creating a non-null expression.
             // Provide null array explicitly to make result null
-            let interim = PrimitiveArray::<O>::new_null(1);
+            let interim = PrimitiveArray::<O>::new_null(left.len());
             (Arc::new(interim) as _, None)
         }
         ColumnarValue::Scalar(right) => {
