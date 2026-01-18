@@ -58,7 +58,7 @@ use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    filter::FilterExec,
+    filter::{FilterExec, FilterExecBuilder},
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
@@ -480,9 +480,10 @@ fn test_filter_with_projection() {
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+        FilterExecBuilder::new(predicate, Arc::clone(&scan))
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
 
@@ -505,9 +506,10 @@ fn test_filter_with_projection() {
     let projection = vec![1];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExecBuilder::new(predicate, scan)
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
     insta::assert_snapshot!(
@@ -564,9 +566,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), scan)
-            .unwrap()
+        FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan)
             .with_batch_size(10)
+            .build()
             .unwrap(),
     );
 
@@ -596,9 +598,9 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
 
     let predicate = col_lit_predicate("b", "bar", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, aggregate)
-            .unwrap()
+        FilterExecBuilder::new(predicate, aggregate)
             .with_batch_size(100)
+            .build()
             .unwrap(),
     );
 
