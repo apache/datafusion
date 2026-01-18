@@ -71,8 +71,8 @@ use datafusion_functions_table::generate_series::{
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
-use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion_physical_plan::aggregates::{AggregateMode, LimitOptions};
 use datafusion_physical_plan::analyze::AnalyzeExec;
 #[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -1105,11 +1105,6 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let limit = hash_agg
-            .limit
-            .as_ref()
-            .map(|lit_value| lit_value.limit as usize);
-
         let agg = AggregateExec::try_new(
             agg_mode,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
@@ -1119,7 +1114,16 @@ impl protobuf::PhysicalPlanNode {
             physical_schema,
         )?;
 
-        let agg = agg.with_limit(limit);
+        let agg = if let Some(limit_proto) = &hash_agg.limit {
+            let limit = limit_proto.limit as usize;
+            let limit_options = match limit_proto.descending {
+                Some(descending) => LimitOptions::new_with_order(limit, descending),
+                None => LimitOptions::new(limit),
+            };
+            agg.with_limit_options(Some(limit_options))
+        } else {
+            agg
+        };
 
         Ok(Arc::new(agg))
     }
@@ -2529,8 +2533,9 @@ impl protobuf::PhysicalPlanNode {
             .map(|expr| serialize_physical_expr(&expr.0, extension_codec))
             .collect::<Result<Vec<_>>>()?;
 
-        let limit = exec.limit().map(|value| protobuf::AggLimit {
-            limit: value as u64,
+        let limit = exec.limit_options().map(|config| protobuf::AggLimit {
+            limit: config.limit() as u64,
+            descending: config.descending(),
         });
 
         Ok(protobuf::PhysicalPlanNode {
