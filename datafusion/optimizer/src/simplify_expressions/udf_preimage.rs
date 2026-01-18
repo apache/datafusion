@@ -17,7 +17,7 @@
 
 use datafusion_common::{Result, internal_err, tree_node::Transformed};
 use datafusion_expr::{
-    BinaryExpr, Expr, Operator, and, lit, or, simplify::SimplifyContext,
+    Expr, Operator, and, binary_expr, lit, or, simplify::SimplifyContext,
 };
 use datafusion_expr_common::interval_arithmetic::Interval;
 
@@ -49,65 +49,29 @@ pub(super) fn rewrite_with_preimage(
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < lower
         // <expr> >= x  ==>  <expr> >= lower
-        Operator::Lt | Operator::GtEq => Expr::BinaryExpr(BinaryExpr {
-            left: expr,
-            op,
-            right: Box::new(lower),
-        }),
+        Operator::Lt | Operator::GtEq => binary_expr(*expr, op, lower),
         // <expr> > x ==> <expr> >= upper
-        Operator::Gt => Expr::BinaryExpr(BinaryExpr {
-            left: expr,
-            op: Operator::GtEq,
-            right: Box::new(upper),
-        }),
+        Operator::Gt => binary_expr(*expr, Operator::GtEq, upper),
         // <expr> <= x ==> <expr> < upper
-        Operator::LtEq => Expr::BinaryExpr(BinaryExpr {
-            left: expr,
-            op: Operator::Lt,
-            right: Box::new(upper),
-        }),
+        Operator::LtEq => binary_expr(*expr, Operator::Lt, upper),
         // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
         //
         // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
         // but since x is always not NULL => (<expr> >= lower) and (<expr> < upper)
         Operator::Eq | Operator::IsNotDistinctFrom => and(
-            Expr::BinaryExpr(BinaryExpr {
-                left: expr.clone(),
-                op: Operator::GtEq,
-                right: Box::new(lower),
-            }),
-            Expr::BinaryExpr(BinaryExpr {
-                left: expr,
-                op: Operator::Lt,
-                right: Box::new(upper),
-            }),
+            binary_expr(*expr.clone(), Operator::GtEq, lower),
+            binary_expr(*expr, Operator::Lt, upper),
         ),
         // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
         Operator::NotEq => or(
-            Expr::BinaryExpr(BinaryExpr {
-                left: expr.clone(),
-                op: Operator::Lt,
-                right: Box::new(lower),
-            }),
-            Expr::BinaryExpr(BinaryExpr {
-                left: expr,
-                op: Operator::GtEq,
-                right: Box::new(upper),
-            }),
+            binary_expr(*expr.clone(), Operator::Lt, lower),
+            binary_expr(*expr, Operator::GtEq, upper),
         ),
         // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
         // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL)
-        Operator::IsDistinctFrom => Expr::BinaryExpr(BinaryExpr {
-            left: expr.clone(),
-            op: Operator::Lt,
-            right: Box::new(lower.clone()),
-        })
-        .or(Expr::BinaryExpr(BinaryExpr {
-            left: expr.clone(),
-            op: Operator::GtEq,
-            right: Box::new(upper),
-        }))
-        .or(expr.is_null()),
+        Operator::IsDistinctFrom => binary_expr(*expr.clone(), Operator::Lt, lower)
+            .or(binary_expr(*expr.clone(), Operator::GtEq, upper))
+            .or(expr.is_null()),
         _ => return internal_err!("Expect comparison operators"),
     };
     Ok(Transformed::yes(rewritten_expr))
