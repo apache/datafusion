@@ -122,20 +122,22 @@ impl TableProvider for TestInsertTableProvider {
 #[derive(Debug)]
 struct TestInsertExec {
     op: InsertOp,
-    plan_properties: PlanProperties,
+    plan_properties: Arc<PlanProperties>,
 }
 
 impl TestInsertExec {
     fn new(op: InsertOp) -> Self {
         Self {
             op,
-            plan_properties: PlanProperties::new(
-                EquivalenceProperties::new(make_count_schema()),
-                Partitioning::UnknownPartitioning(1),
-                EmissionType::Incremental,
-                Boundedness::Bounded,
-            )
-            .with_scheduling_type(SchedulingType::Cooperative),
+            plan_properties: Arc::new(
+                PlanProperties::new(
+                    EquivalenceProperties::new(make_count_schema()),
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )
+                .with_scheduling_type(SchedulingType::Cooperative),
+            ),
         }
     }
 }
@@ -159,7 +161,7 @@ impl ExecutionPlan for TestInsertExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.plan_properties
     }
 

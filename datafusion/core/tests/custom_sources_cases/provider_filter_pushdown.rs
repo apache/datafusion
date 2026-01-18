@@ -62,13 +62,16 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
 #[derive(Debug)]
 struct CustomPlan {
     batches: Vec<RecordBatch>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl CustomPlan {
     fn new(schema: SchemaRef, batches: Vec<RecordBatch>) -> Self {
         let cache = Self::compute_properties(schema);
-        Self { batches, cache }
+        Self {
+            batches,
+            cache: Arc::new(cache),
+        }
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -109,7 +112,7 @@ impl ExecutionPlan for CustomPlan {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
