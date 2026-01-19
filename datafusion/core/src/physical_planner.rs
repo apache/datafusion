@@ -1939,15 +1939,14 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer pushes some predicates down.
     // We deduplicate by (unqualified) expression to avoid passing the same filter twice.
-    let mut seen = HashSet::new();
-    let mut deduped = Vec::new();
-
-    for filter in filters {
-        let filter = strip_column_qualifiers(filter)?;
-        if seen.insert(filter.clone()) {
-            deduped.push(filter);
-        }
-    }
+    let mut seen_filters = HashSet::new();
+    let deduped = filters
+        .into_iter()
+        .map(strip_column_qualifiers)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|f| seen_filters.insert(f.clone()))
+        .collect();
 
     Ok(deduped)
 }
