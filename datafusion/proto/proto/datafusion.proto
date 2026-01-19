@@ -1111,6 +1111,7 @@ message HashJoinExecNode {
   datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
+  bool null_aware = 10;
 }
 
 enum StreamPartitionMode {
@@ -1219,6 +1220,8 @@ message MaybePhysicalSortExprs {
 message AggLimit {
   // wrap into a message to make it optional
   uint64 limit = 1;
+  // Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+  optional bool descending = 2;
 }
 
 message AggregateExecNode {

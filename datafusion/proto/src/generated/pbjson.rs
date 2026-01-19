@@ -9,11 +9,17 @@ impl serde::Serialize for AggLimit {
         if self.limit != 0 {
             len += 1;
         }
+        if self.descending.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AggLimit", len)?;
         if self.limit != 0 {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("limit", ToString::to_string(&self.limit).as_str())?;
+        }
+        if let Some(v) = self.descending.as_ref() {
+            struct_ser.serialize_field("descending", v)?;
         }
         struct_ser.end()
     }
@@ -26,11 +32,13 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
     {
         const FIELDS: &[&str] = &[
             "limit",
+            "descending",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Limit,
+            Descending,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -53,6 +61,7 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                     {
                         match value {
                             "limit" => Ok(GeneratedField::Limit),
+                            "descending" => Ok(GeneratedField::Descending),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -73,6 +82,7 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut limit__ = None;
+                let mut descending__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Limit => {
@@ -83,10 +93,17 @@ impl<'de> serde::Deserialize<'de> for AggLimit {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Descending => {
+                            if descending__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("descending"));
+                            }
+                            descending__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(AggLimit {
                     limit: limit__.unwrap_or_default(),
+                    descending: descending__,
                 })
             }
         }
@@ -8041,6 +8058,9 @@ impl serde::Serialize for HashJoinExecNode {
         if !self.projection.is_empty() {
             len += 1;
         }
+        if self.null_aware {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -8072,6 +8092,9 @@ impl serde::Serialize for HashJoinExecNode {
         if !self.projection.is_empty() {
             struct_ser.serialize_field("projection", &self.projection)?;
         }
+        if self.null_aware {
+            struct_ser.serialize_field("nullAware", &self.null_aware)?;
+        }
         struct_ser.end()
     }
 }
@@ -8093,6 +8116,8 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "nullEquality",
             "filter",
             "projection",
+            "null_aware",
+            "nullAware",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8105,6 +8130,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             NullEquality,
             Filter,
             Projection,
+            NullAware,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8134,6 +8160,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "nullEquality" | "null_equality" => Ok(GeneratedField::NullEquality),
                             "filter" => Ok(GeneratedField::Filter),
                             "projection" => Ok(GeneratedField::Projection),
+                            "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8161,6 +8188,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut null_equality__ = None;
                 let mut filter__ = None;
                 let mut projection__ = None;
+                let mut null_aware__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -8214,6 +8242,12 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                                     .into_iter().map(|x| x.0).collect())
                             ;
                         }
+                        GeneratedField::NullAware => {
+                            if null_aware__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullAware"));
+                            }
+                            null_aware__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -8225,6 +8259,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     null_equality: null_equality__.unwrap_or_default(),
                     filter: filter__,
                     projection: projection__.unwrap_or_default(),
+                    null_aware: null_aware__.unwrap_or_default(),
                 })
             }
         }
