@@ -18,7 +18,7 @@
 //! Planner for [`LogicalPlan`] to [`ExecutionPlan`]
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -1916,15 +1916,33 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
     input.apply(|node| {
-        if let LogicalPlan::Filter(filter) = node {
-            // Split AND predicates into individual expressions
-            filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+        match node {
+            LogicalPlan::Filter(filter) => {
+                // Split AND predicates into individual expressions
+                filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+            }
+            LogicalPlan::TableScan(TableScan { filters: scan_filters, .. }) => {
+                for filter in scan_filters {
+                    filters.extend(split_conjunction(filter).into_iter().cloned());
+                }
+            }
+            _ => {}
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
 
     // Strip table qualifiers from column references
-    filters.into_iter().map(strip_column_qualifiers).collect()
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for filter in filters {
+        let filter = strip_column_qualifiers(filter)?;
+        if seen.insert(filter.clone()) {
+            deduped.push(filter);
+        }
+    }
+
+    Ok(deduped)
 }
 
 /// Strip table qualifiers from column references in an expression.

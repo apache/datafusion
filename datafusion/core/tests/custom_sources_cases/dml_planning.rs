@@ -25,7 +25,10 @@ use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{
+    Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
+};
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_catalog::Session;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -34,6 +37,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 struct CaptureDeleteProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
+    filter_pushdown: TableProviderFilterPushDown,
 }
 
 impl CaptureDeleteProvider {
@@ -41,6 +45,18 @@ impl CaptureDeleteProvider {
         Self {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+        }
+    }
+
+    fn new_with_filter_pushdown(
+        schema: SchemaRef,
+        filter_pushdown: TableProviderFilterPushDown,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown,
         }
     }
 
@@ -90,6 +106,13 @@ impl TableProvider for CaptureDeleteProvider {
         Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
             Field::new("count", DataType::UInt64, false),
         ])))))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
 }
 
@@ -243,6 +266,39 @@ async fn test_delete_complex_expr() -> Result<()> {
         .captured_filters()
         .expect("filters should be captured");
     assert!(!filters.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx.sql("DELETE FROM t WHERE id = 1").await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 1);
+    assert!(filters[0].to_string().contains("id"));
     Ok(())
 }
 
