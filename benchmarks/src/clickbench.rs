@@ -35,9 +35,9 @@ use datafusion_common::instant::Instant;
 /// storage efficiency (2 bytes vs 4-8 bytes for date types).
 /// This view transforms it to SQL DATE type for query compatibility.
 const HITS_VIEW_DDL: &str = r#"CREATE VIEW hits AS
-    SELECT * EXCEPT ("EventDate"),
-           CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
-    FROM hits_raw"#;
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw"#;
 
 /// Driver program to run the ClickBench benchmark
 ///
