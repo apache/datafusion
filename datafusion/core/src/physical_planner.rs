@@ -1907,10 +1907,11 @@ fn get_physical_expr_pair(
 }
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
-/// Walks the logical plan tree and collects Filter predicates,
-/// splitting AND conjunctions into individual expressions.
+/// Walks the logical plan tree and collects Filter predicates and any filters
+/// pushed down into TableScan nodes, splitting AND conjunctions into individual expressions.
 /// Column qualifiers are stripped so expressions can be evaluated against
-/// the TableProvider's schema.
+/// the TableProvider's schema. Deduplicates filters to avoid passing the same
+/// predicate twice when filters appear in both Filter and TableScan nodes.
 ///
 fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
@@ -1931,7 +1932,10 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
         Ok(TreeNodeRecursion::Continue)
     })?;
 
-    // Strip table qualifiers from column references
+    // Strip table qualifiers from column references and deduplicate.
+    // Deduplication is necessary because filters may appear in both Filter nodes
+    // and TableScan.filters when the optimizer pushes some predicates down.
+    // We deduplicate by (unqualified) expression to avoid passing the same filter twice.
     let mut seen = HashSet::new();
     let mut deduped = Vec::new();
 
