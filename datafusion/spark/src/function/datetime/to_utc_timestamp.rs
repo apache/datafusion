@@ -42,6 +42,10 @@ use datafusion_functions::utils::make_scalar_function;
 ///
 /// Interprets the given timestamp in the provided timezone and then converts it to UTC.
 ///
+/// Timestamp in Apache Spark represents number of microseconds from the Unix epoch, which is not
+/// timezone-agnostic. So in Apache Spark this function just shift the timestamp value from the given
+/// timezone to UTC timezone.
+///
 /// See <https://spark.apache.org/docs/latest/api/sql/index.html#to_utc_timestamp>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToUtcTimestamp {

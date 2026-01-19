@@ -15,26 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Spark-compatible `from_utc_timestamp` function.
-//!
-//! This function interprets a timestamp as UTC and converts it to a specified timezone.
-//! Unlike DataFusion's `to_local_time` which strips the timezone from the result,
-//! `from_utc_timestamp` preserves the original timezone annotation on the output.
-//!
-//! # How it works
-//!
-//! The function reuses [`adjust_to_local_time`] from DataFusion's `to_local_time` module
-//! to perform the actual timestamp adjustment. The key insight is that both functions
-//! need to add the timezone offset to the underlying UTC timestamp value.
-//!
-//! For example, given a timestamp `2024-01-15T10:00:00Z` (UTC) and target timezone
-//! `America/New_York` (UTC-5 in winter):
-//!
-//! 1. The input timestamp is stored as a UTC value (e.g., `1705312800` seconds)
-//! 2. `adjust_to_local_time` calculates the offset for `America/New_York` (-5 hours)
-//! 3. The offset is added to get the local time value (`1705312800 + (-18000)`)
-//! 4. The result represents `2024-01-15T05:00:00` in the target timezone
-
 use std::any::Any;
 use std::sync::Arc;
 
@@ -58,6 +38,10 @@ use datafusion_functions::utils::make_scalar_function;
 /// Apache Spark `from_utc_timestamp` function.
 ///
 /// Interprets the given timestamp as UTC and converts it to the given timezone.
+///
+/// Timestamp in Apache Spark represents number of microseconds from the Unix epoch, which is not
+/// timezone-agnostic. So in Apache Spark this function just shift the timestamp value from UTC timezone to
+/// the given timezone.
 ///
 /// See <https://spark.apache.org/docs/latest/api/sql/index.html#from_utc_timestamp>
 #[derive(Debug, PartialEq, Eq, Hash)]
