@@ -894,8 +894,7 @@ impl Stream for FilterExecStream {
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_total(batch.num_rows());
                                     // TODO: support push_batch_with_filter in LimitedBatchCoalescer
-                                    let batch = filter_record_batch(&batch, filter_array)?;
-                                    let state = self.batch_coalescer.push_batch(batch)?;
+                                    let state = self.batch_coalescer.push_batch_with_filter(batch, filter_array)?;
                                     Ok(state)
                                 }
                                 Err(_) => {

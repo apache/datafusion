@@ -271,3 +271,32 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+## Temporary arrow-rs patch until 58 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-array = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-buffer = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-cast = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-data = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-ipc = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-schema = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-select = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-string = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-ord = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+arrow-flight = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+parquet = { git = "https://github.com/Dandandan/arrow-rs.git", branch = "coalesce_batches_filter" }
+
+#arrow = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow" }
+#arrow-array = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-array" }
+#arrow-buffer = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-buffer" }
+#arrow-cast = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-cast" }
+#arrow-data = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-data" }
+#arrow-ipc = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ipc" }
+#arrow-schema = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-schema" }
+#arrow-select = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-select" }
+#arrow-string = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-string" }
+#arrow-ord = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-ord" }
+#arrow-flight = { path= "/Users/andrewlamb/Software/arrow-rs2/arrow-flight" }
+#parquet = { path= "/Users/andrewlamb/Software/arrow-rs2/parquet" }

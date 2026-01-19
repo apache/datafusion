@@ -120,6 +120,44 @@ impl LimitedBatchCoalescer {
         Ok(PushBatchStatus::Continue)
     }
 
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: RecordBatch,
+        filter: &arrow::array::BooleanArray,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        // if we are at the limit, return LimitReached
+        if let Some(fetch) = self.fetch {
+            // limit previously reached
+            if self.total_rows >= fetch {
+                return Ok(PushBatchStatus::LimitReached);
+            }
+        }
+
+        let count = filter.true_count();
+
+        // if we are at the limit after filtering, return LimitReached
+        if let Some(fetch) = self.fetch {
+            // limit now reached
+            if self.total_rows + count as usize >= fetch {
+                // TODO: limit at remaining rows
+                self.total_rows += count as usize;
+                self.inner.push_batch_with_filter(batch, filter)?;
+                return Ok(PushBatchStatus::LimitReached);
+            }
+        }
+
+        // Limit not reached, push the entire filtered batch
+        self.total_rows += count;
+        self.inner.push_batch_with_filter(batch, filter)?;
+
+        Ok(PushBatchStatus::Continue)
+    }
+
     /// Return true if there is no data buffered
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
