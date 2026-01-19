@@ -720,6 +720,9 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// A preimage is a single contiguous [`Interval`] of values where the function
     /// will always return `lit_value`
     ///
+    /// Implementations should return intervals with an inclusive lower bound and
+    /// exclusive upper bound.
+    ///
     /// This rewrite is described in the [ClickHouse Paper] and is particularly
     /// useful for simplifying expressions `date_part` or equivalent functions. The
     /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
@@ -727,7 +730,8 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
     /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
     ///
-    /// This should only return a preimage if the function takes a single argument
+    /// Implementations must also provide [`ScalarUDFImpl::column_expr`] so the
+    /// optimizer can identify which argument maps to the preimage interval.
     ///
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
