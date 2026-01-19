@@ -28,6 +28,7 @@ pub mod make_dt_interval;
 pub mod make_interval;
 pub mod next_day;
 pub mod time_trunc;
+pub mod to_utc_timestamp;
 pub mod trunc;
 
 use datafusion_expr::ScalarUDF;
@@ -52,6 +53,7 @@ make_udf_function!(make_dt_interval::SparkMakeDtInterval, make_dt_interval);
 make_udf_function!(make_interval::SparkMakeInterval, make_interval);
 make_udf_function!(next_day::SparkNextDay, next_day);
 make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
+make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
 make_udf_function!(trunc::SparkTrunc, trunc);
 
 pub mod expr_fn {
@@ -135,6 +137,11 @@ pub mod expr_fn {
         "Interpret a given timestamp `ts` in UTC timezone and then convert it to timezone `tz`.",
         ts tz
     ));
+    export_functions!((
+        to_utc_timestamp,
+        "Interpret a given timestamp `ts` in timezone `tz` and then convert it to UTC timezone.",
+        ts tz
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -154,6 +161,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         next_day(),
         second(),
         time_trunc(),
+        to_utc_timestamp(),
         trunc(),
     ]
 }

@@ -15,27 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Spark-compatible `from_utc_timestamp` function.
-//!
-//! This function interprets a timestamp as UTC and converts it to a specified timezone.
-//! Unlike DataFusion's `to_local_time` which strips the timezone from the result,
-//! `from_utc_timestamp` preserves the original timezone annotation on the output.
-//!
-//! # How it works
-//!
-//! The function reuses [`adjust_to_local_time`] from DataFusion's `to_local_time` module
-//! to perform the actual timestamp adjustment. The key insight is that both functions
-//! need to add the timezone offset to the underlying UTC timestamp value.
-//!
-//! For example, given a timestamp `2024-01-15T10:00:00Z` (UTC) and target timezone
-//! `America/New_York` (UTC-5 in winter):
-//!
-//! 1. The input timestamp is stored as a UTC value (e.g., `1705312800` seconds)
-//! 2. `adjust_to_local_time` calculates the offset for `America/New_York` (-5 hours)
-//! 3. The offset is added to get the local time value (`1705312800 + (-18000)`)
-//! 4. The result represents `2024-01-15T05:00:00` in the target timezone
-
 use std::any::Any;
+use std::ops::Sub;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
@@ -45,33 +26,35 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, Field, FieldRef, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
+use chrono::{DateTime, Offset, TimeDelta, TimeZone};
 use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, exec_datafusion_err, exec_err, internal_err};
+use datafusion_common::{
+    Result, exec_datafusion_err, exec_err, internal_datafusion_err, internal_err,
+};
 use datafusion_expr::{
     Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     Signature, TypeSignatureClass, Volatility,
 };
-use datafusion_functions::datetime::to_local_time::adjust_to_local_time;
 use datafusion_functions::utils::make_scalar_function;
 
-/// Apache Spark `from_utc_timestamp` function.
+/// Apache Spark `to_utc_timestamp` function.
 ///
-/// Interprets the given timestamp as UTC and converts it to the given timezone.
+/// Interprets the given timestamp in the provided timezone and then converts it to UTC.
 ///
-/// See <https://spark.apache.org/docs/latest/api/sql/index.html#from_utc_timestamp>
+/// See <https://spark.apache.org/docs/latest/api/sql/index.html#to_utc_timestamp>
 #[derive(Debug, PartialEq, Eq, Hash)]
-pub struct SparkFromUtcTimestamp {
+pub struct SparkToUtcTimestamp {
     signature: Signature,
 }
 
-impl Default for SparkFromUtcTimestamp {
+impl Default for SparkToUtcTimestamp {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SparkFromUtcTimestamp {
+impl SparkToUtcTimestamp {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
@@ -89,13 +72,13 @@ impl SparkFromUtcTimestamp {
     }
 }
 
-impl ScalarUDFImpl for SparkFromUtcTimestamp {
+impl ScalarUDFImpl for SparkToUtcTimestamp {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "from_utc_timestamp"
+        "to_utc_timestamp"
     }
 
     fn signature(&self) -> &Signature {
@@ -117,12 +100,12 @@ impl ScalarUDFImpl for SparkFromUtcTimestamp {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(spark_from_utc_timestamp, vec![])(&args.args)
+        make_scalar_function(to_utc_timestamp, vec![])(&args.args)
     }
 }
 
-fn spark_from_utc_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let [timestamp, timezone] = take_function_args("from_utc_timestamp", args)?;
+fn to_utc_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let [timestamp, timezone] = take_function_args("to_utc_timestamp", args)?;
 
     match (timestamp.data_type(), timezone.data_type()) {
         (DataType::Timestamp(TimeUnit::Nanosecond, tz_opt), _) => {
@@ -154,7 +137,7 @@ fn spark_from_utc_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         (ts_type, _) => {
-            exec_err!("`from_utc_timestamp`: unsupported argument types: {ts_type}")
+            exec_err!("`to_utc_timestamp`: unsupported argument types: {ts_type}")
         }
     }
 }
@@ -175,7 +158,7 @@ fn process_timestamp_with_tz_array<T: ArrowTimestampType>(
             process_arrays::<T, _>(tz_opt, ts_array, tz_array.as_string_view())
         }
         other => {
-            exec_err!("`from_utc_timestamp`: timezone must be a string type, got {other}")
+            exec_err!("`to_utc_timestamp`: timezone must be a string type, got {other}")
         }
     }
 }
@@ -196,10 +179,10 @@ where
             (Some(ts), Some(tz_str)) => {
                 let tz: Tz = tz_str.parse().map_err(|e| {
                     exec_datafusion_err!(
-                        "`from_utc_timestamp`: invalid timezone '{tz_str}': {e}"
+                        "`to_utc_timestamp`: invalid timezone '{tz_str}': {e}"
                     )
                 })?;
-                let val = adjust_to_local_time::<T>(ts, tz)?;
+                let val = adjust_to_utc_time::<T>(ts, tz)?;
                 builder.append_value(val);
             }
             _ => builder.append_null(),
@@ -208,4 +191,39 @@ where
 
     builder = builder.with_timezone_opt(return_tz_opt);
     Ok(Arc::new(builder.finish()))
+}
+
+fn adjust_to_utc_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+    let date_time = match T::UNIT {
+        TimeUnit::Nanosecond => Some(DateTime::from_timestamp_nanos(ts)),
+        TimeUnit::Microsecond => DateTime::from_timestamp_micros(ts),
+        TimeUnit::Millisecond => DateTime::from_timestamp_millis(ts),
+        TimeUnit::Second => DateTime::from_timestamp(ts, 0),
+    }
+    .unwrap()
+    .with_timezone(&tz);
+
+    let offset_seconds: i64 = tz
+        .offset_from_utc_datetime(&date_time.naive_utc())
+        .fix()
+        .local_minus_utc() as i64;
+
+    let adjusted_date_time = date_time.sub(
+        // This should not fail under normal circumstances as the
+        // maximum possible offset is 26 hours (93,600 seconds)
+        TimeDelta::try_seconds(offset_seconds)
+            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
+    );
+
+    // convert the naive datetime back to i64
+    match T::UNIT {
+        TimeUnit::Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
+            internal_datafusion_err!(
+                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
+            )
+        ),
+        TimeUnit::Microsecond => Ok(adjusted_date_time.timestamp_micros()),
+        TimeUnit::Millisecond => Ok(adjusted_date_time.timestamp_millis()),
+        TimeUnit::Second => Ok(adjusted_date_time.timestamp()),
+    }
 }
