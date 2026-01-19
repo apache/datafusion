@@ -27,6 +27,7 @@ use datafusion_functions::math::cot;
 use std::hint::black_box;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use std::sync::Arc;
 
@@ -79,6 +80,51 @@ fn criterion_benchmark(c: &mut Criterion) {
                             arg_fields: arg_fields.clone(),
                             number_rows: size,
                             return_field: Arc::clone(&return_field),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+
+        // Scalar benchmarks
+        let scalar_f32_args =
+            vec![ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0)))];
+        let scalar_f32_arg_fields =
+            vec![Field::new("a", DataType::Float32, false).into()];
+        let return_field_f32 = Field::new("f", DataType::Float32, false).into();
+
+        c.bench_function(&format!("cot f32 scalar: {size}"), |b| {
+            b.iter(|| {
+                black_box(
+                    cot_fn
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: scalar_f32_args.clone(),
+                            arg_fields: scalar_f32_arg_fields.clone(),
+                            number_rows: 1,
+                            return_field: Arc::clone(&return_field_f32),
+                            config_options: Arc::clone(&config_options),
+                        })
+                        .unwrap(),
+                )
+            })
+        });
+
+        let scalar_f64_args =
+            vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0)))];
+        let scalar_f64_arg_fields =
+            vec![Field::new("a", DataType::Float64, false).into()];
+        let return_field_f64 = Field::new("f", DataType::Float64, false).into();
+
+        c.bench_function(&format!("cot f64 scalar: {size}"), |b| {
+            b.iter(|| {
+                black_box(
+                    cot_fn
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: scalar_f64_args.clone(),
+                            arg_fields: scalar_f64_arg_fields.clone(),
+                            number_rows: 1,
+                            return_field: Arc::clone(&return_field_f64),
                             config_options: Arc::clone(&config_options),
                         })
                         .unwrap(),

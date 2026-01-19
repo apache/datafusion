@@ -18,12 +18,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::AsArray;
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use crate::utils::make_scalar_function;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -96,24 +96,47 @@ impl ScalarUDFImpl for CotFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(cot, vec![])(&args.args)
-    }
-}
+        let return_type = args.return_type().clone();
+        let [arg] = take_function_args(self.name(), args.args)?;
 
-///cot SQL function
-fn cot(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        Float64 => Ok(Arc::new(
-            args[0]
-                .as_primitive::<Float64Type>()
-                .unary::<_, Float64Type>(|x: f64| compute_cot64(x)),
-        ) as ArrayRef),
-        Float32 => Ok(Arc::new(
-            args[0]
-                .as_primitive::<Float32Type>()
-                .unary::<_, Float32Type>(|x: f32| compute_cot32(x)),
-        ) as ArrayRef),
-        other => exec_err!("Unsupported data type {other:?} for function cot"),
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return ColumnarValue::Scalar(ScalarValue::Null)
+                        .cast_to(&return_type, None);
+                }
+
+                match scalar {
+                    ScalarValue::Float64(Some(v)) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::Float64(Some(compute_cot64(v))),
+                    )),
+                    ScalarValue::Float32(Some(v)) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::Float32(Some(compute_cot32(v))),
+                    )),
+                    _ => {
+                        internal_err!(
+                            "Unexpected scalar type for cot: {:?}",
+                            scalar.data_type()
+                        )
+                    }
+                }
+            }
+            ColumnarValue::Array(array) => match array.data_type() {
+                Float64 => Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .as_primitive::<Float64Type>()
+                        .unary::<_, Float64Type>(compute_cot64),
+                ))),
+                Float32 => Ok(ColumnarValue::Array(Arc::new(
+                    array
+                        .as_primitive::<Float32Type>()
+                        .unary::<_, Float32Type>(compute_cot32),
+                ))),
+                other => {
+                    internal_err!("Unexpected data type {other:?} for function cot")
+                }
+            },
+        }
     }
 }
 
@@ -129,54 +152,93 @@ fn compute_cot64(x: f64) -> f64 {
 
 #[cfg(test)]
 mod test {
-    use crate::math::cot::cot;
-    use arrow::array::{ArrayRef, Float32Array, Float64Array};
-    use datafusion_common::cast::{as_float32_array, as_float64_array};
     use std::sync::Arc;
+
+    use arrow::array::{ArrayRef, Float32Array, Float64Array};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+
+    use crate::math::cot::CotFunc;
 
     #[test]
     fn test_cot_f32() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float32_array(&result).expect("failed to initialize function cot");
+        let array = Arc::new(Float32Array::from(vec![12.1, 30.0, 90.0, -30.0]));
+        let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
+            arg_fields,
+            number_rows: array.len(),
+            return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function cot");
 
-        let expected = Float32Array::from(vec![
-            -1.986_460_4,
-            -0.156_119_96,
-            -0.501_202_8,
-            0.156_119_96,
-        ]);
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float32_array(&arr)
+                    .expect("failed to convert result to a Float32Array");
 
-        let eps = 1e-6;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
+                let expected = Float32Array::from(vec![
+                    -1.986_460_4,
+                    -0.156_119_96,
+                    -0.501_202_8,
+                    0.156_119_96,
+                ]);
+
+                let eps = 1e-6;
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - expected.value(0)).abs() < eps);
+                assert!((floats.value(1) - expected.value(1)).abs() < eps);
+                assert!((floats.value(2) - expected.value(2)).abs() < eps);
+                assert!((floats.value(3) - expected.value(3)).abs() < eps);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 
     #[test]
     fn test_cot_f64() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]))];
-        let result = cot(&args).expect("failed to initialize function cot");
-        let floats =
-            as_float64_array(&result).expect("failed to initialize function cot");
+        let array = Arc::new(Float64Array::from(vec![12.1, 30.0, 90.0, -30.0]));
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
+            arg_fields,
+            number_rows: array.len(),
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("failed to initialize function cot");
 
-        let expected = Float64Array::from(vec![
-            -1.986_458_685_881_4,
-            -0.156_119_952_161_6,
-            -0.501_202_783_380_1,
-            0.156_119_952_161_6,
-        ]);
+        match result {
+            ColumnarValue::Array(arr) => {
+                let floats = as_float64_array(&arr)
+                    .expect("failed to convert result to a Float64Array");
 
-        let eps = 1e-12;
-        assert_eq!(floats.len(), 4);
-        assert!((floats.value(0) - expected.value(0)).abs() < eps);
-        assert!((floats.value(1) - expected.value(1)).abs() < eps);
-        assert!((floats.value(2) - expected.value(2)).abs() < eps);
-        assert!((floats.value(3) - expected.value(3)).abs() < eps);
+                let expected = Float64Array::from(vec![
+                    -1.986_458_685_881_4,
+                    -0.156_119_952_161_6,
+                    -0.501_202_783_380_1,
+                    0.156_119_952_161_6,
+                ]);
+
+                let eps = 1e-12;
+                assert_eq!(floats.len(), 4);
+                assert!((floats.value(0) - expected.value(0)).abs() < eps);
+                assert!((floats.value(1) - expected.value(1)).abs() < eps);
+                assert!((floats.value(2) - expected.value(2)).abs() < eps);
+                assert!((floats.value(3) - expected.value(3)).abs() < eps);
+            }
+            ColumnarValue::Scalar(_) => {
+                panic!("Expected an array value")
+            }
+        }
     }
 }
