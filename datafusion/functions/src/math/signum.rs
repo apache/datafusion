@@ -23,7 +23,7 @@ use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -139,7 +139,9 @@ impl ScalarUDFImpl for SignumFunc {
                         },
                     ),
                 ))),
-                other => exec_err!("Unsupported data type {other:?} for function signum"),
+                other => {
+                    internal_err!("Unsupported data type {other:?} for function signum")
+                }
             },
         }
     }
