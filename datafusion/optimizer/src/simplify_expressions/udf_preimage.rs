@@ -141,7 +141,7 @@ mod test {
         }
 
         fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
-            args.get(0).cloned()
+            args.first().cloned()
         }
     }
 
