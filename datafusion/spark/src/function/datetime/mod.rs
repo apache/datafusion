@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod date_add;
+pub mod date_diff;
 pub mod date_part;
 pub mod date_sub;
 pub mod date_trunc;
@@ -32,6 +33,7 @@ use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
 make_udf_function!(date_add::SparkDateAdd, date_add);
+make_udf_function!(date_diff::SparkDateDiff, date_diff);
 make_udf_function!(date_part::SparkDatePart, date_part);
 make_udf_function!(date_sub::SparkDateSub, date_sub);
 make_udf_function!(date_trunc::SparkDateTrunc, date_trunc);
@@ -92,6 +94,11 @@ pub mod expr_fn {
         arg1 arg2
     ));
     export_functions!((
+        date_diff,
+        "Returns the number of days from start `start` to end `end`.",
+        end start
+    ));
+    export_functions!((
         date_trunc,
         "Truncates a timestamp `ts` to the unit specified by the format `fmt`.",
         fmt ts
@@ -110,13 +117,13 @@ pub mod expr_fn {
         date_part,
         "Extracts a part of the date or time from a date, time, or timestamp expression.",
         arg1 arg2
-
     ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
         date_add(),
+        date_diff(),
         date_part(),
         date_sub(),
         date_trunc(),
