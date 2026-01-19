@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::ops::Sub;
 use std::sync::Arc;
 
 use arrow::array::timezone::Tz;
@@ -26,7 +25,7 @@ use arrow::datatypes::{
     ArrowTimestampType, DataType, Field, FieldRef, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{DateTime, Offset, TimeDelta, TimeZone};
+use chrono::{DateTime, Offset, TimeZone};
 use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
@@ -198,36 +197,29 @@ where
 }
 
 fn adjust_to_utc_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
-    let date_time = match T::UNIT {
+    let dt = match T::UNIT {
         TimeUnit::Nanosecond => Some(DateTime::from_timestamp_nanos(ts)),
         TimeUnit::Microsecond => DateTime::from_timestamp_micros(ts),
         TimeUnit::Millisecond => DateTime::from_timestamp_millis(ts),
         TimeUnit::Second => DateTime::from_timestamp(ts, 0),
     }
-    .unwrap()
-    .with_timezone(&tz);
+    .ok_or_else(|| internal_datafusion_err!("Invalid timestamp"))?;
+    let naive_dt = dt.naive_utc();
 
-    let offset_seconds: i64 = tz
-        .offset_from_utc_datetime(&date_time.naive_utc())
+    let offset_seconds = tz
+        .offset_from_utc_datetime(&naive_dt)
         .fix()
         .local_minus_utc() as i64;
 
-    let adjusted_date_time = date_time.sub(
-        // This should not fail under normal circumstances as the
-        // maximum possible offset is 26 hours (93,600 seconds)
-        TimeDelta::try_seconds(offset_seconds)
-            .ok_or_else(|| internal_datafusion_err!("Offset seconds should be less than i64::MAX / 1_000 or greater than -i64::MAX / 1_000"))?,
-    );
-
-    // convert the naive datetime back to i64
-    match T::UNIT {
-        TimeUnit::Nanosecond => adjusted_date_time.timestamp_nanos_opt().ok_or_else(||
-            internal_datafusion_err!(
-                "Failed to convert DateTime to timestamp in nanosecond. This error may occur if the date is out of range. The supported date ranges are between 1677-09-21T00:12:43.145224192 and 2262-04-11T23:47:16.854775807"
-            )
-        ),
-        TimeUnit::Microsecond => Ok(adjusted_date_time.timestamp_micros()),
-        TimeUnit::Millisecond => Ok(adjusted_date_time.timestamp_millis()),
-        TimeUnit::Second => Ok(adjusted_date_time.timestamp()),
+    let offset_in_unit = match T::UNIT {
+        TimeUnit::Nanosecond => offset_seconds.checked_mul(1_000_000_000),
+        TimeUnit::Microsecond => offset_seconds.checked_mul(1_000_000),
+        TimeUnit::Millisecond => offset_seconds.checked_mul(1_000),
+        TimeUnit::Second => Some(offset_seconds),
     }
+    .ok_or_else(|| internal_datafusion_err!("Offset overflow"))?;
+
+    ts.checked_sub(offset_in_unit).ok_or_else(|| {
+        internal_datafusion_err!("Timestamp overflow during timezone adjustment")
+    })
 }
