@@ -28,8 +28,8 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{
     Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
 };
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_catalog::Session;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -299,6 +299,42 @@ async fn test_delete_filter_pushdown_extracts_table_scan_filters() -> Result<()>
         .expect("filters should be captured");
     assert_eq!(filters.len(), 1);
     assert!(filters[0].to_string().contains("id"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_compound_filters_with_pushdown() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?
+        .collect()
+        .await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    // Should receive both filters, not deduplicate valid separate predicates
+    assert_eq!(
+        filters.len(),
+        2,
+        "compound filters should not be over-suppressed"
+    );
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain status filter"
+    );
     Ok(())
 }
 

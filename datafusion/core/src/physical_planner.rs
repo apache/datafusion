@@ -1922,7 +1922,10 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
                 // Split AND predicates into individual expressions
                 filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
             }
-            LogicalPlan::TableScan(TableScan { filters: scan_filters, .. }) => {
+            LogicalPlan::TableScan(TableScan {
+                filters: scan_filters,
+                ..
+            }) => {
                 for filter in scan_filters {
                     filters.extend(split_conjunction(filter).into_iter().cloned());
                 }
