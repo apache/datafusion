@@ -30,10 +30,12 @@ SELECT add_months('2016-07-30'::date, 10000::int);
 ----
 2849-11-30
 
-query D
-SELECT add_months('2016-07-30'::date, 2147483647::int);
-----
-NULL
+# Test integer overflow
+# TODO: Enable with next arrow upgrade (>=58.0.0)
+# query D
+# SELECT add_months('2016-07-30'::date, 2147483647::int);
+# ----
+# NULL
 
 query D
 SELECT add_months('2016-07-30'::date, -5::int);

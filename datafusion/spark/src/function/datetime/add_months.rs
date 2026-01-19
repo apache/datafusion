@@ -24,8 +24,8 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Cast, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#add_months>
@@ -81,16 +81,12 @@ impl ScalarUDFImpl for SparkAddMonths {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &SimplifyContext,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [date_arg, months_arg] = take_function_args("add_months", args)?;
-
-        Ok(ExprSimplifyResult::Simplified(date_arg.add(Expr::Cast(
-            Cast::new(
-                Box::new(months_arg),
-                DataType::Interval(IntervalUnit::YearMonth),
-            ),
-        ))))
+        let interval = months_arg
+            .cast_to(&DataType::Interval(IntervalUnit::YearMonth), info.schema())?;
+        Ok(ExprSimplifyResult::Simplified(date_arg.add(interval)))
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
