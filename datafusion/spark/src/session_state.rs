@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::SessionStateBuilder;
 
 use crate::planner::SparkFunctionPlanner;
 use crate::{
@@ -30,6 +30,21 @@ use crate::{
 ///
 /// This trait provides a convenient way to register all Apache Spark-compatible
 /// functions and planners with a DataFusion session.
+///
+/// # Example
+///
+/// ```rust
+/// use datafusion::execution::SessionStateBuilder;
+/// use datafusion_spark::SessionStateBuilderSpark;
+///
+/// // Create a SessionState with Apache Spark features enabled
+/// // note: the order matters here, `with_spark_features` should be
+/// // called after `with_default_features` to overwrite any existing functions
+/// let state = SessionStateBuilder::new()
+///     .with_default_features()
+///     .with_spark_features()
+///     .build();
+/// ```
 pub trait SessionStateBuilderSpark {
     /// Adds all expr_planners, scalar, aggregate, window and table functions
     /// compatible with Apache Spark.

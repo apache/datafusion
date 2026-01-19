@@ -106,19 +106,8 @@
 //! datafusion-spark = { version = "X", features = ["core"] }
 //! ```
 //!
-//! Then use the extension trait:
-//! ```rust
-//! use datafusion_core::execution::SessionStateBuilder;
-//! use datafusion_spark::SessionStateBuilderSpark;
-//!
-//! // Create a SessionState with Apache Spark features enabled
-//! // note: the order matters here, `with_spark_features` should be
-//! // called after `with_default_features` to overwrite any existing functions
-//! let state = SessionStateBuilder::new()
-//!     .with_default_features()
-//!     .with_spark_features()
-//!     .build();
-//! ```
+//! Then use the extension trait - see [`SessionStateBuilderSpark::with_spark_features`]
+//! for an example.
 
 pub mod function;
 pub mod planner;
