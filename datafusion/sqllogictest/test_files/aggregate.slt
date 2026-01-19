@@ -562,6 +562,58 @@ from data
 ----
 1 0.666666666667
 
+# covariance_decimal_1
+statement ok
+create table t_covar_decimal (c1 decimal(10,2), c2 decimal(10,2)) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(c1, c2), arrow_typeof(covar_pop(c1, c2)) from t_covar_decimal;
+----
+0.666666666667 Float64
+
+query RT
+select covar_samp(c1, c2), arrow_typeof(covar_samp(c1, c2)) from t_covar_decimal;
+----
+1 Float64
+
+statement ok
+drop table t_covar_decimal;
+
+# covariance_decimal_with_nulls
+statement ok
+create table t_covar_decimal_nulls (f decimal(10,2), b decimal(10,2)) as values
+  (1,       4),
+  (null,   99),
+  (2,       5),
+  (98,   null),
+  (3,       6),
+  (null, null);
+
+query RR
+select covar_samp(f, b), covar_pop(f, b) from t_covar_decimal_nulls;
+----
+1 0.666666666667
+
+statement ok
+drop table t_covar_decimal_nulls;
+
+# covariance_mixed_decimal_float
+statement ok
+create table t_covar_mixed (x decimal(10,2), y double) as values (1, 4), (2, 5), (3, 6);
+
+query RT
+select covar_pop(x, y), arrow_typeof(covar_pop(x, y)) from t_covar_mixed;
+----
+0.666666666667 Float64
+
+query RT
+select covar_samp(x, y), arrow_typeof(covar_samp(x, y)) from t_covar_mixed;
+----
+1 Float64
+
+statement ok
+drop table t_covar_mixed;
+
 # csv_query_correlation
 query R
 SELECT corr(c2, c12) FROM aggregate_test_100

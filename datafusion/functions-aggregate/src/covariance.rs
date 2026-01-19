@@ -29,7 +29,6 @@ use datafusion_common::{
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
     utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
@@ -94,7 +93,7 @@ impl CovarianceSample {
     pub fn new() -> Self {
         Self {
             aliases: vec![String::from("covar")],
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::numeric(2, Volatility::Immutable),
         }
     }
 }
@@ -188,7 +187,7 @@ impl Default for CovariancePopulation {
 impl CovariancePopulation {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::numeric(2, Volatility::Immutable),
         }
     }
 }
