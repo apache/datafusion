@@ -203,11 +203,11 @@ impl PhysicalExtensionCodec for CachingCodec {
 impl PhysicalProtoConverterExtension for CachingCodec {
     fn proto_to_execution_plan(
         &self,
-        _ctx: &TaskContext,
-        _extension_codec: &dyn PhysicalExtensionCodec,
-        _proto: &PhysicalPlanNode,
+        ctx: &TaskContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
+        proto: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        todo!()
+        proto.try_into_physical_plan(ctx, extension_codec, self)
     }
 
     fn execution_plan_to_proto(
