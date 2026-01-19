@@ -28,9 +28,64 @@
 
 //! An [Avro](https://avro.apache.org/) based [`FileSource`](datafusion_datasource::file::FileSource) implementation and related functionality.
 
-pub mod avro_to_arrow;
 pub mod file_format;
 pub mod source;
 
-pub use apache_avro;
+use arrow::datatypes::Schema;
+pub use arrow_avro;
+use arrow_avro::reader::ReaderBuilder;
 pub use file_format::*;
+use std::io::{BufReader, Read};
+
+/// Read Avro schema given a reader
+pub fn read_avro_schema_from_reader<R: Read>(
+    reader: &mut R,
+) -> datafusion_common::Result<Schema> {
+    let avro_reader = ReaderBuilder::new().build(BufReader::new(reader))?;
+    Ok(avro_reader.schema().as_ref().clone())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::Result as DFResult;
+    use datafusion_common::test_util::arrow_test_data;
+    use std::fs::File;
+
+    fn avro_test_file(name: &str) -> String {
+        format!("{}/avro/{name}", arrow_test_data())
+    }
+
+    #[test]
+    fn test_read_avro_schema_from_reader() -> DFResult<()> {
+        let path = avro_test_file("alltypes_dictionary.avro");
+        let mut file = File::open(&path)?;
+        let file_schema = read_avro_schema_from_reader(&mut file)?;
+
+        let expected_fields = vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("bool_col", DataType::Boolean, true),
+            Field::new("tinyint_col", DataType::Int32, true),
+            Field::new("smallint_col", DataType::Int32, true),
+            Field::new("int_col", DataType::Int32, true),
+            Field::new("bigint_col", DataType::Int64, true),
+            Field::new("float_col", DataType::Float32, true),
+            Field::new("double_col", DataType::Float64, true),
+            Field::new("date_string_col", DataType::Binary, true),
+            Field::new("string_col", DataType::Binary, true),
+            Field::new(
+                "timestamp_col",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                true,
+            ),
+        ];
+
+        assert_eq!(file_schema.fields.len(), expected_fields.len());
+        for (i, field) in file_schema.fields.iter().enumerate() {
+            assert_eq!(field.as_ref(), &expected_fields[i]);
+        }
+
+        Ok(())
+    }
+}

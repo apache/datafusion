@@ -283,7 +283,7 @@ query TT
 EXPLAIN SELECT * FROM avro_table
 ----
 logical_plan TableScan: avro_table projection=[f1, f2, f3]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/avro/simple_enum.avro]]}, projection=[f1, f2, f3], file_type=avro
+physical_plan DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/testing/data/avro/simple_enum.avro:0..103], [WORKSPACE_ROOT/testing/data/avro/simple_enum.avro:103..206], [WORKSPACE_ROOT/testing/data/avro/simple_enum.avro:206..309], [WORKSPACE_ROOT/testing/data/avro/simple_enum.avro:309..411]]}, projection=[f1, f2, f3], file_type=avro
 
 # Cleanup
 statement ok
