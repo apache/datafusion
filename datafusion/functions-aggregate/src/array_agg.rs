@@ -32,7 +32,9 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
-use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
+use datafusion_common::{
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, not_impl_err,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -104,27 +106,22 @@ impl AggregateUDFImpl for ArrayAgg {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
-            true,
-        ))))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because return_field is implemented")
     }
 
     fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
-        // Preserve the nullability of the input field in the list's inner element
-        // If the input is non-nullable, elements in the list are non-nullable
-        // If the input is nullable, elements in the list are nullable
-        // The list itself is always nullable (returns NULL for empty results)
+        // Outer field is always nullable in case of empty groups
+        // Inner list field nullability depends on input field
         let input_field = &arg_fields[0];
         let list_field = Field::new_list_field(
             input_field.data_type().clone(),
-            input_field.is_nullable(), // preserve input field's nullability for elements
+            input_field.is_nullable(),
         );
         Ok(Arc::new(Field::new(
             self.name(),
             DataType::List(Arc::new(list_field)),
-            true, // list itself is always nullable (NULL for no rows)
+            true,
         )))
     }
 

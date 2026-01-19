@@ -137,18 +137,10 @@ impl ScalarUDFImpl for ArraySort {
         match &arg_types[0] {
             DataType::Null => Ok(DataType::Null),
             DataType::List(field) => {
-                // Preserve the inner field's nullability from the input
-                Ok(DataType::new_list(
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                ))
+                Ok(DataType::new_list(field.data_type().clone(), true))
             }
             DataType::LargeList(field) => {
-                // Preserve the inner field's nullability from the input
-                Ok(DataType::new_large_list(
-                    field.data_type().clone(),
-                    field.is_nullable(),
-                ))
+                Ok(DataType::new_large_list(field.data_type().clone(), true))
             }
             arg_type => {
                 plan_err!("{} does not support type {arg_type}", self.name())
