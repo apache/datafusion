@@ -18,10 +18,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray};
+use arrow::array::AsArray;
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
@@ -29,8 +30,6 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_macros::user_doc;
-
-use crate::utils::make_scalar_function;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -98,66 +97,55 @@ impl ScalarUDFImpl for SignumFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let arg = take_function_args(self.name(), args.args)?;
+        let return_type = args.return_type().clone();
+        let [arg] = take_function_args(self.name(), args.args)?;
 
-        // Scalar fast path for float types - avoid array conversion overhead
-        if let ColumnarValue::Scalar(scalar) = arg {
-            if scalar.is_null() {
-                return ColumnarValue::Scalar(ScalarValue::Null)
-                    .cast_to(args.return_type(), None);
-            }
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return ColumnarValue::Scalar(ScalarValue::Null)
+                        .cast_to(&return_type, None);
+                }
 
-            match scalar {
-                ScalarValue::Float64(Some(v)) => {
-                    let result = if *v == 0.0 { 0.0 } else { v.signum() };
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))));
-                }
-                ScalarValue::Float32(Some(v)) => {
-                    let result = if *v == 0.0 { 0.0 } else { v.signum() };
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))));
-                }
-                _ => {
-                    return internal_err!(
-                        "Unexpected scalar type for signum: {:?}",
-                        scalar.data_type()
-                    );
+                match scalar {
+                    ScalarValue::Float64(Some(v)) => {
+                        let result = if v == 0.0 { 0.0 } else { v.signum() };
+                        Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(result))))
+                    }
+                    ScalarValue::Float32(Some(v)) => {
+                        let result = if v == 0.0 { 0.0 } else { v.signum() };
+                        Ok(ColumnarValue::Scalar(ScalarValue::Float32(Some(result))))
+                    }
+                    _ => {
+                        internal_err!(
+                            "Unexpected scalar type for signum: {:?}",
+                            scalar.data_type()
+                        )
+                    }
                 }
             }
+            ColumnarValue::Array(array) => match array.data_type() {
+                Float64 => Ok(ColumnarValue::Array(Arc::new(
+                    array.as_primitive::<Float64Type>().unary::<_, Float64Type>(
+                        |x: f64| {
+                            if x == 0.0 { 0.0 } else { x.signum() }
+                        },
+                    ),
+                ))),
+                Float32 => Ok(ColumnarValue::Array(Arc::new(
+                    array.as_primitive::<Float32Type>().unary::<_, Float32Type>(
+                        |x: f32| {
+                            if x == 0.0 { 0.0 } else { x.signum() }
+                        },
+                    ),
+                ))),
+                other => exec_err!("Unsupported data type {other:?} for function signum"),
+            },
         }
-
-        // Array path
-        make_scalar_function(signum, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// signum SQL function
-fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        Float64 => Ok(Arc::new(
-            args[0]
-                .as_primitive::<Float64Type>()
-                .unary::<_, Float64Type>(
-                    |x: f64| {
-                        if x == 0_f64 { 0_f64 } else { x.signum() }
-                    },
-                ),
-        ) as ArrayRef),
-
-        Float32 => Ok(Arc::new(
-            args[0]
-                .as_primitive::<Float32Type>()
-                .unary::<_, Float32Type>(
-                    |x: f32| {
-                        if x == 0_f32 { 0_f32 } else { x.signum() }
-                    },
-                ),
-        ) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function signum"),
     }
 }
 
