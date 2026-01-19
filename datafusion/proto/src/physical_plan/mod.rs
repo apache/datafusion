@@ -1469,7 +1469,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &union.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, codec, proto_converter)?);
+            inputs.push(proto_converter.proto_to_execution_plan(ctx, codec, input)?);
         }
         UnionExec::try_new(inputs)
     }
@@ -1484,7 +1484,7 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
         for input in &interleave.inputs {
-            inputs.push(input.try_into_physical_plan(ctx, codec, proto_converter)?);
+            inputs.push(proto_converter.proto_to_execution_plan(ctx, codec, input)?);
         }
         Ok(Arc::new(InterleaveExec::try_new(inputs)?))
     }
@@ -1645,7 +1645,7 @@ impl protobuf::PhysicalPlanNode {
         let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
             .inputs
             .iter()
-            .map(|i| i.try_into_physical_plan(ctx, codec, proto_converter))
+            .map(|i| proto_converter.proto_to_execution_plan(ctx, codec, i))
             .collect::<Result<_>>()?;
 
         let extension_node = codec.try_decode(extension.node.as_slice(), &inputs, ctx)?;
@@ -2940,11 +2940,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
-            exec.input().to_owned(),
-            codec,
-            proto_converter,
-        )?;
+        let input = proto_converter.execution_plan_to_proto(exec.input(), codec)?;
         let expr = exec
             .expr()
             .iter()
@@ -3580,6 +3576,9 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
     }
 }
 
+/// Controls the conversion of physical plans and expressions to and from their
+/// Protobuf variants. Using this trait, users can perform optimizations on the
+/// conversion process or collect performance metrics.
 pub trait PhysicalProtoConverterExtension {
     fn proto_to_execution_plan(
         &self,
@@ -3773,7 +3772,7 @@ fn into_physical_plan(
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(field) = node {
-        field.try_into_physical_plan(ctx, codec, proto_converter)
+        proto_converter.proto_to_execution_plan(ctx, codec, field)
     } else {
         Err(proto_error("Missing required field in protobuf"))
     }
