@@ -164,7 +164,7 @@ mod test {
     fn test_schema() -> DFSchemaRef {
         Arc::new(
             DFSchema::from_unqualified_fields(
-                vec![Field::new("x", DataType::Int32, false)].into(),
+                vec![Field::new("x", DataType::Int32, true)].into(),
                 Default::default(),
             )
             .unwrap(),
