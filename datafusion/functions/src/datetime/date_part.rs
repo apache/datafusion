@@ -61,6 +61,7 @@ use datafusion_macros::user_doc;
         description = r#"Part of the date to return. The following date parts are supported:
 
     - year
+    - isoyear (ISO 8601 week-numbering year)
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
     - week (week of the year)
@@ -151,6 +152,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+        let nullable = args.arg_fields[1].is_nullable();
 
         field
             .and_then(|sv| {
@@ -159,9 +161,9 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            Field::new(self.name(), DataType::Float64, true)
+                            Field::new(self.name(), DataType::Float64, nullable)
                         } else {
-                            Field::new(self.name(), DataType::Int32, true)
+                            Field::new(self.name(), DataType::Int32, nullable)
                         }
                     })
             })
@@ -218,6 +220,7 @@ impl ScalarUDFImpl for DatePartFunc {
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
+                "isoyear" => date_part(array.as_ref(), DatePart::YearISO)?,
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,

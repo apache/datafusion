@@ -23,6 +23,15 @@ use datafusion_expr::planner::{ExprPlanner, PlannerResult};
 pub struct SparkFunctionPlanner;
 
 impl ExprPlanner for SparkFunctionPlanner {
+    fn plan_extract(
+        &self,
+        args: Vec<Expr>,
+    ) -> datafusion_common::Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+            ScalarFunction::new_udf(crate::function::datetime::date_part(), args),
+        )))
+    }
+
     fn plan_substring(
         &self,
         args: Vec<Expr>,

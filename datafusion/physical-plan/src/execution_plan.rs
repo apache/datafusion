@@ -709,6 +709,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         Ok(SortOrderPushdownResult::Unsupported)
     }
+
+    /// Returns a variant of this `ExecutionPlan` that is aware of order-sensitivity.
+    ///
+    /// This is used to signal to data sources that the output ordering must be
+    /// preserved, even if it might be more efficient to ignore it (e.g. by
+    /// skipping some row groups in Parquet).
+    ///
+    fn with_preserve_order(
+        &self,
+        _preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        None
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
