@@ -107,7 +107,7 @@
 //! ```
 //!
 //! Then use the extension trait:
-//! ```ignore
+//! ```rust
 //! use datafusion_core::execution::SessionStateBuilder;
 //! use datafusion_spark::SessionStateBuilderSpark;
 //!
