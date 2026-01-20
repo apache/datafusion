@@ -330,7 +330,7 @@ mod test {
     fn test_preimage_null_literal_no_rewrite() {
         // NULL literal RHS should not be rewritten.
         let schema = test_schema();
-        let expr = preimage_udf_expr().eq(lit(ScalarValue::Int32(None)));
+        let expr = is_distinct_from(preimage_udf_expr(), lit(ScalarValue::Int32(None)));
         let expected = expr.clone();
 
         assert_eq!(optimize_test(expr, &schema), expected);
