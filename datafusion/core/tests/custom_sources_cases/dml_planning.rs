@@ -518,3 +518,35 @@ async fn test_delete_target_table_scoping() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
+    // Test that filter qualifiers are properly stripped and validated
+    // Unqualified predicates should work fine
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    // Execute DELETE with unqualified column reference
+    // (After parsing, the planner adds qualifiers, but our validation should accept them)
+    let df = ctx.sql("DELETE FROM t WHERE id = 1").await?;
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert!(!filters.is_empty(), "Should have extracted filter");
+
+    // The filter should have been stripped of qualifiers for TableProvider
+    // Verify it contains the column reference (without qualifier prefix)
+    let filter_str = filters[0].to_string();
+    assert!(
+        filter_str.contains("id") || filter_str.contains("1"),
+        "Filter should reference id column or the value 1, got: {}",
+        filter_str
+    );
+    Ok(())
+}

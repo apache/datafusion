@@ -1973,20 +1973,57 @@ fn extract_dml_filters(
         Ok(TreeNodeRecursion::Continue)
     })?;
 
-    // Strip table qualifiers from column references and deduplicate.
-    // Deduplication is necessary because filters may appear in both Filter nodes
-    // and TableScan.filters when the optimizer pushes some predicates down.
-    // We deduplicate by (unqualified) expression to avoid passing the same filter twice.
+    // Validate that all filters reference only the target table, then strip qualifiers
+    // and deduplicate. This ensures:
+    // 1. No cross-table predicate contamination (safety check)
+    // 2. Qualifiers stripped for TableProvider compatibility
+    // 3. Duplicates removed (from Filter nodes + TableScan.filters)
     let mut seen_filters = HashSet::new();
     let deduped = filters
         .into_iter()
-        .map(strip_column_qualifiers)
+        .map(|f| validate_and_strip_qualifiers(&f, target_table_name))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|f| seen_filters.insert(f.clone()))
         .collect();
 
     Ok(deduped)
+}
+
+/// Validate that a filter expression only references columns from the target table,
+/// then strip table qualifiers from column references.
+///
+/// This ensures that DML filters don't inadvertently reference columns from other
+/// tables (important for UPDATE...FROM scenarios where multiple tables may be involved).
+///
+/// # Arguments
+/// * `expr` - The filter expression to validate
+/// * `target_table_name` - The name of the target table for the DML operation
+///
+/// # Returns
+/// * `Ok(expr_with_qualifiers_stripped)` if all columns belong to the target table or are unqualified
+/// * `Err(plan_err)` if any column references a different table
+fn validate_and_strip_qualifiers(expr: &Expr, target_table_name: &str) -> Result<Expr> {
+    // First, validate that all column references belong to the target table
+    let col_refs = expr.column_refs();
+
+    for col_ref in col_refs {
+        if let Some(table_qualifier) = &col_ref.relation {
+            // Column is qualified; verify it matches the target table
+            if table_qualifier.to_string() != target_table_name {
+                return plan_err!(
+                    "DELETE/UPDATE filter references column from non-target table: {}.{}. \
+                     Only columns from table '{}' are allowed in DML filters.",
+                    table_qualifier,
+                    col_ref.name,
+                    target_table_name
+                );
+            }
+        }
+    }
+
+    // All columns validated; now strip qualifiers for passing to TableProvider
+    strip_column_qualifiers(expr.clone())
 }
 
 /// Strip table qualifiers from column references in an expression.
