@@ -23,7 +23,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 ///
 /// Specifically it rewrites expressions of the form `<expr> OP x` (e.g. `<expr> =
 /// x`) where `<expr>` is known to have a pre-image (aka the entire single
-/// range for which it is valid)
+/// range for which it is valid) and `x` is not `NULL`
 ///
 /// This rewrite is described in the [ClickHouse Paper] and is particularly
 /// useful for simplifying expressions `date_part` or equivalent functions. The
