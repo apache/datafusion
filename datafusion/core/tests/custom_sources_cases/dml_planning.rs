@@ -122,6 +122,7 @@ struct CaptureUpdateProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
     received_assignments: Arc<Mutex<Option<Vec<(String, Expr)>>>>,
+    filter_pushdown: TableProviderFilterPushDown,
 }
 
 impl CaptureUpdateProvider {
@@ -130,6 +131,19 @@ impl CaptureUpdateProvider {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
             received_assignments: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+        }
+    }
+
+    fn new_with_filter_pushdown(
+        schema: SchemaRef,
+        filter_pushdown: TableProviderFilterPushDown,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            received_assignments: Arc::new(Mutex::new(None)),
+            filter_pushdown,
         }
     }
 
@@ -185,6 +199,13 @@ impl TableProvider for CaptureUpdateProvider {
         Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
             Field::new("count", DataType::UInt64, false),
         ])))))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> Result<Vec<TableProviderFilterPushDown>> {
+        Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
 }
 
@@ -358,6 +379,41 @@ async fn test_update_assignments() -> Result<()> {
         .captured_filters()
         .expect("filters should be captured");
     assert!(!filters.is_empty(), "should have filter for WHERE clause");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx.sql("UPDATE t SET value = 100 WHERE id = 1").await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    // Verify that the optimizer pushed down the filter into TableScan
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    // Execute the UPDATE and verify filters were extracted and passed to update()
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 1);
+    assert!(filters[0].to_string().contains("id"));
     Ok(())
 }
 
