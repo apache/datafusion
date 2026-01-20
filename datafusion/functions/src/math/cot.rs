@@ -156,6 +156,7 @@ mod test {
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -239,6 +240,124 @@ mod test {
             ColumnarValue::Scalar(_) => {
                 panic!("Expected an array value")
             }
+        }
+    }
+
+    #[test]
+    fn test_cot_scalar_f64() {
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0)))],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, false).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("cot scalar should succeed");
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
+                // cot(1.0) = 1/tan(1.0) ≈ 0.6420926159343306
+                let expected = 1.0_f64 / 1.0_f64.tan();
+                assert!((v - expected).abs() < 1e-12);
+            }
+            _ => panic!("Expected Float64 scalar"),
+        }
+    }
+
+    #[test]
+    fn test_cot_scalar_f32() {
+        let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0)))],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float32, false).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("cot scalar should succeed");
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float32(Some(v))) => {
+                let expected = 1.0_f32 / 1.0_f32.tan();
+                assert!((v - expected).abs() < 1e-6);
+            }
+            _ => panic!("Expected Float32 scalar"),
+        }
+    }
+
+    #[test]
+    fn test_cot_scalar_null() {
+        let arg_fields = vec![Field::new("a", DataType::Float64, true).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Float64(None))],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("cot null should succeed");
+
+        match result {
+            ColumnarValue::Scalar(scalar) => {
+                assert!(scalar.is_null());
+            }
+            _ => panic!("Expected scalar result"),
+        }
+    }
+
+    #[test]
+    fn test_cot_scalar_zero() {
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(0.0)))],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, false).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("cot zero should succeed");
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
+                // cot(0) = 1/tan(0) = infinity
+                assert!(v.is_infinite());
+            }
+            _ => panic!("Expected Float64 scalar"),
+        }
+    }
+
+    #[test]
+    fn test_cot_scalar_pi() {
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(
+                std::f64::consts::PI,
+            )))],
+            arg_fields,
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Float64, false).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = CotFunc::new()
+            .invoke_with_args(args)
+            .expect("cot pi should succeed");
+
+        match result {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
+                // cot(PI) = 1/tan(PI) - very large negative number due to floating point
+                let expected = 1.0_f64 / std::f64::consts::PI.tan();
+                assert!((v - expected).abs() < 1e-6);
+            }
+            _ => panic!("Expected Float64 scalar"),
         }
     }
 }
