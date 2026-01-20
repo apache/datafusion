@@ -29,8 +29,8 @@ use datafusion::logical_expr::{
     Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
 };
 use datafusion_catalog::Session;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::TableReference;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -552,8 +552,8 @@ async fn test_delete_target_table_scoping() -> Result<()> {
         Arc::clone(&target_provider) as Arc<dyn TableProvider>,
     )?;
 
-    // For now, we test single-table DELETE (UPDATE...FROM is not yet supported)
-    // But this validates that the scoping logic is correct
+    // For now, we test single-table DELETE
+    // and validate that the scoping logic is correct
     let df = ctx.sql("DELETE FROM target_t WHERE id > 5").await?;
     df.collect().await?;
 
@@ -579,10 +579,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
         TableProviderFilterPushDown::Exact,
     ));
     let ctx = SessionContext::new();
-    ctx.register_table(
-        "t1",
-        Arc::clone(&target_provider) as Arc<dyn TableProvider>,
-    )?;
+    ctx.register_table("t1", Arc::clone(&target_provider) as Arc<dyn TableProvider>)?;
 
     let source_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
@@ -644,9 +641,20 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         .expect("filters should be captured");
     assert!(!filters.is_empty(), "Should have extracted filter");
 
-    // The filter should have been stripped of qualifiers for TableProvider
-    // Verify it contains the column reference (without qualifier prefix)
+    // Verify qualifiers are stripped: check that Column expressions have no qualifier
+    let has_qualified_column = filters[0]
+        .exists(|expr| Ok(matches!(expr, Expr::Column(col) if col.relation.is_some())))?;
+    assert!(
+        !has_qualified_column,
+        "Filter should have unqualified columns after stripping"
+    );
+
+    // Also verify the string representation doesn't contain table qualifiers
     let filter_str = filters[0].to_string();
+    assert!(
+        !filter_str.contains("t.id"),
+        "Filter should not contain qualified column reference, got: {filter_str}"
+    );
     assert!(
         filter_str.contains("id") || filter_str.contains("1"),
         "Filter should reference id column or the value 1, got: {filter_str}"
