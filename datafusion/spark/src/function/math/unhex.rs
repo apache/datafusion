@@ -90,6 +90,7 @@ fn hex_nibble(c: u8) -> Option<u8> {
         _ => None,
     }
 }
+
 fn unhex_common(bytes: &[u8], out: &mut Vec<u8>) -> bool {
     if bytes.is_empty() {
         return true;
@@ -255,12 +256,9 @@ mod tests {
 
             match result {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(actual))) => {
-                    assert_eq!(
-                        actual, expected,
-                        "Failed for odd-length input: {input}",
-                    );
+                    assert_eq!(actual, expected, "Failed for odd-length input: {input}",);
                 }
-                _ => panic!("Unexpected result type for odd-length input: {input}", ),
+                _ => panic!("Unexpected result type for odd-length input: {input}",),
             }
         }
     }
