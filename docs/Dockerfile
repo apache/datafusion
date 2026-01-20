@@ -15,14 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:1.92.0-bookworm
+FROM rust:bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    python3-venv \
     graphviz \
     make \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 RUN cargo install cargo-depgraph --version ^1.6 --locked
@@ -32,4 +32,4 @@ WORKDIR /datafusion/docs
 COPY requirements.txt .
 RUN python3 -m pip install --break-system-packages -r requirements.txt
 
-CMD ["make", "html"]
+CMD ["sh", "-c", "dos2unix build.sh scripts/*.sh 2>/dev/null || true; bash build.sh"]
