@@ -7225,15 +7225,21 @@ impl serde::Serialize for ScalarRunEndEncodedValue {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
-        if self.run_ends_type.is_some() {
+        if self.run_ends_field.is_some() {
+            len += 1;
+        }
+        if self.values_field.is_some() {
             len += 1;
         }
         if self.value.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ScalarRunEndEncodedValue", len)?;
-        if let Some(v) = self.run_ends_type.as_ref() {
-            struct_ser.serialize_field("runEndsType", v)?;
+        if let Some(v) = self.run_ends_field.as_ref() {
+            struct_ser.serialize_field("runEndsField", v)?;
+        }
+        if let Some(v) = self.values_field.as_ref() {
+            struct_ser.serialize_field("valuesField", v)?;
         }
         if let Some(v) = self.value.as_ref() {
             struct_ser.serialize_field("value", v)?;
@@ -7248,14 +7254,17 @@ impl<'de> serde::Deserialize<'de> for ScalarRunEndEncodedValue {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
-            "run_ends_type",
-            "runEndsType",
+            "run_ends_field",
+            "runEndsField",
+            "values_field",
+            "valuesField",
             "value",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            RunEndsType,
+            RunEndsField,
+            ValuesField,
             Value,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -7278,7 +7287,8 @@ impl<'de> serde::Deserialize<'de> for ScalarRunEndEncodedValue {
                         E: serde::de::Error,
                     {
                         match value {
-                            "runEndsType" | "run_ends_type" => Ok(GeneratedField::RunEndsType),
+                            "runEndsField" | "run_ends_field" => Ok(GeneratedField::RunEndsField),
+                            "valuesField" | "values_field" => Ok(GeneratedField::ValuesField),
                             "value" => Ok(GeneratedField::Value),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -7299,15 +7309,22 @@ impl<'de> serde::Deserialize<'de> for ScalarRunEndEncodedValue {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                let mut run_ends_type__ = None;
+                let mut run_ends_field__ = None;
+                let mut values_field__ = None;
                 let mut value__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::RunEndsType => {
-                            if run_ends_type__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("runEndsType"));
+                        GeneratedField::RunEndsField => {
+                            if run_ends_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("runEndsField"));
                             }
-                            run_ends_type__ = map_.next_value()?;
+                            run_ends_field__ = map_.next_value()?;
+                        }
+                        GeneratedField::ValuesField => {
+                            if values_field__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("valuesField"));
+                            }
+                            values_field__ = map_.next_value()?;
                         }
                         GeneratedField::Value => {
                             if value__.is_some() {
@@ -7318,7 +7335,8 @@ impl<'de> serde::Deserialize<'de> for ScalarRunEndEncodedValue {
                     }
                 }
                 Ok(ScalarRunEndEncodedValue {
-                    run_ends_type: run_ends_type__,
+                    run_ends_field: run_ends_field__,
+                    values_field: values_field__,
                     value: value__,
                 })
             }

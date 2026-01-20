@@ -242,8 +242,9 @@ message ScalarDictionaryValue {
 }
 
 message ScalarRunEndEncodedValue {
-  ArrowType run_ends_type = 1;
-  ScalarValue value = 2;
+  Field run_ends_field = 1;
+  Field values_field = 2;
+  ScalarValue value = 3;
 }
 
 message IntervalDayTimeValue {

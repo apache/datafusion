@@ -1441,7 +1441,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
-            ScalarValue::RunEndEncoded(_, v) => self.scalar_to_sql(v),
+            ScalarValue::RunEndEncoded(_, _, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -2320,7 +2320,8 @@ mod tests {
             (
                 Expr::Literal(
                     ScalarValue::RunEndEncoded(
-                        Box::new(DataType::Int32),
+                        Field::new("run_ends", DataType::Int32, false).into(),
+                        Field::new("values", DataType::Utf8, true).into(),
                         Box::new(ScalarValue::Utf8(Some("foo".into()))),
                     ),
                     None,

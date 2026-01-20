@@ -56,8 +56,8 @@ use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::{
-    Array, ArrayData, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray,
-    BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
+    Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
+    AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
     Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
@@ -79,7 +79,7 @@ use arrow::compute::kernels::numeric::{
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType, Date32Type,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, Field,
-    Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
+    FieldRef, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTime,
     IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType, RunEndIndexType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type,
@@ -429,8 +429,8 @@ pub enum ScalarValue {
     Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
-    /// RunEndEncoded type: run ends type and value
-    RunEndEncoded(Box<DataType>, Box<ScalarValue>),
+    /// (run-ends field, value field, value)
+    RunEndEncoded(FieldRef, FieldRef, Box<ScalarValue>),
 }
 
 impl Hash for Fl<f16> {
@@ -560,8 +560,10 @@ impl PartialEq for ScalarValue {
             (Union(_, _, _), _) => false,
             (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
             (Dictionary(_, _), _) => false,
-            (RunEndEncoded(r1, v1), RunEndEncoded(r2, v2)) => r1.eq(r2) && v1.eq(v2),
-            (RunEndEncoded(_, _), _) => false,
+            (RunEndEncoded(rf1, vf1, v1), RunEndEncoded(rf2, vf2, v2)) => {
+                rf1.eq(rf2) && vf1.eq(vf2) && v1.eq(v2)
+            }
+            (RunEndEncoded(_, _, _), _) => false,
             (Null, Null) => true,
             (Null, _) => false,
         }
@@ -727,11 +729,15 @@ impl PartialOrd for ScalarValue {
                 if k1 == k2 { v1.partial_cmp(v2) } else { None }
             }
             (Dictionary(_, _), _) => None,
-            (RunEndEncoded(k1, v1), RunEndEncoded(k2, v2)) => {
-                // Don't compare if the run ends types don't match (it is effectively a different datatype)
-                if k1 == k2 { v1.partial_cmp(v2) } else { None }
+            (RunEndEncoded(rf1, vf1, v1), RunEndEncoded(rf2, vf2, v2)) => {
+                // Don't compare if the run ends fields don't match (it is effectively a different datatype)
+                if rf1 == rf2 && vf1 == vf2 {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
             }
-            (RunEndEncoded(_, _), _) => None,
+            (RunEndEncoded(_, _, _), _) => None,
             (Null, Null) => Some(Ordering::Equal),
             (Null, _) => None,
         }
@@ -975,8 +981,9 @@ impl Hash for ScalarValue {
                 k.hash(state);
                 v.hash(state);
             }
-            RunEndEncoded(k, v) => {
-                k.hash(state);
+            RunEndEncoded(rf, vf, v) => {
+                rf.hash(state);
+                vf.hash(state);
                 v.hash(state);
             }
             // stable hash for Null value
@@ -1259,7 +1266,8 @@ impl ScalarValue {
             ),
             DataType::RunEndEncoded(run_ends_field, value_field) => {
                 ScalarValue::RunEndEncoded(
-                    Box::new(run_ends_field.data_type().clone()),
+                    Arc::clone(run_ends_field),
+                    Arc::clone(value_field),
                     Box::new(value_field.data_type().try_into()?),
                 )
             }
@@ -1665,7 +1673,8 @@ impl ScalarValue {
 
             DataType::RunEndEncoded(run_ends_field, value_field) => {
                 Ok(ScalarValue::RunEndEncoded(
-                    Box::new(run_ends_field.data_type().clone()),
+                    Arc::clone(run_ends_field),
+                    Arc::clone(value_field),
                     Box::new(ScalarValue::new_default(value_field.data_type())?),
                 ))
             }
@@ -1980,10 +1989,12 @@ impl ScalarValue {
             ScalarValue::Dictionary(k, v) => {
                 DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
-            ScalarValue::RunEndEncoded(run_ends_type, value) => DataType::RunEndEncoded(
-                Field::new("run_ends", *run_ends_type.to_owned(), false).into(),
-                Field::new("values", value.data_type(), true).into(),
-            ),
+            ScalarValue::RunEndEncoded(run_ends_field, value_field, _) => {
+                DataType::RunEndEncoded(
+                    Arc::clone(run_ends_field),
+                    Arc::clone(value_field),
+                )
+            }
             ScalarValue::Null => DataType::Null,
         }
     }
@@ -2262,7 +2273,7 @@ impl ScalarValue {
                 None => true,
             },
             ScalarValue::Dictionary(_, v) => v.is_null(),
-            ScalarValue::RunEndEncoded(_, v) => v.is_null(),
+            ScalarValue::RunEndEncoded(_, _, v) => v.is_null(),
         }
     }
 
@@ -2630,10 +2641,11 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
-            DataType::RunEndEncoded(run_ends_field, _) => {
+            DataType::RunEndEncoded(run_ends_field, value_field) => {
                 fn make_run_array<R: RunEndIndexType>(
                     scalars: impl IntoIterator<Item = ScalarValue>,
-                    run_ends_type: &DataType,
+                    run_ends_field: &FieldRef,
+                    values_field: &FieldRef,
                 ) -> Result<ArrayRef> {
                     let mut scalars = scalars.into_iter();
 
@@ -2641,25 +2653,30 @@ impl ScalarValue {
                     let mut value_scalars = vec![];
 
                     let mut len = R::Native::ONE;
-                    let mut current = if let Some(ScalarValue::RunEndEncoded(_, scalar)) =
-                        scalars.next()
-                    {
-                        *scalar
-                    } else {
-                        // We are guaranteed to have one element of correct
-                        // type because we peeked above
-                        unreachable!()
-                    };
+                    let mut current =
+                        if let Some(ScalarValue::RunEndEncoded(_, _, scalar)) =
+                            scalars.next()
+                        {
+                            *scalar
+                        } else {
+                            // We are guaranteed to have one element of correct
+                            // type because we peeked above
+                            unreachable!()
+                        };
                     for scalar in scalars {
                         let scalar = match scalar {
-                            ScalarValue::RunEndEncoded(inner_run_ends_type, scalar)
-                                if inner_run_ends_type.as_ref() == run_ends_type =>
+                            ScalarValue::RunEndEncoded(
+                                inner_run_ends_field,
+                                inner_value_field,
+                                scalar,
+                            ) if &inner_run_ends_field == run_ends_field
+                                && &inner_value_field == values_field =>
                             {
                                 *scalar
                             }
                             _ => {
                                 return _exec_err!(
-                                    "Expected RunEndEncoded scalar with run-ends type {run_ends_type} but got: {scalar:?}"
+                                    "Expected RunEndEncoded scalar with run-ends field {run_ends_field} but got: {scalar:?}"
                                 );
                             }
                         };
@@ -2673,7 +2690,8 @@ impl ScalarValue {
 
                         len = len.add_checked(R::Native::ONE).map_err(|_| {
                             DataFusionError::Execution(format!(
-                                "Cannot construct RunArray: Overflows run-ends type {run_ends_type}"
+                                "Cannot construct RunArray: Overflows run-ends type {}",
+                                run_ends_field.data_type()
                             ))
                         })?;
                     }
@@ -2684,19 +2702,29 @@ impl ScalarValue {
                     let run_ends = PrimitiveArray::<R>::from_iter_values(run_ends);
                     let values = ScalarValue::iter_to_array(value_scalars)?;
 
-                    Ok(Arc::new(RunArray::try_new(&run_ends, &values)?))
+                    // Using ArrayDataBuilder so we can maintain the fields
+                    let dt = DataType::RunEndEncoded(
+                        Arc::clone(run_ends_field),
+                        Arc::clone(values_field),
+                    );
+                    let builder = ArrayDataBuilder::new(dt)
+                        .len(RunArray::logical_len(&run_ends))
+                        .add_child_data(run_ends.to_data())
+                        .add_child_data(values.to_data());
+                    let run_array = RunArray::<R>::from(builder.build()?);
+
+                    Ok(Arc::new(run_array))
                 }
 
-                let run_ends_type = run_ends_field.data_type();
-                match run_ends_type {
+                match run_ends_field.data_type() {
                     DataType::Int16 => {
-                        make_run_array::<Int16Type>(scalars, run_ends_type)?
+                        make_run_array::<Int16Type>(scalars, run_ends_field, value_field)?
                     }
                     DataType::Int32 => {
-                        make_run_array::<Int32Type>(scalars, run_ends_type)?
+                        make_run_array::<Int32Type>(scalars, run_ends_field, value_field)?
                     }
                     DataType::Int64 => {
-                        make_run_array::<Int64Type>(scalars, run_ends_type)?
+                        make_run_array::<Int64Type>(scalars, run_ends_field, value_field)?
                     }
                     dt => unreachable!("Invalid run-ends type: {dt}"),
                 }
@@ -3305,23 +3333,52 @@ impl ScalarValue {
                     _ => unreachable!("Invalid dictionary keys type: {}", key_type),
                 }
             }
-            ScalarValue::RunEndEncoded(run_ends_type, value) => {
+            ScalarValue::RunEndEncoded(run_ends_field, values_field, value) => {
                 fn make_run_array<R: RunEndIndexType>(
+                    run_ends_field: &Arc<Field>,
+                    values_field: &Arc<Field>,
                     value: &ScalarValue,
                     size: usize,
                 ) -> Result<ArrayRef> {
-                    let size = R::Native::from_usize(size)
+                    let size_native = R::Native::from_usize(size)
                         .ok_or_else(|| DataFusionError::Execution(format!("Cannot construct RunArray of size {size}: Overflows run-ends type {}", R::DATA_TYPE)))?;
                     let values = value.to_array_of_size(1)?;
-                    let run_ends = PrimitiveArray::<R>::new(vec![size].into(), None);
-                    let run_array = RunArray::<R>::try_new(&run_ends, &values)?;
+                    let run_ends =
+                        PrimitiveArray::<R>::new(vec![size_native].into(), None);
+
+                    // Using ArrayDataBuilder so we can maintain the fields
+                    let dt = DataType::RunEndEncoded(
+                        Arc::clone(run_ends_field),
+                        Arc::clone(values_field),
+                    );
+                    let builder = ArrayDataBuilder::new(dt)
+                        .len(size)
+                        .add_child_data(run_ends.to_data())
+                        .add_child_data(values.to_data());
+                    let run_array = RunArray::<R>::from(builder.build()?);
+
                     Ok(Arc::new(run_array))
                 }
-                match run_ends_type.as_ref() {
-                    DataType::Int16 => make_run_array::<Int16Type>(value, size)?,
-                    DataType::Int32 => make_run_array::<Int32Type>(value, size)?,
-                    DataType::Int64 => make_run_array::<Int64Type>(value, size)?,
-                    _ => unreachable!("Invalid run-ends type: {run_ends_type}"),
+                match run_ends_field.data_type() {
+                    DataType::Int16 => make_run_array::<Int16Type>(
+                        run_ends_field,
+                        values_field,
+                        value,
+                        size,
+                    )?,
+                    DataType::Int32 => make_run_array::<Int32Type>(
+                        run_ends_field,
+                        values_field,
+                        value,
+                        size,
+                    )?,
+                    DataType::Int64 => make_run_array::<Int64Type>(
+                        run_ends_field,
+                        values_field,
+                        value,
+                        size,
+                    )?,
+                    dt => unreachable!("Invalid run-ends type: {dt}"),
                 }
             }
             ScalarValue::Null => get_or_create_cached_null_array(size),
@@ -3674,7 +3731,7 @@ impl ScalarValue {
 
                 Self::Dictionary(key_type.clone(), Box::new(value))
             }
-            DataType::RunEndEncoded(run_ends_field, _) => {
+            DataType::RunEndEncoded(run_ends_field, value_field) => {
                 // Explicitly check length here since get_physical_index() doesn't
                 // bound check for us
                 if index > array.len() {
@@ -3691,7 +3748,8 @@ impl ScalarValue {
                     dt => unreachable!("Invalid run-ends type: {dt}")
                 );
                 Self::RunEndEncoded(
-                    Box::new(run_ends_field.data_type().to_owned()),
+                    Arc::clone(run_ends_field),
+                    Arc::clone(value_field),
                     Box::new(scalar),
                 )
             }
@@ -3807,7 +3865,7 @@ impl ScalarValue {
             ScalarValue::LargeUtf8(v) => v,
             ScalarValue::Utf8View(v) => v,
             ScalarValue::Dictionary(_, v) => return v.try_as_str(),
-            ScalarValue::RunEndEncoded(_, v) => return v.try_as_str(),
+            ScalarValue::RunEndEncoded(_, _, v) => return v.try_as_str(),
             _ => return None,
         };
         Some(v.as_ref().map(|v| v.as_str()))
@@ -4136,7 +4194,7 @@ impl ScalarValue {
                     None => v.is_null(),
                 }
             }
-            ScalarValue::RunEndEncoded(run_ends_type, value) => {
+            ScalarValue::RunEndEncoded(run_ends_field, _, value) => {
                 // Explicitly check length here since get_physical_index() doesn't
                 // bound check for us
                 if index > array.len() {
@@ -4145,7 +4203,7 @@ impl ScalarValue {
                         array.len()
                     );
                 }
-                match run_ends_type.as_ref() {
+                match run_ends_field.data_type() {
                     DataType::Int16 => {
                         let array = as_run_array::<Int16Type>(array)?;
                         let index = array.get_physical_index(index);
@@ -4249,10 +4307,11 @@ impl ScalarValue {
                         + (size_of::<Field>() * fields.len())
                         + fields.iter().map(|(_idx, field)| field.size() - size_of_val(field)).sum::<usize>()
                 }
-                ScalarValue::Dictionary(dt, sv) | ScalarValue::RunEndEncoded(dt, sv) => {
+                ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
                     dt.size() + sv.size()
                 }
+                ScalarValue::RunEndEncoded(rf, vf, v) => rf.size() + vf.size() + v.size(),
             }
     }
 
@@ -4368,7 +4427,7 @@ impl ScalarValue {
             ScalarValue::Dictionary(_, value) => {
                 value.compact();
             }
-            ScalarValue::RunEndEncoded(_, value) => {
+            ScalarValue::RunEndEncoded(_, _, value) => {
                 value.compact();
             }
         }
@@ -5002,7 +5061,7 @@ impl fmt::Display for ScalarValue {
                 None => write!(f, "NULL")?,
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
-            ScalarValue::RunEndEncoded(_, v) => write!(f, "{v}")?,
+            ScalarValue::RunEndEncoded(_, _, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
         };
         Ok(())
@@ -5181,7 +5240,9 @@ impl fmt::Debug for ScalarValue {
                 None => write!(f, "Union(NULL)"),
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
-            ScalarValue::RunEndEncoded(k, v) => write!(f, "RunEndEncoded({k:?}, {v:?})"),
+            ScalarValue::RunEndEncoded(rf, vf, v) => {
+                write!(f, "RunEndEncoded({rf:?}, {vf:?}, {v:?})")
+            }
             ScalarValue::Null => write!(f, "NULL"),
         }
     }
@@ -9418,8 +9479,11 @@ mod tests {
         fn run_test<R: RunEndIndexType>() {
             let value = Box::new(ScalarValue::Float32(Some(1.0)));
             let size = 5;
-            let scalar =
-                ScalarValue::RunEndEncoded(Box::new(R::DATA_TYPE), value.clone());
+            let scalar = ScalarValue::RunEndEncoded(
+                Field::new("run_ends", R::DATA_TYPE, false).into(),
+                Field::new("values", DataType::Float32, true).into(),
+                value.clone(),
+            );
             let array = scalar.to_array_of_size(size).unwrap();
             let array = array.as_run::<R>();
             let array = array.downcast::<Float32Array>().unwrap();
@@ -9432,7 +9496,8 @@ mod tests {
         run_test::<Int64Type>();
 
         let scalar = ScalarValue::RunEndEncoded(
-            Box::new(DataType::Int16),
+            Field::new("run_ends", DataType::Int16, false).into(),
+            Field::new("values", DataType::Float32, true).into(),
             Box::new(ScalarValue::Float32(Some(1.0))),
         );
         let err = scalar.to_array_of_size(i16::MAX as usize + 10).unwrap_err();
@@ -9450,13 +9515,15 @@ mod tests {
             Arc::new(RunArray::try_new(&run_ends, &values).unwrap()) as ArrayRef;
 
         let scalar = ScalarValue::RunEndEncoded(
-            Box::new(DataType::Int16),
+            Field::new("run_ends", DataType::Int16, false).into(),
+            Field::new("values", DataType::Float32, true).into(),
             Box::new(ScalarValue::Float32(None)),
         );
         assert!(scalar.eq_array(&run_array, 0).unwrap());
 
         let scalar = ScalarValue::RunEndEncoded(
-            Box::new(DataType::Int16),
+            Field::new("run_ends", DataType::Int16, false).into(),
+            Field::new("values", DataType::Float32, true).into(),
             Box::new(ScalarValue::Float32(Some(1.0))),
         );
         assert!(scalar.eq_array(&run_array, 1).unwrap());
@@ -9464,7 +9531,8 @@ mod tests {
 
         // value types must match
         let scalar = ScalarValue::RunEndEncoded(
-            Box::new(DataType::Int16),
+            Field::new("run_ends", DataType::Int16, false).into(),
+            Field::new("values", DataType::Float64, true).into(),
             Box::new(ScalarValue::Float64(Some(1.0))),
         );
         let err = scalar.eq_array(&run_array, 1).unwrap_err();
@@ -9475,7 +9543,8 @@ mod tests {
 
         // run ends type must match
         let scalar = ScalarValue::RunEndEncoded(
-            Box::new(DataType::Int32),
+            Field::new("run_ends", DataType::Int32, false).into(),
+            Field::new("values", DataType::Float32, true).into(),
             Box::new(ScalarValue::Float32(None)),
         );
         let err = scalar.eq_array(&run_array, 0).unwrap_err();
@@ -9487,30 +9556,37 @@ mod tests {
 
     #[test]
     fn test_iter_to_array_run_end_encoded() {
-        let run_ends_type = Box::new(DataType::Int16);
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int16, false));
+        let values_field = Arc::new(Field::new("values", DataType::Int64, true));
         let scalars = vec![
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(None)),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(2))),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(2))),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(2))),
             ),
         ];
@@ -9526,48 +9602,53 @@ mod tests {
         // inconsistent run-ends type
         let scalars = vec![
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
             ScalarValue::RunEndEncoded(
-                Box::new(DataType::Int64),
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert_eq!(
-            "Execution error: Expected RunEndEncoded scalar with run-ends type Int16 but got: RunEndEncoded(Int64, Int64(1))",
+            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int32 }, Field { name: \"values\", data_type: Int64, nullable: true }, Int64(1))",
             err.to_string()
         );
 
         // inconsistent value type
         let scalars = vec![
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Field::new("values", DataType::Int32, true).into(),
                 Box::new(ScalarValue::Int32(Some(1))),
             ),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert_eq!(
-            "Execution error: Inconsistent types in ScalarValue::iter_to_array. Expected Int64, got Int32(1)",
+            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int16 }, Field { name: \"values\", data_type: Int32, nullable: true }, Int32(1))",
             err.to_string()
         );
 
         // inconsistent scalars type
         let scalars = vec![
             ScalarValue::RunEndEncoded(
-                run_ends_type.clone(),
+                Arc::clone(&run_ends_field),
+                Arc::clone(&values_field),
                 Box::new(ScalarValue::Int64(Some(1))),
             ),
             ScalarValue::Int64(Some(1)),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
         assert_eq!(
-            "Execution error: Expected RunEndEncoded scalar with run-ends type Int16 but got: Int64(1)",
+            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: Int64(1)",
             err.to_string()
         );
     }

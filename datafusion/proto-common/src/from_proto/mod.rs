@@ -592,10 +592,16 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 Self::Dictionary(Box::new(index_type), Box::new(value))
             }
             Value::RunEndEncodedValue(v) => {
-                let run_ends_type: DataType = v
-                    .run_ends_type
+                let run_ends_field: Field = v
+                    .run_ends_field
                     .as_ref()
-                    .ok_or_else(|| Error::required("run_ends_type"))?
+                    .ok_or_else(|| Error::required("run_ends_field"))?
+                    .try_into()?;
+
+                let values_field: Field = v
+                    .values_field
+                    .as_ref()
+                    .ok_or_else(|| Error::required("values_field"))?
                     .try_into()?;
 
                 let value: Self = v
@@ -605,7 +611,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .as_ref()
                     .try_into()?;
 
-                Self::RunEndEncoded(Box::new(run_ends_type), Box::new(value))
+                Self::RunEndEncoded(
+                    run_ends_field.into(),
+                    values_field.into(),
+                    Box::new(value),
+                )
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),

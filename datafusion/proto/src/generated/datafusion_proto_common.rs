@@ -274,8 +274,10 @@ pub struct ScalarDictionaryValue {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarRunEndEncodedValue {
     #[prost(message, optional, tag = "1")]
-    pub run_ends_type: ::core::option::Option<ArrowType>,
-    #[prost(message, optional, boxed, tag = "2")]
+    pub run_ends_field: ::core::option::Option<Field>,
+    #[prost(message, optional, tag = "2")]
+    pub values_field: ::core::option::Option<Field>,
+    #[prost(message, optional, boxed, tag = "3")]
     pub value: ::core::option::Option<::prost::alloc::boxed::Box<ScalarValue>>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

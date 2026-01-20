@@ -690,13 +690,13 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
 
-            ScalarValue::RunEndEncoded(run_ends_type, val) => {
-                let value: protobuf::ScalarValue = val.as_ref().try_into()?;
+            ScalarValue::RunEndEncoded(run_ends_field, values_field, val) => {
                 Ok(protobuf::ScalarValue {
                     value: Some(Value::RunEndEncodedValue(Box::new(
                         protobuf::ScalarRunEndEncodedValue {
-                            run_ends_type: Some(run_ends_type.as_ref().try_into()?),
-                            value: Some(Box::new(value)),
+                            run_ends_field: Some(run_ends_field.as_ref().try_into()?),
+                            values_field: Some(values_field.as_ref().try_into()?),
+                            value: Some(Box::new(val.as_ref().try_into()?)),
                         },
                     ))),
                 })
