@@ -2002,7 +2002,12 @@ fn extract_dml_filters(
     filters
         .into_iter()
         .try_fold(Vec::new(), |mut deduped, filter| {
-            let unqualified = strip_column_qualifiers(filter)?;
+            let unqualified = strip_column_qualifiers(filter).map_err(|e| {
+                e.context(format!(
+                    "Failed to strip column qualifiers for DML filter on table '{}'",
+                    target
+                ))
+            })?;
             if seen_filters.insert(unqualified.clone()) {
                 deduped.push(unqualified);
             }
