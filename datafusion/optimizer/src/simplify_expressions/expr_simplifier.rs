@@ -1986,7 +1986,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
             // Rewrites use inclusive lower and exclusive upper bounds when
             // translating an equality into a range.
-            // NOTE: we only consider immutable UDFs with literal RHS values and
+            // NOTE: we only consider immutable UDFs with non Null literal RHS values and
             // UDFs that provide both `preimage` and `column_expr`.
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 use datafusion_expr::Operator::*;
@@ -2000,7 +2000,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         | IsDistinctFrom
                         | IsNotDistinctFrom
                 );
-                if !is_preimage_op {
+                if !is_preimage_op || is_null(&right) {
                     return Ok(Transformed::no(Expr::BinaryExpr(BinaryExpr {
                         left,
                         op,
