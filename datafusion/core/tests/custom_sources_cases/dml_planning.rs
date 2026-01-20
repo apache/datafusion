@@ -545,8 +545,7 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
     let filter_str = filters[0].to_string();
     assert!(
         filter_str.contains("id") || filter_str.contains("1"),
-        "Filter should reference id column or the value 1, got: {}",
-        filter_str
+        "Filter should reference id column or the value 1, got: {filter_str}"
     );
     Ok(())
 }
