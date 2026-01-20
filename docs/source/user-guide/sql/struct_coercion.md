@@ -52,6 +52,7 @@ SELECT [{x: 1, y: 2}, {y: 3, x: 4}];
 ```
 
 **When it applies:**
+
 - Array literals with struct elements: `[{...}, {...}]`
 - Nested arrays with structs: `[[{x: 1}, {x: 2}]]`
 
@@ -70,6 +71,7 @@ SELECT [t_left.s, t_right.s] FROM t_left JOIN t_right;
 ```
 
 **When it applies:**
+
 - Array construction with column references: `[col1, col2]`
 - Array construction in joins with matching field names
 
@@ -86,6 +88,7 @@ SELECT {b: 3, a: 4} as s;
 ```
 
 **When it applies:**
+
 - UNION ALL with structs: field names matched across branches
 - UNION (deduplicated) with structs
 
@@ -212,6 +215,7 @@ If you have existing code that relied on **positional** struct field matching, y
 ### Example: Query That Changes Behavior
 
 **Old behavior (positional):**
+
 ```sql
 -- These would have been positionally mapped (left-to-right)
 SELECT [{x: 1, y: 2}, {y: 3, x: 4}];
@@ -219,6 +223,7 @@ SELECT [{x: 1, y: 2}, {y: 3, x: 4}];
 ```
 
 **New behavior (name-based):**
+
 ```sql
 -- Now uses name-based matching
 SELECT [{x: 1, y: 2}, {y: 3, x: 4}];
@@ -309,6 +314,7 @@ FROM customers c;
 **Cause:** Trying to combine structs with different numbers of fields.
 
 **Solution:**
+
 ```sql
 -- Use explicit CAST to handle missing fields
 SELECT [
@@ -322,6 +328,7 @@ SELECT [
 **Cause:** Referencing a field name that doesn't exist in the struct.
 
 **Solution:**
+
 ```sql
 -- Verify field names match exactly (case-sensitive)
 SELECT s['field_name'] FROM my_table;  -- Use bracket notation for access
