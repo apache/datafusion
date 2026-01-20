@@ -193,6 +193,10 @@ fn regexp_replace_func(args: &[ColumnarValue]) -> Result<ArrayRef> {
 /// used by regexp_replace
 /// Handles both single backslash (\1) and double backslash (\\1) which can occur
 /// when SQL strings with escaped backslashes are passed through
+///
+/// Note: \0 is converted to ${0}, which in Rust's regex replacement syntax
+/// substitutes the entire match. This is consistent with POSIX behavior where
+/// \0 (or &) refers to the entire matched string.
 fn regex_replace_posix_groups(replacement: &str) -> String {
     static CAPTURE_GROUPS_RE_LOCK: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\\{1,2}(\d+)").unwrap());
@@ -686,6 +690,12 @@ mod tests {
         // Test that backslash followed by non-digit is preserved
         assert_eq!(regex_replace_posix_groups(r"\n"), r"\n");
         assert_eq!(regex_replace_posix_groups(r"\t"), r"\t");
+
+        // Test \0 behavior: \0 is converted to ${0}, which in Rust's regex
+        // replacement syntax substitutes the entire match. This is consistent
+        // with POSIX behavior where \0 (or &) refers to the entire matched string.
+        assert_eq!(regex_replace_posix_groups(r"\0"), "${0}");
+        assert_eq!(regex_replace_posix_groups(r"prefix\0suffix"), "prefix${0}suffix");
     }
 
     macro_rules! static_pattern_regexp_replace {
