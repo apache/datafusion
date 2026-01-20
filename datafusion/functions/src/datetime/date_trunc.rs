@@ -37,12 +37,14 @@ use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Sec
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ReturnFieldArgs,
 };
+use arrow::datatypes::Field;
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
@@ -221,12 +223,25 @@ impl ScalarUDFImpl for DateTruncFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[1].is_null() {
-            Ok(Timestamp(Nanosecond, None))
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // This UDF implements `return_field_from_args` and therefore
+        // `return_type` should not be used. Return an internal error to
+        // surface bugs if this code path is invoked. See
+        // `ScalarUDFImpl::return_field_from_args` docs for details.
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+        // For date_trunc the return type is the same as the second argument
+        // unless that argument is NULL, in which case we default to a
+        // nanosecond timestamp. Preserve the nullability of the second arg.
+        let dt = args.arg_fields[1].data_type().clone();
+        let return_type = if dt.is_null() {
+            Timestamp(Nanosecond, None)
         } else {
-            Ok(arg_types[1].clone())
-        }
+            dt
+        };
+        Ok(Arc::new(Field::new(self.name(), return_type, args.arg_fields[1].is_nullable())))
     }
 
     fn invoke_with_args(
