@@ -327,13 +327,23 @@ mod test {
     }
 
     #[test]
-    fn test_preimage_null_literal_no_rewrite() {
-        // NULL literal RHS should not be rewritten.
-        let schema = test_schema();
-        let expr = is_distinct_from(preimage_udf_expr(), lit(ScalarValue::Int32(None)));
-        let expected = expr.clone();
+    fn test_preimage_null_literal_no_rewrite_distinct_ops() {
+        // NULL literal RHS should not be rewritten for DISTINCTness operators:
+        // - `expr IS DISTINCT FROM NULL`  <=> `NOT (expr IS NULL)`
+        // - `expr IS NOT DISTINCT FROM NULL` <=> `expr IS NULL`
+        //
+        // For normal comparisons (=, !=, <, <=, >, >=), `expr OP NULL` evaluates to NULL
+        // under SQL tri-state logic, and DataFusion's simplifier constant-folds it.
+        // https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html#boolean-tri-state-logic
 
-        assert_eq!(optimize_test(expr, &schema), expected);
+        let schema = test_schema();
+
+        let expr = is_distinct_from(preimage_udf_expr(), lit(ScalarValue::Int32(None)));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
+
+        let expr =
+            is_not_distinct_from(preimage_udf_expr(), lit(ScalarValue::Int32(None)));
+        assert_eq!(optimize_test(expr.clone(), &schema), expr);
     }
 
     #[test]
