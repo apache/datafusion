@@ -172,19 +172,6 @@ impl CaptureUpdateProvider {
         }
     }
 
-    fn new_with_per_filter_pushdown(
-        schema: SchemaRef,
-        per_filter_pushdown: Vec<TableProviderFilterPushDown>,
-    ) -> Self {
-        Self {
-            schema,
-            received_filters: Arc::new(Mutex::new(None)),
-            received_assignments: Arc::new(Mutex::new(None)),
-            filter_pushdown: TableProviderFilterPushDown::Unsupported,
-            per_filter_pushdown: Some(per_filter_pushdown),
-        }
-    }
-
     fn captured_filters(&self) -> Option<Vec<Expr>> {
         self.received_filters.lock().unwrap().clone()
     }
