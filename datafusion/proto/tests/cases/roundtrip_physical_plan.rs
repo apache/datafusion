@@ -70,7 +70,7 @@ use datafusion::physical_expr::{
     LexOrdering, PhysicalSortRequirement, ScalarFunctionExpr,
 };
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -78,7 +78,7 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, NotExpr, PhysicalSortExpr, binary, cast, col, in_list, like, lit,
 };
-use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
     StreamJoinPartitionMode, SymmetricHashJoinExec,
@@ -616,7 +616,7 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
         Arc::new(EmptyExec::new(schema.clone())),
         schema,
     )?;
-    let agg = agg.with_limit(Some(12));
+    let agg = agg.with_limit_options(Some(LimitOptions::new_with_order(12, false)));
     roundtrip_test(Arc::new(agg))
 }
 
@@ -1821,11 +1821,12 @@ async fn roundtrip_projection_source() -> Result<()> {
             .build();
 
     let filter = Arc::new(
-        FilterExec::try_new(
+        FilterExecBuilder::new(
             Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
             DataSourceExec::from_data_source(scan_config),
-        )?
-        .with_projection(Some(vec![0, 1]))?,
+        )
+        .apply_projection(Some(vec![0, 1]))?
+        .build()?,
     );
 
     roundtrip_test(filter)

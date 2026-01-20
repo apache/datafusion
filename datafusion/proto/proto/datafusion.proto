@@ -1220,6 +1220,8 @@ message MaybePhysicalSortExprs {
 message AggLimit {
   // wrap into a message to make it optional
   uint64 limit = 1;
+  // Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+  optional bool descending = 2;
 }
 
 message AggregateExecNode {
