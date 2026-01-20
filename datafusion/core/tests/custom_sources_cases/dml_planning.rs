@@ -128,10 +128,10 @@ impl TableProvider for CaptureDeleteProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        if let Some(per_filter) = &self.per_filter_pushdown {
-            if per_filter.len() == filters.len() {
-                return Ok(per_filter.clone());
-            }
+        if let Some(per_filter) = &self.per_filter_pushdown
+            && per_filter.len() == filters.len()
+        {
+            return Ok(per_filter.clone());
         }
 
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
@@ -230,10 +230,10 @@ impl TableProvider for CaptureUpdateProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        if let Some(per_filter) = &self.per_filter_pushdown {
-            if per_filter.len() == filters.len() {
-                return Ok(per_filter.clone());
-            }
+        if let Some(per_filter) = &self.per_filter_pushdown
+            && per_filter.len() == filters.len()
+        {
+            return Ok(per_filter.clone());
         }
 
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
