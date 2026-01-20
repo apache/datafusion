@@ -360,6 +360,47 @@ async fn test_delete_compound_filters_with_pushdown() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_delete_mixed_filter_locations() -> Result<()> {
+    // Test mixed-location filters: some in Filter node, some in TableScan.filters
+    // This happens when provider uses TableProviderFilterPushDown::Inexact,
+    // meaning it can push down some predicates but not others.
+    let provider = Arc::new(CaptureDeleteProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Inexact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    // Execute DELETE with compound WHERE clause
+    ctx.sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?
+        .collect()
+        .await?;
+
+    // Verify that both predicates are extracted and passed to delete_from(),
+    // even though they may be split between Filter node and TableScan.filters
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(
+        filters.len(),
+        2,
+        "should extract both predicates (union of Filter and TableScan.filters)"
+    );
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain status filter"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_update_assignments() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
     let ctx = SessionContext::new();
