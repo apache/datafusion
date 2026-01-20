@@ -39,7 +39,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility, and,
-    binary::BinaryTypeCoercer, interval_arithmetic::Interval, lit, or,
+    binary::BinaryTypeCoercer, lit, or, preimage::PreimageResult,
 };
 use datafusion_expr::{Cast, TryCast, simplify::ExprSimplifyResult};
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
@@ -2008,15 +2008,15 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     })));
                 }
 
-                if let (Some(interval), Some(col_expr)) =
+                if let PreimageResult::Range { interval, expr } =
                     get_preimage(left.as_ref(), right.as_ref(), info)?
                 {
-                    rewrite_with_preimage(info, interval, op, col_expr)?
+                    rewrite_with_preimage(info, interval, op, expr)?
                 } else if let Some(swapped) = op.swap() {
-                    if let (Some(interval), Some(col_expr)) =
+                    if let PreimageResult::Range { interval, expr } =
                         get_preimage(right.as_ref(), left.as_ref(), info)?
                     {
-                        rewrite_with_preimage(info, interval, swapped, col_expr)?
+                        rewrite_with_preimage(info, interval, swapped, expr)?
                     } else {
                         Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
                     }
@@ -2035,20 +2035,17 @@ fn get_preimage(
     left_expr: &Expr,
     right_expr: &Expr,
     info: &SimplifyContext,
-) -> Result<(Option<Interval>, Option<Expr>)> {
+) -> Result<PreimageResult> {
     let Expr::ScalarFunction(ScalarFunction { func, args }) = left_expr else {
-        return Ok((None, None));
+        return Ok(PreimageResult::None);
     };
     if !is_literal_or_literal_cast(right_expr) {
-        return Ok((None, None));
+        return Ok(PreimageResult::None);
     }
     if func.signature().volatility != Volatility::Immutable {
-        return Ok((None, None));
+        return Ok(PreimageResult::None);
     }
-    Ok((
-        func.preimage(args, right_expr, info)?,
-        func.column_expr(args),
-    ))
+    func.preimage(args, right_expr, info)
 }
 
 fn is_literal_or_literal_cast(expr: &Expr) -> bool {

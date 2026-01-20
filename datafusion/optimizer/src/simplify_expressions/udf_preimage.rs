@@ -84,7 +84,8 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, and, binary_expr, col, lit, simplify::SimplifyContext,
+        Signature, Volatility, and, binary_expr, col, lit, preimage::PreimageResult,
+        simplify::SimplifyContext,
     };
 
     use super::Interval;
@@ -153,26 +154,27 @@ mod test {
             args: &[Expr],
             lit_expr: &Expr,
             _info: &SimplifyContext,
-        ) -> Result<Option<Interval>> {
+        ) -> Result<PreimageResult> {
             if !self.enabled {
-                return Ok(None);
+                return Ok(PreimageResult::None);
             }
             if args.len() != 1 {
-                return Ok(None);
+                return Ok(PreimageResult::None);
             }
+
+            let expr = args.first().cloned().expect("Should be column expression");
             match lit_expr {
                 Expr::Literal(ScalarValue::Int32(Some(500)), _) => {
-                    Ok(Some(Interval::try_new(
-                        ScalarValue::Int32(Some(100)),
-                        ScalarValue::Int32(Some(200)),
-                    )?))
+                    Ok(PreimageResult::Range {
+                        expr,
+                        interval: Interval::try_new(
+                            ScalarValue::Int32(Some(100)),
+                            ScalarValue::Int32(Some(200)),
+                        )?,
+                    })
                 }
-                _ => Ok(None),
+                _ => Ok(PreimageResult::None),
             }
-        }
-
-        fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
-            args.first().cloned()
         }
     }
 

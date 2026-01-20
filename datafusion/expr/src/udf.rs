@@ -19,6 +19,7 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::preimage::PreimageResult;
 use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
@@ -240,15 +241,8 @@ impl ScalarUDF {
         args: &[Expr],
         lit_expr: &Expr,
         info: &SimplifyContext,
-    ) -> Result<Option<Interval>> {
+    ) -> Result<PreimageResult> {
         self.inner.preimage(args, lit_expr, info)
-    }
-
-    /// Return inner column from function args
-    ///
-    /// See [`ScalarUDFImpl::column_expr`]
-    pub fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
-        self.inner.column_expr(args)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -730,9 +724,6 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
     /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
     ///
-    /// Implementations must also provide [`ScalarUDFImpl::column_expr`] so the
-    /// optimizer can identify which argument maps to the preimage interval.
-    ///
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
     fn preimage(
@@ -740,13 +731,8 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         _args: &[Expr],
         _lit_expr: &Expr,
         _info: &SimplifyContext,
-    ) -> Result<Option<Interval>> {
-        Ok(None)
-    }
-
-    // Return the inner column expression from this function
-    fn column_expr(&self, _args: &[Expr]) -> Option<Expr> {
-        None
+    ) -> Result<PreimageResult> {
+        Ok(PreimageResult::None)
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
@@ -984,12 +970,8 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         args: &[Expr],
         lit_expr: &Expr,
         info: &SimplifyContext,
-    ) -> Result<Option<Interval>> {
+    ) -> Result<PreimageResult> {
         self.inner.preimage(args, lit_expr, info)
-    }
-
-    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
-        self.inner.column_expr(args)
     }
 
     fn conditional_arguments<'a>(
