@@ -377,18 +377,11 @@ impl ExecutionPlan for ProjectionExec {
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
+            // rewrite filter expression using invert alias map
             let mut rewriter = PhysicalColumnRewriter::new(&invert_alias_map);
             let rewritten = Arc::clone(&filter).rewrite(&mut rewriter)?.data;
 
-            if rewriter.has_unmapped_columns() {
-                // Filter contains columns that cannot be mapped through projection
-                // Mark as unsupported - cannot push down
-                child_parent_filters.push(PushedDownPredicate::unsupported(filter));
-            } else {
-                // All columns were successfully mapped through the projection
-                // The rewritten filter already has correct column indices for the child
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
-            }
+            child_parent_filters.push(PushedDownPredicate::supported(rewritten));
         }
 
         Ok(FilterDescription::new().with_child(ChildFilterDescription {
