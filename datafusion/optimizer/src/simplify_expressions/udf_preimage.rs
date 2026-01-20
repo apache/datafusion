@@ -167,10 +167,10 @@ mod test {
                 Expr::Literal(ScalarValue::Int32(Some(500)), _) => {
                     Ok(PreimageResult::Range {
                         expr,
-                        interval: Interval::try_new(
+                        interval: Box::new(Interval::try_new(
                             ScalarValue::Int32(Some(100)),
                             ScalarValue::Int32(Some(200)),
-                        )?,
+                        )?),
                     })
                 }
                 _ => Ok(PreimageResult::None),

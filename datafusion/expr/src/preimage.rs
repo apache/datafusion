@@ -24,5 +24,5 @@ pub enum PreimageResult {
     None,
     /// The expression always evaluates to the specified constant
     /// given that `expr` is within the interval
-    Range { expr: Expr, interval: Interval },
+    Range { expr: Expr, interval: Box<Interval> },
 }
