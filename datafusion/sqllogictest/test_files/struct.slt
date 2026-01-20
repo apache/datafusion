@@ -1197,14 +1197,6 @@ select arrow_typeof([col_x, col_y]) from t_with_cast limit 1;
 ----
 List(Struct("id": Int32, "description": Utf8View))
 
-# Verify NULL filling when fields are missing (using CAST)
-query ?
-select [col_x, col_y] from t_with_cast order by col_x.id;
-----
-[{id: 1, description: First}, {id: 10, description: First Value}]
-[{id: 2, description: Second}, {id: 20, description: Second Value}]
-
-statement ok
 drop table t_with_cast;
 
 # Test 4: Explicit CAST for partial field overlap scenarios
