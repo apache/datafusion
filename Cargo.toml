@@ -177,6 +177,7 @@ pbjson-types = "0.8"
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"
+rand_distr = "0.5.1"
 recursive = "0.1.1"
 regex = "1.12"
 rstest = "0.26.1"

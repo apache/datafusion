@@ -176,7 +176,7 @@ glob = { workspace = true }
 insta = { workspace = true }
 paste = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
-rand_distr = "0.5"
+rand_distr = { workspace = true }
 recursive = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
