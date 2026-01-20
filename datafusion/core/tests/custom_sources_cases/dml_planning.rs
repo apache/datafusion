@@ -30,6 +30,7 @@ use datafusion::logical_expr::{
 };
 use datafusion_catalog::Session;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::TableReference;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -215,6 +216,19 @@ fn test_schema() -> SchemaRef {
         Field::new("status", DataType::Utf8, true),
         Field::new("value", DataType::Int32, true),
     ]))
+}
+
+fn expr_has_table_reference(expr: &Expr, table: &str) -> Result<bool> {
+    let reference = TableReference::bare(table);
+    expr.exists(|node| {
+        Ok(matches!(
+            node,
+            Expr::Column(column)
+                if column.relation.as_ref().is_some_and(|relation| {
+                    relation.resolved_eq(&reference)
+                })
+        ))
+    })
 }
 
 #[tokio::test]
@@ -459,6 +473,45 @@ async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()>
 }
 
 #[tokio::test]
+async fn test_update_filter_pushdown_passes_table_scan_filters() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql("UPDATE t SET value = 42 WHERE status = 'ready'")
+        .await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    assert!(
+        !scan_filters.is_empty(),
+        "expected filter pushdown to populate TableScan filters"
+    );
+
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert!(
+        !filters.is_empty(),
+        "expected filters extracted from TableScan during UPDATE"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_unsupported_table_delete() -> Result<()> {
     let schema = test_schema();
     let ctx = SessionContext::new();
@@ -515,6 +568,57 @@ async fn test_delete_target_table_scoping() -> Result<()> {
     assert!(
         filters[0].to_string().contains("5"),
         "Filter should contain the value 5"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_from_drops_non_target_predicates() -> Result<()> {
+    let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
+        test_schema(),
+        TableProviderFilterPushDown::Exact,
+    ));
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "t1",
+        Arc::clone(&target_provider) as Arc<dyn TableProvider>,
+    )?;
+
+    let source_schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("status", DataType::Utf8, true),
+    ]));
+    let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
+    ctx.register_table("t2", Arc::new(source_table))?;
+
+    ctx.sql(
+        "UPDATE t1 SET value = 1 FROM t2 \
+         WHERE t1.id = t2.id AND t2.status = 'active' AND t1.value > 10",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let filters = target_provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert!(
+        !filters.is_empty(),
+        "expected target predicates extracted from UPDATE ... FROM"
+    );
+
+    let has_t2_reference = filters.iter().try_fold(false, |found, expr| {
+        expr_has_table_reference(expr, "t2").map(|has_ref| found || has_ref)
+    })?;
+    assert!(
+        !has_t2_reference,
+        "filters should only include target-table predicates"
+    );
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("value")),
+        "expected target-table predicate to be retained"
     );
     Ok(())
 }
