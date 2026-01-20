@@ -84,7 +84,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
-use datafusion_expr::utils::split_conjunction;
+use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
     FetchType, Filter, JoinType, Operator, RecursiveQuery, SkipType, StringifiedPlan,
@@ -613,7 +613,7 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input, &table_name.to_string())?;
+                    let filters = extract_dml_filters(input, &table_name)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -639,7 +639,7 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, &table_name.to_string())?;
+                    let filters = extract_dml_filters(input, &table_name)?;
                     // Extract assignments from the projection in input plan
                     let assignments = extract_update_assignments(input)?;
                     provider
@@ -1915,7 +1915,7 @@ fn get_physical_expr_pair(
 ///
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
-    target_table_name: &str,
+    target: &TableReference,
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
@@ -1923,7 +1923,11 @@ fn extract_dml_filters(
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
-                filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
+                for predicate in split_conjunction(&filter.predicate) {
+                    if predicate_is_on_target(predicate, target)? {
+                        filters.push(predicate.clone());
+                    }
+                }
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
@@ -1933,7 +1937,7 @@ fn extract_dml_filters(
                 // Only extract filters from the target table scan.
                 // This prevents incorrect filter extraction in UPDATE...FROM scenarios
                 // where multiple table scans may have filters.
-                if table_name.to_string() == target_table_name {
+                if table_name.resolved_eq(target) {
                     for filter in scan_filters {
                         filters.extend(split_conjunction(filter).into_iter().cloned());
                     }
@@ -1973,15 +1977,14 @@ fn extract_dml_filters(
         Ok(TreeNodeRecursion::Continue)
     })?;
 
-    // Validate that all filters reference only the target table, then strip qualifiers
-    // and deduplicate. This ensures:
-    // 1. No cross-table predicate contamination (safety check)
+    // Strip qualifiers and deduplicate. This ensures:
+    // 1. Only target-table predicates are retained from Filter nodes
     // 2. Qualifiers stripped for TableProvider compatibility
     // 3. Duplicates removed (from Filter nodes + TableScan.filters)
     let mut seen_filters = HashSet::new();
     let deduped = filters
         .into_iter()
-        .map(|f| validate_and_strip_qualifiers(&f, target_table_name))
+        .map(strip_column_qualifiers)
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|f| seen_filters.insert(f.clone()))
@@ -1990,40 +1993,17 @@ fn extract_dml_filters(
     Ok(deduped)
 }
 
-/// Validate that a filter expression only references columns from the target table,
-/// then strip table qualifiers from column references.
-///
-/// This ensures that DML filters don't inadvertently reference columns from other
-/// tables (important for UPDATE...FROM scenarios where multiple tables may be involved).
-///
-/// # Arguments
-/// * `expr` - The filter expression to validate
-/// * `target_table_name` - The name of the target table for the DML operation
-///
-/// # Returns
-/// * `Ok(expr_with_qualifiers_stripped)` if all columns belong to the target table or are unqualified
-/// * `Err(plan_err)` if any column references a different table
-fn validate_and_strip_qualifiers(expr: &Expr, target_table_name: &str) -> Result<Expr> {
-    // First, validate that all column references belong to the target table
-    let col_refs = expr.column_refs();
+/// Determine whether a predicate references only columns from the target table.
+fn predicate_is_on_target(expr: &Expr, target: &TableReference) -> Result<bool> {
+    let mut columns = HashSet::new();
+    expr_to_columns(expr, &mut columns)?;
 
-    for col_ref in col_refs {
-        if let Some(table_qualifier) = &col_ref.relation {
-            // Column is qualified; verify it matches the target table
-            if table_qualifier.to_string() != target_table_name {
-                return plan_err!(
-                    "DELETE/UPDATE filter references column from non-target table: {}.{}. \
-                     Only columns from table '{}' are allowed in DML filters.",
-                    table_qualifier,
-                    col_ref.name,
-                    target_table_name
-                );
-            }
-        }
-    }
-
-    // All columns validated; now strip qualifiers for passing to TableProvider
-    strip_column_qualifiers(expr.clone())
+    Ok(columns.iter().all(|column| {
+        column
+            .relation
+            .as_ref()
+            .is_none_or(|relation| relation.resolved_eq(target))
+    }))
 }
 
 /// Strip table qualifiers from column references in an expression.
