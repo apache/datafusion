@@ -695,7 +695,10 @@ mod tests {
         // replacement syntax substitutes the entire match. This is consistent
         // with POSIX behavior where \0 (or &) refers to the entire matched string.
         assert_eq!(regex_replace_posix_groups(r"\0"), "${0}");
-        assert_eq!(regex_replace_posix_groups(r"prefix\0suffix"), "prefix${0}suffix");
+        assert_eq!(
+            regex_replace_posix_groups(r"prefix\0suffix"),
+            "prefix${0}suffix"
+        );
     }
 
     macro_rules! static_pattern_regexp_replace {
