@@ -21,17 +21,94 @@
 # For more information, please see:
 #   https://github.com/apache/datafusion/issues/15914
 
-## Original Query: SELECT random();
-## PySpark 3.5.5 Result: {'rand()': 0.7460731389309176, 'typeof(rand())': 'double'}
-#query
-#SELECT random();
+query R
+SELECT random(42::integer);
+----
+0.81430514512291
 
-## Original Query: SELECT random(0);
-## PySpark 3.5.5 Result: {'rand(0)': 0.7604953758285915, 'typeof(rand(0))': 'double', 'typeof(0)': 'int'}
-#query
-#SELECT random(0::int);
+query R
+SELECT random(0::integer);
+----
+0.324575268031407
 
-## Original Query: SELECT random(null);
-## PySpark 3.5.5 Result: {'rand(NULL)': 0.7604953758285915, 'typeof(rand(NULL))': 'double', 'typeof(NULL)': 'void'}
-#query
-#SELECT random(NULL::void);
+query R
+SELECT random(NULL::integer);
+----
+0.324575268031407
+
+query BBB
+SELECT
+    random() BETWEEN 0.0 AND 1.0,
+    random() = random(),
+    random(1) = random(1);
+----
+true false true
+
+query R
+SELECT rand(42::integer);
+----
+0.81430514512291
+
+query R
+SELECT rand(0::integer);
+----
+0.324575268031407
+
+query R
+SELECT rand(NULL::integer);
+----
+0.324575268031407
+
+query BBB
+SELECT
+    rand() BETWEEN 0.0 AND 1.0,
+    rand() = rand(),
+    rand(1) = rand(1);
+----
+true false true
+
+
+query R
+SELECT randn(42::integer);
+----
+0.834397546843796
+
+query R
+SELECT randn(0::integer);
+----
+-0.292803298604708
+
+query R
+SELECT randn(NULL::integer);
+----
+-0.292803298604708
+
+
+query BB
+SELECT
+    randn() = randn(),
+    randn(1) = randn(1);
+----
+false true
+
+query T
+SELECT randstr(3::integer, 42::integer);
+----
+0Us
+
+query T
+SELECT randstr(3::integer, 0::integer);
+----
+UYX
+
+query T
+SELECT randstr(3::integer, NULL::integer);
+----
+UYX
+
+query BB
+SELECT
+    randstr(10) = randstr(10),
+    randstr(10, 2) = randstr(10, 2);
+----
+false true
