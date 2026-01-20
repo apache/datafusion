@@ -16,9 +16,7 @@
 // under the License.
 
 use datafusion_common::{Result, internal_err, tree_node::Transformed};
-use datafusion_expr::{
-    Expr, Operator, and, binary_expr, lit, or, simplify::SimplifyContext,
-};
+use datafusion_expr::{Expr, Operator, and, lit, or, simplify::SimplifyContext};
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 /// Rewrites a binary expression using its "preimage"
@@ -46,32 +44,32 @@ pub(super) fn rewrite_with_preimage(
 ) -> Result<Transformed<Expr>> {
     let (lower, upper) = preimage_interval.into_bounds();
     let (lower, upper) = (lit(lower), lit(upper));
+    let expr = *expr;
 
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < lower
         // <expr> >= x  ==>  <expr> >= lower
-        Operator::Lt | Operator::GtEq => binary_expr(*expr, op, lower),
+        Operator::Lt => expr.lt(lower),
+        Operator::GtEq => expr.gt_eq(lower),
         // <expr> > x ==> <expr> >= upper
-        Operator::Gt => binary_expr(*expr, Operator::GtEq, upper),
+        Operator::Gt => expr.gt_eq(upper),
         // <expr> <= x ==> <expr> < upper
-        Operator::LtEq => binary_expr(*expr, Operator::Lt, upper),
+        Operator::LtEq => expr.lt(upper),
         // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
         //
         // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
         // but since x is always not NULL => (<expr> >= lower) and (<expr> < upper)
-        Operator::Eq | Operator::IsNotDistinctFrom => and(
-            binary_expr(*expr.clone(), Operator::GtEq, lower),
-            binary_expr(*expr, Operator::Lt, upper),
-        ),
+        Operator::Eq | Operator::IsNotDistinctFrom => {
+            and(expr.clone().gt_eq(lower), expr.lt(upper))
+        }
         // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
-        Operator::NotEq => or(
-            binary_expr(*expr.clone(), Operator::Lt, lower),
-            binary_expr(*expr, Operator::GtEq, upper),
-        ),
+        Operator::NotEq => or(expr.clone().lt(lower), expr.gt_eq(upper)),
         // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
         // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL)
-        Operator::IsDistinctFrom => binary_expr(*expr.clone(), Operator::Lt, lower)
-            .or(binary_expr(*expr.clone(), Operator::GtEq, upper))
+        Operator::IsDistinctFrom => expr
+            .clone()
+            .lt(lower)
+            .or(expr.clone().gt_eq(upper))
             .or(expr.is_null()),
         _ => return internal_err!("Expect comparison operators"),
     };
@@ -86,17 +84,56 @@ mod test {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
-        ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, and, binary_expr, col, expr::ScalarFunction, lit,
-        simplify::SimplifyContext,
+        BinaryExpr, ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, and, col, lit, simplify::SimplifyContext,
     };
 
     use super::Interval;
     use crate::simplify_expressions::ExprSimplifier;
 
+    fn is_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::IsDistinctFrom,
+            right: Box::new(right),
+        })
+    }
+
+    fn is_not_distinct_from(left: Expr, right: Expr) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left),
+            op: Operator::IsNotDistinctFrom,
+            right: Box::new(right),
+        })
+    }
+
     #[derive(Debug, PartialEq, Eq, Hash)]
     struct PreimageUdf {
+        /// Defaults to an exact signature with one Int32 argument and Immutable volatility
         signature: Signature,
+        /// If true, returns a preimage; otherwise, returns None
+        enabled: bool,
+    }
+
+    impl PreimageUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
+                enabled: true,
+            }
+        }
+
+        /// Set the enabled flag
+        fn with_enabled(mut self, enabled: bool) -> Self {
+            self.enabled = enabled;
+            self
+        }
+
+        /// Set the volatility
+        fn with_volatility(mut self, volatility: Volatility) -> Self {
+            self.signature.volatility = volatility;
+            self
+        }
     }
 
     impl ScalarUDFImpl for PreimageUdf {
@@ -126,6 +163,9 @@ mod test {
             lit_expr: &Expr,
             _info: &SimplifyContext,
         ) -> Result<Option<Interval>> {
+            if !self.enabled {
+                return Ok(None);
+            }
             if args.len() != 1 {
                 return Ok(None);
             }
@@ -146,19 +186,24 @@ mod test {
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let simplifier = ExprSimplifier::new(
-            SimplifyContext::default().with_schema(Arc::clone(schema)),
-        );
-
-        simplifier.simplify(expr).unwrap()
+        let simplify_context = SimplifyContext::default().with_schema(Arc::clone(schema));
+        ExprSimplifier::new(simplify_context)
+            .simplify(expr)
+            .unwrap()
     }
 
     fn preimage_udf_expr() -> Expr {
-        let udf = ScalarUDF::new_from_impl(PreimageUdf {
-            signature: Signature::exact(vec![DataType::Int32], Volatility::Immutable),
-        });
+        ScalarUDF::new_from_impl(PreimageUdf::new()).call(vec![col("x")])
+    }
 
-        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(udf), vec![col("x")]))
+    fn non_immutable_udf_expr() -> Expr {
+        ScalarUDF::new_from_impl(PreimageUdf::new().with_volatility(Volatility::Volatile))
+            .call(vec![col("x")])
+    }
+
+    fn no_preimage_udf_expr() -> Expr {
+        ScalarUDF::new_from_impl(PreimageUdf::new().with_enabled(false))
+            .call(vec![col("x")])
     }
 
     fn test_schema() -> DFSchemaRef {
@@ -171,99 +216,149 @@ mod test {
         )
     }
 
+    fn test_schema_xy() -> DFSchemaRef {
+        Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![
+                    Field::new("x", DataType::Int32, false),
+                    Field::new("y", DataType::Int32, false),
+                ]
+                .into(),
+                Default::default(),
+            )
+            .unwrap(),
+        )
+    }
+
     #[test]
     fn test_preimage_eq_rewrite() {
+        // Equality rewrite when preimage and column expression are available.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::Eq, lit(500));
-        let expected = and(
-            binary_expr(col("x"), Operator::GtEq, lit(100)),
-            binary_expr(col("x"), Operator::Lt, lit(200)),
-        );
+        let expr = preimage_udf_expr().eq(lit(500));
+        let expected = and(col("x").gt_eq(lit(100)), col("x").lt(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_noteq_rewrite() {
+        // Inequality rewrite expands to disjoint ranges.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::NotEq, lit(500));
-        let expected = binary_expr(col("x"), Operator::Lt, lit(100)).or(binary_expr(
-            col("x"),
-            Operator::GtEq,
-            lit(200),
-        ));
+        let expr = preimage_udf_expr().not_eq(lit(500));
+        let expected = col("x").lt(lit(100)).or(col("x").gt_eq(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_eq_rewrite_swapped() {
+        // Equality rewrite works when the literal appears on the left.
         let schema = test_schema();
-        let expr = binary_expr(lit(500), Operator::Eq, preimage_udf_expr());
-        let expected = and(
-            binary_expr(col("x"), Operator::GtEq, lit(100)),
-            binary_expr(col("x"), Operator::Lt, lit(200)),
-        );
+        let expr = lit(500).eq(preimage_udf_expr());
+        let expected = and(col("x").gt_eq(lit(100)), col("x").lt(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_lt_rewrite() {
+        // Less-than comparison rewrites to the lower bound.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::Lt, lit(500));
-        let expected = binary_expr(col("x"), Operator::Lt, lit(100));
+        let expr = preimage_udf_expr().lt(lit(500));
+        let expected = col("x").lt(lit(100));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_lteq_rewrite() {
+        // Less-than-or-equal comparison rewrites to the upper bound.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::LtEq, lit(500));
-        let expected = binary_expr(col("x"), Operator::Lt, lit(200));
+        let expr = preimage_udf_expr().lt_eq(lit(500));
+        let expected = col("x").lt(lit(200));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_gt_rewrite() {
+        // Greater-than comparison rewrites to the upper bound (inclusive).
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::Gt, lit(500));
-        let expected = binary_expr(col("x"), Operator::GtEq, lit(200));
+        let expr = preimage_udf_expr().gt(lit(500));
+        let expected = col("x").gt_eq(lit(200));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_gteq_rewrite() {
+        // Greater-than-or-equal comparison rewrites to the lower bound.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::GtEq, lit(500));
-        let expected = binary_expr(col("x"), Operator::GtEq, lit(100));
+        let expr = preimage_udf_expr().gt_eq(lit(500));
+        let expected = col("x").gt_eq(lit(100));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_is_not_distinct_from_rewrite() {
+        // IS NOT DISTINCT FROM is treated like equality for non-null literal RHS.
         let schema = test_schema();
-        let expr =
-            binary_expr(preimage_udf_expr(), Operator::IsNotDistinctFrom, lit(500));
-        let expected = and(
-            binary_expr(col("x"), Operator::GtEq, lit(100)),
-            binary_expr(col("x"), Operator::Lt, lit(200)),
-        );
+        let expr = is_not_distinct_from(preimage_udf_expr(), lit(500));
+        let expected = and(col("x").gt_eq(lit(100)), col("x").lt(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
 
     #[test]
     fn test_preimage_is_distinct_from_rewrite() {
+        // IS DISTINCT FROM adds an explicit NULL branch for the column.
         let schema = test_schema();
-        let expr = binary_expr(preimage_udf_expr(), Operator::IsDistinctFrom, lit(500));
-        let expected = binary_expr(col("x"), Operator::Lt, lit(100))
-            .or(binary_expr(col("x"), Operator::GtEq, lit(200)))
+        let expr = is_distinct_from(preimage_udf_expr(), lit(500));
+        let expected = col("x")
+            .lt(lit(100))
+            .or(col("x").gt_eq(lit(200)))
             .or(col("x").is_null());
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_non_literal_rhs_no_rewrite() {
+        // Non-literal RHS should not be rewritten.
+        let schema = test_schema_xy();
+        let expr = preimage_udf_expr().eq(col("y"));
+        let expected = expr.clone();
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_null_literal_no_rewrite() {
+        // NULL literal RHS should not be rewritten.
+        let schema = test_schema();
+        let expr = preimage_udf_expr().eq(lit(ScalarValue::Int32(None)));
+        let expected = expr.clone();
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_non_immutable_no_rewrite() {
+        // Non-immutable UDFs should not participate in preimage rewrites.
+        let schema = test_schema();
+        let expr = non_immutable_udf_expr().eq(lit(500));
+        let expected = expr.clone();
+
+        assert_eq!(optimize_test(expr, &schema), expected);
+    }
+
+    #[test]
+    fn test_preimage_no_preimage_no_rewrite() {
+        // If the UDF provides no preimage, the expression should remain unchanged.
+        let schema = test_schema();
+        let expr = no_preimage_udf_expr().eq(lit(500));
+        let expected = expr.clone();
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
