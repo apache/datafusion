@@ -51,13 +51,13 @@ mod expr_adapter;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
+mod issue_19839;
 mod ordering;
 mod page_pruning;
 mod row_group_pruning;
 mod schema;
 mod schema_coercion;
 mod utils;
-mod issue_19839;
 
 #[cfg(test)]
 #[ctor::ctor]
