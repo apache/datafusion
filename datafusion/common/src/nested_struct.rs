@@ -66,7 +66,7 @@ fn cast_struct_column(
 
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
-        let has_overlap = fields_have_name_overlap(source_fields, target_fields);
+        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
         validate_struct_compatibility(source_fields, target_fields)?;
 
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
@@ -227,7 +227,7 @@ pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> Result<()> {
-    let has_overlap = fields_have_name_overlap(source_fields, target_fields);
+    let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
     if !has_overlap {
         if source_fields.len() != target_fields.len() {
             return _plan_err!(
@@ -322,7 +322,7 @@ fn validate_field_compatibility(
     Ok(())
 }
 
-fn fields_have_name_overlap(
+fn has_one_of_more_common_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> bool {
