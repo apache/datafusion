@@ -28,8 +28,8 @@ use super::{
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
-    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDownPredicate,
+    ChildFilterDescription, ChildPushdownResult, FilterColumnChecker, FilterDescription,
+    FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::util::PhysicalColumnRewriter;
@@ -50,7 +50,7 @@ use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
@@ -373,13 +373,21 @@ impl ExecutionPlan for ProjectionExec {
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
         let invert_alias_map = self.collect_reverse_alias()?;
-
+        let output_schema = self.schema();
+        let checker = FilterColumnChecker::new(&output_schema);
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
+            if !checker.can_pushdown(&filter) {
+                child_parent_filters.push(PushedDownPredicate::unsupported(filter));
+                continue;
+            }
+            // All columns exist in child - we can push down
+            // Need to reassign column indices to match child schema
+            let reassigned_filter = reassign_expr_columns(filter, &output_schema)?;
             // rewrite filter expression using invert alias map
             let mut rewriter = PhysicalColumnRewriter::new(&invert_alias_map);
-            let rewritten = Arc::clone(&filter).rewrite(&mut rewriter)?.data;
+            let rewritten = reassigned_filter.rewrite(&mut rewriter)?.data;
 
             child_parent_filters.push(PushedDownPredicate::supported(rewritten));
         }

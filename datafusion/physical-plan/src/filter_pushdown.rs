@@ -325,7 +325,7 @@ impl<'a> FilterColumnChecker<'a> {
     ///
     /// Extracts all column names from the schema's fields to build
     /// a lookup set for efficient column existence checks.
-    fn new(input_schema: &'a Schema) -> Self {
+    pub(crate) fn new(input_schema: &'a Schema) -> Self {
         let column_names: HashSet<&str> = input_schema
             .fields()
             .iter()
@@ -342,7 +342,7 @@ impl<'a> FilterColumnChecker<'a> {
     ///
     /// This method traverses the entire expression tree, checking each
     /// column reference against the available column names.
-    fn can_pushdown(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
+    pub(crate) fn can_pushdown(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
         let mut can_apply = true;
         filter
             .apply(|expr| {
