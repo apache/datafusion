@@ -1981,16 +1981,17 @@ fn extract_dml_filters(
     // 1. Only target-table predicates are retained from Filter nodes
     // 2. Qualifiers stripped for TableProvider compatibility
     // 3. Duplicates removed (from Filter nodes + TableScan.filters)
+    //
+    // Deduplication is necessary because filters may appear in both Filter nodes
+    // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
     let mut seen_filters = HashSet::new();
-    let deduped = filters
-        .into_iter()
-        .map(strip_column_qualifiers)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|f| seen_filters.insert(f.clone()))
-        .collect();
-
-    Ok(deduped)
+    filters.into_iter().try_fold(Vec::new(), |mut deduped, filter| {
+        let unqualified = strip_column_qualifiers(filter)?;
+        if seen_filters.insert(unqualified.clone()) {
+            deduped.push(unqualified);
+        }
+        Ok(deduped)
+    })
 }
 
 /// Determine whether a predicate references only columns from the target table.
