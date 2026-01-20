@@ -170,9 +170,9 @@ macro_rules! define_unix_timestamp_udf {
                 args: Vec<Expr>,
                 info: &SimplifyContext,
             ) -> Result<ExprSimplifyResult> {
-                let [date] = take_function_args(self.name(), args)?;
+                let [ts] = take_function_args(self.name(), args)?;
                 Ok(ExprSimplifyResult::Simplified(
-                    date.cast_to(
+                    ts.cast_to(
                         &DataType::Timestamp($time_unit, Some("UTC".into())),
                         info.schema(),
                     )?
