@@ -20,6 +20,7 @@ pub mod expm1;
 pub mod factorial;
 pub mod hex;
 pub mod modulus;
+pub mod random;
 pub mod rint;
 pub mod trigonometry;
 pub mod width_bucket;
@@ -34,6 +35,9 @@ make_udf_function!(factorial::SparkFactorial, factorial);
 make_udf_function!(hex::SparkHex, hex);
 make_udf_function!(modulus::SparkMod, modulus);
 make_udf_function!(modulus::SparkPmod, pmod);
+make_udf_function!(random::SparkRandom, random);
+make_udf_function!(random::SparkRandN, randn);
+make_udf_function!(random::SparkRandStr, randstr);
 make_udf_function!(rint::SparkRint, rint);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
@@ -60,6 +64,21 @@ pub mod expr_fn {
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
     export_functions!((sec, "Returns the secant of expr.", arg1));
+    export_functions!((
+        random,
+        "Returns a random float value sampled from a uniform distribution in [0, 1).",
+        opt_seed
+    ));
+    export_functions!((
+        randn,
+        "Returns a random float value sampled from the standard normal distribution.",
+        opt_seed
+    ));
+    export_functions!((
+        randstr,
+        "Returns a random string of the specified length.",
+        length opt_seed
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -74,5 +93,8 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         width_bucket(),
         csc(),
         sec(),
+        random(),
+        randn(),
+        randstr(),
     ]
 }
