@@ -1930,7 +1930,36 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
                     filters.extend(split_conjunction(filter).into_iter().cloned());
                 }
             }
-            _ => {}
+            // Plans without filter information
+            LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_)
+            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Distinct(_)
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_) => {
+                // No filters to extract from leaf/meta plans
+            }
+            // Plans with inputs (may contain filters in children)
+            LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Limit(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Union(_)
+            | LogicalPlan::Join(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Subquery(_) => {
+                // Filter information may appear in child nodes; continue traversal
+                // to extract filters from Filter/TableScan nodes deeper in the plan
+            }
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
