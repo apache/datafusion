@@ -616,34 +616,24 @@ impl BinaryExpr {
 
 impl Display for BinaryExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        // Put parentheses around child binary expressions so that we can see the difference
-        // between `(a OR b) AND c` and `a OR (b AND c)`. We only insert parentheses when needed,
-        // based on operator precedence. For example, `(a AND b) OR c` and `a AND b OR c` are
-        // equivalent and the parentheses are not necessary.
+        // Put parentheses around child binary expressions to avoid ambiguity.
+        // For example, `(1 + 2) * 3` should display with parentheses to show
+        // it's different from `1 + 2 * 3`. This follows DuckDB's approach of
+        // always adding parentheses around nested binary expressions.
 
-        fn write_child(
-            f: &mut Formatter<'_>,
-            expr: &Expr,
-            precedence: u8,
-        ) -> fmt::Result {
+        fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
             match expr {
                 Expr::BinaryExpr(child) => {
-                    let p = child.op.precedence();
-                    if p == 0 || p < precedence {
-                        write!(f, "({child})")?;
-                    } else {
-                        write!(f, "{child}")?;
-                    }
+                    write!(f, "({child})")?;
                 }
                 _ => write!(f, "{expr}")?,
             }
             Ok(())
         }
 
-        let precedence = self.op.precedence();
-        write_child(f, self.left.as_ref(), precedence)?;
+        write_child(f, self.left.as_ref())?;
         write!(f, " {} ", self.op)?;
-        write_child(f, self.right.as_ref(), precedence)
+        write_child(f, self.right.as_ref())
     }
 }
 
@@ -2828,7 +2818,16 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                // Add parentheses around nested binary expressions to avoid ambiguity
+                fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(_) => write!(f, "({})", SchemaDisplay(expr)),
+                        _ => write!(f, "{}", SchemaDisplay(expr)),
+                    }
+                }
+                write_child(f, left)?;
+                write!(f, " {op} ")?;
+                write_child(f, right)
             }
             Expr::Case(Case {
                 expr,
@@ -3090,7 +3089,16 @@ impl Display for SqlDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                // Add parentheses around nested binary expressions to avoid ambiguity
+                fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
+                    match expr {
+                        Expr::BinaryExpr(_) => write!(f, "({})", SqlDisplay(expr)),
+                        _ => write!(f, "{}", SqlDisplay(expr)),
+                    }
+                }
+                write_child(f, left)?;
+                write!(f, " {op} ")?;
+                write_child(f, right)
             }
             Expr::Case(Case {
                 expr,
@@ -4092,5 +4100,76 @@ mod test {
                 unimplemented!()
             }
         }
+    }
+
+    #[test]
+    fn test_binary_expr_display_with_parentheses() {
+        // Test that nested binary expressions display with parentheses
+        // to avoid ambiguity. For example, (1+2)*3 should show parentheses.
+        let one = lit(1i64);
+        let two = lit(2i64);
+        let three = lit(3i64);
+
+        // (1+2)*3 - addition nested in multiplication
+        let add = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(one.clone()),
+            Operator::Plus,
+            Box::new(two.clone()),
+        ));
+        let mul = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(add),
+            Operator::Multiply,
+            Box::new(three.clone()),
+        ));
+
+        let display = format!("{}", mul);
+        // Should contain parentheses around the addition
+        assert!(
+            display.contains("("),
+            "Expected parentheses in display: {}",
+            display
+        );
+        assert_eq!(display, "(Int64(1) + Int64(2)) * Int64(3)");
+
+        // 1*(2+3) - addition nested in multiplication on the right
+        let add_right = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(two.clone()),
+            Operator::Multiply,
+            Box::new(three.clone()),
+        ));
+        let mul_right = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(one.clone()),
+            Operator::Plus,
+            Box::new(add_right),
+        ));
+
+        let display_right = format!("{}", mul_right);
+        assert!(
+            display_right.contains("("),
+            "Expected parentheses in display: {}",
+            display_right
+        );
+        assert_eq!(display_right, "Int64(1) + (Int64(2) * Int64(3))");
+
+        // (a OR b) AND c - logical operators
+        let a = col("a");
+        let b = col("b");
+        let c = col("c");
+
+        let or_expr =
+            Expr::BinaryExpr(BinaryExpr::new(Box::new(a), Operator::Or, Box::new(b)));
+        let and_expr = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(or_expr),
+            Operator::And,
+            Box::new(c),
+        ));
+
+        let display_logical = format!("{}", and_expr);
+        assert!(
+            display_logical.contains("("),
+            "Expected parentheses in display: {}",
+            display_logical
+        );
+        assert_eq!(display_logical, "(a OR b) AND c");
     }
 }
