@@ -340,7 +340,7 @@ fn has_one_of_more_common_fields(
 mod tests {
 
     use super::*;
-    use crate::format::DEFAULT_CAST_OPTIONS;
+    use crate::{assert_contains, format::DEFAULT_CAST_OPTIONS};
     use arrow::{
         array::{
             BinaryArray, Int32Array, Int32Builder, Int64Array, ListArray, MapArray,
@@ -658,9 +658,10 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("field1"));
-        assert!(error_msg.contains("Binary"));
-        assert!(error_msg.contains("Int32"));
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct field 'field1' from type Binary to type Int32"
+        );
     }
 
     #[test]
@@ -675,8 +676,10 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("Struct"));
-        assert!(error_msg.contains("Int32"));
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct field 'alpha' from type Struct(\"x\": Int32) to type Int32"
+        );
     }
 
     #[test]
@@ -714,9 +717,10 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("field2"));
-        assert!(error_msg.contains("non-nullable"));
-        assert!(error_msg.contains("missing"));
+        assert_contains!(
+            error_msg,
+            "Cannot cast struct: target field 'field2' is non-nullable but missing from source. Cannot fill with NULL."
+        );
     }
 
     #[test]
