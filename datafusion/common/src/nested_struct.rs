@@ -66,8 +66,8 @@ fn cast_struct_column(
 
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
-        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
         validate_struct_compatibility(source_fields, target_fields)?;
+        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
 
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
@@ -223,6 +223,7 @@ pub fn cast_column(
 /// // Target: {a: binary}
 /// // Result: Err(...) - string cannot cast to binary
 /// ```
+///
 pub fn validate_struct_compatibility(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
@@ -626,6 +627,113 @@ mod tests {
         let error_msg = result.unwrap_err().to_string();
         assert!(error_msg.contains("nested"));
         assert!(error_msg.contains("non-nullable"));
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_by_name() {
+        // Source struct: {field1: Int32, field2: String}
+        let source_fields = vec![
+            arc_field("field1", DataType::Int32),
+            arc_field("field2", DataType::Utf8),
+        ];
+
+        // Target struct: {field2: String, field1: Int64}
+        let target_fields = vec![
+            arc_field("field2", DataType::Utf8),
+            arc_field("field1", DataType::Int64),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_by_name_with_type_mismatch() {
+        // Source struct: {field1: Binary}
+        let source_fields = vec![arc_field("field1", DataType::Binary)];
+
+        // Target struct: {field1: Int32} (incompatible type)
+        let target_fields = vec![arc_field("field1", DataType::Int32)];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("field1"));
+        assert!(error_msg.contains("Binary"));
+        assert!(error_msg.contains("Int32"));
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_positional_with_type_mismatch() {
+        // Source struct: {left: Struct} - nested struct
+        let source_fields =
+            vec![arc_struct_field("left", vec![field("x", DataType::Int32)])];
+
+        // Target struct: {alpha: Int32} (no name overlap, incompatible type at position 0)
+        let target_fields = vec![arc_field("alpha", DataType::Int32)];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Struct"));
+        assert!(error_msg.contains("Int32"));
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_mixed_name_overlap() {
+        // Source struct: {a: Int32, b: String, extra: Boolean}
+        let source_fields = vec![
+            arc_field("a", DataType::Int32),
+            arc_field("b", DataType::Utf8),
+            arc_field("extra", DataType::Boolean),
+        ];
+
+        // Target struct: {b: String, a: Int64, c: Float32}
+        // Name overlap with a and b, missing c (nullable)
+        let target_fields = vec![
+            arc_field("b", DataType::Utf8),
+            arc_field("a", DataType::Int64),
+            arc_field("c", DataType::Float32),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_by_name_missing_required_field() {
+        // Source struct: {field1: Int32} (missing field2)
+        let source_fields = vec![arc_field("field1", DataType::Int32)];
+
+        // Target struct: {field1: Int32, field2: Int32 non-nullable}
+        let target_fields = vec![
+            arc_field("field1", DataType::Int32),
+            Arc::new(non_null_field("field2", DataType::Int32)),
+        ];
+
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("field2"));
+        assert!(error_msg.contains("non-nullable"));
+        assert!(error_msg.contains("missing"));
+    }
+
+    #[test]
+    fn test_validate_struct_compatibility_partial_name_overlap_with_count_mismatch() {
+        // Source struct: {a: Int32} (only one field)
+        let source_fields = vec![arc_field("a", DataType::Int32)];
+
+        // Target struct: {a: Int32, b: String} (two fields, but 'a' overlaps)
+        let target_fields = vec![
+            arc_field("a", DataType::Int32),
+            arc_field("b", DataType::Utf8),
+        ];
+
+        // This should succeed - partial overlap means by-name mapping
+        // and missing field 'b' is nullable
+        let result = validate_struct_compatibility(&source_fields, &target_fields);
+        assert!(result.is_ok());
     }
 
     #[test]
