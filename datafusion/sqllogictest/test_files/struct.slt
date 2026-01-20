@@ -1286,3 +1286,154 @@ select [col1, col2] from t_multi order by col1.a;
 
 statement ok
 drop table t_multi;
+
+############################
+# Comprehensive Implicit Struct Coercion Suite
+############################
+
+# Test 1: VALUES clause with field reordering coerced by name into declared schema
+statement ok
+create table implicit_values_reorder (
+  s struct(a int, b int)
+) as values
+  ({a: 1, b: 2}),
+  ({b: 3, a: 4});
+
+query T
+select arrow_typeof(s) from implicit_values_reorder limit 1;
+----
+Struct("a": Int32, "b": Int32)
+
+query ?
+select s from implicit_values_reorder order by s.a;
+----
+{a: 1, b: 2}
+{a: 4, b: 3}
+
+statement ok
+drop table implicit_values_reorder;
+
+# Test 2: Array literal coercion with reordered struct fields
+query IIII
+select 
+  [{a: 1, b: 2}, {b: 3, a: 4}][1]['a'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][1]['b'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][2]['a'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][2]['b'];
+----
+1 2 4 3
+
+# Test 3: Array construction from columns with reordered struct fields
+statement ok
+create table struct_columns_order (
+  s1 struct(a int, b int),
+  s2 struct(b int, a int)
+) as values
+  ({a: 1, b: 2}, {b: 3, a: 4}),
+  ({a: 5, b: 6}, {b: 7, a: 8});
+
+query IIII
+select 
+  [s1, s2][1]['a'],
+  [s1, s2][1]['b'],
+  [s1, s2][2]['a'],
+  [s1, s2][2]['b']
+from struct_columns_order
+order by s1['a'];
+----
+1 2 4 3
+5 6 8 7
+
+statement ok
+drop table struct_columns_order;
+
+# Test 4: UNION with struct field reordering
+query II
+select s['a'], s['b']
+from (
+  select {a: 1, b: 2} as s
+  union all
+  select {b: 3, a: 4} as s
+) t
+order by s['a'];
+----
+1 2
+4 3
+
+# Test 5: CTE with struct coercion across branches
+query II
+with 
+  t1 as (select {a: 1, b: 2} as s),
+  t2 as (select {b: 3, a: 4} as s)
+select t1.s['a'], t1.s['b'] from t1
+union all
+select t2.s['a'], t2.s['b'] from t2
+order by 1;
+----
+1 2
+4 3
+
+# Test 6: Struct aggregation retains name-based mapping
+statement ok
+create table agg_structs_reorder (
+  k int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (1, {y: 3, x: 4}),
+  (2, {x: 5, y: 6});
+
+query I?
+select k, array_agg(s) from agg_structs_reorder group by k order by k;
+----
+1 [{x: 1, y: 2}, {x: 4, y: 3}]
+2 [{x: 5, y: 6}]
+
+statement ok
+drop table agg_structs_reorder;
+
+# Test 7: Nested struct coercion with reordered inner fields
+query IIII
+with nested as (
+  select [{outer: {inner: 1, value: 2}}, {outer: {value: 3, inner: 4}}] as arr
+)
+select 
+  arr[1]['outer']['inner'],
+  arr[1]['outer']['value'],
+  arr[2]['outer']['inner'],
+  arr[2]['outer']['value']
+from nested;
+----
+1 2 4 3
+
+# Test 8: Partial name overlap - currently errors (field count mismatch detected)
+# This is a documented limitation: structs must have exactly same field set for coercion
+query error DataFusion error: Error during planning: Inconsistent data type across values list
+select column1 from (values ({a: 1, b: 2}), ({b: 3, c: 4})) order by column1['a'];
+
+# Negative test: mismatched struct field counts are rejected (documented limitation)
+query error DataFusion error: .*
+select [{a: 1}, {a: 2, b: 3}];
+
+# Test 9: INSERT with name-based struct coercion into target schema
+statement ok
+create table target_struct_insert (s struct(a int, b int));
+
+statement ok
+insert into target_struct_insert values ({b: 1, a: 2});
+
+query ?
+select s from target_struct_insert;
+----
+{a: 2, b: 1}
+
+statement ok
+drop table target_struct_insert;
+
+# Test 10: CASE expression with different struct field orders
+query II
+select 
+  (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['a'] as a_val,
+  (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['b'] as b_val;
+----
+1 2
