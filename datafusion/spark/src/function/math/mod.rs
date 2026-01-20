@@ -39,6 +39,7 @@ make_udf_function!(random::SparkRandom, random);
 make_udf_function!(random::SparkRandN, randn);
 make_udf_function!(random::SparkRandStr, randstr);
 make_udf_function!(rint::SparkRint, rint);
+make_udf_function!(random::SparkUniform, uniform);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
@@ -79,6 +80,11 @@ pub mod expr_fn {
         "Returns a random string of the specified length.",
         length opt_seed
     ));
+    export_functions!((
+        uniform,
+        "Returns a random float value sampled from a uniform distribution in [`min`, `max`).",
+        min max opt_seed
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -96,5 +102,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         random(),
         randn(),
         randstr(),
+        uniform(),
     ]
 }

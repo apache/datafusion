@@ -16,20 +16,24 @@
 // under the License.
 
 use std::any::Any;
+use std::ops::{Add, Mul, Sub};
 use std::sync::Arc;
 
 use arrow::array::{Float64Array, StringArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_int32, logical_int64};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_err, internal_datafusion_err, internal_err, plan_err,
+};
+use datafusion_expr::binary::binary_numeric_coercion;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, TypeSignature,
-    TypeSignatureClass,
+    Coercion, ColumnarValue, Expr, ExprSchemable, ReturnFieldArgs, ScalarFunctionArgs,
+    TypeSignature, TypeSignatureClass,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-use datafusion_functions::expr_fn::random;
 use rand::rngs::SmallRng;
 use rand::{Rng, RngCore, SeedableRng, rng};
 use rand_distr::{Alphanumeric, StandardNormal, Uniform};
@@ -123,7 +127,9 @@ impl ScalarUDFImpl for SparkRandom {
     ) -> Result<ExprSimplifyResult> {
         // if no seed is provided, we can simplify to Datafusion built-in random()
         match args.len() {
-            0 => Ok(ExprSimplifyResult::Simplified(random())),
+            0 => Ok(ExprSimplifyResult::Simplified(
+                datafusion_functions::expr_fn::random(),
+            )),
             1 => Ok(ExprSimplifyResult::Original(args)),
             _ => plan_err!("`{}` function expects 0 or 1 argument(s)", self.name()),
         }
@@ -321,5 +327,123 @@ impl ScalarUDFImpl for SparkRandStr {
             .collect();
 
         Ok(ColumnarValue::Array(Arc::new(values)))
+    }
+}
+
+/// <https://spark.apache.org/docs/latest/api/sql/index.html#uniform>
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkUniform {
+    signature: Signature,
+}
+
+impl Default for SparkUniform {
+    fn default() -> Self {
+        SparkUniform::new()
+    }
+}
+
+impl SparkUniform {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Numeric),
+                        Coercion::new_exact(TypeSignatureClass::Numeric),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Numeric),
+                        Coercion::new_exact(TypeSignatureClass::Numeric),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Native(logical_int64()),
+                            vec![TypeSignatureClass::Integer],
+                            NativeType::Int64,
+                        ),
+                    ]),
+                ],
+                Volatility::Volatile,
+            ),
+        }
+    }
+
+    fn get_return_type(&self, min: &DataType, max: &DataType) -> Result<DataType> {
+        let return_type = binary_numeric_coercion(min, max).ok_or_else(|| {
+            internal_datafusion_err!("Incompatible types for {} function", self.name())
+        })?;
+        Ok(return_type)
+    }
+}
+
+impl ScalarUDFImpl for SparkUniform {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "uniform"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        if args.arg_fields.iter().any(|f| f.data_type().is_null()) {
+            return Ok(Arc::new(Field::new(self.name(), DataType::Null, nullable)));
+        }
+
+        let return_type = self.get_return_type(
+            args.arg_fields[0].data_type(),
+            args.arg_fields[1].data_type(),
+        )?;
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("`invoke_with_args` is not implemented for {}", self.name())
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        let rand_expr = match args.len() {
+            2 => Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::new(SparkRandom::new().into()),
+                vec![],
+            )),
+            3 => Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::new(SparkRandom::new().into()),
+                vec![args[2].clone()],
+            )),
+            _ => {
+                return plan_err!(
+                    "`{}` function expects 2 or 3 argument(s)",
+                    self.name()
+                );
+            }
+        };
+
+        let min = args[0].clone();
+        let max = args[1].clone();
+        let (_, min_field) = min.to_field(info.schema())?;
+        let (_, max_field) = max.to_field(info.schema())?;
+        let return_type =
+            self.get_return_type(min_field.data_type(), max_field.data_type())?;
+
+        let min = min.cast_to(&DataType::Float64, info.schema())?;
+        let max = max.cast_to(&DataType::Float64, info.schema())?;
+
+        Ok(ExprSimplifyResult::Simplified(
+            min.clone()
+                .add((max.sub(min)).mul(rand_expr))
+                .cast_to(&return_type, info.schema())?,
+        ))
     }
 }
