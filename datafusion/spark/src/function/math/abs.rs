@@ -236,74 +236,97 @@ mod tests {
     use super::*;
     use arrow::datatypes::i256;
 
+    macro_rules! eval_with_mode {
+        ($FLAG:expr, $TYPE:ident, $VAL:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(@impl $FLAG, $TYPE, $VAL $(, $RESULT)?);
+        }};
+        (@impl $FLAG:expr, $TYPE:ident, $VAL:expr) => {{
+            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
+            match spark_abs(&[args], $FLAG) {
+                Err(e) => {
+                    assert!(
+                        e.to_string().contains("overflow on abs"),
+                        "Error message did not match. Actual message: {e}"
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }};
+        (@impl $FLAG:expr, $TYPE:ident, $VAL:expr, $RESULT:expr) => {{
+            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
+            match spark_abs(&[args], $FLAG) {
+                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(Some(result)))) => {
+                    assert_eq!(result, $RESULT);
+                }
+                _ => unreachable!(),
+            }
+        }};
+        ($FLAG:expr, $TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(@impl $FLAG, $TYPE, $VAL, $PRECISION, $SCALE $(, $RESULT)?)
+        }};
+        (@impl $FLAG:expr, $TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr) => {{
+            let args =
+                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
+            match spark_abs(&[args], $FLAG) {
+                Err(e) => {
+                    assert!(
+                        e.to_string().contains("overflow on abs"),
+                        "Error message did not match. Actual message: {e}"
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }};
+        (@impl $FLAG:expr, $TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr, $RESULT:expr) => {{
+            let args =
+                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
+            match spark_abs(&[args], $FLAG) {
+                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(
+                    Some(result),
+                    precision,
+                    scale,
+                ))) => {
+                    assert_eq!(result, $RESULT);
+                    assert_eq!(precision, $PRECISION);
+                    assert_eq!(scale, $SCALE);
+                }
+                _ => unreachable!(),
+            }
+        }}
+    }
+
     macro_rules! eval_legacy_mode {
-        ($TYPE:ident, $VAL:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            match spark_abs(&[args], false) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(Some(result)))) => {
-                    assert_eq!(result, $VAL);
-                }
-                _ => unreachable!(),
-            }
+        ($TYPE:ident, $VAL:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(false, $TYPE, $VAL $(, $RESULT)?)
         }};
-        ($TYPE:ident, $VAL:expr, $RESULT:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            match spark_abs(&[args], false) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(Some(result)))) => {
-                    assert_eq!(result, $RESULT);
-                }
-                _ => unreachable!(),
-            }
+        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(false, $TYPE, $VAL, $PRECISION, $SCALE $(, $RESULT)?)
         }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            match spark_abs(&[args], false) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(
-                    Some(result),
-                    precision,
-                    scale,
-                ))) => {
-                    assert_eq!(result, $VAL);
-                    assert_eq!(precision, $PRECISION);
-                    assert_eq!(scale, $SCALE);
-                }
-                _ => unreachable!(),
-            }
+    }
+    macro_rules! eval_ansi_mode {
+        ($TYPE:ident, $VAL:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(true, $TYPE, $VAL $(, $RESULT)?)
         }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr, $RESULT:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            match spark_abs(&[args], false) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(
-                    Some(result),
-                    precision,
-                    scale,
-                ))) => {
-                    assert_eq!(result, $RESULT);
-                    assert_eq!(precision, $PRECISION);
-                    assert_eq!(scale, $SCALE);
-                }
-                _ => unreachable!(),
-            }
+        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr $(, $RESULT:expr)?) => {{
+            eval_with_mode!(true, $TYPE, $VAL, $PRECISION, $SCALE $(, $RESULT)?)
         }};
     }
 
     #[test]
     fn test_abs_scalar_legacy_mode() {
         // NumericType MIN
-        eval_legacy_mode!(UInt8, u8::MIN);
-        eval_legacy_mode!(UInt16, u16::MIN);
-        eval_legacy_mode!(UInt32, u32::MIN);
-        eval_legacy_mode!(UInt64, u64::MIN);
-        eval_legacy_mode!(Int8, i8::MIN);
-        eval_legacy_mode!(Int16, i16::MIN);
-        eval_legacy_mode!(Int32, i32::MIN);
-        eval_legacy_mode!(Int64, i64::MIN);
+        eval_legacy_mode!(UInt8, u8::MIN, u8::MIN);
+        eval_legacy_mode!(UInt16, u16::MIN, u16::MIN);
+        eval_legacy_mode!(UInt32, u32::MIN, u32::MIN);
+        eval_legacy_mode!(UInt64, u64::MIN, u64::MIN);
+        eval_legacy_mode!(Int8, i8::MIN, i8::MIN);
+        eval_legacy_mode!(Int16, i16::MIN, i16::MIN);
+        eval_legacy_mode!(Int32, i32::MIN, i32::MIN);
+        eval_legacy_mode!(Int64, i64::MIN, i64::MIN);
         eval_legacy_mode!(Float32, f32::MIN, f32::MAX);
         eval_legacy_mode!(Float64, f64::MIN, f64::MAX);
-        eval_legacy_mode!(Decimal128, i128::MIN, 18, 10);
-        eval_legacy_mode!(Decimal256, i256::MIN, 10, 2);
+        eval_legacy_mode!(Decimal128, i128::MIN, 18, 10, i128::MIN);
+        eval_legacy_mode!(Decimal256, i256::MIN, 10, 2, i256::MIN);
 
         // NumericType not MIN
         eval_legacy_mode!(Int8, -1i8, 1i8);
@@ -322,59 +345,6 @@ mod tests {
         eval_legacy_mode!(Float64, f64::INFINITY, f64::INFINITY);
         eval_legacy_mode!(Float64, 0.0f64, 0.0f64);
         eval_legacy_mode!(Float64, -0.0f64, 0.0f64);
-    }
-
-    macro_rules! eval_ansi_mode {
-        ($TYPE:ident, $VAL:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            match spark_abs(&[args], true) {
-                Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $RESULT:expr) => {{
-            let args = ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL)));
-            match spark_abs(&[args], true) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(Some(result)))) => {
-                    assert_eq!(result, $RESULT);
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            match spark_abs(&[args], true) {
-                Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
-                    );
-                }
-                _ => unreachable!(),
-            }
-        }};
-        ($TYPE:ident, $VAL:expr, $PRECISION:expr, $SCALE:expr, $RESULT:expr) => {{
-            let args =
-                ColumnarValue::Scalar(ScalarValue::$TYPE(Some($VAL), $PRECISION, $SCALE));
-            match spark_abs(&[args], true) {
-                Ok(ColumnarValue::Scalar(ScalarValue::$TYPE(
-                    Some(result),
-                    precision,
-                    scale,
-                ))) => {
-                    assert_eq!(result, $RESULT);
-                    assert_eq!(precision, $PRECISION);
-                    assert_eq!(scale, $SCALE);
-                }
-                _ => unreachable!(),
-            }
-        }};
     }
 
     #[test]
