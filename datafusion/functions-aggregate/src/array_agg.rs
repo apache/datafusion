@@ -126,12 +126,17 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        // Inner list field nullability matches input field (same as return_field)
+        let input_nullable = args.input_fields[0].is_nullable();
+
         if args.is_distinct {
             return Ok(vec![
                 Field::new_list(
                     format_state_name(args.name, "distinct_array_agg"),
-                    // See COMMENTS.md to understand why nullable is set to true
-                    Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                    Field::new_list_field(
+                        args.input_fields[0].data_type().clone(),
+                        input_nullable,
+                    ),
                     true,
                 )
                 .into(),
@@ -141,8 +146,10 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![
             Field::new_list(
                 format_state_name(args.name, "array_agg"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                Field::new_list_field(
+                    args.input_fields[0].data_type().clone(),
+                    input_nullable,
+                ),
                 true,
             )
             .into(),
@@ -398,30 +405,10 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // State uses nullable inner elements to match state_fields() schema
-        // This is required for proper merging across partitions
-        let element_arrays: Vec<&dyn Array> =
-            self.values.iter().map(|a| a.as_ref()).collect();
-
-        if element_arrays.is_empty() {
-            return Ok(vec![ScalarValue::new_null_list(
-                self.datatype.clone(),
-                true, // state always uses nullable inner
-                1,
-            )]);
-        }
-
-        let concated_array = arrow::compute::concat(&element_arrays)?;
-
-        Ok(vec![
-            SingleRowListArrayBuilder::new(concated_array)
-                .with_nullable(true) // state always uses nullable inner
-                .build_list_scalar(),
-        ])
+        Ok(vec![self.evaluate()?])
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Final output uses input_nullable to preserve nullability from input
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 
@@ -493,46 +480,7 @@ impl DistinctArrayAggAccumulator {
 
 impl Accumulator for DistinctArrayAggAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        // State uses nullable inner elements to match state_fields() schema
-        let mut values: Vec<ScalarValue> = self.values.iter().cloned().collect();
-        if values.is_empty() {
-            return Ok(vec![ScalarValue::new_null_list(
-                self.datatype.clone(),
-                true, // state always uses nullable inner
-                1,
-            )]);
-        }
-
-        // Sort if needed (same logic as evaluate)
-        if let Some(opts) = self.sort_options {
-            let mut delayed_cmp_err = Ok(());
-            values.sort_by(|a, b| {
-                if a.is_null() {
-                    return match opts.nulls_first {
-                        true => Ordering::Less,
-                        false => Ordering::Greater,
-                    };
-                }
-                if b.is_null() {
-                    return match opts.nulls_first {
-                        true => Ordering::Greater,
-                        false => Ordering::Less,
-                    };
-                }
-                match opts.descending {
-                    true => b.try_cmp(a),
-                    false => a.try_cmp(b),
-                }
-                .unwrap_or_else(|err| {
-                    delayed_cmp_err = Err(err);
-                    Ordering::Equal
-                })
-            });
-            delayed_cmp_err?;
-        }
-
-        let arr = ScalarValue::new_list(&values, &self.datatype, true); // state always uses nullable inner
-        Ok(vec![ScalarValue::List(arr)])
+        Ok(vec![self.evaluate()?])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -838,43 +786,12 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        if !self.is_input_pre_ordered {
-            self.sort();
-        }
-
-        // State uses nullable inner elements to match state_fields() schema
-        let state_value = if self.values.is_empty() {
-            ScalarValue::new_null_list(
-                self.datatypes[0].clone(),
-                true, // state always uses nullable inner
-                1,
-            )
-        } else {
-            let values = self.values.clone();
-            let array = if self.reverse {
-                ScalarValue::new_list_from_iter(
-                    values.into_iter().rev(),
-                    &self.datatypes[0],
-                    true, // state always uses nullable inner
-                )
-            } else {
-                ScalarValue::new_list_from_iter(
-                    values.into_iter(),
-                    &self.datatypes[0],
-                    true, // state always uses nullable inner
-                )
-            };
-            ScalarValue::List(array)
-        };
-
-        let mut result = vec![state_value];
+        let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
-
         Ok(result)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Final output uses input_nullable to preserve nullability from input
         if !self.is_input_pre_ordered {
             self.sort();
         }
