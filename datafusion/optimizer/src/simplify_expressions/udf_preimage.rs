@@ -40,11 +40,10 @@ pub(super) fn rewrite_with_preimage(
     _info: &SimplifyContext,
     preimage_interval: Interval,
     op: Operator,
-    expr: Box<Expr>,
+    expr: Expr,
 ) -> Result<Transformed<Expr>> {
     let (lower, upper) = preimage_interval.into_bounds();
     let (lower, upper) = (lit(lower), lit(upper));
-    let expr = *expr;
 
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < lower
@@ -84,9 +83,8 @@ mod test {
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
-        BinaryExpr, ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, and, binary_expr, col, lit,
-        simplify::SimplifyContext,
+        ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, Volatility, and, binary_expr, col, lit, simplify::SimplifyContext,
     };
 
     use super::Interval;
