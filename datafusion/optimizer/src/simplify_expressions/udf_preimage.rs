@@ -85,26 +85,19 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         BinaryExpr, ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, Volatility, and, col, lit, simplify::SimplifyContext,
+        ScalarUDFImpl, Signature, Volatility, and, binary_expr, col, lit,
+        simplify::SimplifyContext,
     };
 
     use super::Interval;
     use crate::simplify_expressions::ExprSimplifier;
 
     fn is_distinct_from(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::IsDistinctFrom,
-            right: Box::new(right),
-        })
+        binary_expr(left, Operator::IsDistinctFrom, right)
     }
 
     fn is_not_distinct_from(left: Expr, right: Expr) -> Expr {
-        Expr::BinaryExpr(BinaryExpr {
-            left: Box::new(left),
-            op: Operator::IsNotDistinctFrom,
-            right: Box::new(right),
-        })
+        binary_expr(left, Operator::IsNotDistinctFrom, right)
     }
 
     #[derive(Debug, PartialEq, Eq, Hash)]
