@@ -121,6 +121,7 @@ pub trait HashTableAllocExt {
     ///
     /// Returns the bucket where the element was inserted.
     /// Note that allocation counts capacity, not size.
+    /// This method assumes that the element is not already present
     ///
     /// # Example:
     /// ```
@@ -134,7 +135,7 @@ pub trait HashTableAllocExt {
     /// assert_eq!(allocated, 64);
     ///
     /// // insert more values
-    /// for i in 0..100 {
+    /// for i in 2..100 {
     ///     table.insert_accounted(i, hash_fn, &mut allocated);
     /// }
     /// assert_eq!(allocated, 400);
