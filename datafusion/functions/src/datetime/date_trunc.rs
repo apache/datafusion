@@ -33,6 +33,7 @@ use arrow::array::types::{
 };
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
+use arrow::datatypes::Field;
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
@@ -41,10 +42,9 @@ use datafusion_common::{
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
-    ReturnFieldArgs,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
-use arrow::datatypes::Field;
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
@@ -231,7 +231,10 @@ impl ScalarUDFImpl for DateTruncFunc {
         internal_err!("return_field_from_args should be used instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<arrow::datatypes::FieldRef> {
+    fn return_field_from_args(
+        &self,
+        args: ReturnFieldArgs,
+    ) -> Result<arrow::datatypes::FieldRef> {
         // For date_trunc the return type is the same as the second argument
         // unless that argument is NULL, in which case we default to a
         // nanosecond timestamp. Preserve the nullability of the second arg.
@@ -241,7 +244,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         } else {
             dt
         };
-        Ok(Arc::new(Field::new(self.name(), return_type, args.arg_fields[1].is_nullable())))
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            args.arg_fields[1].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(
