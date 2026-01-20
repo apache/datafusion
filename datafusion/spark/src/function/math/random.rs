@@ -414,11 +414,11 @@ impl ScalarUDFImpl for SparkUniform {
     ) -> Result<ExprSimplifyResult> {
         let rand_expr = match args.len() {
             2 => Expr::ScalarFunction(ScalarFunction::new_udf(
-                Arc::new(SparkRandom::new().into()),
+                crate::function::math::random(),
                 vec![],
             )),
             3 => Expr::ScalarFunction(ScalarFunction::new_udf(
-                Arc::new(SparkRandom::new().into()),
+                crate::function::math::random(),
                 vec![args[2].clone()],
             )),
             _ => {
