@@ -613,7 +613,7 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input)?;
+                    let filters = extract_dml_filters(input, &table_name.to_string())?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -639,7 +639,7 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input)?;
+                    let filters = extract_dml_filters(input, &table_name.to_string())?;
                     // Extract assignments from the projection in input plan
                     let assignments = extract_update_assignments(input)?;
                     provider
@@ -1913,7 +1913,10 @@ fn get_physical_expr_pair(
 /// the TableProvider's schema. Deduplicates filters to avoid passing the same
 /// predicate twice when filters appear in both Filter and TableScan nodes.
 ///
-fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
+fn extract_dml_filters(
+    input: &Arc<LogicalPlan>,
+    target_table_name: &str,
+) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
 
     input.apply(|node| {
@@ -1923,11 +1926,17 @@ fn extract_dml_filters(input: &Arc<LogicalPlan>) -> Result<Vec<Expr>> {
                 filters.extend(split_conjunction(&filter.predicate).into_iter().cloned());
             }
             LogicalPlan::TableScan(TableScan {
+                table_name,
                 filters: scan_filters,
                 ..
             }) => {
-                for filter in scan_filters {
-                    filters.extend(split_conjunction(filter).into_iter().cloned());
+                // Only extract filters from the target table scan.
+                // This prevents incorrect filter extraction in UPDATE...FROM scenarios
+                // where multiple table scans may have filters.
+                if table_name.to_string() == target_table_name {
+                    for filter in scan_filters {
+                        filters.extend(split_conjunction(filter).into_iter().cloned());
+                    }
                 }
             }
             // Plans without filter information
