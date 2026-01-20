@@ -61,8 +61,7 @@ impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
             } else {
                 // Column not found in mapping
                 return Err(DataFusionError::Internal(format!(
-                    "Column {:?} not found in column mapping",
-                    column
+                    "Column {column:?} not found in column mapping"
                 )));
             }
         }
