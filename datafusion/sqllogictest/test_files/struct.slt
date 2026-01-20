@@ -1121,3 +1121,168 @@ query ?
 select [{val: 1}, {val: 2.5}];
 ----
 [{val: 1.0}, {val: 2.5}]
+
+############################
+# Dynamic Array Construction Tests (from Table Columns)
+############################
+
+# Setup test table with struct columns for dynamic array construction
+statement ok
+create table t_complete_overlap (
+  s1 struct(x int, y int),
+  s2 struct(y int, x int)
+) as values
+  ({x: 1, y: 2}, {y: 3, x: 4}),
+  ({x: 5, y: 6}, {y: 7, x: 8});
+
+# Test 1: Complete overlap - same fields, different order
+# Verify arrow_typeof for dynamically created array
+query T
+select arrow_typeof([s1, s2]) from t_complete_overlap limit 1;
+----
+List(Struct("y": Int32, "x": Int32))
+
+# Verify values are correctly mapped by name in the array
+# Field order follows the second column's field order
+query ?
+select [s1, s2] from t_complete_overlap order by s1.x;
+----
+[{y: 2, x: 1}, {y: 3, x: 4}]
+[{y: 6, x: 5}, {y: 7, x: 8}]
+
+statement ok
+drop table t_complete_overlap;
+
+# Test 2: Partial overlap - some shared fields between columns
+# Note: Columns must have the exact same field set for array construction to work
+# Test with identical field set (all fields present in both columns)
+statement ok
+create table t_partial_overlap (
+  col_a struct(name VARCHAR, age int, active boolean),
+  col_b struct(age int, name VARCHAR, active boolean)
+) as values
+  ({name: 'Alice', age: 30, active: true}, {age: 25, name: 'Bob', active: false}),
+  ({name: 'Charlie', age: 35, active: true}, {age: 40, name: 'Diana', active: false});
+
+# Verify unified type includes all fields from both structs
+query T
+select arrow_typeof([col_a, col_b]) from t_partial_overlap limit 1;
+----
+List(Struct("age": Int32, "name": Utf8View, "active": Boolean))
+
+# Verify values are correctly mapped by name in the array
+# Field order follows the second column's field order
+query ?
+select [col_a, col_b] from t_partial_overlap order by col_a.name;
+----
+[{age: 30, name: Alice, active: true}, {age: 25, name: Bob, active: false}]
+[{age: 35, name: Charlie, active: true}, {age: 40, name: Diana, active: false}]
+
+statement ok
+drop table t_partial_overlap;
+
+# Test 3: Complete field set matching
+# For array construction with partial field overlap, use CAST to explicitly unify schemas
+statement ok
+create table t_with_cast (
+  col_x struct(id int, description VARCHAR),
+  col_y struct(id int, description VARCHAR)
+) as values
+  ({id: 1, description: 'First'}, {id: 10, description: 'First Value'}),
+  ({id: 2, description: 'Second'}, {id: 20, description: 'Second Value'});
+
+# Verify type unification with all fields
+query T
+select arrow_typeof([col_x, col_y]) from t_with_cast limit 1;
+----
+List(Struct("id": Int32, "description": Utf8View))
+
+# Verify NULL filling when fields are missing (using CAST)
+query ?
+select [col_x, col_y] from t_with_cast order by col_x.id;
+----
+[{id: 1, description: First}, {id: 10, description: First Value}]
+[{id: 2, description: Second}, {id: 20, description: Second Value}]
+
+statement ok
+drop table t_with_cast;
+
+# Test 4: Explicit CAST for partial field overlap scenarios
+# When columns have different field sets, use explicit CAST to unify schemas
+query ?
+select [
+  CAST({id: 1} AS STRUCT(id INT, description VARCHAR)),
+  CAST({id: 10, description: 'Value'} AS STRUCT(id INT, description VARCHAR))
+];
+----
+[{id: 1, description: NULL}, {id: 10, description: Value}]
+
+# Test 5: Complex nested structs with field reordering
+# Nested fields must have the exact same field set for array construction
+statement ok
+create table t_nested (
+  col_1 struct(id int, outer struct(x int, y int)),
+  col_2 struct(id int, outer struct(x int, y int))
+) as values
+  ({id: 100, outer: {x: 1, y: 2}}, {id: 101, outer: {x: 4, y: 3}}),
+  ({id: 200, outer: {x: 5, y: 6}}, {id: 201, outer: {x: 8, y: 7}});
+
+# Verify nested struct in unified schema
+query T
+select arrow_typeof([col_1, col_2]) from t_nested limit 1;
+----
+List(Struct("id": Int32, "outer": Struct("x": Int32, "y": Int32)))
+
+# Verify nested field values are correctly mapped
+query ?
+select [col_1, col_2] from t_nested order by col_1.id;
+----
+[{id: 100, outer: {x: 1, y: 2}}, {id: 101, outer: {x: 4, y: 3}}]
+[{id: 200, outer: {x: 5, y: 6}}, {id: 201, outer: {x: 8, y: 7}}]
+
+statement ok
+drop table t_nested;
+
+# Test 6: NULL handling with matching field sets
+statement ok
+create table t_nulls (
+  col_a struct(val int, flag boolean),
+  col_b struct(val int, flag boolean)
+) as values
+  ({val: 1, flag: true}, {val: 10, flag: false}),
+  ({val: NULL, flag: false}, {val: NULL, flag: true});
+
+# Verify NULL values are preserved
+query ?
+select [col_a, col_b] from t_nulls order by col_a.val;
+----
+[{val: 1, flag: true}, {val: 10, flag: false}]
+[{val: NULL, flag: false}, {val: NULL, flag: true}]
+
+statement ok
+drop table t_nulls;
+
+# Test 7: Multiple columns with complete field matching
+statement ok
+create table t_multi (
+  col1 struct(a int, b int, c int),
+  col2 struct(a int, b int, c int)
+) as values
+  ({a: 1, b: 2, c: 3}, {a: 10, b: 20, c: 30}),
+  ({a: 4, b: 5, c: 6}, {a: 40, b: 50, c: 60});
+
+# Verify array with complete field matching
+query T
+select arrow_typeof([col1, col2]) from t_multi limit 1;
+----
+List(Struct("a": Int32, "b": Int32, "c": Int32))
+
+# Verify values are correctly unified
+query ?
+select [col1, col2] from t_multi order by col1.a;
+----
+[{a: 1, b: 2, c: 3}, {a: 10, b: 20, c: 30}]
+[{a: 4, b: 5, c: 6}, {a: 40, b: 50, c: 60}]
+
+statement ok
+drop table t_multi;
