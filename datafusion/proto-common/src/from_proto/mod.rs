@@ -326,6 +326,19 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let keys_sorted = map.keys_sorted;
                 DataType::Map(Arc::new(field), keys_sorted)
             }
+            arrow_type::ArrowTypeEnum::RunEndEncoded(run_end_encoded) => {
+                let run_ends_field: Field = run_end_encoded
+                    .as_ref()
+                    .run_ends_field
+                    .as_deref()
+                    .required("run_ends_field")?;
+                let value_field: Field = run_end_encoded
+                    .as_ref()
+                    .value_field
+                    .as_deref()
+                    .required("value_field")?;
+                DataType::RunEndEncoded(run_ends_field.into(), value_field.into())
+            }
         })
     }
 }
@@ -577,6 +590,22 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     .try_into()?;
 
                 Self::Dictionary(Box::new(index_type), Box::new(value))
+            }
+            Value::RunEndEncodedValue(v) => {
+                let run_ends_type: DataType = v
+                    .run_ends_type
+                    .as_ref()
+                    .ok_or_else(|| Error::required("run_ends_type"))?
+                    .try_into()?;
+
+                let value: Self = v
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| Error::required("value"))?
+                    .as_ref()
+                    .try_into()?;
+
+                Self::RunEndEncoded(Box::new(run_ends_type), Box::new(value))
             }
             Value::BinaryValue(v) => Self::Binary(Some(v.clone())),
             Value::BinaryViewValue(v) => Self::BinaryView(Some(v.clone())),

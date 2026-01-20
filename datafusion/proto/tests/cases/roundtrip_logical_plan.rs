@@ -1533,6 +1533,14 @@ fn round_trip_scalar_values_and_data_types() {
             Box::new(DataType::Int32),
             Box::new(ScalarValue::Utf8(None)),
         ),
+        ScalarValue::RunEndEncoded(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::from("foo")),
+        ),
+        ScalarValue::RunEndEncoded(
+            Box::new(DataType::Int32),
+            Box::new(ScalarValue::Utf8(None)),
+        ),
         ScalarValue::Binary(Some(b"bar".to_vec())),
         ScalarValue::Binary(None),
         ScalarValue::LargeBinary(Some(b"bar".to_vec())),
