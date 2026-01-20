@@ -897,3 +897,164 @@ query ?
 SELECT CAST(NULL::STRUCT(b INT, a INT) AS STRUCT(a INT, b INT));
 ----
 NULL
+
+############################
+# Implicit Coercion Tests with CREATE TABLE AS VALUES
+############################
+
+# Test implicit coercion with same field order, different types
+statement ok
+create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("r": Utf8, "c": Float64)
+
+query ?
+select * from t order by column1.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nullable fields (same order)
+statement ok
+create table t as values({a: 1, b: 'x'}), ({a: 2, b: 'y'});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("a": Int64, "b": Utf8)
+
+query ?
+select * from t order by column1.a;
+----
+{a: 1, b: x}
+{a: 2, b: y}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nested structs (same field order)
+statement ok
+create table t as 
+  select {outer: {x: 1, y: 2}} as column1
+  union all
+  select {outer: {x: 3, y: 4}};
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("outer": Struct("x": Int64, "y": Int64))
+
+query ?
+select column1 from t order by column1.outer.x;
+----
+{outer: {x: 1, y: 2}}
+{outer: {x: 3, y: 4}}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with type widening (Int32 -> Int64)
+statement ok
+create table t as values({id: 1, val: 100}), ({id: 2, val: 9223372036854775807});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("id": Int64, "val": Int64)
+
+query ?
+select * from t order by column1.id;
+----
+{id: 1, val: 100}
+{id: 2, val: 9223372036854775807}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nested struct and type coercion
+statement ok
+create table t as 
+  select {name: 'Alice', data: {score: 100, active: true}} as column1
+  union all
+  select {name: 'Bob', data: {score: 200, active: false}};
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("name": Utf8, "data": Struct("score": Int64, "active": Boolean))
+
+query ?
+select column1 from t order by column1.name;
+----
+{name: Alice, data: {score: 100, active: true}}
+{name: Bob, data: {score: 200, active: false}}
+
+statement ok
+drop table t;
+
+############################
+# Field Reordering Tests (using explicit CAST)
+############################
+
+# Test explicit cast with field reordering in VALUES - basic case
+query ?
+select CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT));
+----
+{r: b, c: 2.3}
+
+# Test explicit cast with field reordering - multiple rows
+query ?
+select * from (values 
+  (CAST({c: 1, r: 'a'} AS STRUCT(r VARCHAR, c FLOAT))),
+  (CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT)))
+) order by column1.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+# Test table with explicit cast for field reordering
+statement ok
+create table t as select CAST({c: 1, r: 'a'} AS STRUCT(r VARCHAR, c FLOAT)) as s
+union all
+select CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT));
+
+query T
+select arrow_typeof(s) from t limit 1;
+----
+Struct("r": Utf8View, "c": Float32)
+
+query ?
+select * from t order by s.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+statement ok
+drop table t;
+
+# Test field reordering with nullable fields using CAST
+query ?
+select CAST({b: NULL, a: 42} AS STRUCT(a INT, b INT));
+----
+{a: 42, b: NULL}
+
+# Test field reordering with nested structs using CAST
+query ?
+select CAST({outer: {y: 4, x: 3}} AS STRUCT(outer STRUCT(x INT, y INT)));
+----
+{outer: {x: 3, y: 4}}
+
+# Test complex nested field reordering
+query ?
+select CAST(
+  {data: {active: false, score: 200}, name: 'Bob'}
+  AS STRUCT(name VARCHAR, data STRUCT(score INT, active BOOLEAN))
+);
+----
+{name: Bob, data: {score: 200, active: false}}
