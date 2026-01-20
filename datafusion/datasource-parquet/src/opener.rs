@@ -436,7 +436,7 @@ impl FileOpener for ParquetOpener {
                     reader_metadata,
                     &mut async_file_reader,
                     // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
-                    options.with_page_index(true),
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
                 )
                 .await?;
             }

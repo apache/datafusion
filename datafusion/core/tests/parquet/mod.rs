@@ -57,6 +57,7 @@ mod row_group_pruning;
 mod schema;
 mod schema_coercion;
 mod utils;
+mod issue_19839;
 
 #[cfg(test)]
 #[ctor::ctor]
