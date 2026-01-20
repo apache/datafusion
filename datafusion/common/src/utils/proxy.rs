@@ -161,22 +161,24 @@ where
     ) {
         let hash = hasher(&x);
 
-        // NOTE: `find_entry` does NOT grow!
-        match self.find_entry(hash, |y| y == &x) {
-            Ok(_occupied) => {}
-            Err(_absent) => {
-                if self.len() == self.capacity() {
-                    // need to request more memory
-                    let bump_elements = self.capacity().max(16);
-                    let bump_size = bump_elements * size_of::<T>();
-                    *accounting = (*accounting).checked_add(bump_size).expect("overflow");
-
-                    self.reserve(bump_elements, &hasher);
-                }
-
-                // still need to insert the element since first try failed
-                self.entry(hash, |y| y == &x, hasher).insert(x);
-            }
+        if cfg!(debug_assertions) {
+            // In debug mode, check that the element is not already present
+            debug_assert!(
+                self.find_entry(hash, |y| y == &x).is_err(),
+                "attempted to insert duplicate element into HashTableAllocExt::insert_accounted"
+            );
         }
+
+        if self.len() == self.capacity() {
+            // need to request more memory
+            let bump_elements = self.capacity().max(16);
+            let bump_size = bump_elements * size_of::<T>();
+            *accounting = (*accounting).checked_add(bump_size).expect("overflow");
+
+            self.reserve(bump_elements, &hasher);
+        }
+
+        // still need to insert the element since first try failed
+        self.insert_unique(hash, x, hasher);
     }
 }
