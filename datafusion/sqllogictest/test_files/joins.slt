@@ -5049,9 +5049,10 @@ WHERE k1 < 0
 ----
 physical_plan
 01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k2@0, k1@0)]
-02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--FilterExec: k1@0 < 0
-04)----DataSourceExec: partitions=1, partition_sizes=[10000]
+02)--FilterExec: k2@0 < 0
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)--FilterExec: k1@0 < 0
+05)----DataSourceExec: partitions=1, partition_sizes=[10000]
 
 query II
 SELECT *
