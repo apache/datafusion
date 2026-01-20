@@ -1907,11 +1907,25 @@ fn get_physical_expr_pair(
 }
 
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
+///
 /// Walks the logical plan tree and collects Filter predicates and any filters
 /// pushed down into TableScan nodes, splitting AND conjunctions into individual expressions.
-/// Column qualifiers are stripped so expressions can be evaluated against
-/// the TableProvider's schema. Deduplicates filters to avoid passing the same
-/// predicate twice when filters appear in both Filter and TableScan nodes.
+///
+/// For UPDATE...FROM queries involving multiple tables, this function only extracts predicates
+/// that reference the target table. Filters from source table scans are excluded to prevent
+/// incorrect filter semantics.
+///
+/// Column qualifiers are stripped so expressions can be evaluated against the TableProvider's
+/// schema. Deduplication is performed because filters may appear in both Filter nodes and
+/// TableScan.filters when the optimizer performs partial (Inexact) filter pushdown.
+///
+/// # Parameters
+/// - `input`: The logical plan tree to extract filters from (typically a DELETE or UPDATE plan)
+/// - `target`: The target table reference to scope filter extraction (prevents multi-table filter leakage)
+///
+/// # Returns
+/// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
+/// Returns an empty vector if no applicable filters are found.
 ///
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
@@ -1985,13 +1999,15 @@ fn extract_dml_filters(
     // Deduplication is necessary because filters may appear in both Filter nodes
     // and TableScan.filters when the optimizer performs partial (Inexact) pushdown.
     let mut seen_filters = HashSet::new();
-    filters.into_iter().try_fold(Vec::new(), |mut deduped, filter| {
-        let unqualified = strip_column_qualifiers(filter)?;
-        if seen_filters.insert(unqualified.clone()) {
-            deduped.push(unqualified);
-        }
-        Ok(deduped)
-    })
+    filters
+        .into_iter()
+        .try_fold(Vec::new(), |mut deduped, filter| {
+            let unqualified = strip_column_qualifiers(filter)?;
+            if seen_filters.insert(unqualified.clone()) {
+                deduped.push(unqualified);
+            }
+            Ok(deduped)
+        })
 }
 
 /// Determine whether a predicate references only columns from the target table.
