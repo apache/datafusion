@@ -1437,3 +1437,231 @@ select
   (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['b'] as b_val;
 ----
 1 2
+
+############################
+# JOIN Coercion Tests
+############################
+
+# Test: Struct coercion in JOIN ON condition
+statement ok
+create table t_left (
+  id int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (2, {x: 3, y: 4});
+
+statement ok
+create table t_right (
+  id int,
+  s struct(y int, x int)
+) as values
+  (1, {y: 2, x: 1}),
+  (2, {y: 4, x: 3});
+
+# JOIN on reordered struct fields - matched by name
+query IIII
+select t_left.id, t_left.s['x'], t_left.s['y'], t_right.id
+from t_left
+join t_right on t_left.s = t_right.s
+order by t_left.id;
+----
+1 1 2 1
+2 3 4 2
+
+statement ok
+drop table t_left;
+
+statement ok
+drop table t_right;
+
+# Test: Struct coercion with filtered JOIN
+statement ok
+create table orders (
+  order_id int,
+  customer struct(name varchar, id int)
+) as values
+  (1, {name: 'Alice', id: 100}),
+  (2, {name: 'Bob', id: 101}),
+  (3, {name: 'Charlie', id: 102});
+
+statement ok
+create table customers (
+  customer_id int,
+  info struct(id int, name varchar)
+) as values
+  (100, {id: 100, name: 'Alice'}),
+  (101, {id: 101, name: 'Bob'}),
+  (103, {id: 103, name: 'Diana'});
+
+# Join with struct field reordering - names matched, not positions
+query I
+select count(*) from orders
+join customers on orders.customer = customers.info
+where orders.order_id <= 2;
+----
+2
+
+statement ok
+drop table orders;
+
+statement ok
+drop table customers;
+
+############################
+# WHERE Predicate Coercion Tests
+############################
+
+# Test: Struct equality in WHERE clause with field reordering
+statement ok
+create table t_where (
+  id int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (2, {x: 3, y: 4}),
+  (3, {x: 1, y: 2});
+
+# WHERE clause with struct comparison - coerced by name
+query I
+select id from t_where
+where s = {y: 2, x: 1}
+order by id;
+----
+1
+3
+
+statement ok
+drop table t_where;
+
+# Test: Struct IN clause with reordering
+statement ok
+create table t_in (
+  id int,
+  s struct(a int, b varchar)
+) as values
+  (1, {a: 1, b: 'x'}),
+  (2, {a: 2, b: 'y'}),
+  (3, {a: 1, b: 'x'});
+
+# IN clause with reordered struct literals
+query I
+select id from t_in
+where s in ({b: 'x', a: 1}, {b: 'y', a: 2})
+order by id;
+----
+1
+2
+3
+
+statement ok
+drop table t_in;
+
+# Test: Struct BETWEEN (not supported, but documents limitation)
+# Structs don't support BETWEEN, but can use comparison operators
+
+statement ok
+create table t_between (
+  id int,
+  s struct(val int)
+) as values
+  (1, {val: 10}),
+  (2, {val: 20}),
+  (3, {val: 30});
+
+# Comparison via field extraction works
+query I
+select id from t_between
+where s['val'] >= 20
+order by id;
+----
+2
+3
+
+statement ok
+drop table t_between;
+
+############################
+# Window Function Coercion Tests
+############################
+
+# Test: Struct in window function PARTITION BY
+statement ok
+create table t_window (
+  id int,
+  s struct(category int, value int)
+) as values
+  (1, {category: 1, value: 10}),
+  (2, {category: 1, value: 20}),
+  (3, {category: 2, value: 30}),
+  (4, {category: 2, value: 40});
+
+# Window partition on struct field via extraction
+query III
+select 
+  id,
+  s['value'],
+  row_number() over (partition by s['category'] order by s['value'])
+from t_window
+order by id;
+----
+1 10 1
+2 20 2
+3 30 1
+4 40 2
+
+statement ok
+drop table t_window;
+
+# Test: Struct in window function ORDER BY with coercion
+statement ok
+create table t_rank (
+  id int,
+  s struct(rank_val int, group_id int)
+) as values
+  (1, {rank_val: 10, group_id: 1}),
+  (2, {rank_val: 20, group_id: 1}),
+  (3, {rank_val: 15, group_id: 2});
+
+# Window ranking with struct field extraction
+query III
+select 
+  id,
+  s['rank_val'],
+  rank() over (partition by s['group_id'] order by s['rank_val'])
+from t_rank
+order by id;
+----
+1 10 1
+2 20 2
+3 15 1
+
+statement ok
+drop table t_rank;
+
+# Test: Aggregate function with struct coercion across window partitions
+statement ok
+create table t_agg_window (
+  id int,
+  partition_id int,
+  s struct(amount int)
+) as values
+  (1, 1, {amount: 100}),
+  (2, 1, {amount: 200}),
+  (3, 2, {amount: 150});
+
+# Running sum via extracted struct field
+query III
+select 
+  id,
+  partition_id,
+  sum(s['amount']) over (partition by partition_id order by id)
+from t_agg_window
+order by id;
+----
+1 1 100
+2 1 300
+3 2 150
+
+statement ok
+drop table t_agg_window;
