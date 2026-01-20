@@ -1248,6 +1248,16 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
             // If the two structs have exactly the same set of field names (possibly in
             // different order), prefer name-based coercion. Otherwise fall back to
             // positional coercion which preserves backward compatibility.
+            //
+            // Name-based coercion is used in:
+            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
+            // 2. UNION operations: different field orders unified by name
+            // 3. VALUES clauses: heterogeneous struct rows unified by field name
+            // 4. JOIN conditions: structs with matching field names
+            // 5. Window functions: partitions/orders by struct fields
+            // 6. Aggregate functions: collecting structs with reordered fields
+            //
+            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
             if fields_have_same_names(lhs_fields, rhs_fields) {
                 return coerce_struct_by_name(lhs_fields, rhs_fields);
             }
