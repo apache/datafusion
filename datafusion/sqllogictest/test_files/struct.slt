@@ -1058,3 +1058,66 @@ select CAST(
 );
 ----
 {name: Bob, data: {score: 200, active: false}}
+
+############################
+# Array Literal Tests with Struct Field Reordering (Implicit Coercion)
+############################
+
+# Test array literal with reordered struct fields - implicit coercion by name
+# Field order in unified schema is determined during type coercion
+query ?
+select [{r: 'a', c: 1}, {c: 2.3, r: 'b'}];
+----
+[{c: 1.0, r: a}, {c: 2.3, r: b}]
+
+# Test array literal with same-named fields but different order
+# Fields are reordered during coercion
+query ?
+select [{a: 1, b: 2}, {b: 3, a: 4}];
+----
+[{b: 2, a: 1}, {b: 3, a: 4}]
+
+# Test array literal with explicit cast to unify struct schemas with partial overlap
+# Use CAST to explicitly unify schemas when fields don't match completely
+query ?
+select [
+  CAST({a: 1, b: 2} AS STRUCT(a INT, b INT, c INT)),
+  CAST({b: 3, c: 4} AS STRUCT(a INT, b INT, c INT))
+];
+----
+[{a: 1, b: 2, c: NULL}, {a: NULL, b: 3, c: 4}]
+
+# Test NULL handling in array literals with reordered but matching fields
+query ?
+select [{a: NULL, b: 1}, {b: 2, a: NULL}];
+----
+[{b: 1, a: NULL}, {b: 2, a: NULL}]
+
+# Verify arrow_typeof for array with reordered struct fields
+# The unified schema type follows the coercion order
+query T
+select arrow_typeof([{x: 1, y: 2}, {y: 3, x: 4}]);
+----
+List(Struct("y": Int64, "x": Int64))
+
+# Test array of structs with matching nested fields in different order
+# Inner nested fields are also reordered during coercion
+query ?
+select [
+  {id: 1, info: {name: 'Alice', age: 30}},
+  {info: {age: 25, name: 'Bob'}, id: 2}
+];
+----
+[{info: {age: 30, name: Alice}, id: 1}, {info: {age: 25, name: Bob}, id: 2}]
+
+# Test nested arrays with matching struct fields (different order)
+query ?
+select [[{x: 1, y: 2}], [{y: 4, x: 3}]];
+----
+[[{x: 1, y: 2}], [{x: 3, y: 4}]]
+
+# Test array literal with float type coercion across elements
+query ?
+select [{val: 1}, {val: 2.5}];
+----
+[{val: 1.0}, {val: 2.5}]
