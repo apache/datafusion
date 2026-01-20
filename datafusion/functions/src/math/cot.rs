@@ -96,14 +96,14 @@ impl ScalarUDFImpl for CotFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let return_type = args.return_type().clone();
+        let return_field = args.return_field;
         let [arg] = take_function_args(self.name(), args.args)?;
 
         match arg {
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {
                     return ColumnarValue::Scalar(ScalarValue::Null)
-                        .cast_to(&return_type, None);
+                        .cast_to(return_field.data_type(), None);
                 }
 
                 match scalar {
