@@ -316,7 +316,7 @@ pub struct ChildFilterDescription {
 /// This checker validates that all columns referenced in a filter expression
 /// exist in the target schema. If any column in the filter is not present
 /// in the schema, the filter cannot be pushed down to that child.
-pub struct FilterColumnChecker<'a> {
+pub(crate) struct FilterColumnChecker<'a> {
     column_names: HashSet<&'a str>,
 }
 
