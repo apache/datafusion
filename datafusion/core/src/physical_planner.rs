@@ -2015,11 +2015,12 @@ fn predicate_is_on_target(expr: &Expr, target: &TableReference) -> Result<bool> 
     let mut columns = HashSet::new();
     expr_to_columns(expr, &mut columns)?;
 
-    Ok(columns.iter().all(|column| {
+    // Short-circuit on first mismatch: returns false if any column references a different table
+    Ok(!columns.iter().any(|column| {
         column
             .relation
             .as_ref()
-            .is_none_or(|relation| relation.resolved_eq(target))
+            .is_some_and(|relation| !relation.resolved_eq(target))
     }))
 }
 
