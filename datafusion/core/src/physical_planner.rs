@@ -613,7 +613,7 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) =
                     target.as_any().downcast_ref::<DefaultTableSource>()
                 {
-                    let filters = extract_dml_filters(input, &table_name)?;
+                    let filters = extract_dml_filters(input, table_name)?;
                     provider
                         .table_provider
                         .delete_from(session_state, filters)
@@ -639,7 +639,7 @@ impl DefaultPhysicalPlanner {
                 {
                     // For UPDATE, the assignments are encoded in the projection of input
                     // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, &table_name)?;
+                    let filters = extract_dml_filters(input, table_name)?;
                     // Extract assignments from the projection in input plan
                     let assignments = extract_update_assignments(input)?;
                     provider
@@ -2004,8 +2004,7 @@ fn extract_dml_filters(
         .try_fold(Vec::new(), |mut deduped, filter| {
             let unqualified = strip_column_qualifiers(filter).map_err(|e| {
                 e.context(format!(
-                    "Failed to strip column qualifiers for DML filter on table '{}'",
-                    target
+                    "Failed to strip column qualifiers for DML filter on table '{target}'"
                 ))
             })?;
             if seen_filters.insert(unqualified.clone()) {
