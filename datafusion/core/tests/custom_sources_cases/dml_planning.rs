@@ -39,6 +39,7 @@ struct CaptureDeleteProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
     filter_pushdown: TableProviderFilterPushDown,
+    per_filter_pushdown: Option<Vec<TableProviderFilterPushDown>>,
 }
 
 impl CaptureDeleteProvider {
@@ -47,6 +48,7 @@ impl CaptureDeleteProvider {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
             filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: None,
         }
     }
 
@@ -58,6 +60,19 @@ impl CaptureDeleteProvider {
             schema,
             received_filters: Arc::new(Mutex::new(None)),
             filter_pushdown,
+            per_filter_pushdown: None,
+        }
+    }
+
+    fn new_with_per_filter_pushdown(
+        schema: SchemaRef,
+        per_filter_pushdown: Vec<TableProviderFilterPushDown>,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: Some(per_filter_pushdown),
         }
     }
 
@@ -113,6 +128,12 @@ impl TableProvider for CaptureDeleteProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if let Some(per_filter) = &self.per_filter_pushdown {
+            if per_filter.len() == filters.len() {
+                return Ok(per_filter.clone());
+            }
+        }
+
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
 }
@@ -124,6 +145,7 @@ struct CaptureUpdateProvider {
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,
     received_assignments: Arc<Mutex<Option<Vec<(String, Expr)>>>>,
     filter_pushdown: TableProviderFilterPushDown,
+    per_filter_pushdown: Option<Vec<TableProviderFilterPushDown>>,
 }
 
 impl CaptureUpdateProvider {
@@ -133,6 +155,7 @@ impl CaptureUpdateProvider {
             received_filters: Arc::new(Mutex::new(None)),
             received_assignments: Arc::new(Mutex::new(None)),
             filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: None,
         }
     }
 
@@ -145,6 +168,20 @@ impl CaptureUpdateProvider {
             received_filters: Arc::new(Mutex::new(None)),
             received_assignments: Arc::new(Mutex::new(None)),
             filter_pushdown,
+            per_filter_pushdown: None,
+        }
+    }
+
+    fn new_with_per_filter_pushdown(
+        schema: SchemaRef,
+        per_filter_pushdown: Vec<TableProviderFilterPushDown>,
+    ) -> Self {
+        Self {
+            schema,
+            received_filters: Arc::new(Mutex::new(None)),
+            received_assignments: Arc::new(Mutex::new(None)),
+            filter_pushdown: TableProviderFilterPushDown::Unsupported,
+            per_filter_pushdown: Some(per_filter_pushdown),
         }
     }
 
@@ -206,6 +243,12 @@ impl TableProvider for CaptureUpdateProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
+        if let Some(per_filter) = &self.per_filter_pushdown {
+            if per_filter.len() == filters.len() {
+                return Ok(per_filter.clone());
+            }
+        }
+
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
     }
 }
@@ -411,6 +454,58 @@ async fn test_delete_mixed_filter_locations() -> Result<()> {
         filter_strs.iter().any(|s| s.contains("status")),
         "should contain status filter"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_per_filter_pushdown_mixed_locations() -> Result<()> {
+    // Force per-filter pushdown decisions to exercise mixed locations in one query.
+    // First predicate is pushed down (Exact), second stays as residual (Unsupported).
+    let provider = Arc::new(CaptureDeleteProvider::new_with_per_filter_pushdown(
+        test_schema(),
+        vec![
+            TableProviderFilterPushDown::Exact,
+            TableProviderFilterPushDown::Unsupported,
+        ],
+    ));
+
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let df = ctx
+        .sql("DELETE FROM t WHERE id = 1 AND status = 'active'")
+        .await?;
+    let optimized_plan = df.clone().into_optimized_plan()?;
+
+    // Only the first predicate should be pushed to TableScan.filters.
+    let mut scan_filters = Vec::new();
+    optimized_plan.apply(|node| {
+        if let LogicalPlan::TableScan(TableScan { filters, .. }) = node {
+            scan_filters.extend(filters.clone());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(scan_filters.len(), 1);
+    assert!(scan_filters[0].to_string().contains("id"));
+
+    // Both predicates should still reach the provider (union + dedup behavior).
+    df.collect().await?;
+
+    let filters = provider
+        .captured_filters()
+        .expect("filters should be captured");
+    assert_eq!(filters.len(), 2);
+
+    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
+    assert!(
+        filter_strs.iter().any(|s| s.contains("id")),
+        "should contain pushed-down id filter"
+    );
+    assert!(
+        filter_strs.iter().any(|s| s.contains("status")),
+        "should contain residual status filter"
+    );
+
     Ok(())
 }
 
