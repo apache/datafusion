@@ -103,7 +103,7 @@ impl ScalarUDFImpl for SparkRandom {
             ColumnarValue::Scalar(ScalarValue::Int64(None)) => 0,
             _ => {
                 return exec_err!(
-                    "`{}` function expects an Int64 or Int32 seed argument",
+                    "`{}` function expects an Int64 seed argument",
                     self.name()
                 );
             }
@@ -285,7 +285,6 @@ impl ScalarUDFImpl for SparkRandStr {
             ColumnarValue::Scalar(ScalarValue::Int32(Some(val))) if val > 0 => {
                 val as usize
             }
-            ColumnarValue::Scalar(ScalarValue::Int32(None)) => 10,
             _ => {
                 return exec_err!(
                     "`{}` function expects a positive Int32 length argument",

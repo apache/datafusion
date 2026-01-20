@@ -101,6 +101,12 @@ SELECT randstr(3::integer, NULL::integer);
 ----
 UYX
 
+query error Execution error: `randstr` function expects a positive Int32 length argument
+SELECT randstr(NULL::integer, 23::integer);
+
+query error Execution error: `randstr` function expects a positive Int32 length argument
+SELECT randstr(-2::integer, 23::integer);
+
 query BB
 SELECT
     randstr(10) = randstr(10),
