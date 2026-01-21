@@ -79,7 +79,6 @@ pub fn basic_parse() {
 mod test {
     use std::sync::Arc;
 
-    use super::*;
     use bytes::Bytes;
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::{
