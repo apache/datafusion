@@ -25,9 +25,25 @@ https://datafusion.apache.org/ as part of the release process.
 
 ## Dependencies
 
-### Option 1: Docker (Recommended)
+### Option 1: Docker with Docker Compose (Recommended for iterative builds)
 
-If you have Docker installed, you can build the docs without installing any dependencies on your system:
+If you have Docker and Docker Compose installed, you can build the docs without installing any dependencies on your system. This method uses persistent volumes to cache Rust dependencies, making subsequent builds much faster:
+
+```sh
+# Run the docs build with Docker Compose (from repository root)
+docker-compose run --rm datafusion-docs
+```
+
+The built documentation will be available in `docs/build/html/`.
+
+**Benefits of this approach:**
+- Rust toolchain and dependencies are cached between builds (no re-downloading on each run)
+- Cross-platform compatibility (works on Windows, macOS, Linux)
+- Simple one-command build process
+
+### Option 1b: Docker without Compose (Quick single build)
+
+If you prefer a quick build without Docker Compose:
 
 ```sh
 # Build the Docker image (from repository root)
@@ -39,6 +55,8 @@ docker run --rm -v $(pwd):/datafusion datafusion-docs
 # On Windows PowerShell, use:
 # docker run --rm -v ${PWD}:/datafusion datafusion-docs
 ```
+
+**Note:** This method re-downloads Rust dependencies on each run. For iterative development, use Option 1 (Docker Compose) instead.
 
 The built documentation will be available in `docs/build/html/`.
 

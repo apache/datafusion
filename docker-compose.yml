@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  datafusion-docs:
+    build:
+      context: .
+      dockerfile: ./docs/Dockerfile
+    container_name: datafusion-docs
+    volumes:
+      - .:/datafusion
+      - rust-cache:/usr/local/cargo
+      - rust-target:/datafusion/docs/target
+    working_dir: /datafusion
+
+volumes:
+  rust-cache:
+  rust-target:

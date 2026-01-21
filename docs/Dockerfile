@@ -25,7 +25,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
-RUN cargo install cargo-depgraph --version ^1.6 --locked
+# Install Rust tools with persistent caching
+# These are cached in docker volumes when using docker-compose
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-depgraph --version ^1.6 --locked
 
 WORKDIR /datafusion/docs
 
