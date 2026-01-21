@@ -1164,7 +1164,7 @@ query TT
 explain select column2 || 'is' || column3 from temp;
 ----
 logical_plan
-01)Projection: temp.column2 || Utf8View("is") || temp.column3 AS temp.column2 || Utf8("is") || temp.column3
+01)Projection: (temp.column2 || Utf8View("is")) || temp.column3 AS temp.column2 || Utf8("is") || temp.column3
 02)--TableScan: temp projection=[column2, column3]
 
 # should not cast the column2 to utf8

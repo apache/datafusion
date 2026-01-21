@@ -212,7 +212,7 @@ ORDER BY 1,2;
 ----
 logical_plan
 01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
-02)--Inner Join:  Filter: CAST(t1.t1_id AS Int64) < CAST(t2.t2_id AS Int64) + Int64(1)
+02)--Inner Join:  Filter: CAST(t1.t1_id AS Int64) < (CAST(t2.t2_id AS Int64) + Int64(1))
 03)----SubqueryAlias: t1
 04)------TableScan: join_t1 projection=[t1_id]
 05)----SubqueryAlias: t2
@@ -258,7 +258,7 @@ logical_plan
 01)Sort: t1.t1_id ASC NULLS LAST, t2.t2_id ASC NULLS LAST
 02)--Inner Join:  Filter: t1.t1_id <= t2.t2_id
 03)----SubqueryAlias: t1
-04)------Filter: join_t1.t1_id = Int32(11) OR join_t1.t1_id = Int32(44)
+04)------Filter: (join_t1.t1_id = Int32(11)) OR (join_t1.t1_id = Int32(44))
 05)--------TableScan: join_t1 projection=[t1_id]
 06)----SubqueryAlias: t2
 07)------Projection: join_t2.t2_id
@@ -320,7 +320,7 @@ ORDER BY 1,2;
 logical_plan
 01)Sort: left_id ASC NULLS LAST, right_id ASC NULLS LAST
 02)--Projection: t1.id AS left_id, t2.id AS right_id
-03)----Inner Join:  Filter: t1.id < t1.id + t2.id
+03)----Inner Join:  Filter: t1.id < (t1.id + t2.id)
 04)------SubqueryAlias: t1
 05)--------TableScan: null_join_t1 projection=[id]
 06)------SubqueryAlias: t2

@@ -1067,9 +1067,9 @@ LEFT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
 WHERE join_t2.t2_int < 10 or (join_t1.t1_int > 2 and join_t2.t2_name != 'w')
 ----
 logical_plan
-01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8View("w")
+01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: (join_t2.t2_int < UInt32(10)) OR ((join_t1.t1_int > UInt32(2)) AND (join_t2.t2_name != Utf8View("w")))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8View("w")
+03)--Filter: (join_t2.t2_int < UInt32(10)) OR (join_t2.t2_name != Utf8View("w"))
 04)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce left join 3 (to inner join)
@@ -1094,7 +1094,7 @@ logical_plan
 05)--------Filter: join_t1.t1_id < UInt32(100)
 06)----------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 07)--------Projection: join_t2.t2_id
-08)----------Filter: join_t2.t2_int < UInt32(3) AND join_t2.t2_id < UInt32(100)
+08)----------Filter: (join_t2.t2_int < UInt32(3)) AND (join_t2.t2_id < UInt32(100))
 09)------------TableScan: join_t2 projection=[t2_id, t2_int]
 10)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -1745,7 +1745,7 @@ from join_t1
 inner join join_t2 on join_t1.t1_id * 4 < join_t2.t2_id
 ----
 logical_plan
-01)Inner Join:  Filter: CAST(join_t1.t1_id AS Int64) * Int64(4) < CAST(join_t2.t2_id AS Int64)
+01)Inner Join:  Filter: (CAST(join_t1.t1_id AS Int64) * Int64(4)) < CAST(join_t2.t2_id AS Int64)
 02)--TableScan: join_t1 projection=[t1_id, t1_name]
 03)--TableScan: join_t2 projection=[t2_id]
 
@@ -1759,7 +1759,7 @@ inner join join_t2
 on join_t1.t1_id * 5 = join_t2.t2_id and join_t1.t1_id * 4 < join_t2.t2_id
 ----
 logical_plan
-01)Inner Join: CAST(join_t1.t1_id AS Int64) * Int64(5) = CAST(join_t2.t2_id AS Int64) Filter: CAST(join_t1.t1_id AS Int64) * Int64(4) < CAST(join_t2.t2_id AS Int64)
+01)Inner Join: CAST(join_t1.t1_id AS Int64) * Int64(5) = CAST(join_t2.t2_id AS Int64) Filter: (CAST(join_t1.t1_id AS Int64) * Int64(4)) < CAST(join_t2.t2_id AS Int64)
 02)--TableScan: join_t1 projection=[t1_id, t1_name]
 03)--TableScan: join_t2 projection=[t2_id]
 
@@ -1879,7 +1879,7 @@ where join_t1.t1_id + 12 in
     )
 ----
 logical_plan
-01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_1.t2_int AND join_t1.t1_name != __correlated_sq_1.t2_name
+01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: (join_t1.t1_int <= __correlated_sq_1.t2_int) AND (join_t1.t1_name != __correlated_sq_1.t2_name)
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1), join_t2.t2_int, join_t2.t2_name
@@ -1950,7 +1950,7 @@ where join_t1.t1_id + 12 in
   and join_t1.t1_id > 0
 ----
 logical_plan
-01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int <= __correlated_sq_1.t2_int AND join_t1.t1_name != __correlated_sq_1.t2_name
+01)LeftSemi Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: (join_t1.t1_int <= __correlated_sq_1.t2_int) AND (join_t1.t1_name != __correlated_sq_1.t2_name)
 02)--Filter: join_t1.t1_id > UInt32(0)
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 04)--SubqueryAlias: __correlated_sq_1
@@ -2116,7 +2116,7 @@ WHERE EXISTS (
 )
 ----
 logical_plan
-01)LeftSemi Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftSemi Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: join_t2 projection=[t2_id]
@@ -2168,7 +2168,7 @@ WHERE EXISTS (
 )
 ----
 logical_plan
-01)LeftSemi Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftSemi Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
@@ -2216,7 +2216,7 @@ WHERE EXISTS (
 )
 ----
 logical_plan
-01)LeftSemi Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftSemi Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--Filter: join_t1.t1_int < UInt32(3)
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 04)--SubqueryAlias: __correlated_sq_1
@@ -2263,7 +2263,7 @@ WHERE NOT EXISTS (
 )
 ----
 logical_plan
-01)LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftAnti Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: join_t2 projection=[t2_id]
@@ -2309,7 +2309,7 @@ WHERE NOT EXISTS (
 )
 ----
 logical_plan
-01)LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftAnti Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
@@ -2358,7 +2358,7 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-01)LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftAnti Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
@@ -2409,7 +2409,7 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-01)LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftAnti Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
@@ -2440,7 +2440,7 @@ WHERE NOT EXISTS(
 )
 ----
 logical_plan
-01)LeftAnti Join:  Filter: CAST(join_t1.t1_id AS Int64) + Int64(1) > CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2)
+01)LeftAnti Join:  Filter: (CAST(join_t1.t1_id AS Int64) + Int64(1)) > (CAST(__correlated_sq_1.t2_id AS Int64) * Int64(2))
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: join_t2.t2_id
@@ -3371,7 +3371,7 @@ logical_plan
 03)----Projection: last_value(l.d) ORDER BY [l.a ASC NULLS LAST] AS amount_usd, row_n
 04)------Aggregate: groupBy=[[row_n]], aggr=[[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]]]
 05)--------Projection: l.a, l.d, row_n
-06)----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= CAST(r.a AS Int64) - Int64(10)
+06)----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= (CAST(r.a AS Int64) - Int64(10))
 07)------------SubqueryAlias: l
 08)--------------TableScan: multiple_ordered_table projection=[a, d]
 09)------------Projection: r.a, r.d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_n
@@ -4642,7 +4642,7 @@ logical_plan
 04)----TableScan: j2 projection=[j2_string, j2_id]
 05)----SubqueryAlias: j3
 06)------Subquery:
-07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
+07)--------Filter: (outer_ref(j1.j1_id) + outer_ref(j2.j2_id)) = j3.j3_id
 08)----------TableScan: j3 projection=[j3_string, j3_id]
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "j1_id", data_type: Int32, nullable: true }, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
 

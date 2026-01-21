@@ -3916,7 +3916,7 @@ logical_plan
 03)----Projection: last_value(l.d) ORDER BY [l.a ASC NULLS LAST] AS amount_usd, row_n
 04)------Aggregate: groupBy=[[row_n]], aggr=[[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]]]
 05)--------Projection: l.a, l.d, row_n
-06)----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= CAST(r.a AS Int64) - Int64(10)
+06)----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= (CAST(r.a AS Int64) - Int64(10))
 07)------------SubqueryAlias: l
 08)--------------TableScan: multiple_ordered_table projection=[a, d]
 09)------------Projection: r.a, r.d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_n

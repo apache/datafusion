@@ -991,7 +991,7 @@ logical_plan
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
 06)--------SubqueryAlias: __scalar_sq_1
-07)----------Projection: count(Int64(1)) + Int64(1) + Int64(1) AS cnt_plus_two, t2.t2_int, count(Int64(1)), Boolean(true) AS __always_true
+07)----------Projection: (count(Int64(1)) + Int64(1)) + Int64(1) AS cnt_plus_two, t2.t2_int, count(Int64(1)), Boolean(true) AS __always_true
 08)------------Aggregate: groupBy=[[t2.t2_int]], aggr=[[count(Int64(1))]]
 09)--------------TableScan: t2 projection=[t2_int]
 
@@ -1060,7 +1060,7 @@ query TT
 explain SELECT t1_id, (SELECT max(t2.t2_id) is null FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, __scalar_sq_1.__always_true IS NULL OR __scalar_sq_1.__always_true IS NOT NULL AND __scalar_sq_1.max(t2.t2_id) IS NULL AS x
+01)Projection: t1.t1_id, __scalar_sq_1.__always_true IS NULL OR (__scalar_sq_1.__always_true IS NOT NULL AND __scalar_sq_1.max(t2.t2_id) IS NULL) AS x
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
@@ -1090,7 +1090,7 @@ where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
-02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.mark
+02)--Filter: (t1.t1_id > Int32(40)) OR __correlated_sq_1.mark
 03)----LeftMark Join: t1.t1_id = __correlated_sq_1.t2_id Filter: t1.t1_int > Int32(0)
 04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
 05)------SubqueryAlias: __correlated_sq_1
@@ -1117,7 +1117,7 @@ where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
-02)--Filter: t1.t1_id = Int32(11) OR NOT __correlated_sq_1.mark
+02)--Filter: (t1.t1_id = Int32(11)) OR NOT __correlated_sq_1.mark
 03)----LeftMark Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.t2.t2_id + Int64(1) Filter: t1.t1_int > Int32(0)
 04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
 05)------SubqueryAlias: __correlated_sq_1
@@ -1144,7 +1144,7 @@ where t1.t1_id > 40 or exists (select * from t2 where t1.t1_id = t2.t2_id)
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
-02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_1.mark
+02)--Filter: (t1.t1_id > Int32(40)) OR __correlated_sq_1.mark
 03)----LeftMark Join: t1.t1_id = __correlated_sq_1.t2_id
 04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
 05)------SubqueryAlias: __correlated_sq_1
@@ -1174,7 +1174,7 @@ where t1.t1_id > 40 or not exists (select * from t2 where t1.t1_id = t2.t2_id)
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
-02)--Filter: t1.t1_id > Int32(40) OR NOT __correlated_sq_1.mark
+02)--Filter: (t1.t1_id > Int32(40)) OR NOT __correlated_sq_1.mark
 03)----LeftMark Join: t1.t1_id = __correlated_sq_1.t2_id
 04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
 05)------SubqueryAlias: __correlated_sq_1
@@ -1209,7 +1209,7 @@ where t1.t1_id in (select t3.t3_id from t3) and (t1.t1_id > 40 or t1.t1_id in (s
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
-02)--Filter: t1.t1_id > Int32(40) OR __correlated_sq_2.mark
+02)--Filter: (t1.t1_id > Int32(40)) OR __correlated_sq_2.mark
 03)----LeftMark Join: t1.t1_id = __correlated_sq_2.t2_id Filter: t1.t1_int > Int32(0)
 04)------LeftSemi Join: t1.t1_id = __correlated_sq_1.t3_id
 05)--------TableScan: t1 projection=[t1_id, t1_name, t1_int]
@@ -1507,9 +1507,9 @@ explain select v from (values (1), (6), (10)) set_cmp_t(v) where v > any(select 
 ----
 logical_plan
 01)Projection: set_cmp_t.v
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL)
+02)--Filter: __correlated_sq_1.mark OR ((__correlated_sq_2.mark AND NOT __correlated_sq_3.mark) AND Boolean(NULL))
 03)----LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_3.v IS TRUE
-04)------Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND Boolean(NULL)
+04)------Filter: __correlated_sq_1.mark OR (__correlated_sq_2.mark AND Boolean(NULL))
 05)--------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
 06)----------Filter: __correlated_sq_1.mark OR Boolean(NULL)
 07)------------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_1.v IS TRUE
