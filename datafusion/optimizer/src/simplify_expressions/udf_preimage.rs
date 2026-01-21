@@ -46,14 +46,16 @@ pub(super) fn rewrite_with_preimage(
         // <expr> <= x ==> <expr> < upper
         Operator::LtEq => expr.lt(upper),
         // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
-        //
-        // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
-        // but since x is always not NULL => (<expr> >= lower) and (<expr> < upper)
-        Operator::Eq | Operator::IsNotDistinctFrom => {
-            and(expr.clone().gt_eq(lower), expr.lt(upper))
-        }
+        Operator::Eq => and(expr.clone().gt_eq(lower), expr.lt(upper)),
         // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
         Operator::NotEq => or(expr.clone().lt(lower), expr.gt_eq(upper)),
+        // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
+        // but since x is always not NULL => (<expr> is not NULL) and (<expr> >= lower) and (<expr> < upper)
+        Operator::IsNotDistinctFrom => expr
+            .clone()
+            .is_not_null()
+            .and(expr.clone().gt_eq(lower))
+            .and(expr.lt(upper)),
         // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
         // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL)
         Operator::IsDistinctFrom => expr
@@ -286,10 +288,14 @@ mod test {
 
     #[test]
     fn test_preimage_is_not_distinct_from_rewrite() {
-        // IS NOT DISTINCT FROM is treated like equality for non-null literal RHS.
+        // IS NOT DISTINCT FROM rewrites to equality plus expression not-null check
+        // for non-null literal RHS.
         let schema = test_schema();
         let expr = is_not_distinct_from(preimage_udf_expr(), lit(500));
-        let expected = and(col("x").gt_eq(lit(100)), col("x").lt(lit(200)));
+        let expected = col("x")
+            .is_not_null()
+            .and(col("x").gt_eq(lit(100)))
+            .and(col("x").lt(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }
