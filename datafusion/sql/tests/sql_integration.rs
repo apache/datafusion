@@ -4855,3 +4855,134 @@ fn test_using_join_wildcard_schema() {
         ]
     );
 }
+
+#[test]
+fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_relation() {
+    let sql = "SELECT * FROM j1 j1_outer, LATERAL (
+    SELECT * FROM j1 j1_inner, LATERAL (
+        SELECT * FROM j2 WHERE j1_inner.j1_id = j2_id and j1_outer.j1_id=j2_id
+    ) as j2
+) as j2";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+         plan,
+         @r#"
+Projection: j1_outer.j1_id, j1_outer.j1_string, j2.j1_id, j2.j1_string, j2.j2_id, j2.j2_string
+  Cross Join:
+    SubqueryAlias: j1_outer
+      TableScan: j1
+    SubqueryAlias: j2
+      Subquery:
+        Projection: j1_inner.j1_id, j1_inner.j1_string, j2.j2_id, j2.j2_string
+          Cross Join:
+            SubqueryAlias: j1_inner
+              TableScan: j1
+            SubqueryAlias: j2
+              Subquery:
+                Projection: j2.j2_id, j2.j2_string
+                  Filter: outer_ref(j1_inner.j1_id) = j2.j2_id AND outer_ref(j1_outer.j1_id) = j2.j2_id
+                    TableScan: j2
+"#
+);
+}
+
+#[test]
+fn test_correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_referencing_level1_relation() {
+    let sql = "select c_custkey from customer
+            where c_acctbal < (
+            select sum(o_totalprice) from orders
+            where o_custkey = c_custkey
+            and o_totalprice < (
+            select sum(l_extendedprice) as price from lineitem where l_orderkey = o_orderkey
+            and l_extendedprice < c_acctbal
+        )
+        ) order by c_custkey";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+         plan,
+         @r#"
+Sort: customer.c_custkey ASC NULLS LAST
+  Projection: customer.c_custkey
+    Filter: customer.c_acctbal < (<subquery>)
+      Subquery:
+        Projection: sum(orders.o_totalprice)
+          Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+            Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_totalprice < (<subquery>)
+              Subquery:
+                Projection: sum(lineitem.l_extendedprice) AS price
+                  Aggregate: groupBy=[[]], aggr=[[sum(lineitem.l_extendedprice)]]
+                    Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+                      TableScan: lineitem
+              TableScan: orders
+      TableScan: customer
+"#
+);
+}
+
+#[test]
+fn correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation() {
+    let sql = "select c_custkey from customer
+        where c_acctbal < (
+        select sum(o_totalprice) from orders
+        where o_custkey = c_custkey
+        and exists (
+        select * from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+        )
+        ) order by c_custkey";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+         plan,
+         @r#"
+Sort: customer.c_custkey ASC NULLS LAST
+  Projection: customer.c_custkey
+    Filter: customer.c_acctbal < (<subquery>)
+      Subquery:
+        Projection: sum(orders.o_totalprice)
+          Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+            Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND EXISTS (<subquery>)
+              Subquery:
+                Projection: lineitem.l_orderkey, lineitem.l_item_id, lineitem.l_description, lineitem.l_extendedprice, lineitem.price
+                  Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+                    TableScan: lineitem
+              TableScan: orders
+      TableScan: customer
+"#
+);
+}
+
+#[test]
+fn correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_level1_relation() {
+    let sql = "select c_custkey from customer
+    where c_acctbal < (
+    select sum(o_totalprice) from orders
+    where o_custkey = c_custkey
+    and o_totalprice in (
+        select l_extendedprice as price from lineitem where l_orderkey = o_orderkey
+        and l_extendedprice < c_acctbal
+    )
+    ) order by c_custkey";
+
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+         plan,
+         @r#"
+Sort: customer.c_custkey ASC NULLS LAST
+  Projection: customer.c_custkey
+    Filter: customer.c_acctbal < (<subquery>)
+      Subquery:
+        Projection: sum(orders.o_totalprice)
+          Aggregate: groupBy=[[]], aggr=[[sum(orders.o_totalprice)]]
+            Filter: orders.o_custkey = outer_ref(customer.c_custkey) AND orders.o_totalprice IN (<subquery>)
+              Subquery:
+                Projection: lineitem.l_extendedprice AS price
+                  Filter: lineitem.l_orderkey = outer_ref(orders.o_orderkey) AND lineitem.l_extendedprice < outer_ref(customer.c_acctbal)
+                    TableScan: lineitem
+              TableScan: orders
+      TableScan: customer
+"#
+);
+}

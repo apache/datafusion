@@ -160,12 +160,25 @@ impl ContextProvider for MockContextProvider {
                 Field::new("last_name", DataType::Utf8, false),
             ])),
             "orders" => Ok(Schema::new(vec![
-                Field::new("order_id", DataType::UInt32, false),
+                Field::new("o_orderkey", DataType::UInt32, false),
+                Field::new("o_custkey", DataType::UInt32, false),
+                Field::new("o_orderstatus", DataType::Utf8, false),
                 Field::new("customer_id", DataType::UInt32, false),
+                Field::new("o_totalprice", DataType::Decimal32(15, 2), false),
                 Field::new("o_item_id", DataType::Utf8, false),
                 Field::new("qty", DataType::Int32, false),
                 Field::new("price", DataType::Float64, false),
                 Field::new("delivered", DataType::Boolean, false),
+            ])),
+            "customer" => Ok(Schema::new(vec![
+                Field::new("c_custkey", DataType::UInt32, false),
+                Field::new("c_name", DataType::Utf8, false),
+                Field::new("c_address", DataType::Utf8, false),
+                Field::new("c_nationkey", DataType::UInt32, false),
+                Field::new("c_phone", DataType::Decimal32(15, 2), false),
+                Field::new("c_acctbal", DataType::Float64, false),
+                Field::new("c_mktsegment", DataType::Utf8, false),
+                Field::new("c_comment", DataType::Utf8, false),
             ])),
             "array" => Ok(Schema::new(vec![
                 Field::new(
@@ -186,8 +199,10 @@ impl ContextProvider for MockContextProvider {
                 ),
             ])),
             "lineitem" => Ok(Schema::new(vec![
+                Field::new("l_orderkey", DataType::UInt32, false),
                 Field::new("l_item_id", DataType::UInt32, false),
                 Field::new("l_description", DataType::Utf8, false),
+                Field::new("l_extendedprice", DataType::Decimal32(15, 2), false),
                 Field::new("price", DataType::Float64, false),
             ])),
             "aggregate_test_100" => Ok(Schema::new(vec![
