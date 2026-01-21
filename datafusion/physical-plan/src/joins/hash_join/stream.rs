@@ -61,6 +61,8 @@ use futures::{Stream, StreamExt, ready};
 pub(super) enum BuildSide {
     /// Indicates that build-side not collected yet
     Initial(BuildSideInitialState),
+    /// Indicates that build-side is being collected and partially ready
+    Active(BuildSideActiveState),
     /// Indicates that build-side data has been collected
     Ready(BuildSideReadyState),
 }
@@ -69,6 +71,14 @@ pub(super) enum BuildSide {
 pub(super) struct BuildSideInitialState {
     /// Futures for building hash tables from build-side input partitions
     pub(super) left_futs: Vec<OnceFut<JoinLeftData>>,
+}
+
+/// Container for BuildSide::Active related data
+pub(super) struct BuildSideActiveState {
+    /// Futures for building hash tables from build-side input partitions
+    pub(super) left_futs: Vec<OnceFut<JoinLeftData>>,
+    /// Partially collected build-side data for each partition
+    pub(super) left_data: Vec<Option<Arc<JoinLeftData>>>,
 }
 
 /// Container for BuildSide::Ready related data
@@ -87,11 +97,25 @@ impl BuildSide {
         }
     }
 
+    /// Tries to extract BuildSideActiveState from BuildSide enum.
+    /// Returns an error if state is not Active.
+    fn try_as_active_mut(&mut self) -> Result<&mut BuildSideActiveState> {
+        match self {
+            BuildSide::Active(state) => Ok(state),
+            _ => internal_err!("Expected build side in active state"),
+        }
+    }
+
     /// Tries to extract BuildSideReadyState from BuildSide enum.
     /// Returns an error if state is not Ready.
     fn try_as_ready(&self) -> Result<&BuildSideReadyState> {
         match self {
             BuildSide::Ready(state) => Ok(state),
+            BuildSide::Active(state) if state.left_data.iter().all(|x| x.is_some()) => {
+                // This is a bit of a hack to avoid having to convert everywhere
+                // but we should eventually transition to Ready
+                internal_err!("Build side is active but all partitions are ready, should be in Ready state")
+            }
             _ => internal_err!("Expected build side in ready state"),
         }
     }
@@ -131,7 +155,7 @@ pub(super) enum HashJoinStreamState {
     /// Indicates that non-empty batch has been fetched from probe-side, and is ready to be processed
     ProcessProbeBatch(ProcessProbeBatchState),
     /// Indicates that probe-side has been fully processed
-    ExhaustedProbeSide,
+    ProcessUnmatchedBuildBatch(ProcessUnmatchedBuildBatchState),
     /// Indicates that HashJoinStream execution is completed
     Completed,
 }
@@ -143,6 +167,14 @@ impl HashJoinStreamState {
         match self {
             HashJoinStreamState::ProcessProbeBatch(state) => Ok(state),
             _ => internal_err!("Expected hash join stream in ProcessProbeBatch state"),
+        }
+    }
+
+    /// Tries to extract ProcessUnmatchedBuildBatchState from HashJoinStreamState enum.
+    fn try_as_process_unmatched_build_batch_mut(&mut self) -> Result<&mut ProcessUnmatchedBuildBatchState> {
+        match self {
+            HashJoinStreamState::ProcessUnmatchedBuildBatch(state) => Ok(state),
+            _ => internal_err!("Expected hash join stream in ProcessUnmatchedBuildBatch state"),
         }
     }
 }
@@ -169,6 +201,13 @@ pub(super) struct ProcessProbeBatchState {
 }
 
 impl ProcessProbeBatchState {}
+
+/// Container for HashJoinStreamState::ProcessUnmatchedBuildBatch related data
+#[derive(Debug, Clone, Default)]
+pub(super) struct ProcessUnmatchedBuildBatchState {
+    pub current_partition_idx: usize,
+    pub offset: MapOffset,
+}
 
 /// [`Stream`] for [`super::HashJoinExec`] that does the actual join.
 ///
@@ -417,10 +456,10 @@ impl HashJoinStream {
                     handle_state!(ready!(self.fetch_probe_batch(cx)))
                 }
                 HashJoinStreamState::ProcessProbeBatch(_) => {
-                    handle_state!(self.process_probe_batch())
+                    handle_state!(ready!(self.process_probe_batch(cx)))
                 }
-                HashJoinStreamState::ExhaustedProbeSide => {
-                    handle_state!(self.process_unmatched_build_batch())
+                HashJoinStreamState::ProcessUnmatchedBuildBatch(_) => {
+                    handle_state!(ready!(self.process_unmatched_build_batch(cx)))
                 }
                 HashJoinStreamState::Completed if !self.output_buffer.is_empty() => {
                     // Flush any remaining buffered data
@@ -455,68 +494,117 @@ impl HashJoinStream {
 
     /// Collects build-side data by polling `OnceFut` future from initialized build-side
     ///
-    /// Updates build-side to `Ready`, and state to `FetchProbeSide`
+    /// Updates build-side to `Active`, and state to `FetchProbeSide`
     fn collect_build_side(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let build_timer = self.join_metrics.build_time.timer();
-        // build hash table from left (build) side, if not yet done
-        let initial_state = self.build_side.try_as_initial_mut()?;
-        let mut left_data = Vec::with_capacity(initial_state.left_futs.len());
-        for fut in &mut initial_state.left_futs {
-            left_data.push(ready!(fut.get_shared(cx))?);
-        }
-        build_timer.done();
 
-        // Handle dynamic filter build-side information accumulation
-        if let Some(ref build_accumulator) = self.build_accumulator {
-            let build_accumulator = Arc::clone(build_accumulator);
-            let mut report_futs = Vec::new();
-            for (i, data) in left_data.iter().enumerate() {
-                let left_side_partition_id = match self.mode {
-                    PartitionMode::Partitioned => i,
-                    PartitionMode::CollectLeft => 0,
-                    _ => unreachable!(),
-                };
+        match &mut self.build_side {
+            BuildSide::Initial(state) => {
+                let num_parts = state.left_futs.len();
 
-                let pushdown = data.membership().clone();
-                let build_data = match self.mode {
-                    PartitionMode::Partitioned => PartitionBuildData::Partitioned {
-                        partition_id: left_side_partition_id,
-                        pushdown,
-                        bounds: data
-                            .bounds
-                            .clone()
-                            .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                    },
-                    PartitionMode::CollectLeft => PartitionBuildData::CollectLeft {
-                        pushdown,
-                        bounds: data
-                            .bounds
-                            .clone()
-                            .unwrap_or_else(|| PartitionBounds::new(vec![])),
-                    },
-                    _ => unreachable!(),
-                };
+                // Handle dynamic filter build-side information accumulation
+                if let Some(ref build_accumulator) = self.build_accumulator {
+                    // Accumulator logic needs ALL partitions to be ready
+                    let mut left_data = Vec::with_capacity(num_parts);
+                    for fut in &mut state.left_futs {
+                        match fut.get_shared(cx) {
+                            Poll::Ready(Ok(data)) => left_data.push(data),
+                            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                            Poll::Pending => {
+                                build_timer.done();
+                                return Poll::Pending;
+                            }
+                        }
+                    }
 
-                let build_accumulator_clone = Arc::clone(&build_accumulator);
-                report_futs.push(async move {
-                    build_accumulator_clone.report_build_data(build_data).await
-                });
-            }
-            self.build_waiter = Some(OnceFut::new(async move {
-                for fut in report_futs {
-                    fut.await?;
+                    // All partitions ready, extract Initial state to handle accumulator logic
+                    let initial_state = match std::mem::replace(
+                        &mut self.build_side,
+                        BuildSide::Ready(BuildSideReadyState {
+                            left_data: vec![],
+                        }),
+                    ) {
+                        BuildSide::Initial(s) => s,
+                        _ => unreachable!(),
+                    };
+
+                    build_timer.done();
+
+                    let build_accumulator = Arc::clone(build_accumulator);
+                    let mut report_futs = Vec::new();
+                    for (i, data) in left_data.iter().enumerate() {
+                        let left_side_partition_id = match self.mode {
+                            PartitionMode::Partitioned => i,
+                            PartitionMode::CollectLeft => 0,
+                            _ => unreachable!(),
+                        };
+
+                        let pushdown = data.membership().clone();
+                        let build_data = match self.mode {
+                            PartitionMode::Partitioned => {
+                                PartitionBuildData::Partitioned {
+                                    partition_id: left_side_partition_id,
+                                    pushdown,
+                                    bounds: data.bounds.clone().unwrap_or_else(|| {
+                                        PartitionBounds::new(vec![])
+                                    }),
+                                }
+                            }
+                            PartitionMode::CollectLeft => {
+                                PartitionBuildData::CollectLeft {
+                                    pushdown,
+                                    bounds: data.bounds.clone().unwrap_or_else(|| {
+                                        PartitionBounds::new(vec![])
+                                    }),
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+
+                        let build_accumulator_clone = Arc::clone(&build_accumulator);
+                        report_futs.push(async move {
+                            build_accumulator_clone.report_build_data(build_data).await
+                        });
+                    }
+                    self.build_waiter = Some(OnceFut::new(async move {
+                        for fut in report_futs {
+                            fut.await?;
+                        }
+                        Ok(())
+                    }));
+                    self.state = HashJoinStreamState::WaitPartitionBoundsReport;
+                    self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
+                } else {
+                    // No dynamic filter, transition to Active immediately
+                    let initial_state = match std::mem::replace(
+                        &mut self.build_side,
+                        BuildSide::Ready(BuildSideReadyState {
+                            left_data: vec![],
+                        }),
+                    ) {
+                        BuildSide::Initial(s) => s,
+                        _ => unreachable!(),
+                    };
+                    self.build_side = BuildSide::Active(BuildSideActiveState {
+                        left_futs: initial_state.left_futs,
+                        left_data: vec![None; num_parts],
+                    });
+                    self.state = HashJoinStreamState::FetchProbeBatch;
+                    build_timer.done();
                 }
-                Ok(())
-            }));
-            self.state = HashJoinStreamState::WaitPartitionBoundsReport;
-        } else {
-            self.state = HashJoinStreamState::FetchProbeBatch;
+            }
+            _ => {
+                // Already collected or active, ensure state is updated to move forward
+                if matches!(self.state, HashJoinStreamState::WaitBuildSide) {
+                     self.state = HashJoinStreamState::FetchProbeBatch;
+                }
+                build_timer.done();
+            }
         }
 
-        self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
@@ -530,14 +618,17 @@ impl HashJoinStream {
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
-                self.state = HashJoinStreamState::ExhaustedProbeSide;
+                self.state = HashJoinStreamState::ProcessUnmatchedBuildBatch(ProcessUnmatchedBuildBatchState::default());
             }
             Some(Ok(batch)) => {
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
-                let build_side = self.build_side.try_as_ready()?;
-                let num_parts = build_side.left_data.len();
+                let num_parts = match &self.build_side {
+                    BuildSide::Ready(s) => s.left_data.len(),
+                    BuildSide::Active(s) => s.left_data.len(),
+                    _ => return Poll::Ready(internal_err!("Invalid build side state")),
+                };
 
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
@@ -603,9 +694,12 @@ impl HashJoinStream {
     /// Updates state to `FetchProbeBatch`
     fn process_probe_batch(
         &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
-        let state = self.state.try_as_process_probe_batch_mut()?;
-        let build_side = self.build_side.try_as_ready_mut()?;
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        let state = match self.state.try_as_process_probe_batch_mut() {
+            Ok(s) => s,
+            Err(e) => return Poll::Ready(Err(e)),
+        };
 
         self.join_metrics
             .probe_hit_rate
@@ -615,30 +709,51 @@ impl HashJoinStream {
 
         // Null-aware anti join semantics
         if self.null_aware {
+            let (probe_side_non_empty, probe_side_has_null) = match &mut self.build_side {
+                BuildSide::Ready(s) => (
+                    Arc::clone(&s.left_data[0].probe_side_non_empty),
+                    Arc::clone(&s.left_data[0].probe_side_has_null),
+                ),
+                BuildSide::Active(s) => {
+                    // We need at least partition 0 to be ready for null-aware join flags
+                    // This is slightly suboptimal but usually partition 0 finishes fast.
+                    let data = match s.left_futs[0].get_shared(cx) {
+                        Poll::Ready(Ok(d)) => d,
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        Poll::Pending => {
+                            timer.done();
+                            return Poll::Pending;
+                        }
+                    };
+                    (
+                        Arc::clone(&data.probe_side_non_empty),
+                        Arc::clone(&data.probe_side_has_null),
+                    )
+                }
+                _ => return Poll::Ready(internal_err!("Invalid build side state")),
+            };
+
             if state.batch.num_rows() > 0 {
-                build_side.left_data[0]
-                    .probe_side_non_empty
-                    .store(true, Ordering::Relaxed);
+                probe_side_non_empty.store(true, Ordering::Relaxed);
             }
 
             let probe_key_column = &state.values[0];
             if probe_key_column.null_count() > 0 {
-                build_side.left_data[0]
-                    .probe_side_has_null
-                    .store(true, Ordering::Relaxed);
+                probe_side_has_null.store(true, Ordering::Relaxed);
             }
 
-            if build_side.left_data[0]
-                .probe_side_has_null
-                .load(Ordering::Relaxed)
-            {
+            if probe_side_has_null.load(Ordering::Relaxed) {
                 timer.done();
                 self.state = HashJoinStreamState::FetchProbeBatch;
-                return Ok(StatefulStreamResult::Continue);
+                return Poll::Ready(Ok(StatefulStreamResult::Continue));
             }
         }
 
-        let num_parts = build_side.left_data.len();
+        let num_parts = match &self.build_side {
+            BuildSide::Ready(s) => s.left_data.len(),
+            BuildSide::Active(s) => s.left_data.len(),
+            _ => return Poll::Ready(internal_err!("Invalid build side state")),
+        };
 
         while state.current_partition_idx < num_parts {
             let partition_idx = state.current_partition_idx;
@@ -650,46 +765,83 @@ impl HashJoinStream {
                 }
             }
 
-            let left_data = &build_side.left_data[partition_idx];
+            let left_data = match &mut self.build_side {
+                BuildSide::Ready(s) => Arc::clone(&s.left_data[partition_idx]),
+                BuildSide::Active(s) => {
+                    if let Some(data) = &s.left_data[partition_idx] {
+                        Arc::clone(data)
+                    } else {
+                        // Try to poll the future
+                        match s.left_futs[partition_idx].get_shared(cx) {
+                            Poll::Ready(Ok(data)) => {
+                                s.left_data[partition_idx] = Some(Arc::clone(&data));
+                                // If all ready, we could transition to Ready, but we'll do it later
+                                Arc::clone(&data)
+                            }
+                            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                            Poll::Pending => {
+                                // Partition not ready, come back later
+                                timer.done();
+                                return Poll::Pending;
+                            }
+                        }
+                    }
+                }
+                _ => return Poll::Ready(internal_err!("Invalid build side state")),
+            };
+
             let partition_indices = state
                 .partition_indices
                 .as_ref()
                 .map(|v| v[partition_idx].as_slice());
 
             let (left_indices, right_indices, next_offset) = match left_data.map() {
-                Map::HashMap(map) => lookup_join_hashmap(
-                    map.as_ref(),
-                    left_data.values(),
-                    &state.values,
-                    self.null_equality,
-                    &state.hashes,
-                    partition_indices,
-                    self.batch_size,
-                    state.offset,
-                    &mut self.probe_indices_buffer,
-                    &mut self.build_indices_buffer,
-                )?,
+                Map::HashMap(map) => {
+                    match lookup_join_hashmap(
+                        map.as_ref(),
+                        left_data.values(),
+                        &state.values,
+                        self.null_equality,
+                        &state.hashes,
+                        partition_indices,
+                        self.batch_size,
+                        state.offset,
+                        &mut self.probe_indices_buffer,
+                        &mut self.build_indices_buffer,
+                    ) {
+                        Ok(res) => res,
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
+                }
                 Map::ArrayMap(array_map) => {
-                    let next_offset = array_map.get_matched_indices_with_limit_offset(
+                    match array_map.get_matched_indices_with_limit_offset(
                         &state.values,
                         partition_indices,
                         self.batch_size,
                         state.offset,
                         &mut self.probe_indices_buffer,
                         &mut self.build_indices_buffer,
-                    )?;
-                    (
-                        UInt64Array::from(self.build_indices_buffer.clone()),
-                        UInt32Array::from(self.probe_indices_buffer.clone()),
-                        next_offset,
-                    )
+                    ) {
+                        Ok(next_offset) => (
+                            UInt64Array::from(std::mem::take(&mut self.build_indices_buffer)),
+                            UInt32Array::from(std::mem::take(&mut self.probe_indices_buffer)),
+                            next_offset,
+                        ),
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
                 }
             };
+            
+            // Reclaim buffers for ArrayMap case if needed
+            if matches!(left_data.map(), Map::ArrayMap(_)) {
+                self.build_indices_buffer = left_indices.clone().into_parts().1.into();
+                self.probe_indices_buffer = right_indices.clone().into_parts().1.into();
+            }
 
             if !left_indices.is_empty() {
                 // Apply join filter if exists
                 let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-                    apply_join_filter_to_indices(
+                    match apply_join_filter_to_indices(
                         left_data.batch(),
                         &state.batch,
                         left_indices,
@@ -697,7 +849,10 @@ impl HashJoinStream {
                         filter,
                         JoinSide::Left,
                         None,
-                    )?
+                    ) {
+                        Ok(res) => res,
+                        Err(e) => return Poll::Ready(Err(e)),
+                    }
                 } else {
                     (left_indices, right_indices)
                 };
@@ -730,7 +885,7 @@ impl HashJoinStream {
                     | JoinType::Left
                     | JoinType::Right
                     | JoinType::Full => {
-                        let batch = build_batch_from_indices(
+                        let batch = match build_batch_from_indices(
                             &self.schema,
                             left_data.batch(),
                             &state.batch,
@@ -738,23 +893,21 @@ impl HashJoinStream {
                             &right_indices,
                             &self.column_indices,
                             JoinSide::Left,
-                        )?;
-                        self.output_buffer.push_batch(batch)?;
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => return Poll::Ready(Err(e.into())),
+                        };
+                        if let Err(e) = self.output_buffer.push_batch(batch) {
+                            return Poll::Ready(Err(e.into()));
+                        }
                         // If we didn't finish all matches, save state and return Continue to check output buffer
                         if next_offset.is_some() {
-                            self.state = HashJoinStreamState::ProcessProbeBatch(
-                                ProcessProbeBatchState {
-                                    batch: state.batch.clone(),
-                                    values: state.values.clone(),
-                                    hashes: state.hashes.clone(),
-                                    partition_indices: state.partition_indices.clone(),
-                                    current_partition_idx: partition_idx,
-                                    offset: next_offset.unwrap_or((0, None)),
-                                    joined_probe_idx: state.joined_probe_idx,
-                                    probe_matched: state.probe_matched.clone(),
-                                },
-                            );
-                            return Ok(StatefulStreamResult::Continue);
+                            let state = match self.state.try_as_process_probe_batch_mut() {
+                                Ok(s) => s,
+                                Err(e) => return Poll::Ready(Err(e)),
+                            };
+                            state.offset = next_offset.unwrap_or((0, None));
+                            return Poll::Ready(Ok(StatefulStreamResult::Continue));
                         }
                     }
                     _ => {}
@@ -763,7 +916,7 @@ impl HashJoinStream {
 
             if let Some(offset) = next_offset {
                 state.offset = offset;
-                return Ok(StatefulStreamResult::Continue);
+                return Poll::Ready(Ok(StatefulStreamResult::Continue));
             }
 
             if self.probe_side_partitioned {
@@ -808,16 +961,39 @@ impl HashJoinStream {
                         let mut columns = Vec::with_capacity(self.column_indices.len());
                         for column_index in &self.column_indices {
                             let array = match column_index.side {
-                                JoinSide::Right => take(
-                                    state.batch.column(column_index.index),
-                                    &r_indices,
-                                    None,
-                                )?,
+                                JoinSide::Right => {
+                                    match take(
+                                        state.batch.column(column_index.index),
+                                        &r_indices,
+                                        None,
+                                    ) {
+                                        Ok(res) => res,
+                                        Err(e) => return Poll::Ready(Err(e.into())),
+                                    }
+                                }
                                 JoinSide::Left => {
                                     // Should not happen for RightMark output columns?
                                     // Actually RightMark only produces Right side and Mark.
+                                    let left_data = match &mut self.build_side {
+                                        BuildSide::Ready(s) => Arc::clone(&s.left_data[0]),
+                                        BuildSide::Active(s) => {
+                                            if let Some(d) = &s.left_data[0] {
+                                                Arc::clone(d)
+                                            } else {
+                                                // Wait for it
+                                                match ready!(s.left_futs[0].get_shared(cx)) {
+                                                    Ok(d) => {
+                                                        s.left_data[0] = Some(Arc::clone(&d));
+                                                        d
+                                                    }
+                                                    Err(e) => return Poll::Ready(Err(e)),
+                                                }
+                                            }
+                                        }
+                                        _ => unreachable!(),
+                                    };
                                     new_null_array(
-                                        build_side.left_data[0]
+                                        left_data
                                             .batch()
                                             .column(column_index.index)
                                             .data_type(),
@@ -837,20 +1013,46 @@ impl HashJoinStream {
                             };
                             columns.push(array);
                         }
-                        RecordBatch::try_new(Arc::clone(&self.schema), columns)?
+                        match RecordBatch::try_new(Arc::clone(&self.schema), columns) {
+                            Ok(res) => res,
+                            Err(e) => return Poll::Ready(Err(e.into())),
+                        }
                     } else {
                         let l_indices = UInt64Array::from(vec![None; r_indices.len()]);
-                        build_batch_from_indices(
+                        let left_data = match &mut self.build_side {
+                            BuildSide::Ready(s) => Arc::clone(&s.left_data[0]),
+                            BuildSide::Active(s) => {
+                                if let Some(d) = &s.left_data[0] {
+                                    Arc::clone(d)
+                                } else {
+                                    // Wait for it
+                                    match ready!(s.left_futs[0].get_shared(cx)) {
+                                        Ok(d) => {
+                                            s.left_data[0] = Some(Arc::clone(&d));
+                                            d
+                                        }
+                                        Err(e) => return Poll::Ready(Err(e)),
+                                    }
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                        match build_batch_from_indices(
                             &self.schema,
-                            build_side.left_data[0].batch(),
+                            left_data.batch(),
                             &state.batch,
                             &l_indices,
                             &r_indices,
                             &self.column_indices,
                             JoinSide::Left,
-                        )?
+                        ) {
+                            Ok(res) => res,
+                            Err(e) => return Poll::Ready(Err(e.into())),
+                        }
                     };
-                    self.output_buffer.push_batch(batch)?;
+                    if let Err(e) = self.output_buffer.push_batch(batch) {
+                        return Poll::Ready(Err(e.into()));
+                    }
                 }
             }
             _ => {}
@@ -866,7 +1068,14 @@ impl HashJoinStream {
                 self.partition_indices_buffer = indices;
             }
         }
-        Ok(StatefulStreamResult::Continue)
+        // Transition to Ready if all partitions are loaded
+        if let BuildSide::Active(s) = &self.build_side {
+            if s.left_data.iter().all(|x| x.is_some()) {
+                let left_data = s.left_data.iter().map(|x| Arc::clone(x.as_ref().unwrap())).collect();
+                self.build_side = BuildSide::Ready(BuildSideReadyState { left_data });
+            }
+        }
+        Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
     /// Processes unmatched build-side rows for certain join types and produces output batch
@@ -874,48 +1083,74 @@ impl HashJoinStream {
     /// Updates state to `Completed`
     fn process_unmatched_build_batch(
         &mut self,
-    ) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
         let timer = self.join_metrics.join_time.timer();
 
         if !need_produce_result_in_final(self.join_type) {
             self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+            return Poll::Ready(Ok(StatefulStreamResult::Continue));
         }
 
-        let build_side = self.build_side.try_as_ready()?;
+        // We need all build partitions to be ready to process unmatched rows
+        let left_data = match &mut self.build_side {
+            BuildSide::Ready(s) => s.left_data.clone(),
+            BuildSide::Active(s) => {
+                let mut left_data = Vec::with_capacity(s.left_futs.len());
+                for i in 0..s.left_futs.len() {
+                    if let Some(d) = &s.left_data[i] {
+                        left_data.push(Arc::clone(d));
+                    } else {
+                        match ready!(s.left_futs[i].get_shared(cx)) {
+                            Ok(d) => {
+                                s.left_data[i] = Some(Arc::clone(&d));
+                                left_data.push(d);
+                            }
+                            Err(e) => return Poll::Ready(Err(e)),
+                        }
+                    }
+                }
+                // Transition to Ready
+                self.build_side = BuildSide::Ready(BuildSideReadyState {
+                    left_data: left_data.clone(),
+                });
+                left_data
+            }
+            _ => return Poll::Ready(internal_err!("Invalid build side state")),
+        };
 
         // For null-aware anti join, if probe side had NULL, no rows should be output
         if self.null_aware
-            && build_side.left_data[0]
+            && left_data[0]
                 .probe_side_has_null
                 .load(Ordering::Relaxed)
         {
             timer.done();
             self.state = HashJoinStreamState::Completed;
-            return Ok(StatefulStreamResult::Continue);
+            return Poll::Ready(Ok(StatefulStreamResult::Continue));
         }
 
         let mut produced_any = false;
-        for left_data in &build_side.left_data {
-            if !left_data.report_probe_completed() {
+        for data in &left_data {
+            if !data.report_probe_completed() {
                 continue;
             }
 
             produced_any = true;
             // use the global left bitmap to produce the left indices and right indices
             let (mut left_side, right_side) = get_final_indices_from_shared_bitmap(
-                left_data.visited_indices_bitmap(),
+                data.visited_indices_bitmap(),
                 self.join_type,
                 true,
             );
 
             if self.null_aware
                 && self.join_type == JoinType::LeftAnti
-                && build_side.left_data[0]
+                && left_data[0]
                     .probe_side_non_empty
                     .load(Ordering::Relaxed)
             {
-                let build_key_column = &left_data.values()[0];
+                let build_key_column = &data.values()[0];
                 let filtered_indices: Vec<u64> = left_side
                     .iter()
                     .filter_map(|idx| {
@@ -931,16 +1166,21 @@ impl HashJoinStream {
             }
 
             if !left_side.is_empty() {
-                let batch = build_batch_from_indices(
+                let batch = match build_batch_from_indices(
                     &self.schema,
-                    left_data.batch(),
+                    data.batch(),
                     &RecordBatch::new_empty(self.right.schema()),
                     &left_side,
                     &right_side,
                     &self.column_indices,
                     JoinSide::Left,
-                )?;
-                self.output_buffer.push_batch(batch)?;
+                ) {
+                    Ok(b) => b,
+                    Err(e) => return Poll::Ready(Err(e.into())),
+                };
+                if let Err(e) = self.output_buffer.push_batch(batch) {
+                    return Poll::Ready(Err(e.into()));
+                }
             }
         }
 
@@ -951,7 +1191,7 @@ impl HashJoinStream {
 
         timer.done();
         self.state = HashJoinStreamState::Completed;
-        Ok(StatefulStreamResult::Continue)
+        Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 }
 
