@@ -35,6 +35,7 @@ use arrow::array::types::{
 use arrow::array::{Array, ArrayRef, PrimitiveArray};
 use arrow::datatypes::DataType::{self, Time32, Time64, Timestamp};
 use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Second};
+use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{
@@ -42,7 +43,8 @@ use datafusion_common::{
 };
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -228,6 +230,21 @@ impl ScalarUDFImpl for DateTruncFunc {
         // internal error here makes misuse visible and matches other UDFs
         // that implement `return_field_from_args` directly.
         internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let data_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type())
+            .cloned()
+            .collect::<Vec<_>>();
+        let return_type = self.return_type(&data_types)?;
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            args.arg_fields[1].is_nullable(),
+        )))
     }
 
     fn invoke_with_args(
