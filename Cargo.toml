@@ -271,3 +271,7 @@ incremental = false
 inherits = "release"
 debug = true
 strip = false
+
+
+[patch.crates-io]
+object_store = { git = "https://github.com/apache/arrow-rs-object-store.git", branch = "release/0.12" }
