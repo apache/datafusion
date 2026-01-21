@@ -883,7 +883,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * (Int32(1) - test.b)), sum(__common_expr_1 AS test.a * (Int32(1) - test.b) * (Int32(1) + test.c)) AS sum((test.a * (Int32(1) - test.b)) * (Int32(1) + test.c))]]
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
           Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "

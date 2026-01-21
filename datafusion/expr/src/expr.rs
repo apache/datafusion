@@ -2818,16 +2818,11 @@ impl Display for SchemaDisplay<'_> {
                 }
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                // Add parentheses around nested binary expressions to avoid ambiguity
-                fn write_child(f: &mut Formatter<'_>, expr: &Expr) -> fmt::Result {
-                    match expr {
-                        Expr::BinaryExpr(_) => write!(f, "({})", SchemaDisplay(expr)),
-                        _ => write!(f, "{}", SchemaDisplay(expr)),
-                    }
-                }
-                write_child(f, left)?;
-                write!(f, " {op} ")?;
-                write_child(f, right)
+                // Note: SchemaDisplay intentionally does NOT add parentheses around
+                // nested binary expressions because schema names must remain stable
+                // for field lookups in optimizers like common_subexpr_eliminate.
+                // Use Display for human-readable output with parentheses.
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
