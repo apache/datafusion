@@ -645,6 +645,22 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
 }
 
 #[tokio::test]
+async fn predicate_cache_stats_issue_19561() -> datafusion_common::Result<()> {
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.parquet.pushdown_filters = true;
+    // force to get multiple batches to trigger repeated metric compound bug
+    config.options_mut().execution.batch_size = 1;
+    let ctx = SessionContext::new_with_config(config);
+    // The cache is on by default, and used when filter pushdown is enabled
+    PredicateCacheTest {
+        expected_inner_records: 8,
+        expected_records: 4,
+    }
+    .run(&ctx)
+    .await
+}
+
+#[tokio::test]
 async fn predicate_cache_pushdown_default_selections_only()
 -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
