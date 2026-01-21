@@ -3271,11 +3271,11 @@ mod tests {
     #[test]
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let limit = 15u64;
+        let limit = 15i32;
         let expr = col("c1").in_list((1..=limit).map(lit).collect(), false);
 
         let expected_expr = "true";
-        let predicate_expr = test_build_predicate_expression_with_pruning_predicate_config(&expr, &schema, &mut RequiredColumns::new(), &PruningPredicateConfig { max_in_list: limit as usize });
+        let predicate_expr = test_build_predicate_expression_with_pruning_predicate_config(&expr, &schema, &mut RequiredColumns::new(), &PruningPredicateConfig { max_in_list: (limit - 1) as usize });
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
