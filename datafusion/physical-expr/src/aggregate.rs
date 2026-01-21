@@ -662,7 +662,7 @@ impl AggregateFunctionExpr {
             ignore_nulls: self.ignore_nulls,
             ordering_fields: self.ordering_fields.clone(),
             is_distinct: self.is_distinct,
-            is_reversed: false,
+            is_reversed: self.is_reversed,
             input_fields: self.input_fields.clone(),
             is_nullable: self.is_nullable,
         })

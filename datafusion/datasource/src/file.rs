@@ -78,6 +78,14 @@ pub trait FileSource: Send + Sync {
     fn projection(&self) -> Option<&ProjectionExprs> {
         None
     }
+    /// Returns new file source with given filter and projection.
+    fn with_filter_and_projection(
+        &self,
+        _filter: Option<Arc<dyn PhysicalExpr>>,
+        _projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// String representation of file source such as "csv", "json", "parquet"
