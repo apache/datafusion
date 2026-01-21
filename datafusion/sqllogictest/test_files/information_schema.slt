@@ -251,6 +251,7 @@ datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 2
 datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint 524288
 datafusion.execution.parquet.pruning true
+datafusion.execution.parquet.pruning_max_inlist_limit 20
 datafusion.execution.parquet.pushdown_filters false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.schema_force_view_types true
