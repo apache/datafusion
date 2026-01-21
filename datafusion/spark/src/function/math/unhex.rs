@@ -21,7 +21,8 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::types::logical_string;
-use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -33,7 +34,6 @@ use std::sync::Arc;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnhex {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkUnhex {
@@ -48,7 +48,6 @@ impl SparkUnhex {
 
         Self {
             signature: Signature::coercible(vec![string], Volatility::Immutable),
-            aliases: vec![],
         }
     }
 }
@@ -60,10 +59,6 @@ impl ScalarUDFImpl for SparkUnhex {
 
     fn name(&self) -> &str {
         "unhex"
-    }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
     }
 
     fn signature(&self) -> &Signature {
@@ -89,6 +84,8 @@ fn hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
+/// Decodes a hex-encoded byte slice into binary data.
+/// Returns `true` if decoding succeeded, `false` if the input contains invalid hex characters.
 fn unhex_common(bytes: &[u8], out: &mut Vec<u8>) -> bool {
     if bytes.is_empty() {
         return true;
@@ -117,12 +114,17 @@ fn unhex_common(bytes: &[u8], out: &mut Vec<u8>) -> bool {
     true
 }
 
-fn unhex_array<I, T>(iter: I, len: usize) -> Result<ArrayRef, DataFusionError>
+/// Converts an iterator of hex strings to a binary array.
+fn unhex_array<I, T>(
+    iter: I,
+    len: usize,
+    capacity: usize,
+) -> Result<ArrayRef, DataFusionError>
 where
     I: Iterator<Item = Option<T>>,
     T: AsRef<str>,
 {
-    let mut builder = BinaryBuilder::with_capacity(len, len * 32);
+    let mut builder = BinaryBuilder::with_capacity(len, capacity);
     let mut buffer = Vec::new();
 
     for v in iter {
@@ -142,6 +144,7 @@ where
     Ok(Arc::new(builder.finish()))
 }
 
+/// Convert a single hex string to binary
 fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
     let mut buffer = Vec::with_capacity(s.len().div_ceil(2));
     if unhex_common(s.as_bytes(), &mut buffer) {
@@ -151,32 +154,37 @@ fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
     }
 }
 
-pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return exec_err!("unhex tasks exactly 1 argument, but got: {}", args.len());
-    }
+fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+    let args: [&ColumnarValue; 1] = take_function_args("unhex", args)?;
 
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Utf8 => {
                 let array = as_string_array(array)?;
+                let capacity = array.values().len().div_ceil(2);
                 Ok(ColumnarValue::Array(unhex_array(
                     array.iter(),
                     array.len(),
+                    capacity,
                 )?))
             }
             DataType::Utf8View => {
                 let array = as_string_view_array(array)?;
+                // Estimate capacity since StringViewArray data can be scattered or inlined.
+                let capacity = array.len() * 32;
                 Ok(ColumnarValue::Array(unhex_array(
                     array.iter(),
                     array.len(),
+                    capacity,
                 )?))
             }
             DataType::LargeUtf8 => {
                 let array = as_large_string_array(array)?;
+                let capacity = array.values().len().div_ceil(2);
                 Ok(ColumnarValue::Array(unhex_array(
                     array.iter(),
                     array.len(),
+                    capacity,
                 )?))
             }
             _ => exec_err!(
@@ -202,193 +210,5 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
                 )
             }
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::array::{BinaryArray, LargeStringArray, StringArray};
-    use datafusion_common::cast::as_binary_array;
-    use datafusion_expr::ColumnarValue;
-
-    #[test]
-    fn test_unhex_scalar_valid() {
-        let test_cases = vec![
-            ("414243", vec![0x41, 0x42, 0x43]),
-            ("DEADBEEF", vec![0xDE, 0xAD, 0xBE, 0xEF]),
-            ("deadbeef", vec![0xDE, 0xAD, 0xBE, 0xEF]),
-            ("00", vec![0x00]),
-            ("ff", vec![0xFF]),
-            (
-                "0123456789ABCDEF",
-                vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF],
-            ),
-        ];
-
-        for (input, expected) in test_cases {
-            let args = ColumnarValue::Scalar(ScalarValue::from(input));
-            let result = spark_unhex(&[args]).unwrap();
-
-            match result {
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(actual))) => {
-                    assert_eq!(actual, expected, "Failed for input: {input}");
-                }
-                _ => panic!("Unexpected result type for input: {input}"),
-            }
-        }
-    }
-
-    #[test]
-    fn test_unhex_scalar_odd_length() {
-        let test_cases = vec![
-            ("1A2B3", vec![0x01, 0xA2, 0xB3]),
-            ("1", vec![0x01]),
-            ("ABC", vec![0x0A, 0xBC]),
-            ("123", vec![0x01, 0x23]),
-        ];
-
-        for (input, expected) in test_cases {
-            let args = ColumnarValue::Scalar(ScalarValue::from(input));
-            let result = spark_unhex(&[args]).unwrap();
-
-            match result {
-                ColumnarValue::Scalar(ScalarValue::Binary(Some(actual))) => {
-                    assert_eq!(actual, expected, "Failed for odd-length input: {input}",);
-                }
-                _ => panic!("Unexpected result type for odd-length input: {input}",),
-            }
-        }
-    }
-
-    #[test]
-    fn test_unhex_scalar_empty() {
-        let args = ColumnarValue::Scalar(ScalarValue::from(""));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Scalar(ScalarValue::Binary(Some(actual))) => {
-                assert_eq!(actual, Vec::<u8>::new());
-            }
-            _ => panic!("Expected binary value for empty string"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_scalar_invalid() {
-        let args = ColumnarValue::Scalar(ScalarValue::from("GG"));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Scalar(ScalarValue::Binary(None)) => {}
-            _ => panic!("Expected null binary for invalid hex input"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_scalar_null() {
-        let args = ColumnarValue::Scalar(ScalarValue::Utf8(None));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Scalar(ScalarValue::Binary(None)) => {}
-            _ => panic!("Expected null binary for null input"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_array_utf8() {
-        let input = StringArray::from(vec![
-            Some("414243"),
-            None,
-            Some("DEAD"),
-            Some("INVALID"),
-            Some(""),
-        ]);
-        let expected = BinaryArray::from(vec![
-            Some(&[0x41, 0x42, 0x43][..]),
-            None,
-            Some(&[0xDE, 0xAD][..]),
-            None,
-            Some(&[][..]),
-        ]);
-
-        let args = ColumnarValue::Array(Arc::new(input));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Array(array) => {
-                let result = as_binary_array(&array).unwrap();
-                assert_eq!(result, &expected);
-            }
-            _ => panic!("Expected array result"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_array_large_utf8() {
-        let input =
-            LargeStringArray::from(vec![Some("414243"), Some("1A2B3"), None, Some("FF")]);
-        let expected = BinaryArray::from(vec![
-            Some(&[0x41, 0x42, 0x43][..]),
-            Some(&[0x01, 0xA2, 0xB3][..]),
-            None,
-            Some(&[0xFF][..]),
-        ]);
-
-        let args = ColumnarValue::Array(Arc::new(input));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Array(array) => {
-                let result = as_binary_array(&array).unwrap();
-                assert_eq!(result, &expected);
-            }
-            _ => panic!("Expected array result"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_array_mixed_cases() {
-        let input = StringArray::from(vec![
-            Some("deadbeef"),
-            Some("DEADBEEF"),
-            Some("AbCdEf"),
-            Some("1234567890"),
-        ]);
-        let expected = BinaryArray::from(vec![
-            Some(&[0xDE, 0xAD, 0xBE, 0xEF][..]),
-            Some(&[0xDE, 0xAD, 0xBE, 0xEF][..]),
-            Some(&[0xAB, 0xCD, 0xEF][..]),
-            Some(&[0x12, 0x34, 0x56, 0x78, 0x90][..]),
-        ]);
-
-        let args = ColumnarValue::Array(Arc::new(input));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Array(array) => {
-                let result = as_binary_array(&array).unwrap();
-                assert_eq!(result, &expected);
-            }
-            _ => panic!("Expected array result"),
-        }
-    }
-
-    #[test]
-    fn test_unhex_array_empty() {
-        let input: StringArray = StringArray::from(Vec::<&str>::new());
-        let expected: BinaryArray = BinaryArray::from(Vec::<Option<&[u8]>>::new());
-
-        let args = ColumnarValue::Array(Arc::new(input));
-        let result = spark_unhex(&[args]).unwrap();
-
-        match result {
-            ColumnarValue::Array(array) => {
-                let result = as_binary_array(&array).unwrap();
-                assert_eq!(result, &expected);
-            }
-            _ => panic!("Expected array result"),
-        }
     }
 }

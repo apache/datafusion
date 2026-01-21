@@ -39,9 +39,12 @@ abc
 
 # Odd length hex (left pad with 0)
 query ?
-SELECT unhex('1A2B3');
+SELECT unhex(a) FROM VALUES ('1A2B3', '1', 'ABC', '123');
 ----
 01a2b3
+1
+abc
+123
 
 # Null input
 query ?
@@ -55,9 +58,15 @@ SELECT unhex('GGHH');
 ----
 NULL
 
+# Empty hex string
+query T
+SELECT arrow_cast(unhex(''), 'Utf8');
+----
+(empty)
+
 # Array with mixed case
 query ?
-SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42') AS t(a);
+SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('41 42'), ('00'), ('FF') AS t(a);
 ----
 4a4b4c
 0f
@@ -65,6 +74,8 @@ SELECT unhex(a) FROM VALUES ('4a4B4c'), ('F'), ('A'), ('AbCdEf'), ('123abc'), ('
 abcdef
 123abc
 NULL
+00
+ff
 
 # LargeUtf8 type
 statement ok
