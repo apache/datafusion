@@ -2048,11 +2048,17 @@ impl DataFrame {
                 .build()?
         };
 
+        // Build copy options, including single_file_output if explicitly set
+        let mut copy_options: HashMap<String, String> = HashMap::new();
+        if options.single_file_output {
+            copy_options.insert("single_file_output".to_string(), "true".to_string());
+        }
+
         let plan = LogicalPlanBuilder::copy_to(
             plan,
             path.into(),
             file_type,
-            HashMap::new(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2116,11 +2122,17 @@ impl DataFrame {
                 .build()?
         };
 
+        // Build copy options, including single_file_output if explicitly set
+        let mut copy_options: HashMap<String, String> = HashMap::new();
+        if options.single_file_output {
+            copy_options.insert("single_file_output".to_string(), "true".to_string());
+        }
+
         let plan = LogicalPlanBuilder::copy_to(
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;

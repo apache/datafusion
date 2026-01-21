@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::file_format::{
@@ -84,11 +85,17 @@ impl DataFrame {
                 .build()?
         };
 
+        // Build copy options, including single_file_output if explicitly set
+        let mut copy_options = HashMap::<String, String>::new();
+        if options.single_file_output {
+            copy_options.insert("single_file_output".to_string(), "true".to_string());
+        }
+
         let plan = LogicalPlanBuilder::copy_to(
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -321,6 +328,54 @@ mod tests {
 
         let num_rows_selected = selected.count().await?;
         assert_eq!(num_rows_selected, 14);
+
+        Ok(())
+    }
+
+    /// Test that single_file_output works for paths WITHOUT file extensions.
+    /// This verifies the fix for the regression where extension heuristics
+    /// ignored the explicit with_single_file_output(true) setting.
+    #[tokio::test]
+    async fn test_single_file_output_without_extension() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = TempDir::new()?;
+
+        // Path WITHOUT .parquet extension - this is the key scenario
+        let output_path = tmp_dir.path().join("data_no_ext");
+        let output_path_str = output_path.to_str().unwrap();
+
+        let df = ctx.read_batch(RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?)?;
+
+        // Explicitly request single file output
+        df.write_parquet(
+            output_path_str,
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            None,
+        )
+        .await?;
+
+        // Verify: output should be a FILE, not a directory
+        assert!(
+            output_path.is_file(),
+            "Expected single file at {:?}, but got is_file={}, is_dir={}",
+            output_path,
+            output_path.is_file(),
+            output_path.is_dir()
+        );
+
+        // Verify the file is readable as parquet
+        let file = std::fs::File::open(&output_path)?;
+        let reader = parquet::file::reader::SerializedFileReader::new(file)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        assert_eq!(metadata.file_metadata().num_rows(), 3);
 
         Ok(())
     }

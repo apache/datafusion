@@ -674,6 +674,7 @@ impl TableProvider for ListingTable {
             insert_op,
             keep_partition_by_columns,
             file_extension: self.options().format.get_ext(),
+            single_file_output: None, // Use extension heuristic for table inserts
         };
 
         // For writes, we only use user-specified ordering (no file groups to derive from)

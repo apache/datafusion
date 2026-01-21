@@ -549,8 +549,30 @@ impl DefaultPhysicalPlanner {
                     }
                 };
 
+                // Parse single_file_output option if explicitly set
+                let single_file_output = match source_option_tuples
+                    .get("single_file_output")
+                    .map(|v| v.trim())
+                {
+                    None => None,
+                    Some("true") => Some(true),
+                    Some("false") => Some(false),
+                    Some(value) => {
+                        return Err(DataFusionError::Configuration(format!(
+                            "provided value for 'single_file_output' was not recognized: \"{value}\""
+                        )));
+                    }
+                };
+
+                // Filter out sink-related options that are not format options
+                let format_options: HashMap<String, String> = source_option_tuples
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != "single_file_output")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+
                 let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, source_option_tuples)?;
+                    .create(session_state, &format_options)?;
 
                 // Determine extension based on format extension and compression
                 let file_extension = match sink_format.compression_type() {
@@ -571,6 +593,7 @@ impl DefaultPhysicalPlanner {
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
                     file_extension,
+                    single_file_output,
                 };
 
                 let ordering = input_exec.properties().output_ordering().cloned();

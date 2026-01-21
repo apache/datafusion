@@ -112,6 +112,11 @@ pub struct FileSinkConfig {
     pub keep_partition_by_columns: bool,
     /// File extension without a dot(.)
     pub file_extension: String,
+    /// Override for single file output behavior.
+    /// - `None`: use extension heuristic (path with extension = single file)
+    /// - `Some(true)`: force single file output at exact path
+    /// - `Some(false)`: force directory output with generated filenames
+    pub single_file_output: Option<bool>,
 }
 
 impl FileSinkConfig {

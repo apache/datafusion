@@ -106,8 +106,11 @@ pub(crate) fn start_demuxer_task(
     let file_extension = config.file_extension.clone();
     let base_output_path = config.table_paths[0].clone();
     let task = if config.table_partition_cols.is_empty() {
-        let single_file_output = !base_output_path.is_collection()
-            && base_output_path.file_extension().is_some();
+        // Use explicit single_file_output if set, otherwise fall back to extension heuristic
+        let single_file_output = config.single_file_output.unwrap_or_else(|| {
+            !base_output_path.is_collection()
+                && base_output_path.file_extension().is_some()
+        });
         SpawnedTask::spawn(async move {
             row_count_demuxer(
                 tx,
