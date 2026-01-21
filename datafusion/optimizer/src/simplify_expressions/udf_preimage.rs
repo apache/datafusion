@@ -38,8 +38,8 @@ pub(super) fn rewrite_with_preimage(
 
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < lower
-        // <expr> >= x  ==>  <expr> >= lower
         Operator::Lt => expr.lt(lower),
+        // <expr> >= x  ==>  <expr> >= lower
         Operator::GtEq => expr.gt_eq(lower),
         // <expr> > x ==> <expr> >= upper
         Operator::Gt => expr.gt_eq(upper),
