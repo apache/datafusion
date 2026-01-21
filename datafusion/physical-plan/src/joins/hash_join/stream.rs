@@ -210,6 +210,10 @@ pub(super) struct HashJoinStream {
     build_indices_buffer: Vec<u64>,
     /// Scratch space for hashes during join
     hashes_buffer: Vec<u64>,
+    /// Scratch space for partition indices during local repartitioning
+    partition_indices_buffer: Vec<Vec<u32>>,
+    /// Scratch space for probe matched rows
+    probe_matched_buffer: Vec<bool>,
     /// Shared build accumulator for coordinating dynamic filter updates (collects hash maps and/or bounds, optional)
     build_accumulator: Option<Arc<SharedBuildAccumulator>>,
     /// Optional future to signal when build information has been reported by all partitions
@@ -375,6 +379,8 @@ impl HashJoinStream {
             hashes_buffer: Vec::with_capacity(batch_size),
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
+            partition_indices_buffer: vec![],
+            probe_matched_buffer: Vec::with_capacity(batch_size),
             build_accumulator,
             build_waiter: None,
             partition,
@@ -536,16 +542,26 @@ impl HashJoinStream {
                 self.hashes_buffer.clear();
                 self.hashes_buffer.resize(batch.num_rows(), 0);
                 create_hashes(&keys_values, &self.random_state, &mut self.hashes_buffer)?;
-                let hashes = self.hashes_buffer.clone();
+                let hashes = std::mem::take(&mut self.hashes_buffer);
 
                 let partition_indices = if num_parts > 1 && !self.probe_side_partitioned {
-                    let mut indices =
-                        vec![Vec::with_capacity(batch.num_rows() / num_parts); num_parts];
-                    for (i, hash) in self.hashes_buffer.iter().enumerate() {
-                        let p = (hash % num_parts as u64) as usize;
-                        indices[p].push(i as u32);
+                    if self.partition_indices_buffer.len() != num_parts {
+                        self.partition_indices_buffer =
+                            vec![
+                                Vec::with_capacity(batch.num_rows() / num_parts);
+                                num_parts
+                            ];
+                    } else {
+                        for v in self.partition_indices_buffer.iter_mut() {
+                            v.clear();
+                        }
                     }
-                    Some(indices)
+
+                    for (i, hash) in hashes.iter().enumerate() {
+                        let p = (hash % num_parts as u64) as usize;
+                        self.partition_indices_buffer[p].push(i as u32);
+                    }
+                    Some(std::mem::take(&mut self.partition_indices_buffer))
                 } else {
                     None
                 };
@@ -560,6 +576,10 @@ impl HashJoinStream {
                 self.join_metrics.input_rows.add(batch.num_rows());
 
                 let num_rows = batch.num_rows();
+                self.probe_matched_buffer.clear();
+                self.probe_matched_buffer.resize(num_rows, false);
+                let probe_matched = std::mem::take(&mut self.probe_matched_buffer);
+
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
@@ -569,7 +589,7 @@ impl HashJoinStream {
                         current_partition_idx,
                         offset: (0, None),
                         joined_probe_idx: None,
-                        probe_matched: vec![false; num_rows],
+                        probe_matched,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -622,6 +642,14 @@ impl HashJoinStream {
 
         while state.current_partition_idx < num_parts {
             let partition_idx = state.current_partition_idx;
+
+            if let Some(ref indices) = state.partition_indices {
+                if indices[partition_idx].is_empty() {
+                    state.current_partition_idx += 1;
+                    continue;
+                }
+            }
+
             let left_data = &build_side.left_data[partition_idx];
             let partition_indices = state
                 .partition_indices
@@ -829,7 +857,15 @@ impl HashJoinStream {
         }
 
         timer.done();
-        self.state = HashJoinStreamState::FetchProbeBatch;
+        let state =
+            std::mem::replace(&mut self.state, HashJoinStreamState::FetchProbeBatch);
+        if let HashJoinStreamState::ProcessProbeBatch(s) = state {
+            self.hashes_buffer = s.hashes;
+            self.probe_matched_buffer = s.probe_matched;
+            if let Some(indices) = s.partition_indices {
+                self.partition_indices_buffer = indices;
+            }
+        }
         Ok(StatefulStreamResult::Continue)
     }
 
