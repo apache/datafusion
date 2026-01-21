@@ -1126,7 +1126,12 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
-                let filter_predicates = split_conjunction(&filter.predicate);
+                let filter_predicates: Vec<_> = split_conjunction(&filter.predicate)
+                    .into_iter()
+                    // Add already pushed filters.
+                    .chain(scan.filters.iter())
+                    .unique()
+                    .collect();
 
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
@@ -1154,13 +1159,8 @@ impl OptimizerRule for PushDownFilter {
                     .map(|(pred, _)| pred);
 
                 // Add new scan filters
-                let new_scan_filters: Vec<Expr> = scan
-                    .filters
-                    .iter()
-                    .chain(new_scan_filters)
-                    .unique()
-                    .cloned()
-                    .collect();
+                let new_scan_filters: Vec<Expr> =
+                    new_scan_filters.unique().cloned().collect();
 
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
                 let new_predicate: Vec<Expr> = zip
@@ -1438,8 +1438,8 @@ mod tests {
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
-        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, in_list,
-        in_subquery, lit,
+        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, binary_expr,
+        col, in_list, in_subquery, lit,
     };
 
     use crate::OptimizerContext;
@@ -1459,7 +1459,17 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            assert_optimized_plan_equal_with_pases_num!($plan, 1, @ $expected,)
+        }};
+    }
+
+    macro_rules! assert_optimized_plan_equal_with_pases_num {
+        (
+            $plan:expr,
+            $max_pases: expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let optimizer_ctx = OptimizerContext::new().with_max_passes($max_pases);
             let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownFilter::new())];
             assert_optimized_plan_eq_snapshot!(
                 optimizer_ctx,
@@ -4218,6 +4228,67 @@ mod tests {
             @r"
         Filter: Boolean(false)
           TestUserNode
+        "
+        )
+    }
+
+    struct SingleFilterSupportSource {
+        schema: SchemaRef,
+    }
+
+    #[async_trait]
+    impl TableSource for SingleFilterSupportSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn table_type(&self) -> TableType {
+            TableType::Base
+        }
+
+        fn supports_filters_pushdown(
+            &self,
+            filters: &[&Expr],
+        ) -> Result<Vec<TableProviderFilterPushDown>> {
+            // Support exactly any single filter.
+            let mut res = vec![TableProviderFilterPushDown::Unsupported; filters.len()];
+            res[0] = TableProviderFilterPushDown::Exact;
+            Ok(res)
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    #[test]
+    fn test_pushed_filters_passed_again() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let plan = LogicalPlanBuilder::scan(
+            "t",
+            Arc::new(SingleFilterSupportSource {
+                schema: Arc::clone(&schema),
+            }),
+            None,
+        )?
+        .filter(binary_expr(
+            binary_expr(col("a"), Operator::Eq, lit(1)),
+            Operator::And,
+            binary_expr(col("b"), Operator::Eq, lit(4)),
+        ))?
+        .build()?;
+
+        // Verify that the only one filter is pushed.
+        assert_optimized_plan_equal_with_pases_num!(
+            plan,
+            5,
+            @r"
+        Filter: t.b = Int32(4)
+          TableScan: t, full_filters=[t.a = Int32(1)]
         "
         )
     }
