@@ -566,10 +566,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
+        let mut d: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
         let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
