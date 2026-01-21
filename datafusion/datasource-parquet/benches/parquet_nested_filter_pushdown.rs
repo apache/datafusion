@@ -65,7 +65,7 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
 
     group.bench_function("no_pushdown", |b| {
         let file_schema = setup_reader(&dataset_path);
-        let predicate = logical2physical(&create_predicate(), &file_schema);
+        let predicate = logical2physical(&create_predicate(), file_schema);
         b.iter(|| {
             let matched = scan_with_predicate(&dataset_path, &predicate, false)
                 .expect("baseline parquet scan with filter succeeded");
@@ -75,7 +75,7 @@ fn parquet_nested_filter_pushdown(c: &mut Criterion) {
 
     group.bench_function("with_pushdown", |b| {
         let file_schema = setup_reader(&dataset_path);
-        let predicate = logical2physical(&create_predicate(), &file_schema);
+        let predicate = logical2physical(&create_predicate(), file_schema);
         b.iter(|| {
             let matched = scan_with_predicate(&dataset_path, &predicate, true)
                 .expect("pushdown parquet scan with filter succeeded");

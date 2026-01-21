@@ -4990,7 +4990,8 @@ mod tests {
         .unwrap();
 
         // op: AND left: all false
-        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
+        let left_expr =
+            logical2physical(&logical_col("a").eq(expr_lit(2)), Arc::clone(&schema));
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::And),
@@ -4998,7 +4999,8 @@ mod tests {
         ));
 
         // op: AND left: not all false
-        let left_expr = logical2physical(&logical_col("a").eq(expr_lit(3)), &schema);
+        let left_expr =
+            logical2physical(&logical_col("a").eq(expr_lit(3)), Arc::clone(&schema));
         let left_value = left_expr.evaluate(&batch).unwrap();
         let ColumnarValue::Array(array) = &left_value else {
             panic!("Expected ColumnarValue::Array");
@@ -5014,7 +5016,8 @@ mod tests {
         assert_eq!(expected_boolean_arr, boolean_arr);
 
         // op: OR left: all true
-        let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
+        let left_expr =
+            logical2physical(&logical_col("a").gt(expr_lit(0)), Arc::clone(&schema));
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::Or),
@@ -5023,7 +5026,7 @@ mod tests {
 
         // op: OR left: not all true
         let left_expr: Arc<dyn PhysicalExpr> =
-            logical2physical(&logical_col("a").gt(expr_lit(2)), &schema);
+            logical2physical(&logical_col("a").gt(expr_lit(2)), Arc::clone(&schema));
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
             check_short_circuit(&left_value, &Operator::Or),
@@ -5059,7 +5062,7 @@ mod tests {
         .unwrap();
 
         // Case: Mixed values with nulls - shouldn't short-circuit for AND
-        let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
+        let mixed_nulls = logical2physical(&logical_col("c"), schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
         assert!(matches!(
             check_short_circuit(&mixed_nulls_value, &Operator::And),
@@ -5080,10 +5083,10 @@ mod tests {
         )
         .unwrap();
 
-        let null_expr = logical2physical(&logical_col("e"), &null_batch.schema());
+        let null_expr = logical2physical(&logical_col("e"), null_batch.schema());
         let null_value = null_expr.evaluate(&null_batch).unwrap();
 
-        // All nulls shouldn't short-circuit for AND or OR
+        // All nulls shouldn't short-circuit for `AND` or `OR`
         assert!(matches!(
             check_short_circuit(&null_value, &Operator::And),
             ShortCircuitStrategy::None
@@ -5225,7 +5228,7 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&c_array)])
             .unwrap();
 
-        let expr = logical2physical(&logical_col("c").and(expr_lit(true)), &schema);
+        let expr = logical2physical(&logical_col("c").and(expr_lit(true)), schema);
 
         let result = expr.evaluate(&batch).unwrap();
         let ColumnarValue::Array(result_arr) = result else {
