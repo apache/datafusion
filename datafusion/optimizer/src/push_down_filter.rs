@@ -1619,9 +1619,9 @@ mod tests {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Aggregate: groupBy=[[test.b + test.a]], aggr=[[sum(test.a), test.b]]
-          TableScan: test, full_filters=[test.b + test.a > Int64(10)]
+          TableScan: test, full_filters=[(test.b + test.a) > Int64(10)]
         "
         )
     }
@@ -1797,8 +1797,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: test.a + test.b > Int64(10)
+            @"
+        Filter: (test.a + test.b) > Int64(10)
           WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: test
         "
@@ -1969,18 +1969,18 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
+        @"
         Filter: b = Int64(1)
-          Projection: test.a * Int32(2) + test.c AS b, test.c
+          Projection: (test.a * Int32(2)) + test.c AS b, test.c
             TableScan: test
         ",
         );
         // filter is before projection
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.a * Int32(2) + test.c AS b, test.c
-          TableScan: test, full_filters=[test.a * Int32(2) + test.c = Int64(1)]
+            @"
+        Projection: (test.a * Int32(2)) + test.c AS b, test.c
+          TableScan: test, full_filters=[((test.a * Int32(2)) + test.c) = Int64(1)]
         "
         )
     }
@@ -2001,20 +2001,20 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
+        @"
         Filter: a = Int64(1)
           Projection: b * Int32(3) AS a, test.c
-            Projection: test.a * Int32(2) + test.c AS b, test.c
+            Projection: (test.a * Int32(2)) + test.c AS b, test.c
               TableScan: test
         ",
         );
         // filter is before the projections
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: b * Int32(3) AS a, test.c
-          Projection: test.a * Int32(2) + test.c AS b, test.c
-            TableScan: test, full_filters=[(test.a * Int32(2) + test.c) * Int32(3) = Int64(1)]
+          Projection: (test.a * Int32(2)) + test.c AS b, test.c
+            TableScan: test, full_filters=[(((test.a * Int32(2)) + test.c) * Int32(3)) = Int64(1)]
         "
         )
     }
@@ -2216,8 +2216,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)
+        @"
+        Filter: (sum(test.c) > Int64(10)) AND ((b > Int64(10)) AND (sum(test.c) < Int64(20)))
           Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
             Projection: test.a AS b, test.c
               TableScan: test
@@ -2226,8 +2226,8 @@ mod tests {
         // filter is before the projections
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)
+            @"
+        Filter: (sum(test.c) > Int64(10)) AND (sum(test.c) < Int64(20))
           Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
             Projection: test.a AS b, test.c
               TableScan: test, full_filters=[test.a > Int64(10)]
@@ -2430,9 +2430,9 @@ mod tests {
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: test.a
-          Filter: test.a >= Int64(1) AND test.a <= Int64(1)
+          Filter: (test.a >= Int64(1)) AND (test.a <= Int64(1))
             Limit: skip=0, fetch=1
               TableScan: test
         "
@@ -2829,8 +2829,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Inner Join: test.a = test2.a Filter: test.c > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        @"
+        Inner Join: test.a = test2.a Filter: ((test.c > UInt32(1)) AND (test.b < test2.b)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2874,8 +2874,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Inner Join: test.a = test2.a Filter: test.b > UInt32(1) AND test2.c > UInt32(4)
+        @"
+        Inner Join: test.a = test2.a Filter: (test.b > UInt32(1)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2963,8 +2963,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        @"
+        Left Join: test.a = test2.a Filter: ((test.a > UInt32(1)) AND (test.b < test2.b)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -2973,8 +2973,8 @@ mod tests {
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Left Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b
+            @"
+        Left Join: test.a = test2.a Filter: (test.a > UInt32(1)) AND (test.b < test2.b)
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -3009,8 +3009,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Right Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        @"
+        Right Join: test.a = test2.a Filter: ((test.a > UInt32(1)) AND (test.b < test2.b)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -3019,8 +3019,8 @@ mod tests {
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Right Join: test.a = test2.a Filter: test.b < test2.b AND test2.c > UInt32(4)
+            @"
+        Right Join: test.a = test2.a Filter: (test.b < test2.b) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test, full_filters=[test.a > UInt32(1)]
           Projection: test2.a, test2.b, test2.c
@@ -3055,8 +3055,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+        @"
+        Full Join: test.a = test2.a Filter: ((test.a > UInt32(1)) AND (test.b < test2.b)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -3065,8 +3065,8 @@ mod tests {
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Full Join: test.a = test2.a Filter: test.a > UInt32(1) AND test.b < test2.b AND test2.c > UInt32(4)
+            @"
+        Full Join: test.a = test2.a Filter: ((test.a > UInt32(1)) AND (test.b < test2.b)) AND (test2.c > UInt32(4))
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
@@ -3205,9 +3205,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
-          Filter: a = Int64(10) AND b > Int64(11)
+          Filter: (a = Int64(10)) AND (b > Int64(11))
             TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
         "
         )
@@ -3246,8 +3246,8 @@ mod tests {
 
         // filter on col b
         assert_snapshot!(plan,
-        @r"
-        Filter: b > Int64(10) AND test.c > Int64(10)
+        @"
+        Filter: (b > Int64(10)) AND (test.c > Int64(10))
           Projection: test.a AS b, test.c
             TableScan: test
         ",
@@ -3276,8 +3276,8 @@ mod tests {
 
         // filter on col b
         assert_snapshot!(plan,
-        @r"
-        Filter: b > Int64(10) AND test.c > Int64(10)
+        @"
+        Filter: (b > Int64(10)) AND (test.c > Int64(10))
           Projection: b, test.c
             Projection: test.a AS b, test.c
               TableScan: test
@@ -3304,8 +3304,8 @@ mod tests {
 
         // filter on col b and d
         assert_snapshot!(plan,
-        @r"
-        Filter: b > Int64(10) AND d > Int64(10)
+        @"
+        Filter: (b > Int64(10)) AND (d > Int64(10))
           Projection: test.a AS b, test.c AS d
             TableScan: test
         ",
@@ -3525,10 +3525,10 @@ mod tests {
             .filter(filter)?
             .build()?;
 
-        assert_optimized_plan_eq_with_rewrite_predicate!(plan.clone(), @r"
-        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
+        assert_optimized_plan_eq_with_rewrite_predicate!(plan.clone(), @"
+        Inner Join:  Filter: ((test.a = d) AND (test.b > UInt32(1))) OR ((test.b = e) AND (test.c < UInt32(10)))
           Projection: test.a, test.b, test.c
-            TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
+            TableScan: test, full_filters=[(test.b > UInt32(1)) OR (test.c < UInt32(10))]
           Projection: test1.a AS d, test1.a AS e
             TableScan: test1
         ")?;
@@ -3541,10 +3541,10 @@ mod tests {
             .data;
         assert_optimized_plan_equal!(
             optimized_plan,
-            @r"
-        Inner Join:  Filter: test.a = d AND test.b > UInt32(1) OR test.b = e AND test.c < UInt32(10)
+            @"
+        Inner Join:  Filter: ((test.a = d) AND (test.b > UInt32(1))) OR ((test.b = e) AND (test.c < UInt32(10)))
           Projection: test.a, test.b, test.c
-            TableScan: test, full_filters=[test.b > UInt32(1) OR test.c < UInt32(10)]
+            TableScan: test, full_filters=[(test.b > UInt32(1)) OR (test.c < UInt32(10))]
           Projection: test1.a AS d, test1.a AS e
             TableScan: test1
         "
@@ -3619,8 +3619,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        LeftSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        @"
+        LeftSemi Join: test1.a = test2.a Filter: (test1.b > UInt32(1)) AND (test2.b > UInt32(2))
           TableScan: test1
           Projection: test2.a, test2.b
             TableScan: test2
@@ -3706,8 +3706,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        RightSemi Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        @"
+        RightSemi Join: test1.a = test2.a Filter: (test1.b > UInt32(1)) AND (test2.b > UInt32(2))
           TableScan: test1
           Projection: test2.a, test2.b
             TableScan: test2
@@ -3801,8 +3801,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        LeftAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        @"
+        LeftAnti Join: test1.a = test2.a Filter: (test1.b > UInt32(1)) AND (test2.b > UInt32(2))
           Projection: test1.a, test1.b
             TableScan: test1
           Projection: test2.a, test2.b
@@ -3898,8 +3898,8 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        RightAnti Join: test1.a = test2.a Filter: test1.b > UInt32(1) AND test2.b > UInt32(2)
+        @"
+        RightAnti Join: test1.a = test2.a Filter: (test1.b > UInt32(1)) AND (test2.b > UInt32(2))
           Projection: test1.a, test1.b
             TableScan: test1
           Projection: test2.a, test2.b
@@ -3963,9 +3963,9 @@ mod tests {
             .build()?;
 
         assert_snapshot!(plan,
-        @r"
+        @"
         Projection: t.a, t.r
-          Filter: t.a > Int32(5) AND t.r > Float64(0.5)
+          Filter: (t.a > Int32(5)) AND (t.r > Float64(0.5))
             SubqueryAlias: t
               Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r
                 Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]
@@ -4085,8 +4085,8 @@ mod tests {
             .build()?;
 
         assert_snapshot!(plan,
-        @r"
-        Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)
+        @"
+        Filter: ((TestScalarUDF() > Float64(0.1)) AND (t.a > Int32(5))) AND (t.b > Int32(10))
           Projection: test.a, test.b
             TableScan: test
         ",
@@ -4122,17 +4122,17 @@ mod tests {
         .build()?;
 
         assert_snapshot!(plan,
-        @r"
-        Filter: TestScalarUDF() > Float64(0.1) AND t.a > Int32(5) AND t.b > Int32(10)
+        @"
+        Filter: ((TestScalarUDF() > Float64(0.1)) AND (t.a > Int32(5))) AND (t.b > Int32(10))
           Projection: a, b
             TableScan: test
         ",
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
-          Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)
+          Filter: ((t.a > Int32(5)) AND (t.b > Int32(10))) AND (TestScalarUDF() > Float64(0.1))
             TableScan: test
         "
         )

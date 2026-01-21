@@ -341,7 +341,7 @@ fn test_prepare_statement_to_plan_params_as_constants() {
         plan,
         @r#"
     Prepare: "my_plan" [Int32, Float64]
-      Projection: Int64(1) + $1 + $2
+      Projection: (Int64(1) + $1) + $2
         EmptyRelation: rows=1
     "#
     );
@@ -356,8 +356,8 @@ fn test_prepare_statement_to_plan_params_as_constants() {
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r"
-    Projection: Int64(1) + Int32(10) + Float64(10) AS Int64(1) + $1 + $2
+        @"
+    Projection: (Int64(1) + Int32(10)) + Float64(10) AS (Int64(1) + $1) + $2
       EmptyRelation: rows=1
     "
     );
@@ -373,15 +373,15 @@ fn test_infer_types_from_join() {
 
     assert_snapshot!(
         test.run(),
-        @r"
+        @"
     ** Initial Plan:
     Projection: person.id, orders.order_id
-      Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+      Inner Join:  Filter: (person.id = orders.customer_id) AND (person.age = $1)
         TableScan: person
         TableScan: orders
     ** Final Plan:
     Projection: person.id, orders.order_id
-      Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+      Inner Join:  Filter: (person.id = orders.customer_id) AND (person.age = Int32(10))
         TableScan: person
         TableScan: orders
     "
@@ -402,12 +402,12 @@ fn test_prepare_statement_infer_types_from_join() {
     ** Initial Plan:
     Prepare: "my_plan" [Int32]
       Projection: person.id, orders.order_id
-        Inner Join:  Filter: person.id = orders.customer_id AND person.age = $1
+        Inner Join:  Filter: (person.id = orders.customer_id) AND (person.age = $1)
           TableScan: person
           TableScan: orders
     ** Final Plan:
     Projection: person.id, orders.order_id
-      Inner Join:  Filter: person.id = orders.customer_id AND person.age = Int32(10)
+      Inner Join:  Filter: (person.id = orders.customer_id) AND (person.age = Int32(10))
         TableScan: person
         TableScan: orders
     "#
@@ -914,7 +914,7 @@ fn test_prepare_statement_to_plan_multi_params() {
         @r#"
     Prepare: "my_plan" [Int32, Utf8View, Float64, Int32, Float64, Utf8View]
       Projection: person.id, person.age, $6
-        Filter: person.age IN ([$1, $4]) AND person.salary > $3 AND person.salary < $5 OR person.first_name < $2
+        Filter: ((person.age IN ([$1, $4]) AND (person.salary > $3)) AND (person.salary < $5)) OR (person.first_name < $2)
           TableScan: person
     "#
     );
@@ -936,7 +936,7 @@ fn test_prepare_statement_to_plan_multi_params() {
         plan_with_params,
         @r#"
     Projection: person.id, person.age, Utf8View("xyz") AS $6
-      Filter: person.age IN ([Int32(10), Int32(20)]) AND person.salary > Float64(100) AND person.salary < Float64(200) OR person.first_name < Utf8View("abc")
+      Filter: ((person.age IN ([Int32(10), Int32(20)]) AND (person.salary > Float64(100))) AND (person.salary < Float64(200))) OR (person.first_name < Utf8View("abc"))
         TableScan: person
     "#
     );
@@ -957,7 +957,7 @@ fn test_prepare_statement_to_plan_having() {
         @r#"
     Prepare: "my_plan" [Int32, Float64, Float64, Float64]
       Projection: person.id, sum(person.age)
-        Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])
+        Filter: ((sum(person.age) < $1) AND (sum(person.age) > Int64(10))) OR sum(person.age) IN ([$3, $4])
           Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
             Filter: person.salary > $2
               TableScan: person
@@ -977,9 +977,9 @@ fn test_prepare_statement_to_plan_having() {
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r"
+        @"
     Projection: person.id, sum(person.age)
-      Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
+      Filter: ((sum(person.age) < Int32(10)) AND (sum(person.age) > Int64(10))) OR sum(person.age) IN ([Float64(200), Float64(300)])
         Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
           Filter: person.salary > Float64(100)
             TableScan: person

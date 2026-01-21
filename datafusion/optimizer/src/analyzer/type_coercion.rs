@@ -1721,8 +1721,8 @@ mod test {
 
         assert_analyzed_plan_eq!(
             plan,
-            @r"
-        Projection: a < CAST(UInt32(2) AS Float64) OR a < CAST(UInt32(2) AS Float64)
+            @"
+        Projection: (a < CAST(UInt32(2) AS Float64)) OR (a < CAST(UInt32(2) AS Float64))
           EmptyRelation: rows=0
         "
         )

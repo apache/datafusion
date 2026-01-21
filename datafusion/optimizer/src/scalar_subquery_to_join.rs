@@ -455,10 +455,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
           Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
-            Filter: Int32(1) < __scalar_sq_1.max(orders.o_custkey) AND Int32(1) < __scalar_sq_2.max(orders.o_custkey) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            Filter: (Int32(1) < __scalar_sq_1.max(orders.o_custkey)) AND (Int32(1) < __scalar_sq_2.max(orders.o_custkey)) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
               Left Join:  Filter: __scalar_sq_2.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
                 Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
                   TableScan: customer [c_custkey:Int64, c_name:Utf8]
@@ -730,13 +730,13 @@ mod tests {
         // Unsupported predicate, subquery should not be decorrelated
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
           Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
             Subquery: [max(orders.o_custkey):Int64;N]
               Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]
                 Aggregate: groupBy=[[]], aggr=[[max(orders.o_custkey)]] [max(orders.o_custkey):Int64;N]
-                  Filter: outer_ref(customer.c_custkey) = orders.o_custkey OR orders.o_orderkey = Int32(1) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                  Filter: (outer_ref(customer.c_custkey) = orders.o_custkey) OR (orders.o_orderkey = Int32(1)) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
                     TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
             TableScan: customer [c_custkey:Int64, c_name:Utf8]
         "
@@ -887,10 +887,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
           Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
-            Filter: customer.c_custkey >= __scalar_sq_1.max(orders.o_custkey) AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            Filter: (customer.c_custkey >= __scalar_sq_1.max(orders.o_custkey)) AND (customer.c_custkey = Int32(1)) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
               Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
                 TableScan: customer [c_custkey:Int64, c_name:Utf8]
                 SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N, o_custkey:Int64, __always_true:Boolean]
@@ -925,10 +925,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
           Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
-            Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) AND customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            Filter: (customer.c_custkey = __scalar_sq_1.max(orders.o_custkey)) AND (customer.c_custkey = Int32(1)) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
               Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
                 TableScan: customer [c_custkey:Int64, c_name:Utf8]
                 SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N, o_custkey:Int64, __always_true:Boolean]
@@ -964,10 +964,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: customer.c_custkey [c_custkey:Int64]
           Projection: customer.c_custkey, customer.c_name [c_custkey:Int64, c_name:Utf8]
-            Filter: customer.c_custkey = __scalar_sq_1.max(orders.o_custkey) OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            Filter: (customer.c_custkey = __scalar_sq_1.max(orders.o_custkey)) OR (customer.c_custkey = Int32(1)) [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
               Left Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey [c_custkey:Int64, c_name:Utf8, max(orders.o_custkey):Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
                 TableScan: customer [c_custkey:Int64, c_name:Utf8]
                 SubqueryAlias: __scalar_sq_1 [max(orders.o_custkey):Int64;N, o_custkey:Int64, __always_true:Boolean]

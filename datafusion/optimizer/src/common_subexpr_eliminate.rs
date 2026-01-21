@@ -882,8 +882,8 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * (Int32(1) - test.b)), sum(__common_expr_1 AS test.a * (Int32(1) - test.b) * (Int32(1) + test.c)) AS sum((test.a * (Int32(1) - test.b)) * (Int32(1) + test.c))]]
           Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1251,9 +1251,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 - Int32(10) > __common_expr_1
+          Filter: (__common_expr_1 - Int32(10)) > __common_expr_1
             Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1375,9 +1375,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5
-          Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c
+            @ "
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR ((test.a - test.b) = Int32(0)) AS c3, __common_expr_2 AND ((test.a - test.b) = Int32(0)) AS c4, __common_expr_3 OR __common_expr_3 AS c5
+          Projection: (test.a = Int32(0)) OR (test.b = Int32(0)) AS __common_expr_1, (test.a + test.b) = Int32(0) AS __common_expr_2, (test.a * test.b) = Int32(0) AS __common_expr_3, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1429,8 +1429,8 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4
+            @ "
+        Projection: __common_expr_1 OR (random() = Int32(0)) AS c1, __common_expr_1 OR (random() = Int32(0)) AS c2, (random() = Int32(0)) OR (test.b = Int32(0)) AS c3, (random() = Int32(0)) OR (test.b = Int32(0)) AS c4
           Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
         "
@@ -1494,9 +1494,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 * __common_expr_1) = Int32(30)
             Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1512,9 +1512,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 + __common_expr_1) = Int32(30)
             Projection: test.a * test.b AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1530,9 +1530,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 + __common_expr_1) = Int32(30)
             Projection: test.a & test.b AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1548,9 +1548,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 + __common_expr_1) = Int32(30)
             Projection: test.a | test.b AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1566,9 +1566,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 + __common_expr_1) = Int32(30)
             Projection: test.a BIT_XOR test.b AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
@@ -1621,10 +1621,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 - __common_expr_1 = Int32(30)
-            Projection: test.a + test.b * test.c AS __common_expr_1, test.a, test.b, test.c
+          Filter: (__common_expr_1 - __common_expr_1) = Int32(30)
+            Projection: test.a + (test.b * test.c) AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
         )?;
@@ -1639,10 +1639,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 / __common_expr_1 + test.a = Int32(30)
-            Projection: (test.a + test.b / test.c) * test.c AS __common_expr_1, test.a, test.b, test.c
+          Filter: ((__common_expr_1 / __common_expr_1) + test.a) = Int32(30)
+            Projection: (test.a + (test.b / test.c)) * test.c AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "
         )?;
@@ -1655,9 +1655,9 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
+          Filter: (__common_expr_1 * __common_expr_1) = Int32(30)
             Projection: test.b / (test.a + test.c) AS __common_expr_1, test.a, test.b, test.c
               TableScan: test
         "

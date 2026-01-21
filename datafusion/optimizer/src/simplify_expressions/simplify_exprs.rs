@@ -290,8 +290,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.a > Int32(5) AND test.b < Int32(6)
+            @ "
+        Filter: (test.a > Int32(5)) AND (test.b < Int32(6))
           Projection: test.a, test.b
             TableScan: test
         "
@@ -491,7 +491,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a AS (Boolean(true) OR Boolean(false)) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -525,8 +525,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d <= Int32(10) OR test.d >= Int32(100)
+            @ "
+        Filter: (test.d <= Int32(10)) OR (test.d >= Int32(100))
           TableScan: test
         "
         )
@@ -542,8 +542,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d <= Int32(10) AND test.d >= Int32(100)
+            @ "
+        Filter: (test.d <= Int32(10)) AND (test.d >= Int32(100))
           TableScan: test
         "
         )
@@ -610,8 +610,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)
+            @ "
+        Filter: ((test.d != Int32(1)) AND (test.d != Int32(2))) AND (test.d != Int32(3))
           TableScan: test
         "
         )
@@ -627,8 +627,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)
+            @ "
+        Filter: ((test.d = Int32(1)) OR (test.d = Int32(2))) OR (test.d = Int32(3))
           TableScan: test
         "
         )
@@ -645,8 +645,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d < Int32(1) OR test.d > Int32(10)
+            @ "
+        Filter: (test.d < Int32(1)) OR (test.d > Int32(10))
           TableScan: test
         "
         )
@@ -663,8 +663,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Filter: test.d >= Int32(1) AND test.d <= Int32(10)
+            @ "
+        Filter: (test.d >= Int32(1)) AND (test.d <= Int32(10))
           TableScan: test
         "
         )
@@ -937,7 +937,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r#"
-        Filter: test.a != Utf8("a") AND test.a != Utf8("b")
+        Filter: (test.a != Utf8("a")) AND (test.a != Utf8("b"))
           TableScan: test
         "#
         )
@@ -960,7 +960,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r#"
-        Filter: test.a = Utf8("a") OR test.a = Utf8("b")
+        Filter: (test.a = Utf8("a")) OR (test.a = Utf8("b"))
           TableScan: test
         "#
         )
