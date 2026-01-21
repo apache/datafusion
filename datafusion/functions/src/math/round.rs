@@ -186,30 +186,29 @@ impl ScalarUDFImpl for RoundFunc {
                     Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
                 }
                 ScalarValue::Decimal128(Some(v), precision, scale) => {
-                    let rounded = round_decimal(*v, *scale, dp)?;
-                    // Use increased precision from return_type to avoid overflow
                     let new_precision = (*precision + 1).min(DECIMAL128_MAX_PRECISION);
+                    let rounded = round_decimal(*v, new_precision, *scale, dp)?;
                     let scalar =
                         ScalarValue::Decimal128(Some(rounded), new_precision, *scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal256(Some(v), precision, scale) => {
-                    let rounded = round_decimal(*v, *scale, dp)?;
                     let new_precision = (*precision + 1).min(DECIMAL256_MAX_PRECISION);
+                    let rounded = round_decimal(*v, new_precision, *scale, dp)?;
                     let scalar =
                         ScalarValue::Decimal256(Some(rounded), new_precision, *scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal64(Some(v), precision, scale) => {
-                    let rounded = round_decimal(*v, *scale, dp)?;
                     let new_precision = (*precision + 1).min(DECIMAL64_MAX_PRECISION);
+                    let rounded = round_decimal(*v, new_precision, *scale, dp)?;
                     let scalar =
                         ScalarValue::Decimal64(Some(rounded), new_precision, *scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
                 ScalarValue::Decimal32(Some(v), precision, scale) => {
-                    let rounded = round_decimal(*v, *scale, dp)?;
                     let new_precision = (*precision + 1).min(DECIMAL32_MAX_PRECISION);
+                    let rounded = round_decimal(*v, new_precision, *scale, dp)?;
                     let scalar =
                         ScalarValue::Decimal32(Some(rounded), new_precision, *scale);
                     Ok(ColumnarValue::Scalar(scalar))
@@ -283,7 +282,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
+                |v, dp| round_decimal(v, new_precision, *scale, dp),
                 new_precision,
                 *scale,
             )?;
@@ -299,7 +298,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
+                |v, dp| round_decimal(v, new_precision, *scale, dp),
                 new_precision,
                 *scale,
             )?;
@@ -315,7 +314,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
+                |v, dp| round_decimal(v, new_precision, *scale, dp),
                 new_precision,
                 *scale,
             )?;
@@ -331,7 +330,7 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
+                |v, dp| round_decimal(v, new_precision, *scale, dp),
                 new_precision,
                 *scale,
             )?;
@@ -361,6 +360,7 @@ where
 
 fn round_decimal<V: ArrowNativeTypeOp>(
     value: V,
+    precision: u8,
     scale: i8,
     decimal_places: i32,
 ) -> Result<V, ArrowError> {
@@ -404,9 +404,28 @@ fn round_decimal<V: ArrowNativeTypeOp>(
         })?;
     }
 
-    quotient
-        .mul_checked(factor)
-        .map_err(|_| ArrowError::ComputeError("Overflow while rounding decimal".into()))
+    let result = quotient.mul_checked(factor).map_err(|_| {
+        ArrowError::ComputeError("Overflow while rounding decimal".into())
+    })?;
+
+    // Validate the result fits within the precision
+    // The max value for a given precision is 10^precision - 1
+    let max_value = ten.pow_checked(precision as u32).map_err(|_| {
+        ArrowError::ComputeError(format!(
+            "Cannot compute max value for precision {precision}"
+        ))
+    })?;
+
+    // Check if absolute value exceeds max (using comparison since we can't easily get abs)
+    // For positive: result >= max_value means overflow
+    // For negative: result <= -max_value means overflow
+    if result >= max_value || result <= max_value.neg_wrapping() {
+        return Err(ArrowError::ComputeError(format!(
+            "Decimal overflow: rounded value exceeds precision {precision}"
+        )));
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

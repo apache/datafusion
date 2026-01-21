@@ -970,6 +970,11 @@ select arrow_typeof(round('999.9'::decimal(4,1))),
 ----
 Decimal128(5, 1) 1000 -1000 100
 
+# round decimal at max precision returns error when result would overflow
+# 37 nines + .9 rounded would need 38 digits, but precision is maxed at 38
+query error Decimal overflow: rounded value exceeds precision 38
+select round('9999999999999999999999999999999999999.9'::decimal(38,1));
+
 ## signum
 
 # signum scalar function
