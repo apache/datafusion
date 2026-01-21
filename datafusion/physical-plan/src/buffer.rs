@@ -37,9 +37,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr_common::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion_physical_expr_common::physical_expr::{
-    PhysicalExpr, is_dynamic_physical_expr,
-};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -50,7 +48,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Decouples production and consumption of record batches with an internal queue per partition,
 /// eagerly filling up the capacity of the queues even before any message is requested.
@@ -91,7 +89,6 @@ pub struct BufferExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
     capacity: usize,
-    wait_first_poll: bool,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -107,7 +104,6 @@ impl BufferExec {
             input,
             properties,
             capacity,
-            wait_first_poll: false,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -207,12 +203,8 @@ impl ExecutionPlan for BufferExec {
             }
         });
         // Buffer the input.
-        let out_stream = MemoryBufferedStream::new(
-            in_stream,
-            self.capacity,
-            mem_reservation,
-            self.wait_first_poll,
-        );
+        let out_stream =
+            MemoryBufferedStream::new(in_stream, self.capacity, mem_reservation);
         // Update in the metrics that when an element gets out, some memory gets freed.
         let out_stream = out_stream.inspect_ok(move |v| {
             curr_mem_out.fetch_sub(v.get_array_memory_size(), Ordering::Relaxed);
@@ -268,22 +260,7 @@ impl ExecutionPlan for BufferExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // If there is a dynamic filter being pushed down through this node, we don't want to buffer,
-        // we prefer to give a chance to the dynamic filter to be populated with something rather
-        // than eagerly polling data with an empty dynamic filter.
-        let has_dynamic_filter = child_pushdown_result
-            .parent_filters
-            .iter()
-            .any(|v| is_dynamic_physical_expr(&v.filter));
-        if has_dynamic_filter {
-            let mut new_self = self.clone();
-            new_self.wait_first_poll = true;
-            let mut result = FilterPushdownPropagation::if_all(child_pushdown_result);
-            result.updated_node = Some(Arc::new(new_self) as _);
-            Ok(result)
-        } else {
-            Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
-        }
+        Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
     }
 
     fn try_pushdown_sort(
@@ -319,7 +296,6 @@ pub struct MemoryBufferedStream<T: SizedMessage> {
     task: SpawnedTask<()>,
     batch_rx: UnboundedReceiver<Result<(T, OwnedSemaphorePermit)>>,
     memory_reservation: Arc<MemoryReservation>,
-    first_poll_notify: Option<Arc<Notify>>,
 }}
 
 impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
@@ -330,23 +306,13 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
         mut input: impl Stream<Item = Result<T>> + Unpin + Send + 'static,
         capacity: usize,
         memory_reservation: MemoryReservation,
-        wait_first_pool: bool,
     ) -> Self {
         let semaphore = Arc::new(Semaphore::new(capacity));
         let (batch_tx, batch_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let mut first_poll_notify = None;
-        if wait_first_pool {
-            first_poll_notify = Some(Arc::new(Notify::new()));
-        }
-        let mut first_poll_notify_clone = first_poll_notify.clone();
-
         let memory_reservation = Arc::new(memory_reservation);
         let memory_reservation_clone = Arc::clone(&memory_reservation);
         let task = SpawnedTask::spawn(async move {
-            if let Some(first_poll_notify) = first_poll_notify_clone.take() {
-                first_poll_notify.notified_owned().await;
-            }
             while let Some(item_or_err) = input.next().await {
                 let item = match item_or_err {
                     Ok(batch) => batch,
@@ -383,7 +349,6 @@ impl<T: Send + SizedMessage + 'static> MemoryBufferedStream<T> {
             task,
             batch_rx,
             memory_reservation: memory_reservation_clone,
-            first_poll_notify,
         }
     }
 
@@ -398,9 +363,6 @@ impl<T: SizedMessage> Stream for MemoryBufferedStream<T> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let self_project = self.project();
-        if let Some(first_poll_notify) = self_project.first_poll_notify.take() {
-            first_poll_notify.notify_one();
-        }
         match self_project.batch_rx.poll_recv(cx) {
             Poll::Ready(Some(Ok((item, _semaphore_permit)))) => {
                 self_project.memory_reservation.shrink(item.size());
@@ -440,20 +402,9 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let buffered = MemoryBufferedStream::new(input, 4, res, false);
+        let buffered = MemoryBufferedStream::new(input, 4, res);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn respects_wait_for_first_poll() -> Result<(), Box<dyn Error>> {
-        let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
-        let (_, res) = memory_pool_and_reservation();
-
-        let buffered = MemoryBufferedStream::new(input, 4, res, true);
-        wait_for_buffering().await;
-        assert_eq!(buffered.messages_queued(), 0);
         Ok(())
     }
 
@@ -462,26 +413,9 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 4);
-
-        pull_ok_msg(&mut buffered).await?;
-        pull_ok_msg(&mut buffered).await?;
-        pull_ok_msg(&mut buffered).await?;
-        pull_ok_msg(&mut buffered).await?;
-        finished(&mut buffered).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn yields_all_messages_after_first_poll() -> Result<(), Box<dyn Error>> {
-        let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
-        let (_, res) = memory_pool_and_reservation();
-
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, true);
-        wait_for_buffering().await;
-        assert_eq!(buffered.messages_queued(), 0);
 
         pull_ok_msg(&mut buffered).await?;
         pull_ok_msg(&mut buffered).await?;
@@ -496,7 +430,7 @@ mod tests {
         let input = futures::stream::iter([25, 1, 2, 3]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 1);
         pull_ok_msg(&mut buffered).await?;
@@ -508,7 +442,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = bounded_memory_pool_and_reservation(7);
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
         wait_for_buffering().await;
 
         pull_ok_msg(&mut buffered).await?;
@@ -525,7 +459,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (_, res) = bounded_memory_pool_and_reservation(7);
 
-        let mut buffered = MemoryBufferedStream::new(input, 3, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 3, res);
         wait_for_buffering().await;
         pull_ok_msg(&mut buffered).await?;
 
@@ -548,7 +482,7 @@ mod tests {
         let input = futures::stream::iter([3, 3, 3, 3]).map(Ok);
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 2, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 2, res);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 1);
         pull_ok_msg(&mut buffered).await?;
@@ -580,7 +514,7 @@ mod tests {
         });
         let (_, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
         wait_for_buffering().await;
 
         pull_ok_msg(&mut buffered).await?;
@@ -595,7 +529,7 @@ mod tests {
         let input = futures::stream::iter([1, 2, 3, 4]).map(Ok);
         let (pool, res) = memory_pool_and_reservation();
 
-        let mut buffered = MemoryBufferedStream::new(input, 10, res, false);
+        let mut buffered = MemoryBufferedStream::new(input, 10, res);
         wait_for_buffering().await;
         assert_eq!(buffered.messages_queued(), 4);
         assert_eq!(pool.reserved(), 10);
