@@ -515,7 +515,9 @@ impl SharedBuildAccumulator {
                                     // Skip disabled partitions when bounds are also disabled - no filter to create
                                     match &partition.pushdown {
                                         PushdownStrategy::Empty => None,
-                                        PushdownStrategy::Disabled if !bounds_enabled => None,
+                                        PushdownStrategy::Disabled if !bounds_enabled => {
+                                            None
+                                        }
                                         _ => Some((partition_id, partition)),
                                     }
                                 })
