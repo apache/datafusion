@@ -9,7 +9,7 @@ services:
     volumes:
       - .:/datafusion
       - rust-cache:/usr/local/cargo
-      - rust-target:/datafusion/docs/target
+      - rust-target:/datafusion/target
     working_dir: /datafusion
 
 volumes:

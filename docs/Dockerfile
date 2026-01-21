@@ -31,9 +31,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     cargo install cargo-depgraph --version ^1.6 --locked
 
-WORKDIR /datafusion/docs
+WORKDIR /datafusion
 
-COPY requirements.txt .
-RUN python3 -m pip install --break-system-packages -r requirements.txt
+COPY docs/requirements.txt /datafusion/docs/
+RUN python3 -m pip install --break-system-packages -r /datafusion/docs/requirements.txt
 
-CMD ["sh", "-c", "dos2unix build.sh scripts/*.sh 2>/dev/null || true; bash build.sh"]
+CMD ["sh", "-c", "cd /datafusion/docs && dos2unix build.sh scripts/*.sh 2>/dev/null || true; bash build.sh"]
