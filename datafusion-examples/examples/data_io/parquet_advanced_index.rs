@@ -48,7 +48,7 @@ use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties}
 use datafusion::parquet::schema::types::ColumnPath;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningPredicateConfig};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
@@ -302,7 +302,7 @@ impl IndexTableProvider {
         // analyze the predicate. In a real system, using
         // `PruningPredicate::prune` would likely be easier to do.
         let pruning_predicate =
-            PruningPredicate::try_new(Arc::clone(predicate), self.schema())?;
+            PruningPredicate::try_new(Arc::clone(predicate), self.schema(), PruningPredicateConfig::default())?;
 
         // The PruningPredicate's guarantees must all be satisfied in order for
         // the predicate to possibly evaluate to true.

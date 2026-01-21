@@ -378,6 +378,18 @@ pub struct PruningPredicate {
     literal_guarantees: Vec<LiteralGuarantee>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PruningPredicateConfig {
+    // TODO(QPIERRE): name/docs
+    max_in_list: usize,
+}
+
+impl Default for PruningPredicateConfig {
+    fn default() -> Self {
+        PruningPredicateConfig { max_in_list: 20 }
+    }
+}
+
 /// Build a pruning predicate from an optional predicate expression.
 /// If the predicate is None or the predicate cannot be converted to a pruning
 /// predicate, return None.
@@ -388,7 +400,7 @@ pub fn build_pruning_predicate(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema)) {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), PruningPredicateConfig::default()) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -461,7 +473,7 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef, _config: PruningPredicateConfig) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
         // so that PruningPredicate can work with a static expression.
@@ -2371,7 +2383,7 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::clone(&schema), PruningPredicateConfig::default()).unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -3013,7 +3025,7 @@ mod tests {
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
         let p =
-            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema)).unwrap();
+            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema), PruningPredicateConfig::default()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5376,7 +5388,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), PruningPredicateConfig::default()).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5391,7 +5403,7 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), PruningPredicateConfig::default()).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }

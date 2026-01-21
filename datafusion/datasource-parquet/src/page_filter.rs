@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateConfig};
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
@@ -127,6 +127,7 @@ impl PagePruningAccessPlanFilter {
                 let pp = match PruningPredicate::try_new(
                     Arc::clone(predicate),
                     Arc::clone(&schema),
+                    PruningPredicateConfig::default()
                 ) {
                     Ok(pp) => pp,
                     Err(e) => {
