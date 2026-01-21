@@ -155,9 +155,9 @@ fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
 }
 
 fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    let args: [&ColumnarValue; 1] = take_function_args("unhex", args)?;
+    let [args] = take_function_args("unhex", args)?;
 
-    match &args[0] {
+    match args {
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Utf8 => {
                 let array = as_string_array(array)?;
