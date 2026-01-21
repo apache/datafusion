@@ -1,0 +1,197 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+# http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# BigQuery supports the pipe operator syntax
+# TODO: Make the Generic dialect support the pipe operator syntax
+statement ok
+set datafusion.sql_parser.dialect = 'BigQuery';
+
+statement ok
+CREATE TABLE test(
+    a INT,
+    b FLOAT,
+    c VARCHAR,
+    n VARCHAR
+) AS VALUES
+  (1, 1.1, 'a', NULL),
+  (2, 2.2, 'b', NULL),
+  (3, 3.3, 'c', NULL)
+;
+
+# WHERE pipe
+query IRTT
+SELECT *
+FROM test
+|> WHERE a > 1
+----
+2 2.2 b NULL
+3 3.3 c NULL
+
+# ORDER BY pipe
+query IRTT
+SELECT *
+FROM test
+|> ORDER BY a DESC
+----
+3 3.3 c NULL
+2 2.2 b NULL
+1 1.1 a NULL
+
+# ORDER BY pipe, limit
+query IRTT
+SELECT *
+FROM test
+|> ORDER BY a DESC
+|> LIMIT 1
+----
+3 3.3 c NULL
+
+# SELECT pipe
+query I
+SELECT *
+FROM test
+|> SELECT a
+----
+1
+2
+3
+
+# EXTEND pipe
+query IRR
+SELECT *
+FROM test
+|> SELECT a, b
+|> EXTEND a + b AS a_plus_b
+----
+1 1.1 2.1
+2 2.2 4.2
+3 3.3 6.3
+
+query IRR
+SELECT *
+FROM test
+|> SELECT a, b
+|> where a = 1
+|> EXTEND a + b AS a_plus_b
+----
+1 1.1 2.1
+
+# AS pipe
+query I
+SELECT *
+FROM test
+|> as test_pipe
+|> select test_pipe.a
+----
+1
+2
+3
+
+# UNION pipe
+query I
+SELECT *
+FROM test
+|> select a
+|> UNION ALL (
+  SELECT a FROM test
+);
+----
+1
+2
+3
+1
+2
+3
+
+# INTERSECT pipe
+query I rowsort
+SELECT * FROM range(0,3)
+|> INTERSECT DISTINCT
+    (SELECT * FROM range(1,3));
+----
+1
+2
+
+# EXCEPT pipe
+query I rowsort
+select * from range(0,10)
+|> EXCEPT DISTINCT (select * from range(5,10));
+----
+0
+1
+2
+3
+4
+
+# AGGREGATE pipe
+query II
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+  UNION ALL
+  SELECT 'apples' AS item, 7 AS sales
+)
+|> AGGREGATE COUNT(*) AS num_items, SUM(sales) AS total_sales;
+----
+3 14
+
+query TII rowsort
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+  UNION ALL
+  SELECT 'apples' AS item, 7 AS sales
+)
+|> AGGREGATE COUNT(*) AS num_items, SUM(sales) AS total_sales
+   GROUP BY item;
+----
+apples 2 9
+bananas 1 5
+
+query TII rowsort
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+  UNION ALL
+  SELECT 'apples' AS item, 7 AS sales
+)
+|> AGGREGATE COUNT(*) AS num_items, SUM(sales) AS total_sales
+   GROUP BY item
+|> WHERE num_items > 1;
+----
+apples 2 9
+
+# JOIN pipe
+query TII
+(
+  SELECT 'apples' AS item, 2 AS sales
+  UNION ALL
+  SELECT 'bananas' AS item, 5 AS sales
+)
+|> AS produce_sales
+|> LEFT JOIN
+     (
+       SELECT "apples" AS item, 123 AS id
+     ) AS produce_data
+   ON produce_sales.item = produce_data.item
+|> SELECT produce_sales.item, sales, id;
+----
+apples 2 123
+bananas 5 NULL

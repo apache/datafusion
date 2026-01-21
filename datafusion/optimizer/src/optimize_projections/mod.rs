@@ -25,13 +25,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::{
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    HashMap, JoinType, Result,
+    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
-use datafusion_expr::Unnest;
 use datafusion_expr::{
-    logical_plan::LogicalPlan, Aggregate, Distinct, Expr, Projection, TableScan, Window,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -55,11 +55,29 @@ use datafusion_common::tree_node::{
 /// The rule analyzes the input logical plan, determines the necessary column
 /// indices, and then removes any unnecessary columns. It also removes any
 /// unnecessary projections from the plan tree.
+///
+/// ## Schema, Field Properties, and Metadata Handling
+///
+/// The `OptimizeProjections` rule preserves schema and field metadata in most optimization scenarios:
+///
+/// **Schema-level metadata preservation by plan type**:
+/// - **Window and Aggregate plans**: Schema metadata is preserved
+/// - **Projection plans**: Schema metadata is preserved per [`projection_schema`](datafusion_expr::logical_plan::projection_schema).
+/// - **Other logical plans**: Schema metadata is preserved unless [`LogicalPlan::recompute_schema`]
+///   is called on plan types that drop metadata
+///
+/// **Field-level properties and metadata**: Individual field properties are preserved when fields
+/// are retained in the optimized plan, determined by [`exprlist_to_fields`](datafusion_expr::utils::exprlist_to_fields)
+/// and [`ExprSchemable::to_field`](datafusion_expr::expr_schema::ExprSchemable::to_field).
+///
+/// **Field precedence**: When the same field appears multiple times, the optimizer
+/// maintains one occurrence and removes duplicates (refer to `RequiredIndices::compact()`),
+/// preserving the properties and metadata of that occurrence.
 #[derive(Default, Debug)]
 pub struct OptimizeProjections {}
 
 impl OptimizeProjections {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -120,7 +138,7 @@ fn optimize_projections(
         LogicalPlan::Projection(proj) => {
             return merge_consecutive_projections(proj)?.transform_data(|proj| {
                 rewrite_projection_given_requirements(proj, config, &indices)
-            })
+            });
         }
         LogicalPlan::Aggregate(aggregate) => {
             // Split parent requirements to GROUP BY and aggregate sections:
@@ -153,23 +171,16 @@ fn optimize_projections(
 
             // Only use the absolutely necessary aggregate expressions required
             // by the parent:
-            let mut new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
+            let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
 
-            // Aggregations always need at least one aggregate expression.
-            // With a nested count, we don't require any column as input, but
-            // still need to create a correct aggregate, which may be optimized
-            // out later. As an example, consider the following query:
-            //
-            // SELECT count(*) FROM (SELECT count(*) FROM [...])
-            //
-            // which always returns 1.
-            if new_aggr_expr.is_empty()
-                && new_group_bys.is_empty()
-                && !aggregate.aggr_expr.is_empty()
-            {
-                // take the old, first aggregate expression
-                new_aggr_expr = aggregate.aggr_expr;
-                new_aggr_expr.resize_with(1, || unreachable!());
+            if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+                // Global aggregation with no aggregate functions always produces 1 row and no columns.
+                return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                    EmptyRelation {
+                        produce_one_row: true,
+                        schema: Arc::new(DFSchema::empty()),
+                    },
+                )));
             }
 
             let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
@@ -257,15 +268,10 @@ fn optimize_projections(
                 Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
                 None => indices.into_inner(),
             };
-            return TableScan::try_new(
-                table_name,
-                source,
-                Some(projection),
-                filters,
-                fetch,
-            )
-            .map(LogicalPlan::TableScan)
-            .map(Transformed::yes);
+            let new_scan =
+                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }
         // Other node types are handled below
         _ => {}
@@ -330,11 +336,14 @@ fn optimize_projections(
                 return Ok(Transformed::no(plan));
             };
             let children = extension.node.inputs();
-            if children.len() != necessary_children_indices.len() {
-                return internal_err!("Inconsistent length between children and necessary children indices. \
-                Make sure `.necessary_children_exprs` implementation of the `UserDefinedLogicalNode` is \
-                consistent with actual children length for the node.");
-            }
+            assert_eq_or_internal_err!(
+                children.len(),
+                necessary_children_indices.len(),
+                "Inconsistent length between children and necessary children indices. \
+                Make sure `.necessary_children_exprs` implementation of the \
+                `UserDefinedLogicalNode` is consistent with actual children length \
+                for the node."
+            );
             children
                 .into_iter()
                 .zip(necessary_children_indices)
@@ -345,11 +354,34 @@ fn optimize_projections(
                 .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::EmptyRelation(_)
-        | LogicalPlan::RecursiveQuery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::DescribeTable(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
+        }
+        LogicalPlan::RecursiveQuery(recursive) => {
+            // Only allow subqueries that reference the current CTE; nested subqueries are not yet
+            // supported for projection pushdown for simplicity.
+            // TODO: be able to do projection pushdown on recursive CTEs with subqueries
+            if plan_contains_other_subqueries(
+                recursive.static_term.as_ref(),
+                &recursive.name,
+            ) || plan_contains_other_subqueries(
+                recursive.recursive_term.as_ref(),
+                &recursive.name,
+            ) {
+                return Ok(Transformed::no(plan));
+            }
+
+            plan.inputs()
+                .into_iter()
+                .map(|input| {
+                    indices
+                        .clone()
+                        .with_projection_beneficial()
+                        .with_plan_exprs(&plan, input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
@@ -376,22 +408,33 @@ fn optimize_projections(
             );
         }
         LogicalPlan::Unnest(Unnest {
-            dependency_indices, ..
+            input,
+            dependency_indices,
+            ..
         }) => {
-            vec![RequiredIndices::new_from_indices(
-                dependency_indices.clone(),
-            )]
+            // at least provide the indices for the exec-columns as a starting point
+            let required_indices =
+                RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
+
+            // Add additional required indices from the parent
+            let mut additional_necessary_child_indices = Vec::new();
+            indices.indices().iter().for_each(|idx| {
+                if let Some(index) = dependency_indices.get(*idx) {
+                    additional_necessary_child_indices.push(*index);
+                }
+            });
+            vec![required_indices.append(&additional_necessary_child_indices)]
         }
     };
 
     // Required indices are currently ordered (child0, child1, ...)
     // but the loop pops off the last element, so we need to reverse the order
     child_required_indices.reverse();
-    if child_required_indices.len() != plan.inputs().len() {
-        return internal_err!(
-            "OptimizeProjection: child_required_indices length mismatch with plan inputs"
-        );
-    }
+    assert_eq_or_internal_err!(
+        child_required_indices.len(),
+        plan.inputs().len(),
+        "OptimizeProjection: child_required_indices length mismatch with plan inputs"
+    );
 
     // Rewrite children of the plan
     let transformed_plan = plan.map_children(|child| {
@@ -430,6 +473,18 @@ fn optimize_projections(
 /// beneficial when expressions in the current projection are non-trivial and
 /// appear more than once in its input fields. This can act as a caching mechanism
 /// for non-trivial computations.
+///
+/// ## Metadata Handling During Projection Merging
+///
+/// **Alias metadata preservation**: When merging projections, alias metadata from both
+/// the current and previous projections is carefully preserved. The presence of metadata
+/// precludes alias trimming.
+///
+/// **Schema, Fields, and metadata**: If a projection is rewritten, the schema and metadata
+/// are preserved. Individual field properties and metadata flows through expression rewriting
+/// and are preserved when fields are referenced in the merged projection.
+/// Refer to [`projection_schema`](datafusion_expr::logical_plan::projection_schema)
+/// for more details.
 ///
 /// # Parameters
 ///
@@ -533,7 +588,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 // Check whether `expr` is trivial; i.e. it doesn't imply any computation.
 fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_))
+    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)
@@ -554,7 +609,8 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 /// - `Err(error)`: An error occurred during the function call.
 ///
 /// # Notes
-/// This rewrite also removes any unnecessary layers of aliasing.
+/// This rewrite also removes any unnecessary layers of aliasing. "Unnecessary" is
+/// defined as not contributing new information, such as metadata.
 ///
 /// Without trimming, we can end up with unnecessary indirections inside expressions
 /// during projection merges.
@@ -583,8 +639,18 @@ fn is_expr_trivial(expr: &Expr) -> bool {
 fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
     expr.transform_up(|expr| {
         match expr {
-            //  remove any intermediate aliases
-            Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+            //  remove any intermediate aliases if they do not carry metadata
+            Expr::Alias(alias) => {
+                match alias
+                    .metadata
+                    .as_ref()
+                    .map(|h| h.is_empty())
+                    .unwrap_or(true)
+                {
+                    true => Ok(Transformed::yes(*alias.expr)),
+                    false => Ok(Transformed::no(Expr::Alias(alias))),
+                }
+            }
             Expr::Column(col) => {
                 // Find index of column:
                 let idx = input.schema.index_of_column(&col)?;
@@ -662,10 +728,10 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// Depending on the join type, it divides the requirement indices into those
 /// that apply to the left child and those that apply to the right child.
 ///
-/// - For `INNER`, `LEFT`, `RIGHT` and `FULL` joins, the requirements are split
-///   between left and right children. The right child indices are adjusted to
-///   point to valid positions within the right child by subtracting the length
-///   of the left child.
+/// - For `INNER`, `LEFT`, `RIGHT`, `FULL`, `LEFTMARK`, and `RIGHTMARK` joins,
+///   the requirements are split between left and right children. The right
+///   child indices are adjusted to point to valid positions within the right
+///   child by subtracting the length of the left child.
 ///
 /// - For `LEFT ANTI`, `LEFT SEMI`, `RIGHT SEMI` and `RIGHT ANTI` joins, all
 ///   requirements are re-routed to either the left child or the right child
@@ -694,7 +760,8 @@ fn split_join_requirements(
         | JoinType::Left
         | JoinType::Right
         | JoinType::Full
-        | JoinType::LeftMark => {
+        | JoinType::LeftMark
+        | JoinType::RightMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
             indices.split_off(left_len)
@@ -804,6 +871,64 @@ pub fn is_projection_unnecessary(
     ))
 }
 
+/// Returns true if the plan subtree contains any subqueries that are not the
+/// CTE reference itself. This treats any non-CTE [`LogicalPlan::SubqueryAlias`]
+/// node (including aliased relations) as a blocker, along with expression-level
+/// subqueries like scalar, EXISTS, or IN. These cases prevent projection
+/// pushdown for now because we cannot safely reason about their column usage.
+fn plan_contains_other_subqueries(plan: &LogicalPlan, cte_name: &str) -> bool {
+    if let LogicalPlan::SubqueryAlias(alias) = plan
+        && alias.alias.table() != cte_name
+        && !subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+    {
+        return true;
+    }
+
+    let mut found = false;
+    plan.apply_expressions(|expr| {
+        if expr_contains_subquery(expr) {
+            found = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .expect("expression traversal never fails");
+    if found {
+        return true;
+    }
+
+    plan.inputs()
+        .into_iter()
+        .any(|child| plan_contains_other_subqueries(child, cte_name))
+}
+
+fn expr_contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| match e {
+        Expr::ScalarSubquery(_) | Expr::Exists(_) | Expr::InSubquery(_) => Ok(true),
+        _ => Ok(false),
+    })
+    // Safe unwrap since we are doing a simple boolean check
+    .unwrap()
+}
+
+fn subquery_alias_targets_recursive_cte(plan: &LogicalPlan, cte_name: &str) -> bool {
+    match plan {
+        LogicalPlan::TableScan(scan) => scan.table_name.table() == cte_name,
+        LogicalPlan::SubqueryAlias(alias) => {
+            subquery_alias_targets_recursive_cte(alias.input.as_ref(), cte_name)
+        }
+        _ => {
+            let inputs = plan.inputs();
+            if inputs.len() == 1 {
+                subquery_alias_targets_recursive_cte(inputs[0], cte_name)
+            } else {
+                false
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
@@ -826,14 +951,15 @@ mod tests {
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
-        binary_expr, build_join_schema,
+        BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator, Projection,
+        UserDefinedLogicalNodeCore, WindowFunctionDefinition, binary_expr,
+        build_join_schema,
         builder::table_scan_with_filters,
         col,
         expr::{self, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
-        not, try_cast, when, BinaryExpr, Expr, Extension, Like, LogicalPlan, Operator,
-        Projection, UserDefinedLogicalNodeCore, WindowFunctionDefinition,
+        not, try_cast, when,
     };
     use insta::assert_snapshot;
 
@@ -847,9 +973,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(OptimizeProjections::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(OptimizeProjections::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -885,6 +1013,8 @@ mod tests {
                 Some(Ordering::Equal) => self.input.partial_cmp(&other.input),
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -972,6 +1102,8 @@ mod tests {
                 }
                 cmp => cmp,
             }
+            // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+            .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -1122,9 +1254,7 @@ mod tests {
             plan,
             @r"
         Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-          Projection: 
-            Aggregate: groupBy=[[]], aggr=[[count(Int32(1))]]
-              TableScan: ?table? projection=[]
+          EmptyRelation: rows=1
         "
         )
     }
@@ -1814,7 +1944,7 @@ mod tests {
         let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
-            .join_using(table2_scan, JoinType::Left, vec!["a"])?
+            .join_using(table2_scan, JoinType::Left, vec!["a".into()])?
             .project(vec![col("a"), col("b")])?
             .build()?;
 
@@ -2142,7 +2272,7 @@ mod tests {
     fn test_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let max1 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max1 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.a")],
         ))
@@ -2150,7 +2280,7 @@ mod tests {
         .build()
         .unwrap();
 
-        let max2 = Expr::WindowFunction(expr::WindowFunction::new(
+        let max2 = Expr::from(expr::WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(max_udaf()),
             vec![col("test.b")],
         ));

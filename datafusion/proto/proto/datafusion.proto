@@ -98,6 +98,7 @@ message ListingTableScanNode {
     datafusion_common.ParquetFormat parquet = 11;
     datafusion_common.AvroFormat avro = 12;
     datafusion_common.NdJsonFormat json = 15;
+    datafusion_common.ArrowFormat arrow = 16;
   }
   repeated SortExprNodeCollection file_sort_order = 13;
 }
@@ -166,6 +167,7 @@ message CreateExternalTableNode {
   datafusion_common.DfSchema schema = 4;
   repeated string table_partition_cols = 5;
   bool if_not_exists = 6;
+  bool or_replace = 15;
   bool temporary = 14;
   string definition = 7;
   repeated SortExprNodeCollection order_exprs = 10;
@@ -177,8 +179,11 @@ message CreateExternalTableNode {
 
 message PrepareNode {
   string name = 1;
+  // We serialize both the data types and the fields for compatibility with
+  // older versions (newer versions populate both).
   repeated datafusion_common.ArrowType data_types = 2;
   LogicalPlanNode input = 3;
+  repeated datafusion_common.Field fields = 4;
 }
 
 message CreateCatalogSchemaNode {
@@ -243,7 +248,7 @@ message JoinNode {
   datafusion_common.JoinConstraint join_constraint = 4;
   repeated LogicalExprNode left_join_key = 5;
   repeated LogicalExprNode right_join_key = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   LogicalExprNode filter = 8;
 }
 
@@ -410,7 +415,11 @@ message Wildcard {
 
 message PlaceholderNode {
   string id = 1;
+  // We serialize the data type, metadata, and nullability separately to maintain
+  // compatibility with older versions
   datafusion_common.ArrowType data_type = 2;
+  optional bool nullable = 3;
+  map<string, string> metadata = 4;
 }
 
 message LogicalExprList {
@@ -516,6 +525,7 @@ message AggregateUDFExprNode {
   LogicalExprNode filter = 3;
   repeated SortExprNode order_by = 4;
   optional bytes fun_definition = 6;
+  optional NullTreatment null_treatment = 7;
 }
 
 message ScalarUDFExprNode {
@@ -536,6 +546,9 @@ message WindowExprNode {
   // repeated LogicalExprNode filter = 7;
   WindowFrame window_frame = 8;
   optional bytes fun_definition = 10;
+  optional NullTreatment null_treatment = 11;
+  bool distinct = 12;
+  LogicalExprNode filter = 13;
 }
 
 message BetweenNode {
@@ -618,6 +631,11 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   datafusion_common.ScalarValue bound_value = 2;
+}
+
+enum NullTreatment {
+  RESPECT_NULLS = 0;
+  IGNORE_NULLS = 1;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -726,6 +744,11 @@ message PhysicalPlanNode {
     ParquetSinkExecNode parquet_sink = 29;
     UnnestExecNode unnest = 30;
     JsonScanExecNode json_scan = 31;
+    CooperativeExecNode cooperative = 32;
+    GenerateSeriesNode generate_series = 33;
+    SortMergeJoinExecNode sort_merge_join = 34;
+    MemoryScanExecNode memory_scan = 35;
+    AsyncFuncExecNode async_func = 36;
   }
 }
 
@@ -849,6 +872,8 @@ message PhysicalExprNode {
     PhysicalExtensionExprNode extension = 19;
 
     UnknownColumn unknown_column = 20;
+
+    PhysicalHashExprNode hash_expr = 21;
   }
 }
 
@@ -858,6 +883,7 @@ message PhysicalScalarUdfNode {
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
   bool nullable = 5;
+  string return_field_name = 6;
 }
 
 message PhysicalAggregateExprNode {
@@ -869,6 +895,7 @@ message PhysicalAggregateExprNode {
   bool distinct = 3;
   bool ignore_nulls = 6;
   optional bytes fun_definition = 7;
+  string human_display = 8;
 }
 
 message PhysicalWindowExprNode {
@@ -883,6 +910,8 @@ message PhysicalWindowExprNode {
   WindowFrame window_frame = 7;
   string name = 8;
   optional bytes fun_definition = 9;
+  bool ignore_nulls = 11;
+  bool distinct = 12;
 }
 
 message PhysicalIsNull {
@@ -963,6 +992,15 @@ message PhysicalExtensionExprNode {
   repeated PhysicalExprNode inputs = 2;
 }
 
+message PhysicalHashExprNode {
+  repeated PhysicalExprNode on_columns = 1;
+  uint64 seed0 = 2;
+  uint64 seed1 = 3;
+  uint64 seed2 = 4;
+  uint64 seed3 = 5;
+  string description = 6;
+}
+
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
@@ -983,6 +1021,15 @@ message PhysicalSortExprNodeCollection {
   repeated PhysicalSortExprNode physical_sort_expr_nodes = 1;
 }
 
+message ProjectionExpr {
+  string alias = 1;
+  PhysicalExprNode expr = 2;
+}
+
+message ProjectionExprs {
+  repeated ProjectionExpr projections = 1;
+}
+
 message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   datafusion_common.Schema schema = 2;
@@ -998,6 +1045,8 @@ message FileScanExecConf {
 
   datafusion_common.Constraints constraints = 11;
   optional uint64 batch_size = 12;
+
+  optional ProjectionExprs projection_exprs = 13;
 }
 
 message ParquetScanExecNode {
@@ -1023,6 +1072,7 @@ message CsvScanExecNode {
     string comment = 6;
   }
   bool newlines_in_values = 7;
+  bool truncate_rows = 8;
 }
 
 message JsonScanExecNode {
@@ -1031,6 +1081,19 @@ message JsonScanExecNode {
 
 message AvroScanExecNode {
   FileScanExecConf base_conf = 1;
+}
+
+message MemoryScanExecNode {
+  repeated bytes partitions = 1;
+  datafusion_common.Schema schema = 2;
+  repeated uint32 projection = 3;
+  repeated PhysicalSortExprNodeCollection sort_information = 4;
+  bool show_sizes = 5;
+  optional uint32 fetch = 6;
+}
+
+message CooperativeExecNode {
+  PhysicalPlanNode input = 1;
 }
 
 enum PartitionMode {
@@ -1045,9 +1108,10 @@ message HashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   PartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
+  bool null_aware = 10;
 }
 
 enum StreamPartitionMode {
@@ -1061,7 +1125,7 @@ message SymmetricHashJoinExecNode {
   repeated JoinOn on = 3;
   datafusion_common.JoinType join_type = 4;
   StreamPartitionMode partition_mode = 6;
-  bool null_equals_null = 7;
+  datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated PhysicalSortExprNode left_sort_exprs = 9;
   repeated PhysicalSortExprNode right_sort_exprs = 10;
@@ -1156,6 +1220,8 @@ message MaybePhysicalSortExprs {
 message AggLimit {
   // wrap into a message to make it optional
   uint64 limit = 1;
+  // Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+  optional bool descending = 2;
 }
 
 message AggregateExecNode {
@@ -1171,6 +1237,7 @@ message AggregateExecNode {
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
+  bool has_grouping_set = 12;
 }
 
 message GlobalLimitExecNode {
@@ -1285,4 +1352,66 @@ message RecursiveQueryNode {
 message CteWorkTableScanNode {
     string name = 1;
     datafusion_common.Schema schema = 2;
+}
+
+enum GenerateSeriesName {
+  GS_GENERATE_SERIES = 0;
+  GS_RANGE = 1;
+}
+
+message GenerateSeriesArgsContainsNull {
+    GenerateSeriesName name = 1;
+}
+
+message GenerateSeriesArgsInt64 {
+    int64 start = 1;
+    int64 end = 2;
+    int64 step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesArgsTimestamp {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    optional string tz = 4;
+    bool include_end = 5;
+    GenerateSeriesName name = 6;
+}
+
+message GenerateSeriesArgsDate {
+    int64 start = 1;
+    int64 end = 2;
+    datafusion_common.IntervalMonthDayNanoValue step = 3;
+    bool include_end = 4;
+    GenerateSeriesName name = 5;
+}
+
+message GenerateSeriesNode {
+    datafusion_common.Schema schema = 1;
+    uint32 target_batch_size = 2;
+
+    oneof args {
+        GenerateSeriesArgsContainsNull contains_null = 3;
+        GenerateSeriesArgsInt64 int64_args = 4;
+        GenerateSeriesArgsTimestamp timestamp_args = 5;
+        GenerateSeriesArgsDate date_args = 6;
+    }
+}
+
+message SortMergeJoinExecNode {
+  PhysicalPlanNode left = 1;
+  PhysicalPlanNode right = 2;
+  repeated JoinOn on = 3;
+  datafusion_common.JoinType join_type = 4;
+  JoinFilter filter = 5;
+  repeated SortExprNode sort_options = 6;
+  datafusion_common.NullEquality null_equality = 7;
+}
+
+message AsyncFuncExecNode {
+  PhysicalPlanNode input = 1;
+  repeated PhysicalExprNode async_exprs = 2;
+  repeated string async_expr_names = 3;
 }

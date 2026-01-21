@@ -25,10 +25,10 @@ use arrow::datatypes::{
     DataType,
     DataType::{LargeList, List, Map, Null, UInt64},
 };
+use datafusion_common::Result;
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::exec_err;
-use datafusion_common::utils::{take_function_args, ListCoercion};
-use datafusion_common::Result;
+use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -58,7 +58,6 @@ impl Cardinality {
                 ],
                 Volatility::Immutable,
             ),
-            aliases: vec![],
         }
     }
 }
@@ -80,10 +79,9 @@ impl Cardinality {
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Cardinality {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for Cardinality {
@@ -114,17 +112,12 @@ impl ScalarUDFImpl for Cardinality {
         make_scalar_function(cardinality_inner)(&args.args)
     }
 
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
 }
 
-/// Cardinality SQL function
-pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("cardinality", args)?;
     match array.data_type() {
         Null => Ok(Arc::new(UInt64Array::from_value(0, array.len()))),

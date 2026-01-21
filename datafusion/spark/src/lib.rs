@@ -19,29 +19,101 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![deny(clippy::allow_attributes)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Spark Expression packages for [DataFusion].
 //!
-//! This crate contains a collection of various Spark expression packages for DataFusion,
+//! This crate contains a collection of various Spark function packages for DataFusion,
 //! implemented using the extension API.
 //!
 //! [DataFusion]: https://crates.io/crates/datafusion
 //!
-//! # Available Packages
+//!
+//! # Available Function Packages
 //! See the list of [modules](#modules) in this crate for available packages.
 //!
-//! # Using A Package
-//! You can register all functions in all packages using the [`register_all`] function.
+//! # Example: using all function packages
 //!
-//! Each package also exports an `expr_fn` submodule to help create [`Expr`]s that invoke
-//! functions using a fluent style. For example:
+//! You can register all the functions in all packages using the [`register_all`]
+//! function as shown below. Any existing functions will be overwritten, with these
+//! Spark functions taking priority.
+//!
+//! ```
+//! # use datafusion_execution::FunctionRegistry;
+//! # use datafusion_expr::{ScalarUDF, AggregateUDF, WindowUDF};
+//! # use datafusion_expr::planner::ExprPlanner;
+//! # use datafusion_common::Result;
+//! # use std::collections::HashSet;
+//! # use std::sync::Arc;
+//! # // Note: We can't use a real SessionContext here because the
+//! # // `datafusion_spark` crate has no dependence on the DataFusion crate
+//! # // thus use a dummy SessionContext that has enough of the implementation
+//! # struct SessionContext {}
+//! # impl FunctionRegistry for SessionContext {
+//! #    fn register_udf(&mut self, _udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> { Ok (None) }
+//! #    fn udfs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udafs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udwfs(&self) -> HashSet<String> { unimplemented!() }
+//! #    fn udf(&self, _name: &str) -> Result<Arc<ScalarUDF>> { unimplemented!() }
+//! #    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {unimplemented!() }
+//! #    fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> { unimplemented!() }
+//! #    fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> { unimplemented!() }
+//! # }
+//! # impl SessionContext {
+//! #   fn new() -> Self { SessionContext {} }
+//! #   async fn sql(&mut self, _query: &str) -> Result<()> { Ok(()) }
+//! #  }
+//! #
+//! # async fn stub() -> Result<()> {
+//! // Create a new session context
+//! let mut ctx = SessionContext::new();
+//! // Register all Spark functions with the context
+//! datafusion_spark::register_all(&mut ctx)?;
+//! // Run a query using the `sha2` function which is now available and has Spark semantics
+//! let df = ctx.sql("SELECT sha2('The input String', 256)").await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Example: calling a specific function in Rust
+//!
+//! Each package also exports an `expr_fn` submodule that create [`Expr`]s for
+//! invoking functions via rust using a fluent style. For example, to invoke the
+//! `sha2` function, you can use the following code:
+//!
+//! ```rust
+//! # use datafusion_expr::{col, lit};
+//! use datafusion_spark::expr_fn::sha2;
+//! // Create the expression `sha2(my_data, 256)`
+//! let expr = sha2(col("my_data"), lit(256));
+//! ```
+//!
+//! # Example: using the Spark expression planner
+//!
+//! The [`planner::SparkFunctionPlanner`] provides Spark-compatible expression
+//! planning, such as mapping SQL `EXTRACT` expressions to Spark's `date_part`
+//! function. To use it, register it with your session context:
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use datafusion::prelude::SessionContext;
+//! use datafusion_spark::planner::SparkFunctionPlanner;
+//!
+//! let mut ctx = SessionContext::new();
+//! // Register the Spark expression planner
+//! ctx.register_expr_planner(Arc::new(SparkFunctionPlanner))?;
+//! // Now EXTRACT expressions will use Spark semantics
+//! let df = ctx.sql("SELECT EXTRACT(YEAR FROM timestamp_col) FROM my_table").await?;
+//! ```
 //!
 //![`Expr`]: datafusion_expr::Expr
 
 pub mod function;
+pub mod planner;
 
 use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
@@ -51,10 +123,11 @@ use log::debug;
 use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
-#[allow(unused)]
+#[expect(unused_imports)]
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;
+    pub use super::function::bitmap::expr_fn::*;
     pub use super::function::bitwise::expr_fn::*;
     pub use super::function::collection::expr_fn::*;
     pub use super::function::conditional::expr_fn::*;
@@ -69,8 +142,8 @@ pub mod expr_fn {
     pub use super::function::math::expr_fn::*;
     pub use super::function::misc::expr_fn::*;
     pub use super::function::predicate::expr_fn::*;
-    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::string::expr_fn::*;
+    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::table::expr_fn::*;
     pub use super::function::url::expr_fn::*;
     pub use super::function::window::expr_fn::*;
@@ -81,6 +154,7 @@ pub mod expr_fn {
 pub fn all_default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
     function::array::functions()
         .into_iter()
+        .chain(function::bitmap::functions())
         .chain(function::bitwise::functions())
         .chain(function::collection::functions())
         .chain(function::conditional::functions())
@@ -117,7 +191,8 @@ pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
     function::table::functions()
 }
 
-/// Registers all enabled packages with a [`FunctionRegistry`]
+/// Registers all enabled packages with a [`FunctionRegistry`], overriding any existing
+/// functions if there is a name clash.
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let scalar_functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
     scalar_functions.into_iter().try_for_each(|udf| {

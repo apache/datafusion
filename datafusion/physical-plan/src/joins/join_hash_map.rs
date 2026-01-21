@@ -20,10 +20,13 @@
 //! ["on" values] to a list of indices with this key's value.
 
 use std::fmt::{self, Debug};
-use std::ops::IndexMut;
+use std::ops::Sub;
 
-use hashbrown::hash_table::Entry::{Occupied, Vacant};
+use arrow::array::BooleanArray;
+use arrow::buffer::BooleanBuffer;
+use arrow::datatypes::ArrowNativeType;
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
@@ -35,7 +38,7 @@ use hashbrown::HashTable;
 /// During this stage it might be the case that a row is contained the same hashmap value,
 /// but the values don't match. Those are checked in the `equal_rows_arr` method.
 ///
-/// The indices (values) are stored in a separate chained list stored in the `Vec<u64>`.
+/// The indices (values) are stored in a separate chained list stored as `Vec<u32>` or `Vec<u64>`.
 ///
 /// The first value (+1) is stored in the hashmap, whereas the next value is stored in array at the position value.
 ///
@@ -87,261 +90,408 @@ use hashbrown::HashTable;
 /// | 0 | 0 | 0 | 2 | 4 | <--- hash value 10 maps to 5,4,2 (which means indices values 4,3,1)
 /// ---------------------
 /// ```
-pub struct JoinHashMap {
+///
+/// Here we have an option between creating a `JoinHashMapType` using `u32` or `u64` indices
+/// based on how many rows were being used for indices.
+///
+/// At runtime we choose between using `JoinHashMapU32` and `JoinHashMapU64` which oth implement
+/// `JoinHashMapType`.
+///
+/// ## Note on use of this trait as a public API
+/// This is currently a public trait but is mainly intended for internal use within DataFusion.
+/// For example, we may compare references to `JoinHashMapType` implementations by pointer equality
+/// rather than deep equality of contents, as deep equality would be expensive and in our usage
+/// patterns it is impossible for two different hash maps to have identical contents in a practical sense.
+pub trait JoinHashMapType: Send + Sync {
+    fn extend_zero(&mut self, len: usize);
+
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+        deleted_offset: usize,
+    );
+
+    fn get_matched_indices<'a>(
+        &self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+        deleted_offset: Option<usize>,
+    ) -> (Vec<u32>, Vec<u64>);
+
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset>;
+
+    /// Returns a BooleanArray indicating which of the provided hashes exist in the map.
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray;
+
+    /// Returns `true` if the join hash map contains no entries.
+    fn is_empty(&self) -> bool;
+
+    /// Returns the number of entries in the join hash map.
+    fn len(&self) -> usize;
+}
+
+pub struct JoinHashMapU32 {
+    // Stores hash value to last row index
+    map: HashTable<(u64, u32)>,
+    // Stores indices in chained list data structure
+    next: Vec<u32>,
+}
+
+impl JoinHashMapU32 {
+    #[cfg(test)]
+    pub(crate) fn new(map: HashTable<(u64, u32)>, next: Vec<u32>) -> Self {
+        Self { map, next }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            map: HashTable::with_capacity(cap),
+            next: vec![0; cap],
+        }
+    }
+}
+
+impl Debug for JoinHashMapU32 {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+impl JoinHashMapType for JoinHashMapU32 {
+    fn extend_zero(&mut self, _: usize) {}
+
+    fn update_from_iter<'a>(
+        &mut self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+        deleted_offset: usize,
+    ) {
+        update_from_iter::<u32>(&mut self.map, &mut self.next, iter, deleted_offset);
+    }
+
+    fn get_matched_indices<'a>(
+        &self,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+        deleted_offset: Option<usize>,
+    ) -> (Vec<u32>, Vec<u64>) {
+        get_matched_indices::<u32>(&self.map, &self.next, iter, deleted_offset)
+    }
+
+    fn get_matched_indices_with_limit_offset(
+        &self,
+        hash_values: &[u64],
+        limit: usize,
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
+        get_matched_indices_with_limit_offset::<u32>(
+            &self.map,
+            &self.next,
+            hash_values,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
+
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+pub struct JoinHashMapU64 {
     // Stores hash value to last row index
     map: HashTable<(u64, u64)>,
     // Stores indices in chained list data structure
     next: Vec<u64>,
 }
 
-impl JoinHashMap {
+impl JoinHashMapU64 {
     #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u64)>, next: Vec<u64>) -> Self {
         Self { map, next }
     }
 
-    pub(crate) fn with_capacity(capacity: usize) -> Self {
-        JoinHashMap {
-            map: HashTable::with_capacity(capacity),
-            next: vec![0; capacity],
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            map: HashTable::with_capacity(cap),
+            next: vec![0; cap],
         }
     }
 }
 
-// Type of offsets for obtaining indices from JoinHashMap.
-pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
-
-// Macro for traversing chained values with limit.
-// Early returns in case of reaching output tuples limit.
-macro_rules! chain_traverse {
-    (
-        $input_indices:ident, $match_indices:ident, $hash_values:ident, $next_chain:ident,
-        $input_idx:ident, $chain_idx:ident, $deleted_offset:ident, $remaining_output:ident
-    ) => {
-        let mut i = $chain_idx - 1;
-        loop {
-            let match_row_idx = if let Some(offset) = $deleted_offset {
-                // This arguments means that we prune the next index way before here.
-                if i < offset as u64 {
-                    // End of the list due to pruning
-                    break;
-                }
-                i - offset as u64
-            } else {
-                i
-            };
-            $match_indices.push(match_row_idx);
-            $input_indices.push($input_idx as u32);
-            $remaining_output -= 1;
-            // Follow the chain to get the next index value
-            let next = $next_chain[match_row_idx as usize];
-
-            if $remaining_output == 0 {
-                // In case current input index is the last, and no more chain values left
-                // returning None as whole input has been scanned
-                let next_offset = if $input_idx == $hash_values.len() - 1 && next == 0 {
-                    None
-                } else {
-                    Some(($input_idx, Some(next)))
-                };
-                return ($input_indices, $match_indices, next_offset);
-            }
-            if next == 0 {
-                // end of list
-                break;
-            }
-            i = next - 1;
-        }
-    };
+impl Debug for JoinHashMapU64 {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
 }
 
-// Trait defining methods that must be implemented by a hash map type to be used for joins.
-pub trait JoinHashMapType {
-    /// The type of list used to store the next list
-    type NextType: IndexMut<usize, Output = u64>;
-    /// Extend with zero
-    fn extend_zero(&mut self, len: usize);
-    /// Returns mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType);
-    /// Returns a reference to the hash map.
-    fn get_map(&self) -> &HashTable<(u64, u64)>;
-    /// Returns a reference to the next.
-    fn get_list(&self) -> &Self::NextType;
+impl JoinHashMapType for JoinHashMapU64 {
+    fn extend_zero(&mut self, _: usize) {}
 
-    /// Updates hashmap from iterator of row indices & row hashes pairs.
     fn update_from_iter<'a>(
         &mut self,
-        iter: impl Iterator<Item = (usize, &'a u64)>,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
     ) {
-        let (mut_map, mut_list) = self.get_mut();
-        for (row, &hash_value) in iter {
-            let entry = mut_map.entry(
-                hash_value,
-                |&(hash, _)| hash_value == hash,
-                |&(hash, _)| hash,
-            );
-
-            match entry {
-                Occupied(mut occupied_entry) => {
-                    // Already exists: add index to next array
-                    let (_, index) = occupied_entry.get_mut();
-                    let prev_index = *index;
-                    // Store new value inside hashmap
-                    *index = (row + 1) as u64;
-                    // Update chained Vec at `row` with previous value
-                    mut_list[row - deleted_offset] = prev_index;
-                }
-                Vacant(vacant_entry) => {
-                    vacant_entry.insert((hash_value, (row + 1) as u64));
-                    // chained list at `row` is already initialized with 0
-                    // meaning end of list
-                }
-            }
-        }
+        update_from_iter::<u64>(&mut self.map, &mut self.next, iter, deleted_offset);
     }
 
-    /// Returns all pairs of row indices matched by hash.
-    ///
-    /// This method only compares hashes, so additional further check for actual values
-    /// equality may be required.
     fn get_matched_indices<'a>(
         &self,
-        iter: impl Iterator<Item = (usize, &'a u64)>,
+        iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
         deleted_offset: Option<usize>,
     ) -> (Vec<u32>, Vec<u64>) {
-        let mut input_indices = vec![];
-        let mut match_indices = vec![];
-
-        let hash_map = self.get_map();
-        let next_chain = self.get_list();
-        for (row_idx, hash_value) in iter {
-            // Get the hash and find it in the index
-            if let Some((_, index)) =
-                hash_map.find(*hash_value, |(hash, _)| *hash_value == *hash)
-            {
-                let mut i = *index - 1;
-                loop {
-                    let match_row_idx = if let Some(offset) = deleted_offset {
-                        // This arguments means that we prune the next index way before here.
-                        if i < offset as u64 {
-                            // End of the list due to pruning
-                            break;
-                        }
-                        i - offset as u64
-                    } else {
-                        i
-                    };
-                    match_indices.push(match_row_idx);
-                    input_indices.push(row_idx as u32);
-                    // Follow the chain to get the next index value
-                    let next = next_chain[match_row_idx as usize];
-                    if next == 0 {
-                        // end of list
-                        break;
-                    }
-                    i = next - 1;
-                }
-            }
-        }
-
-        (input_indices, match_indices)
+        get_matched_indices::<u64>(&self.map, &self.next, iter, deleted_offset)
     }
 
-    /// Matches hashes with taking limit and offset into account.
-    /// Returns pairs of matched indices along with the starting point for next
-    /// matching iteration (`None` if limit has not been reached).
-    ///
-    /// This method only compares hashes, so additional further check for actual values
-    /// equality may be required.
     fn get_matched_indices_with_limit_offset(
         &self,
         hash_values: &[u64],
-        deleted_offset: Option<usize>,
         limit: usize,
-        offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
-        let mut input_indices = vec![];
-        let mut match_indices = vec![];
+        offset: MapOffset,
+        input_indices: &mut Vec<u32>,
+        match_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
+        get_matched_indices_with_limit_offset::<u64>(
+            &self.map,
+            &self.next,
+            hash_values,
+            limit,
+            offset,
+            input_indices,
+            match_indices,
+        )
+    }
 
-        let mut remaining_output = limit;
+    fn contain_hashes(&self, hash_values: &[u64]) -> BooleanArray {
+        contain_hashes(&self.map, hash_values)
+    }
 
-        let hash_map: &HashTable<(u64, u64)> = self.get_map();
-        let next_chain = self.get_list();
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 
-        // Calculate initial `hash_values` index before iterating
-        let to_skip = match offset {
-            // None `initial_next_idx` indicates that `initial_idx` processing has'n been started
-            (initial_idx, None) => initial_idx,
-            // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
-            // previous iteration, and it should be skipped
-            (initial_idx, Some(0)) => initial_idx + 1,
-            // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
-            // to start with the next index
-            (initial_idx, Some(initial_next_idx)) => {
-                chain_traverse!(
-                    input_indices,
-                    match_indices,
-                    hash_values,
-                    next_chain,
-                    initial_idx,
-                    initial_next_idx,
-                    deleted_offset,
-                    remaining_output
-                );
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
 
-                initial_idx + 1
+use crate::joins::MapOffset;
+use crate::joins::chain::traverse_chain;
+
+pub fn update_from_iter<'a, T>(
+    map: &mut HashTable<(u64, T)>,
+    next: &mut [T],
+    iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+    deleted_offset: usize,
+) where
+    T: Copy + TryFrom<usize> + PartialOrd,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    for (row, &hash_value) in iter {
+        let entry = map.entry(
+            hash_value,
+            |&(hash, _)| hash_value == hash,
+            |&(hash, _)| hash,
+        );
+
+        match entry {
+            Occupied(mut occupied_entry) => {
+                // Already exists: add index to next array
+                let (_, index) = occupied_entry.get_mut();
+                let prev_index = *index;
+                // Store new value inside hashmap
+                *index = T::try_from(row + 1).unwrap();
+                // Update chained Vec at `row` with previous value
+                next[row - deleted_offset] = prev_index;
             }
-        };
-
-        let mut row_idx = to_skip;
-        for hash_value in &hash_values[to_skip..] {
-            if let Some((_, index)) =
-                hash_map.find(*hash_value, |(hash, _)| *hash_value == *hash)
-            {
-                chain_traverse!(
-                    input_indices,
-                    match_indices,
-                    hash_values,
-                    next_chain,
-                    row_idx,
-                    index,
-                    deleted_offset,
-                    remaining_output
-                );
+            Vacant(vacant_entry) => {
+                vacant_entry.insert((hash_value, T::try_from(row + 1).unwrap()));
             }
-            row_idx += 1;
         }
-
-        (input_indices, match_indices, None)
     }
 }
 
-/// Implementation of `JoinHashMapType` for `JoinHashMap`.
-impl JoinHashMapType for JoinHashMap {
-    type NextType = Vec<u64>;
+pub fn get_matched_indices<'a, T>(
+    map: &HashTable<(u64, T)>,
+    next: &[T],
+    iter: Box<dyn Iterator<Item = (usize, &'a u64)> + 'a>,
+    deleted_offset: Option<usize>,
+) -> (Vec<u32>, Vec<u64>)
+where
+    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    let mut input_indices = vec![];
+    let mut match_indices = vec![];
+    let zero = T::try_from(0).unwrap();
+    let one = T::try_from(1).unwrap();
 
-    // Void implementation
-    fn extend_zero(&mut self, _: usize) {}
-
-    /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType) {
-        (&mut self.map, &mut self.next)
+    for (row_idx, hash_value) in iter {
+        // Get the hash and find it in the index
+        if let Some((_, index)) = map.find(*hash_value, |(hash, _)| *hash_value == *hash)
+        {
+            let mut i = *index - one;
+            loop {
+                let match_row_idx = if let Some(offset) = deleted_offset {
+                    let offset = T::try_from(offset).unwrap();
+                    // This arguments means that we prune the next index way before here.
+                    if i < offset {
+                        // End of the list due to pruning
+                        break;
+                    }
+                    i - offset
+                } else {
+                    i
+                };
+                match_indices.push(match_row_idx.into());
+                input_indices.push(row_idx as u32);
+                // Follow the chain to get the next index value
+                let next_chain = next[match_row_idx.into() as usize];
+                if next_chain == zero {
+                    // end of list
+                    break;
+                }
+                i = next_chain - one;
+            }
+        }
     }
 
-    /// Get a reference to the hash map.
-    fn get_map(&self) -> &HashTable<(u64, u64)> {
-        &self.map
-    }
-
-    /// Get a reference to the next.
-    fn get_list(&self) -> &Self::NextType {
-        &self.next
-    }
+    (input_indices, match_indices)
 }
 
-impl Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
+pub fn get_matched_indices_with_limit_offset<T>(
+    map: &HashTable<(u64, T)>,
+    next_chain: &[T],
+    hash_values: &[u64],
+    limit: usize,
+    offset: MapOffset,
+    input_indices: &mut Vec<u32>,
+    match_indices: &mut Vec<u64>,
+) -> Option<MapOffset>
+where
+    T: Copy + TryFrom<usize> + PartialOrd + Into<u64> + Sub<Output = T>,
+    <T as TryFrom<usize>>::Error: Debug,
+    T: ArrowNativeType,
+{
+    // Clear the buffer before producing new results
+    input_indices.clear();
+    match_indices.clear();
+    let one = T::try_from(1).unwrap();
+
+    // Check if hashmap consists of unique values
+    // If so, we can skip the chain traversal
+    if map.len() == next_chain.len() {
+        let start = offset.0;
+        let end = (start + limit).min(hash_values.len());
+        for (i, &hash) in hash_values[start..end].iter().enumerate() {
+            if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
+                input_indices.push(start as u32 + i as u32);
+                match_indices.push((*idx - one).into());
+            }
+        }
+        return if end == hash_values.len() {
+            None
+        } else {
+            Some((end, None))
+        };
+    }
+
+    let mut remaining_output = limit;
+
+    // Calculate initial `hash_values` index before iterating
+    let to_skip = match offset {
+        // None `initial_next_idx` indicates that `initial_idx` processing hasn't been started
+        (idx, None) => idx,
+        // Zero `initial_next_idx` indicates that `initial_idx` has been processed during
+        // previous iteration, and it should be skipped
+        (idx, Some(0)) => idx + 1,
+        // Otherwise, process remaining `initial_idx` matches by traversing `next_chain`,
+        // to start with the next index
+        (idx, Some(next_idx)) => {
+            let next_idx: T = T::usize_as(next_idx as usize);
+            let is_last = idx == hash_values.len() - 1;
+            if let Some(next_offset) = traverse_chain(
+                next_chain,
+                idx,
+                next_idx,
+                &mut remaining_output,
+                input_indices,
+                match_indices,
+                is_last,
+            ) {
+                return Some(next_offset);
+            }
+            idx + 1
+        }
+    };
+
+    let hash_values_len = hash_values.len();
+    for (i, &hash) in hash_values[to_skip..].iter().enumerate() {
+        let row_idx = to_skip + i;
+        if let Some((_, idx)) = map.find(hash, |(h, _)| hash == *h) {
+            let idx: T = *idx;
+            let is_last = row_idx == hash_values_len - 1;
+            if let Some(next_offset) = traverse_chain(
+                next_chain,
+                row_idx,
+                idx,
+                &mut remaining_output,
+                input_indices,
+                match_indices,
+                is_last,
+            ) {
+                return Some(next_offset);
+            }
+        }
+    }
+    None
+}
+
+pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> BooleanArray {
+    let buffer = BooleanBuffer::collect_bool(hash_values.len(), |i| {
+        let hash = hash_values[i];
+        map.find(hash, |(h, _)| hash == *h).is_some()
+    });
+    BooleanArray::new(buffer, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contain_hashes() {
+        let mut hash_map = JoinHashMapU32::with_capacity(10);
+        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
+
+        let probe_hashes = vec![10, 11, 20, 21, 30, 31];
+        let array = hash_map.contain_hashes(&probe_hashes);
+
+        assert_eq!(array.len(), probe_hashes.len());
+
+        for (i, &hash) in probe_hashes.iter().enumerate() {
+            if matches!(hash, 10 | 20 | 30) {
+                assert!(array.value(i), "Hash {hash} should exist in the map");
+            } else {
+                assert!(!array.value(i), "Hash {hash} should NOT exist in the map");
+            }
+        }
     }
 }

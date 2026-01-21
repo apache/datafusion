@@ -31,10 +31,10 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
+        Result,
         config::{ConfigFileType, TableOptions},
         file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
         parsers::CompressionTypeVariant,
-        Result,
     };
 
     use parquet::{

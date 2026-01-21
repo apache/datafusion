@@ -20,7 +20,7 @@ use std::{fmt::Write, sync::Arc, time::Duration};
 use arrow::array::{Int64Builder, RecordBatch, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion::{
     datasource::{
         file_format::parquet::ParquetFormat,
@@ -31,13 +31,13 @@ use datafusion::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use itertools::Itertools;
 use object_store::{
+    ObjectStore,
     memory::InMemory,
     path::Path,
     throttle::{ThrottleConfig, ThrottledStore},
-    ObjectStore,
 };
 use parquet::arrow::ArrowWriter;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use tokio::runtime::Runtime;
 use url::Url;
 
@@ -66,7 +66,7 @@ fn create_parquet_file(rng: &mut StdRng, id_offset: usize) -> Bytes {
     let mut payload_builder = Int64Builder::new();
     for row in 0..FILE_ROWS {
         id_builder.append_value((row + id_offset) as u64);
-        payload_builder.append_value(rng.gen());
+        payload_builder.append_value(rng.random());
     }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),

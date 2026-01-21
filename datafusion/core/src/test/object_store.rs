@@ -17,21 +17,23 @@
 
 //! Object store implementation used for testing
 
-use crate::execution::context::SessionState;
-use crate::execution::session_state::SessionStateBuilder;
-use crate::prelude::SessionContext;
-use futures::stream::BoxStream;
-use futures::FutureExt;
-use object_store::{
-    memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload,
-    PutResult,
+use crate::{
+    execution::{context::SessionState, session_state::SessionStateBuilder},
+    object_store::{
+        Error, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        memory::InMemory, path::Path,
+    },
+    prelude::SessionContext,
 };
-use std::fmt::{Debug, Display, Formatter};
-use std::sync::Arc;
+use futures::{FutureExt, stream::BoxStream};
+use std::{
+    fmt::{Debug, Display, Formatter},
+    sync::Arc,
+};
 use tokio::{
     sync::Barrier,
-    time::{timeout, Duration},
+    time::{Duration, timeout},
 };
 use url::Url;
 
@@ -118,7 +120,7 @@ impl ObjectStore for BlockingObjectStore {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, opts).await
     }
@@ -148,7 +150,7 @@ impl ObjectStore for BlockingObjectStore {
                     "{} barrier wait timed out for {location}",
                     BlockingObjectStore::NAME
                 );
-                log::error!("{}", error_message);
+                log::error!("{error_message}");
                 return Err(Error::Generic {
                     store: BlockingObjectStore::NAME,
                     source: error_message.into(),

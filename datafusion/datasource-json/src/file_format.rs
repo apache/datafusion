@@ -30,29 +30,29 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::json;
-use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
+use arrow::json::reader::{ValueIter, infer_json_schema_from_iterator};
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{
-    not_impl_err, GetExt, Result, Statistics, DEFAULT_JSON_EXTENSION,
+    DEFAULT_JSON_EXTENSION, GetExt, Result, Statistics, not_impl_err,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::decoder::Decoder;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD,
+    DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
@@ -186,6 +186,10 @@ impl FileFormat for JsonFormat {
         Ok(format!("{}{}", ext, file_compression_type.get_ext()))
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        Some(self.options.compression.into())
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,
@@ -249,14 +253,11 @@ impl FileFormat for JsonFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let source = Arc::new(JsonSource::new());
         let conf = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(FileCompressionType::from(
                 self.options.compression,
             ))
-            .with_source(source)
             .build();
         Ok(DataSourceExec::from_data_source(conf))
     }
@@ -279,8 +280,8 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(JsonSource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        Arc::new(JsonSource::new(table_schema))
     }
 }
 
@@ -372,6 +373,7 @@ impl FileSink for JsonSink {
             context,
             serializer,
             self.writer_options.compression.into(),
+            self.writer_options.compression_level,
             object_store,
             demux_task,
             file_stream_rx,

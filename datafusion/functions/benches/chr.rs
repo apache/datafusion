@@ -18,12 +18,14 @@
 extern crate criterion;
 
 use arrow::{array::PrimitiveArray, datatypes::Int64Type};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::chr;
 use rand::{Rng, SeedableRng};
+use std::hint::black_box;
 
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::config::ConfigOptions;
 use rand::rngs::StdRng;
 use std::sync::Arc;
 
@@ -37,25 +39,25 @@ fn criterion_benchmark(c: &mut Criterion) {
     let size = 1024;
     let input: PrimitiveArray<Int64Type> = {
         let null_density = 0.2;
-        let mut rng = seedable_rng();
+        let mut rng = StdRng::seed_from_u64(42);
         (0..size)
             .map(|_| {
-                if rng.gen::<f32>() < null_density {
+                if rng.random::<f32>() < null_density {
                     None
                 } else {
-                    Some(rng.gen_range::<i64, _>(1i64..10_000))
+                    Some(rng.random_range::<i64, _>(1i64..10_000))
                 }
             })
             .collect()
     };
     let input = Arc::new(input);
     let args = vec![ColumnarValue::Array(input)];
-    let arg_fields_owned = args
+    let arg_fields = args
         .iter()
         .enumerate()
-        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true))
+        .map(|(idx, arg)| Field::new(format!("arg_{idx}"), arg.data_type(), true).into())
         .collect::<Vec<_>>();
-    let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
+    let config_options = Arc::new(ConfigOptions::default());
 
     c.bench_function("chr", |b| {
         b.iter(|| {
@@ -65,7 +67,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: &Field::new("f", DataType::Utf8, true),
+                        return_field: Field::new("f", DataType::Utf8, true).into(),
+                        config_options: Arc::clone(&config_options),
                     })
                     .unwrap(),
             )

@@ -21,7 +21,7 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{Array, ArrayRef, ListArray};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{cast::as_map_array, exec_err, internal_err, Result};
+use datafusion_common::{Result, cast::as_map_array, exec_err, internal_err};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -57,7 +57,7 @@ SELECT map_values(map([100, 5], [42, 43]));
         description = "Map expression. Can be a constant, column, or function, and any combination of map operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(crate) struct MapValuesFunc {
     signature: Signature,
 }
@@ -99,7 +99,7 @@ impl ScalarUDFImpl for MapValuesFunc {
     fn return_field_from_args(
         &self,
         args: datafusion_expr::ReturnFieldArgs,
-    ) -> Result<Field> {
+    ) -> Result<FieldRef> {
         let [map_type] = take_function_args(self.name(), args.arg_fields)?;
 
         Ok(Field::new(
@@ -107,7 +107,8 @@ impl ScalarUDFImpl for MapValuesFunc {
             DataType::List(get_map_values_field_as_list_field(map_type.data_type())?),
             // Nullable if the map is nullable
             args.arg_fields.iter().any(|x| x.is_nullable()),
-        ))
+        )
+        .into())
     }
 
     fn invoke_with_args(
@@ -154,7 +155,7 @@ fn get_map_values_field_as_list_field(map_type: &DataType) -> Result<FieldRef> {
 #[cfg(test)]
 mod tests {
     use crate::map_values::MapValuesFunc;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, FieldRef};
     use datafusion_common::ScalarValue;
     use datafusion_expr::ScalarUDFImpl;
     use std::sync::Arc;
@@ -165,7 +166,7 @@ mod tests {
             is_map_nullable: bool,
             is_keys_nullable: bool,
             is_values_nullable: bool,
-        ) -> Field {
+        ) -> FieldRef {
             Field::new_map(
                 "something",
                 "entries",
@@ -178,6 +179,7 @@ mod tests {
                 false,
                 is_map_nullable,
             )
+            .into()
         }
 
         fn get_list_field(
@@ -185,7 +187,7 @@ mod tests {
             is_list_nullable: bool,
             list_item_type: DataType,
             is_list_items_nullable: bool,
-        ) -> Field {
+        ) -> FieldRef {
             Field::new_list(
                 name,
                 Arc::new(Field::new_list_field(
@@ -194,9 +196,10 @@ mod tests {
                 )),
                 is_list_nullable,
             )
+            .into()
         }
 
-        fn get_return_field(field: Field) -> Field {
+        fn get_return_field(field: FieldRef) -> FieldRef {
             let func = MapValuesFunc::new();
             let args = datafusion_expr::ReturnFieldArgs {
                 arg_fields: &[field],

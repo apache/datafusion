@@ -19,10 +19,12 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
@@ -33,33 +35,36 @@ pub mod file;
 pub mod file_compression_type;
 pub mod file_format;
 pub mod file_groups;
-pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod projection;
 pub mod schema_adapter;
 pub mod sink;
 pub mod source;
 mod statistics;
+pub mod table_schema;
 
 #[cfg(test)]
 pub mod test_util;
 
 pub mod url;
 pub mod write;
+pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
 use crate::file_groups::FileGroup;
 use chrono::TimeZone;
 use datafusion_common::stats::Precision;
-use datafusion_common::{exec_datafusion_err, ColumnStatistics, Result};
+use datafusion_common::{ColumnStatistics, Result, exec_datafusion_err};
 use datafusion_common::{ScalarValue, Statistics};
-use file_meta::FileMeta;
+use datafusion_physical_expr::LexOrdering;
 use futures::{Stream, StreamExt};
-use object_store::{path::Path, ObjectMeta};
 use object_store::{GetOptions, GetRange, ObjectStore};
+use object_store::{ObjectMeta, path::Path};
+pub use table_schema::TableSchema;
 // Remove when add_row_stats is remove
-#[allow(deprecated)]
+#[expect(deprecated)]
 pub use statistics::add_row_stats;
 pub use statistics::compute_all_files_statistics;
 use std::ops::Range;
@@ -91,6 +96,19 @@ impl FileRange {
 #[derive(Debug, Clone)]
 /// A single file or part of a file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
+///
+/// # Statistics
+///
+/// The [`Self::statistics`] field contains statistics for the **full table schema**,
+/// which includes both file columns and partition columns. When statistics are set via
+/// [`Self::with_statistics`], exact statistics for partition columns are automatically
+/// computed from [`Self::partition_values`]:
+///
+/// - `min = max = partition_value` (all rows in a file share the same partition value)
+/// - `null_count = 0` (partition values extracted from paths are never null)
+/// - `distinct_count = 1` (single distinct value per file for each partition column)
+///
+/// This enables query optimizers to use partition column bounds for pruning and planning.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub object_meta: ObjectMeta,
@@ -101,9 +119,9 @@ pub struct PartitionedFile {
     /// You may use [`wrap_partition_value_in_dict`] to wrap them if you have used [`wrap_partition_type_in_dict`] to wrap the column type.
     ///
     ///
-    /// [`wrap_partition_type_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L55
-    /// [`wrap_partition_value_in_dict`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/physical_plan/file_scan_config.rs#L62
-    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L190
+    /// [`wrap_partition_type_in_dict`]: crate::file_scan_config::wrap_partition_type_in_dict
+    /// [`wrap_partition_value_in_dict`]: crate::file_scan_config::wrap_partition_value_in_dict
+    /// [`table_partition_cols`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/file_format/options.rs#L87
     pub partition_values: Vec<ScalarValue>,
     /// An optional file range for a more fine-grained parallel execution
     pub range: Option<FileRange>,
@@ -111,7 +129,21 @@ pub struct PartitionedFile {
     ///
     /// DataFusion relies on these statistics for planning (in particular to sort file groups),
     /// so if they are incorrect, incorrect answers may result.
+    ///
+    /// These statistics cover the full table schema: file columns plus partition columns.
+    /// When set via [`Self::with_statistics`], partition column statistics are automatically
+    /// computed from [`Self::partition_values`] with exact min/max/null_count/distinct_count.
     pub statistics: Option<Arc<Statistics>>,
+    /// The known lexicographical ordering of the rows in this file, if any.
+    ///
+    /// This describes how the data within the file is sorted with respect to one or more
+    /// columns, and is used by the optimizer for planning operations that depend on input
+    /// ordering (e.g. merges, sorts, and certain aggregations).
+    ///
+    /// When available, this is typically inferred from file-level metadata exposed by the
+    /// underlying format (for example, Parquet `sorting_columns`), but it may also be set
+    /// explicitly via [`Self::with_ordering`].
+    pub ordering: Option<LexOrdering>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes
@@ -132,6 +164,20 @@ impl PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            ordering: None,
+            extensions: None,
+            metadata_size_hint: None,
+        }
+    }
+
+    /// Create a file from a known ObjectMeta without partition
+    pub fn new_from_meta(object_meta: ObjectMeta) -> Self {
+        Self {
+            object_meta,
+            partition_values: vec![],
+            range: None,
+            statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
@@ -150,10 +196,36 @@ impl PartitionedFile {
             partition_values: vec![],
             range: Some(FileRange { start, end }),
             statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
         .with_range(start, end)
+    }
+
+    /// Attach partition values to this file.
+    /// This replaces any existing partition values.
+    pub fn with_partition_values(mut self, partition_values: Vec<ScalarValue>) -> Self {
+        self.partition_values = partition_values;
+        self
+    }
+
+    /// Size of the file to be scanned (taking into account the range, if present).
+    pub fn effective_size(&self) -> u64 {
+        if let Some(range) = &self.range {
+            (range.end - range.start) as u64
+        } else {
+            self.object_meta.size
+        }
+    }
+
+    /// Effective range of the file to be scanned.
+    pub fn range(&self) -> (u64, u64) {
+        if let Some(range) = &self.range {
+            (range.start as u64, range.end as u64)
+        } else {
+            (0, self.object_meta.size)
+        }
     }
 
     /// Provide a hint to the size of the file metadata. If a hint is provided
@@ -192,9 +264,64 @@ impl PartitionedFile {
         self
     }
 
-    // Update the statistics for this file.
-    pub fn with_statistics(mut self, statistics: Arc<Statistics>) -> Self {
-        self.statistics = Some(statistics);
+    /// Update the statistics for this file.
+    ///
+    /// The provided `statistics` should cover only the file schema columns.
+    /// This method will automatically append exact statistics for partition columns
+    /// based on `partition_values`:
+    /// - `min = max = partition_value` (all rows have the same value)
+    /// - `null_count = 0` (partition values from paths are never null)
+    /// - `distinct_count = 1` (all rows have the same partition value)
+    pub fn with_statistics(mut self, file_statistics: Arc<Statistics>) -> Self {
+        if self.partition_values.is_empty() {
+            // No partition columns, use stats as-is
+            self.statistics = Some(file_statistics);
+        } else {
+            // Extend stats with exact partition column statistics
+            let mut stats = Arc::unwrap_or_clone(file_statistics);
+            for partition_value in &self.partition_values {
+                let col_stats = ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(partition_value.clone()),
+                    min_value: Precision::Exact(partition_value.clone()),
+                    distinct_count: Precision::Exact(1),
+                    sum_value: Precision::Absent,
+                    byte_size: partition_value
+                        .data_type()
+                        .primitive_width()
+                        .map(|w| stats.num_rows.multiply(&Precision::Exact(w)))
+                        .unwrap_or_else(|| Precision::Absent),
+                };
+                stats.column_statistics.push(col_stats);
+            }
+            self.statistics = Some(Arc::new(stats));
+        }
+        self
+    }
+
+    /// Check if this file has any statistics.
+    /// This returns `true` if the file has any Exact or Inexact statistics
+    /// and `false` if all statistics are `Precision::Absent`.
+    pub fn has_statistics(&self) -> bool {
+        if let Some(stats) = &self.statistics {
+            stats.column_statistics.iter().any(|col_stats| {
+                col_stats.null_count != Precision::Absent
+                    || col_stats.max_value != Precision::Absent
+                    || col_stats.min_value != Precision::Absent
+                    || col_stats.sum_value != Precision::Absent
+                    || col_stats.distinct_count != Precision::Absent
+            })
+        } else {
+            false
+        }
+    }
+
+    /// Set the known ordering of data in this file.
+    ///
+    /// The ordering represents the lexicographical sort order of the data,
+    /// typically inferred from file metadata (e.g., Parquet sorting_columns).
+    pub fn with_ordering(mut self, ordering: Option<LexOrdering>) -> Self {
+        self.ordering = ordering;
         self
     }
 }
@@ -206,6 +333,7 @@ impl From<ObjectMeta> for PartitionedFile {
             partition_values: vec![],
             range: None,
             statistics: None,
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         }
@@ -233,23 +361,23 @@ pub enum RangeCalculation {
 /// Calculates an appropriate byte range for reading from an object based on the
 /// provided metadata.
 ///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// This asynchronous function examines the [`PartitionedFile`] of an object in an object store
 /// and determines the range of bytes to be read. The range calculation may adjust
 /// the start and end points to align with meaningful data boundaries (like newlines).
 ///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+/// Returns a `Result` wrapping a [`RangeCalculation`], which is either a calculated byte range or an indication to terminate early.
 ///
 /// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
 pub async fn calculate_range(
-    file_meta: &FileMeta,
+    file: &PartitionedFile,
     store: &Arc<dyn ObjectStore>,
     terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
+    let location = &file.object_meta.location;
+    let file_size = file.object_meta.size;
     let newline = terminator.unwrap_or(b'\n');
 
-    match file_meta.range {
+    match file.range {
         None => Ok(RangeCalculation::Range(None)),
         Some(FileRange { start, end }) => {
             let start: u64 = start.try_into().map_err(|_| {
@@ -265,6 +393,10 @@ pub async fn calculate_range(
                 0
             };
 
+            if start + start_delta > end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
             let end_delta = if end != file_size {
                 find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
@@ -273,7 +405,7 @@ pub async fn calculate_range(
 
             let range = start + start_delta..end + end_delta;
 
-            if range.start == range.end {
+            if range.start >= range.end {
                 return Ok(RangeCalculation::TerminateEarly);
             }
 
@@ -292,7 +424,6 @@ pub async fn calculate_range(
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
 ///
 /// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
 async fn find_first_newline(
     object_store: &Arc<dyn ObjectStore>,
     location: &Path,
@@ -379,7 +510,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
 
         let file = PartitionedFile {
             object_meta: ObjectMeta {
-                location: Path::from(format!("file_{}.parquet", i)),
+                location: Path::from(format!("file_{i}.parquet")),
                 last_modified: chrono::Utc::now(),
                 size: 1000,
                 e_tag: None,
@@ -396,8 +527,10 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     min_value: Precision::Exact(ScalarValue::Float64(Some(min))),
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 }],
             })),
+            ordering: None,
             extensions: None,
             metadata_size_hint: None,
         };
@@ -523,6 +656,70 @@ mod tests {
     }
 
     #[test]
+    fn test_with_statistics_appends_partition_column_stats() {
+        use crate::PartitionedFile;
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue, Statistics};
+
+        // Create a PartitionedFile with partition values
+        let mut pf = PartitionedFile::new(
+            "test.parquet",
+            100, // file size
+        );
+        pf.partition_values = vec![
+            ScalarValue::Date32(Some(20148)), // 2025-03-01
+        ];
+
+        // Create file-only statistics (1 column for 'id')
+        let file_stats = Arc::new(Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Exact(16),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(4))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        });
+
+        // Call with_statistics - should append partition column stats
+        let pf = pf.with_statistics(file_stats);
+
+        // Verify the statistics now have 2 columns
+        let stats = pf.statistics.unwrap();
+        assert_eq!(
+            stats.column_statistics.len(),
+            2,
+            "Expected 2 columns (id + date partition)"
+        );
+
+        // Verify partition column statistics
+        let partition_col_stats = &stats.column_statistics[1];
+        assert_eq!(
+            partition_col_stats.null_count,
+            Precision::Exact(0),
+            "Partition column null_count should be Exact(0)"
+        );
+        assert_eq!(
+            partition_col_stats.min_value,
+            Precision::Exact(ScalarValue::Date32(Some(20148))),
+            "Partition column min should match partition value"
+        );
+        assert_eq!(
+            partition_col_stats.max_value,
+            Precision::Exact(ScalarValue::Date32(Some(20148))),
+            "Partition column max should match partition value"
+        );
+        assert_eq!(
+            partition_col_stats.distinct_count,
+            Precision::Exact(1),
+            "Partition column distinct_count should be Exact(1)"
+        );
+    }
+
+    #[test]
     fn test_url_contains() {
         let url = ListingTableUrl::parse("file:///var/data/mytable/").unwrap();
 
@@ -540,12 +737,13 @@ mod tests {
 
         // as per documentation, when `ignore_subdirectory` is true, we should ignore files that aren't
         // a direct child of the `url`
-        assert!(url
-            .contains(
+        assert!(
+            url.contains(
                 &Path::parse("/var/data/mytable/mysubfolder/data.parquet").unwrap(),
                 true
             )
-            .not());
+            .not()
+        );
 
         // when we set `ignore_subdirectory` to false, we should not ignore the file
         assert!(url.contains(
@@ -572,5 +770,32 @@ mod tests {
 
         // testing an empty path with `ignore_subdirectory` set to false
         assert!(url.contains(&Path::parse("/var/data/mytable/").unwrap(), false));
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/19605>
+    #[tokio::test]
+    async fn test_calculate_range_single_line_file() {
+        use super::{PartitionedFile, RangeCalculation, calculate_range};
+        use object_store::ObjectStore;
+        use object_store::memory::InMemory;
+
+        let content = r#"{"id":1,"data":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+        let file_size = content.len() as u64;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = Path::from("test.json");
+        store.put(&path, content.into()).await.unwrap();
+
+        let mid = file_size / 2;
+        let partitioned_file = PartitionedFile::new_with_range(
+            path.to_string(),
+            file_size,
+            mid as i64,
+            file_size as i64,
+        );
+
+        let result = calculate_range(&partitioned_file, &store, None).await;
+
+        assert!(matches!(result, Ok(RangeCalculation::TerminateEarly)));
     }
 }

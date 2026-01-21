@@ -21,17 +21,21 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
-use arrow::compute::{binary, date_part, DatePart};
+use arrow::compute::{DatePart, binary, date_part};
 use arrow::datatypes::DataType::{
     Date32, Date64, Duration, Interval, Time32, Time64, Timestamp,
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
-use arrow::datatypes::{DataType, Field, TimeUnit};
-use datafusion_common::types::{logical_date, NativeType};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
+};
+use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
+    Result, ScalarValue,
     cast::{
-        as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
+        as_date32_array, as_date64_array, as_int32_array, as_interval_dt_array,
+        as_interval_mdn_array, as_interval_ym_array, as_time32_millisecond_array,
         as_time32_second_array, as_time64_microsecond_array, as_time64_nanosecond_array,
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
@@ -39,7 +43,6 @@ use datafusion_common::{
     exec_err, internal_err, not_impl_err,
     types::logical_string,
     utils::take_function_args,
-    Result, ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarUDFImpl, Signature,
@@ -56,8 +59,9 @@ use datafusion_macros::user_doc;
     argument(
         name = "part",
         description = r#"Part of the date to return. The following date parts are supported:
-        
+
     - year
+    - isoyear (ISO 8601 week-numbering year)
     - quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)
     - month
     - week (week of the year)
@@ -68,9 +72,10 @@ use datafusion_macros::user_doc;
     - millisecond
     - microsecond
     - nanosecond
-    - dow (day of the week)
+    - dow (day of the week where Sunday is 0)
     - doy (day of the year)
-    - epoch (seconds since Unix epoch)
+    - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
+    - isodow (day of the week where Monday is 0)
 "#
     ),
     argument(
@@ -78,7 +83,7 @@ use datafusion_macros::user_doc;
         description = "Time expression to operate on. Can be a constant, column, or function."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct DatePartFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -145,8 +150,9 @@ impl ScalarUDFImpl for DatePartFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+        let nullable = args.arg_fields[1].is_nullable();
 
         field
             .and_then(|sv| {
@@ -155,12 +161,13 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            Field::new(self.name(), DataType::Float64, true)
+                            Field::new(self.name(), DataType::Float64, nullable)
                         } else {
-                            Field::new(self.name(), DataType::Int32, true)
+                            Field::new(self.name(), DataType::Int32, nullable)
                         }
                     })
             })
+            .map(Arc::new)
             .map_or_else(
                 || exec_err!("{} requires non-empty constant string", self.name()),
                 Ok,
@@ -213,9 +220,11 @@ impl ScalarUDFImpl for DatePartFunc {
         } else {
             // special cases that can be extracted (in postgres) but are not interval units
             match part_trim.to_lowercase().as_str() {
+                "isoyear" => date_part(array.as_ref(), DatePart::YearISO)?,
                 "qtr" | "quarter" => date_part(array.as_ref(), DatePart::Quarter)?,
                 "doy" => date_part(array.as_ref(), DatePart::DayOfYear)?,
                 "dow" => date_part(array.as_ref(), DatePart::DayOfWeekSunday0)?,
+                "isodow" => date_part(array.as_ref(), DatePart::DayOfWeekMonday0)?,
                 "epoch" => epoch(array.as_ref())?,
                 _ => return exec_err!("Date part '{part}' not supported"),
             }
@@ -231,6 +240,7 @@ impl ScalarUDFImpl for DatePartFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -345,6 +355,11 @@ fn seconds(array: &dyn Array, unit: TimeUnit) -> Result<ArrayRef> {
 
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
+    // Note: Month-to-second conversion uses 30 days as an approximation.
+    // This matches PostgreSQL's behavior for interval epoch extraction,
+    // but does not represent exact calendar months (which vary 28-31 days).
+    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
+    const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
         Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
@@ -369,7 +384,19 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        Interval(_) | Duration(_) => return seconds(array, Second),
+        Interval(ArrowIntervalUnit::YearMonth) => as_interval_ym_array(array)?
+            .unary(|x| x as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY),
+        Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?.unary(|x| {
+            x.days as f64 * SECONDS_IN_A_DAY + x.milliseconds as f64 / 1_000_f64
+        }),
+        Interval(ArrowIntervalUnit::MonthDayNano) => {
+            as_interval_mdn_array(array)?.unary(|x| {
+                x.months as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY
+                    + x.days as f64 * SECONDS_IN_A_DAY
+                    + x.nanoseconds as f64 / 1_000_000_000_f64
+            })
+        }
+        Duration(_) => return seconds(array, Second),
         d => return exec_err!("Cannot convert {d:?} to epoch"),
     };
     Ok(Arc::new(f))

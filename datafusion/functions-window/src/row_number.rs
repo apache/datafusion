@@ -17,6 +17,7 @@
 
 //! `row_number` window function implementation
 
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
 use datafusion_common::arrow::compute::SortOptions;
@@ -24,15 +25,17 @@ use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
-    Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
+use std::sync::Arc;
 
 define_udwf_and_expr!(
     RowNumber,
@@ -44,9 +47,29 @@ define_udwf_and_expr!(
 #[user_doc(
     doc_section(label = "Ranking Functions"),
     description = "Number of the current row within its partition, counting from 1.",
-    syntax_example = "row_number()"
+    syntax_example = "row_number()",
+    sql_example = r#"
+```sql
+-- Example usage of the row_number window function:
+SELECT department,
+  salary,
+  row_number() OVER (PARTITION BY department ORDER BY salary DESC) AS row_num
+FROM employees;
+
++-------------+--------+---------+
+| department  | salary | row_num |
++-------------+--------+---------+
+| Sales       | 70000  | 1       |
+| Sales       | 50000  | 2       |
+| Sales       | 50000  | 3       |
+| Sales       | 30000  | 4       |
+| Engineering | 90000  | 1       |
+| Engineering | 80000  | 2       |
++-------------+--------+---------+
+```
+"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RowNumber {
     signature: Signature,
 }
@@ -86,8 +109,8 @@ impl WindowUDFImpl for RowNumber {
         Ok(Box::<NumRowsEvaluator>::default())
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        Ok(Field::new(field_args.name(), DataType::UInt64, false))
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        Ok(Field::new(field_args.name(), DataType::UInt64, false).into())
     }
 
     fn sort_options(&self) -> Option<SortOptions> {
@@ -99,6 +122,10 @@ impl WindowUDFImpl for RowNumber {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None
     }
 }
 
@@ -119,7 +146,7 @@ impl PartitionEvaluator for NumRowsEvaluator {
         _values: &[ArrayRef],
         num_rows: usize,
     ) -> Result<ArrayRef> {
-        Ok(std::sync::Arc::new(UInt64Array::from_iter_values(
+        Ok(Arc::new(UInt64Array::from_iter_values(
             1..(num_rows as u64) + 1,
         )))
     }

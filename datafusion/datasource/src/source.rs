@@ -22,22 +22,28 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, SchedulingType,
+};
+use datafusion_physical_plan::metrics::SplitMetrics;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::stream::BatchSplitStream;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
+use itertools::Itertools;
 
 use crate::file_scan_config::FileScanConfig;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::filter_pushdown::{
-    filter_pushdown_not_supported, FilterDescription, FilterPushdownResult,
-    FilterPushdownSupport,
+    ChildPushdownResult, FilterPushdownPhase, FilterPushdownPropagation, PushedDown,
 };
 
 /// A source of data, typically a list of files or memory
@@ -59,8 +65,60 @@ use datafusion_physical_plan::filter_pushdown::{
 /// Requires `Debug` to assist debugging
 ///
 /// [`FileScanConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.FileScanConfig.html
-/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest//datafusion/datasource/memory/struct.MemorySourceConfig.html
+/// [`MemorySourceConfig`]: https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemorySourceConfig.html
 /// [`FileSource`]: crate::file::FileSource
+/// [`FileFormat``]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/index.html
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+///
+/// The following diagram shows how DataSource, FileSource, and DataSourceExec are related
+/// ```text
+///                       ┌─────────────────────┐                              -----► execute path
+///                       │                     │                              ┄┄┄┄┄► init path
+///                       │   DataSourceExec    │  
+///                       │                     │    
+///                       └───────▲─────────────┘
+///                               ┊  │
+///                               ┊  │
+///                       ┌──────────▼──────────┐                            ┌──────────-──────────┐
+///                       │                     │                            |                     |
+///                       │  DataSource(trait)  │                            | TableProvider(trait)|
+///                       │                     │                            |                     |
+///                       └───────▲─────────────┘                            └─────────────────────┘
+///                               ┊  │                                                  ┊
+///               ┌───────────────┿──┴────────────────┐                                 ┊
+///               |   ┌┄┄┄┄┄┄┄┄┄┄┄┘                   |                                 ┊
+///               |   ┊                               |                                 ┊
+///    ┌──────────▼──────────┐             ┌──────────▼──────────┐                      ┊
+///    │                     │             │                     │           ┌──────────▼──────────┐
+///    │   FileScanConfig    │             │ MemorySourceConfig  │           |                     |
+///    │                     │             │                     │           |  FileFormat(trait)  |
+///    └──────────────▲──────┘             └─────────────────────┘           |                     |
+///               │   ┊                                                      └─────────────────────┘
+///               │   ┊                                                                 ┊
+///               │   ┊                                                                 ┊
+///    ┌──────────▼──────────┐                                               ┌──────────▼──────────┐
+///    │                     │                                               │     ArrowSource     │
+///    │ FileSource(trait)   ◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│          ...        │
+///    │                     │                                               │    ParquetSource    │
+///    └─────────────────────┘                                               └─────────────────────┘
+///               │
+///               │
+///               │
+///               │
+///    ┌──────────▼──────────┐
+///    │     ArrowSource     │
+///    │          ...        │
+///    │    ParquetSource    │
+///    └─────────────────────┘
+///               |
+/// FileOpener (called by FileStream)
+///               │
+///    ┌──────────▼──────────┐
+///    │                     │
+///    │     RecordBatch     │
+///    │                     │
+///    └─────────────────────┘
+/// ```
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
@@ -71,7 +129,16 @@ pub trait DataSource: Send + Sync + Debug {
     /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
-    /// Return a copy of this DataSource with a new partitioning scheme
+    /// Return a copy of this DataSource with a new partitioning scheme.
+    ///
+    /// Returns `Ok(None)` (the default) if the partitioning cannot be changed.
+    /// Refer to [`ExecutionPlan::repartitioned`] for details on when None should be returned.
+    ///
+    /// Repartitioning should not change the output ordering, if this ordering exists.
+    /// Refer to [`MemorySourceConfig::repartition_preserving_order`](crate::memory::MemorySourceConfig)
+    /// and the FileSource's
+    /// [`FileGroupPartitioner::repartition_file_groups`](crate::file_groups::FileGroupPartitioner::repartition_file_groups)
+    /// for examples.
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -83,7 +150,24 @@ pub trait DataSource: Send + Sync + Debug {
 
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
-    fn statistics(&self) -> Result<Statistics>;
+    fn scheduling_type(&self) -> SchedulingType {
+        SchedulingType::NonCooperative
+    }
+
+    /// Returns statistics for a specific partition, or aggregate statistics
+    /// across all partitions if `partition` is `None`.
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics>;
+
+    /// Returns aggregate statistics across all partitions.
+    ///
+    /// # Deprecated
+    /// Use [`Self::partition_statistics`] instead, which provides more fine-grained
+    /// control over statistics retrieval (per-partition or aggregate).
+    #[deprecated(since = "51.0.0", note = "Use partition_statistics instead")]
+    fn statistics(&self) -> Result<Statistics> {
+        self.partition_statistics(None)
+    }
+
     /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
@@ -92,16 +176,44 @@ pub trait DataSource: Send + Sync + Debug {
     }
     fn try_swapping_with_projection(
         &self,
-        _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
+        _projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn DataSource>>>;
     /// Try to push down filters into this DataSource.
-    /// See [`ExecutionPlan::try_pushdown_filters`] for more details.
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
     fn try_pushdown_filters(
         &self,
-        fd: FilterDescription,
+        filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn DataSource>>> {
-        Ok(filter_pushdown_not_supported(fd))
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+            vec![PushedDown::No; filters.len()],
+        ))
+    }
+
+    /// Try to create a new DataSource that produces data in the specified sort order.
+    ///
+    /// # Arguments
+    /// * `order` - The desired output ordering
+    ///
+    /// # Returns
+    /// * `Ok(SortOrderPushdownResult::Exact { .. })` - Created a source that guarantees exact ordering
+    /// * `Ok(SortOrderPushdownResult::Inexact { .. })` - Created a source optimized for the ordering
+    /// * `Ok(SortOrderPushdownResult::Unsupported)` - Cannot optimize for this ordering
+    /// * `Err(e)` - Error occurred
+    ///
+    /// Default implementation returns `Unsupported`.
+    fn try_pushdown_sort(
+        &self,
+        _order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        Ok(SortOrderPushdownResult::Unsupported)
+    }
+
+    /// Returns a variant of this `DataSource` that is aware of order-sensitivity.
+    fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        None
     }
 }
 
@@ -161,6 +273,10 @@ impl ExecutionPlan for DataSourceExec {
         Ok(self)
     }
 
+    /// Implementation of [`ExecutionPlan::repartitioned`] which relies upon the inner [`DataSource::repartitioned`].
+    ///
+    /// If the data source does not support changing its partitioning, returns `Ok(None)` (the default). Refer
+    /// to [`ExecutionPlan::repartitioned`] for more details.
     fn repartitioned(
         &self,
         target_partitions: usize,
@@ -172,17 +288,15 @@ impl ExecutionPlan for DataSourceExec {
             self.properties().eq_properties.output_ordering(),
         )?;
 
-        if let Some(source) = data_source {
+        Ok(data_source.map(|source| {
             let output_partitioning = source.output_partitioning();
             let plan = self
                 .clone()
                 .with_data_source(source)
                 // Changing source partitioning may invalidate output partitioning. Update it also
                 .with_partitioning(output_partitioning);
-            Ok(Some(Arc::new(plan)))
-        } else {
-            Ok(Some(Arc::new(self.clone())))
-        }
+            Arc::new(plan) as _
+        }))
     }
 
     fn execute(
@@ -190,33 +304,26 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        self.data_source.open(partition, context)
+        let stream = self.data_source.open(partition, Arc::clone(&context))?;
+        let batch_size = context.session_config().batch_size();
+        log::debug!(
+            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+        );
+        let metrics = self.data_source.metrics();
+        let split_metrics = SplitMetrics::new(&metrics, partition);
+        Ok(Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            split_metrics,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.data_source.metrics().clone_inner())
     }
 
-    fn statistics(&self) -> Result<Statistics> {
-        self.data_source.statistics()
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if let Some(partition) = partition {
-            let mut statistics = Statistics::new_unknown(&self.schema());
-            if let Some(file_config) =
-                self.data_source.as_any().downcast_ref::<FileScanConfig>()
-            {
-                if let Some(file_group) = file_config.file_groups.get(partition) {
-                    if let Some(stat) = file_group.file_statistics(None) {
-                        statistics = stat.clone();
-                    }
-                }
-            }
-            Ok(statistics)
-        } else {
-            Ok(self.data_source.statistics()?)
-        }
+        self.data_source.partition_statistics(partition)
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -234,43 +341,74 @@ impl ExecutionPlan for DataSourceExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.data_source.try_swapping_with_projection(projection)
+        match self
+            .data_source
+            .try_swapping_with_projection(projection.projection_expr())?
+        {
+            Some(new_data_source) => {
+                Ok(Some(Arc::new(DataSourceExec::new(new_data_source))))
+            }
+            None => Ok(None),
+        }
     }
 
-    fn try_pushdown_filters(
+    fn handle_child_pushdown_result(
         &self,
-        fd: FilterDescription,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
-    ) -> Result<FilterPushdownResult<Arc<dyn ExecutionPlan>>> {
-        let FilterPushdownResult {
-            support,
-            remaining_description,
-        } = self.data_source.try_pushdown_filters(fd, config)?;
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // Push any remaining filters into our data source
+        let parent_filters = child_pushdown_result
+            .parent_filters
+            .into_iter()
+            .map(|f| f.filter)
+            .collect_vec();
+        let res = self
+            .data_source
+            .try_pushdown_filters(parent_filters, config)?;
+        match res.updated_node {
+            Some(data_source) => {
+                let mut new_node = self.clone();
+                new_node.data_source = data_source;
+                // Re-compute properties since we have new filters which will impact equivalence info
+                new_node.cache = Self::compute_properties(&new_node.data_source);
 
-        match support {
-            FilterPushdownSupport::Supported {
-                child_descriptions,
-                op,
-                revisit,
-            } => {
-                let new_exec = Arc::new(DataSourceExec::new(op));
-
-                debug_assert!(child_descriptions.is_empty());
-                debug_assert!(!revisit);
-
-                Ok(FilterPushdownResult {
-                    support: FilterPushdownSupport::Supported {
-                        child_descriptions,
-                        op: new_exec,
-                        revisit,
-                    },
-                    remaining_description,
+                Ok(FilterPushdownPropagation {
+                    filters: res.filters,
+                    updated_node: Some(Arc::new(new_node)),
                 })
             }
-            FilterPushdownSupport::NotSupported => {
-                Ok(filter_pushdown_not_supported(remaining_description))
-            }
+            None => Ok(FilterPushdownPropagation {
+                filters: res.filters,
+                updated_node: None,
+            }),
         }
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // Delegate to the data source and wrap result with DataSourceExec
+        self.data_source
+            .try_pushdown_sort(order)?
+            .try_map(|new_data_source| {
+                let new_exec = self.clone().with_data_source(new_data_source);
+                Ok(Arc::new(new_exec) as Arc<dyn ExecutionPlan>)
+            })
+    }
+
+    fn with_preserve_order(
+        &self,
+        preserve_order: bool,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        self.data_source
+            .with_preserve_order(preserve_order)
+            .map(|new_data_source| {
+                Arc::new(self.clone().with_data_source(new_data_source))
+                    as Arc<dyn ExecutionPlan>
+            })
     }
 }
 
@@ -279,8 +417,9 @@ impl DataSourceExec {
         Arc::new(Self::new(Arc::new(data_source)))
     }
 
+    // Default constructor for `DataSourceExec`, setting the `cooperative` flag to `true`.
     pub fn new(data_source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&data_source));
+        let cache = Self::compute_properties(&data_source);
         Self { data_source, cache }
     }
 
@@ -290,7 +429,7 @@ impl DataSourceExec {
     }
 
     pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.cache = Self::compute_properties(&data_source);
         self.data_source = data_source;
         self
     }
@@ -307,13 +446,14 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: &Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
             data_source.eq_properties(),
             data_source.output_partitioning(),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(data_source.scheduling_type())
     }
 
     /// Downcast the `DataSourceExec`'s `data_source` to a specific file source

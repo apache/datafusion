@@ -19,11 +19,10 @@ use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
-    cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
-    PrimitiveArray,
+    ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder, PrimitiveArray,
+    cast::AsArray,
 };
-use arrow::datatypes::{i256, DataType};
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, i256};
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
@@ -85,13 +84,13 @@ hash_float!(f16, f32, f64);
 pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     /// The data type of the output array
     data_type: DataType,
-
-    /// Stores the group index based on the hash of its value
+    /// Stores the `(group_index, hash)` based on the hash of its value
     ///
-    /// We don't store the hashes as hashing fixed width primitives
-    /// is fast enough for this not to benefit performance
-    map: HashTable<u64>,
-
+    /// We also store `hash` is for reducing cost of rehashing. Such cost
+    /// is obvious in high cardinality group by situation.
+    /// More details can see:
+    /// <https://github.com/apache/datafusion/issues/15961>
+    map: HashTable<(usize, u64)>,
     /// The group index of the null value if any
     null_group: Option<u64>,
 
@@ -126,7 +125,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
             map: HashTable::with_capacity(128),
             values,
             null_group: None,
-            random_state: Default::default(),
+           random_state: crate::aggregates::AGGREGATION_HASH_SEED,
             block_size: None,
         }
     }
@@ -161,7 +160,7 @@ where
     }
 
     fn size(&self) -> usize {
-        self.map.capacity() * size_of::<usize>()
+        self.map.capacity() * size_of::<(usize, u64)>()
             + self
                 .values
                 .iter()
@@ -211,18 +210,18 @@ where
             }
 
             EmitTo::First(n) => {
-                assert!(
-                    self.block_size.is_none(),
-                    "only support EmitTo::First in flat mode"
-                );
+                self.map.retain(|entry| {
+                    assert!(
+                        self.block_size.is_none(),
+                        "only support EmitTo::First in flat mode"
+                    );
 
-                let n = n as u64;
-                self.map.retain(|group_idx| {
                     // Decrement group index by n
+                    let group_idx = entry.0;
                     match group_idx.checked_sub(n) {
                         // Group index was >= n, shift value down
                         Some(sub) => {
-                            *group_idx = sub;
+                            entry.0 = sub;
                             true
                         }
                         // Group index was < n, so remove from table
@@ -288,20 +287,18 @@ where
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
-
+    fn clear_shrink(&mut self, num_rows: usize) {
         // TODO: Only reserve room of values in `flat mode` currently,
         // we may need to consider it again when supporting spilling
         // for `blocked mode`.
         if self.block_size.is_none() {
             let single_block = self.values.back_mut().unwrap();
             single_block.clear();
-            single_block.shrink_to(count);
+            single_block.shrink_to(num_rows);
         }
 
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
     }
 
     fn supports_blocked_groups(&self) -> bool {
@@ -362,7 +359,7 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |g| unsafe {
+                        |&(g, _)| unsafe {
                             let block_id = O::get_block_id(*g);
                             let block_offset = O::get_block_offset(*g);
                             self.values
@@ -371,15 +368,7 @@ where
                                 .get_unchecked(block_offset as usize)
                                 .is_eq(key)
                         },
-                        |g| unsafe {
-                            let block_id = O::get_block_id(*g);
-                            let block_offset = O::get_block_offset(*g);
-                            self.values
-                                .get(block_id as usize)
-                                .unwrap()
-                                .get_unchecked(block_offset as usize)
-                                .hash(state)
-                        },
+                        |&(_, h)| h,
                     );
 
                     match insert {

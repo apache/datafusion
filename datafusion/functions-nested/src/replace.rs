@@ -18,15 +18,15 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Capacities, GenericListArray,
-    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -78,7 +78,7 @@ make_udf_expr_and_func!(ArrayReplaceAll,
     argument(name = "from", description = "Initial element."),
     argument(name = "to", description = "Final element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayReplace {
     signature: Signature,
     aliases: Vec<String>,
@@ -105,6 +105,7 @@ impl ArrayReplace {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace")],
         }
@@ -164,7 +165,7 @@ impl ScalarUDFImpl for ArrayReplace {
     argument(name = "to", description = "Final element."),
     argument(name = "max", description = "Number of first occurrences to replace.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayReplaceN {
     signature: Signature,
     aliases: Vec<String>,
@@ -186,6 +187,7 @@ impl ArrayReplaceN {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_n")],
         }
@@ -244,7 +246,7 @@ impl ScalarUDFImpl for ArrayReplaceN {
     argument(name = "from", description = "Initial element."),
     argument(name = "to", description = "Final element.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub(super) struct ArrayReplaceAll {
     signature: Signature,
     aliases: Vec<String>,
@@ -265,6 +267,7 @@ impl ArrayReplaceAll {
                     },
                 ),
                 volatility: Volatility::Immutable,
+                parameter_names: None,
             },
             aliases: vec![String::from("list_replace_all")],
         }
@@ -325,7 +328,7 @@ fn general_replace<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
     from_array: &ArrayRef,
     to_array: &ArrayRef,
-    arr_n: Vec<i64>,
+    arr_n: &[i64],
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<O> = vec![O::usize_as(0)];
@@ -415,7 +418,7 @@ fn general_replace<O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace", args)?;
 
     // replace at most one occurrence for each element
@@ -423,18 +426,18 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
-        array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_replace does not support type '{array_type}'."),
     }
 }
 
-pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to, max] = take_function_args("array_replace_n", args)?;
 
     // replace the specified number of occurrences
@@ -442,20 +445,20 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
-            exec_err!("array_replace_n does not support type '{array_type:?}'.")
+            exec_err!("array_replace_n does not support type '{array_type}'.")
         }
     }
 }
 
-pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace_all", args)?;
 
     // replace all occurrences (up to "i64::MAX")
@@ -463,15 +466,15 @@ pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
+            general_replace::<i32>(list_array, from, to, &arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
+            general_replace::<i64>(list_array, from, to, &arr_n)
         }
         DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
-            exec_err!("array_replace_all does not support type '{array_type:?}'.")
+            exec_err!("array_replace_all does not support type '{array_type}'.")
         }
     }
 }

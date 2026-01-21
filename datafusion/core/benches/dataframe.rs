@@ -26,13 +26,14 @@ use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_expr::col;
 use datafusion_functions::expr_fn::btrim;
+use std::hint::black_box;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionContext>> {
     let mut fields = vec![];
     for i in 0..field_count {
-        fields.push(Field::new(format!("str{}", i), DataType::Utf8, true))
+        fields.push(Field::new(format!("str{i}"), DataType::Utf8, true))
     }
 
     let schema = Arc::new(Schema::new(fields));
@@ -44,13 +45,14 @@ fn create_context(field_count: u32) -> datafusion_common::Result<Arc<SessionCont
     Ok(Arc::new(ctx))
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn run(column_count: u32, ctx: Arc<SessionContext>, rt: &Runtime) {
-    criterion::black_box(rt.block_on(async {
+    black_box(rt.block_on(async {
         let mut data_frame = ctx.table("t").await.unwrap();
 
         for i in 0..column_count {
-            let field_name = &format!("str{}", i);
-            let new_field_name = &format!("newstr{}", i);
+            let field_name = &format!("str{i}");
+            let new_field_name = &format!("newstr{i}");
 
             data_frame = data_frame
                 .with_column_renamed(field_name, new_field_name)

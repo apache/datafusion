@@ -18,16 +18,16 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    types::Int32Type, ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch,
-    StringArray,
+    ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch, StringArray,
+    types::Int32Type,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
 use datafusion::test::object_store::local_unpartitioned_file;
-use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::Result;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -62,14 +62,10 @@ async fn multi_parquet_coercion() {
         Field::new("c2", DataType::Int32, true),
         Field::new("c3", DataType::Float64, true),
     ]));
-    let source = Arc::new(ParquetSource::default());
-    let conf = FileScanConfigBuilder::new(
-        ObjectStoreUrl::local_filesystem(),
-        file_schema,
-        source,
-    )
-    .with_file_group(file_group)
-    .build();
+    let source = Arc::new(ParquetSource::new(file_schema.clone()));
+    let conf = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        .with_file_group(file_group)
+        .build();
 
     let parquet_exec = DataSourceExec::from_data_source(conf);
 
@@ -122,11 +118,11 @@ async fn multi_parquet_coercion_projection() {
     ]));
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::local_filesystem(),
-        file_schema,
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(file_schema)),
     )
     .with_file_group(file_group)
-    .with_projection(Some(vec![1, 0, 2]))
+    .with_projection_indices(Some(vec![1, 0, 2]))
+    .unwrap()
     .build();
 
     let parquet_exec = DataSourceExec::from_data_source(config);

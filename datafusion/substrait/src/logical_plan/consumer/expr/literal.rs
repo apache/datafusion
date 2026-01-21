@@ -15,43 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::types::from_substrait_type;
-use crate::logical_plan::consumer::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use crate::logical_plan::consumer::SubstraitConsumer;
-#[allow(deprecated)]
+use crate::logical_plan::consumer::types::from_substrait_type;
+use crate::logical_plan::consumer::utils::{DEFAULT_TIMEZONE, next_struct_field_name};
+use crate::variation_const::FLOAT_16_TYPE_NAME;
+#[expect(deprecated)]
 use crate::variation_const::{
     DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use datafusion::arrow::array::{new_empty_array, AsArray, MapArray};
+use datafusion::arrow::array::{AsArray, MapArray, new_empty_array};
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{Field, IntervalDayTime, IntervalMonthDayNano};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::common::{
-    not_impl_err, plan_err, substrait_datafusion_err, substrait_err, ScalarValue,
+    ScalarValue, not_impl_err, plan_err, substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::Expr;
+use prost::Message;
 use std::sync::Arc;
 use substrait::proto;
+use substrait::proto::expression::Literal;
 use substrait::proto::expression::literal::user_defined::Val;
 use substrait::proto::expression::literal::{
-    interval_day_to_second, IntervalCompound, IntervalDayToSecond, IntervalYearToMonth,
-    LiteralType,
+    IntervalCompound, IntervalDayToSecond, IntervalYearToMonth, LiteralType,
+    interval_day_to_second,
 };
-use substrait::proto::expression::Literal;
 
 pub async fn from_literal(
     consumer: &impl SubstraitConsumer,
     expr: &Literal,
 ) -> datafusion::common::Result<Expr> {
     let scalar_value = from_substrait_literal_without_names(consumer, expr)?;
-    Ok(Expr::Literal(scalar_value))
+    Ok(Expr::Literal(scalar_value, None))
 }
 
 pub(crate) fn from_substrait_literal_without_names(
@@ -101,7 +104,7 @@ pub(crate) fn from_substrait_literal(
         Some(LiteralType::Fp64(f)) => ScalarValue::Float64(Some(*f)),
         Some(LiteralType::Timestamp(t)) => {
             // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             match lit.type_variation_reference {
                 TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                     ScalarValue::TimestampSecond(Some(*t), None)
@@ -155,6 +158,45 @@ pub(crate) fn from_substrait_literal(
             }
         },
         Some(LiteralType::Date(d)) => ScalarValue::Date32(Some(*d)),
+        Some(LiteralType::PrecisionTime(pt)) => match pt.precision {
+            0 => match lit.type_variation_reference {
+                TIME_32_TYPE_VARIATION_REF => {
+                    ScalarValue::Time32Second(Some(pt.value as i32))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            3 => match lit.type_variation_reference {
+                TIME_32_TYPE_VARIATION_REF => {
+                    ScalarValue::Time32Millisecond(Some(pt.value as i32))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            6 => match lit.type_variation_reference {
+                TIME_64_TYPE_VARIATION_REF => {
+                    ScalarValue::Time64Microsecond(Some(pt.value))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            9 => match lit.type_variation_reference {
+                TIME_64_TYPE_VARIATION_REF => {
+                    ScalarValue::Time64Nanosecond(Some(pt.value))
+                }
+                others => {
+                    return substrait_err!("Unknown type variation reference {others}");
+                }
+            },
+            p => {
+                return not_impl_err!(
+                    "Unsupported Substrait precision {p} for PrecisionTime"
+                );
+            }
+        },
         Some(LiteralType::String(s)) => match lit.type_variation_reference {
             DEFAULT_CONTAINER_TYPE_VARIATION_REF => ScalarValue::Utf8(Some(s.clone())),
             LARGE_CONTAINER_TYPE_VARIATION_REF => ScalarValue::LargeUtf8(Some(s.clone())),
@@ -344,19 +386,23 @@ pub(crate) fn from_substrait_literal(
             // DF only supports millisecond precision, so for any more granular type we lose precision
             let milliseconds = match precision_mode {
                 Some(PrecisionMode::Microseconds(ms)) => ms / 1000,
-                None =>
+                None => {
                     if *subseconds != 0 {
-                        return substrait_err!("Cannot set subseconds field of IntervalDayToSecond without setting precision");
+                        return substrait_err!(
+                            "Cannot set subseconds field of IntervalDayToSecond without setting precision"
+                        );
                     } else {
                         0_i32
                     }
+                }
                 Some(PrecisionMode::Precision(0)) => *subseconds as i32 * 1000,
                 Some(PrecisionMode::Precision(3)) => *subseconds as i32,
                 Some(PrecisionMode::Precision(6)) => (subseconds / 1000) as i32,
                 Some(PrecisionMode::Precision(9)) => (subseconds / 1000 / 1000) as i32,
                 _ => {
                     return not_impl_err!(
-                    "Unsupported Substrait interval day to second precision mode: {precision_mode:?}")
+                        "Unsupported Substrait interval day to second precision mode: {precision_mode:?}"
+                    );
                 }
             };
 
@@ -400,8 +446,6 @@ pub(crate) fn from_substrait_literal(
                 return Ok(value);
             }
 
-            // TODO: remove the code below once the producer has been updated
-
             // Helper function to prevent duplicating this code - can be inlined once the non-extension path is removed
             let interval_month_day_nano =
                 |user_defined: &proto::expression::literal::UserDefined| -> datafusion::common::Result<ScalarValue> {
@@ -434,21 +478,51 @@ pub(crate) fn from_substrait_literal(
                 .get(&user_defined.type_reference)
             {
                 match name.as_ref() {
+                    FLOAT_16_TYPE_NAME => {
+                        // Rules for encoding fp16 Substrait literals are defined as part of Arrow here:
+                        //
+                        // https://github.com/apache/arrow/blame/bab558061696ddc1841148d6210424b12923d48e/format/substrait/extension_types.yaml#L112
+
+                        let Some(value) = user_defined.val.as_ref() else {
+                            return substrait_err!("Float16 value is empty");
+                        };
+                        let Val::Value(value_any) = value else {
+                            return substrait_err!(
+                                "Float16 value is not a value type literal"
+                            );
+                        };
+                        if value_any.type_url != "google.protobuf.UInt32Value" {
+                            return substrait_err!(
+                                "Float16 value is not a google.protobuf.UInt32Value"
+                            );
+                        }
+                        let decoded_value =
+                            pbjson_types::UInt32Value::decode(value_any.value.clone())
+                                .map_err(|err| {
+                                    substrait_datafusion_err!(
+                                        "Failed to decode float16 value: {err}"
+                                    )
+                                })?;
+                        let u32_bytes = decoded_value.value.to_le_bytes();
+                        let f16_val =
+                            half::f16::from_le_bytes(u32_bytes[0..2].try_into().unwrap());
+                        return Ok(ScalarValue::Float16(Some(f16_val)));
+                    }
                     // Kept for backwards compatibility - producers should use IntervalCompound instead
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
                         interval_month_day_nano(user_defined)?
                     }
                     _ => {
                         return not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and name {}",
-                        user_defined.type_reference,
-                        name
-                    )
+                            "Unsupported Substrait user defined type with ref {} and name {}",
+                            user_defined.type_reference,
+                            name
+                        );
                     }
                 }
             } else {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match user_defined.type_reference {
                     // Kept for backwards compatibility, producers should useIntervalYearToMonth instead
                     INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -493,7 +567,7 @@ pub(crate) fn from_substrait_literal(
                         return not_impl_err!(
                             "Unsupported Substrait user defined type literal with ref {}",
                             user_defined.type_reference
-                        )
+                        );
                     }
                 }
             }

@@ -19,21 +19,23 @@
 
 use arrow::compute::SortOptions;
 use std::cmp::Ordering;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::{
     any::Any,
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
 };
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, FieldRef};
 
 use crate::expr::WindowFunction;
+use crate::udf_eq::UdfEq;
 use crate::{
-    function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
+    Expr, PartitionEvaluator, Signature, function::WindowFunctionSimplification,
 };
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_doc::Documentation;
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -64,8 +66,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 ///
 /// [`PartitionEvaluator`]: crate::PartitionEvaluator
 /// [`create_udwf`]: crate::expr_fn::create_udwf
-/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udwf.rs
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`simple_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct WindowUDF {
     inner: Arc<dyn WindowUDFImpl>,
@@ -80,7 +82,7 @@ impl Display for WindowUDF {
 
 impl PartialEq for WindowUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
@@ -88,7 +90,7 @@ impl Eq for WindowUDF {}
 
 impl Hash for WindowUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -133,7 +135,7 @@ impl WindowUDF {
     pub fn call(&self, args: Vec<Expr>) -> Expr {
         let fun = crate::WindowFunctionDefinition::WindowUDF(Arc::new(self.clone()));
 
-        Expr::WindowFunction(WindowFunction::new(fun, args))
+        Expr::from(WindowFunction::new(fun, args))
     }
 
     /// Returns this function's name
@@ -179,7 +181,7 @@ impl WindowUDF {
     /// Returns the field of the final result of evaluating this window function.
     ///
     /// See [`WindowUDFImpl::field`] for more details.
-    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    pub fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -227,24 +229,30 @@ where
 /// This trait exposes the full API for implementing user defined window functions and
 /// can be used to implement any function.
 ///
+/// While the trait depends on [`DynEq`] and [`DynHash`] traits, these should not be
+/// implemented directly. Instead, implement [`Eq`] and [`Hash`] and leverage the
+/// blanket implementations of [`DynEq`] and [`DynHash`].
+///
 /// See [`advanced_udwf.rs`] for a full example with complete implementation and
 /// [`WindowUDF`] for other available options.
 ///
 ///
-/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs
+/// [`advanced_udwf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
 /// # use std::sync::LazyLock;
-/// # use arrow::datatypes::{DataType, Field};
+/// # use arrow::datatypes::{DataType, Field, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
-/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
+/// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation, LimitEffect};
 /// # use datafusion_expr::{WindowUDFImpl, WindowUDF};
 /// # use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 /// # use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 /// # use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+/// # use datafusion_physical_expr_common::physical_expr;
+/// # use std::sync::Arc;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct SmoothIt {
 ///   signature: Signature,
 /// }
@@ -279,9 +287,9 @@ where
 ///    ) -> Result<Box<dyn PartitionEvaluator>> {
 ///        unimplemented!()
 ///    }
-///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-///      if let Some(DataType::Int32) = field_args.get_input_type(0) {
-///        Ok(Field::new(field_args.name(), DataType::Int32, false))
+///    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+///      if let Some(DataType::Int32) = field_args.get_input_field(0).map(|f| f.data_type().clone()) {
+///        Ok(Field::new(field_args.name(), DataType::Int32, false).into())
 ///      } else {
 ///        plan_err!("smooth_it only accepts Int32 arguments")
 ///      }
@@ -289,6 +297,9 @@ where
 ///    fn documentation(&self) -> Option<&Documentation> {
 ///      Some(get_doc())
 ///    }
+///     fn limit_effect(&self, _args: &[Arc<dyn physical_expr::PhysicalExpr>]) -> LimitEffect {
+///         LimitEffect::Unknown
+///     }
 /// }
 ///
 /// // Create a new WindowUDF from the implementation
@@ -303,15 +314,20 @@ where
 ///     .build()
 ///     .unwrap();
 /// ```
-pub trait WindowUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedWindowUDFImpl below!
-
+pub trait WindowUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.
@@ -328,14 +344,6 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
         partition_evaluator_args: PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>>;
 
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     /// Optionally apply per-UDWF simplification / rewrite rules.
     ///
     /// This can be used to apply function specific simplification rules during
@@ -347,51 +355,31 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     /// optimizations manually for specific UDFs.
     ///
     /// Example:
-    /// [`advanced_udwf.rs`]: <https://github.com/apache/arrow-datafusion/blob/main/datafusion-examples/examples/advanced_udwf.rs>
+    /// `advanced_udwf.rs`: <https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udwf.rs>
     ///
     /// # Returns
     /// [None] if simplify is not defined or,
     ///
     /// Or, a closure with two arguments:
     /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyInfo]
+    /// * 'info': [crate::simplify::SimplifyContext]
+    ///
+    /// # Notes
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         None
     }
 
-    /// Return true if this window UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of window UDFs.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this window UDF.
-    ///
-    /// Allows customizing the hash code of window UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
-    ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.name().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
-    }
-
-    /// The [`Field`] of the final result of evaluating this window function.
+    /// The [`FieldRef`] of the final result of evaluating this window function.
     ///
     /// Call `field_args.name()` to get the fully qualified name for defining
-    /// the [`Field`]. For a complete example see the implementation in the
+    /// the [`FieldRef`]. For a complete example see the implementation in the
     /// [Basic Example](WindowUDFImpl#basic-example) section.
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field>;
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef>;
 
     /// Allows the window UDF to define a custom result ordering.
     ///
@@ -438,6 +426,23 @@ pub trait WindowUDFImpl: Debug + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// If not causal, returns the effect this function will have on the window
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::Unknown
+    }
+}
+
+/// the effect this function will have on the limit pushdown
+pub enum LimitEffect {
+    /// Does not affect the limit (i.e. this is causal)
+    None,
+    /// Either undeclared, or dynamic (only evaluatable at run time)
+    Unknown,
+    /// Grow the limit by N rows
+    Relative(usize),
+    /// Limit needs to be at least N rows
+    Absolute(usize),
 }
 
 pub enum ReversedUDWF {
@@ -454,7 +459,7 @@ pub enum ReversedUDWF {
 
 impl PartialEq for dyn WindowUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.equals(other)
+        self.dyn_eq(other.as_any())
     }
 }
 
@@ -464,14 +469,16 @@ impl PartialOrd for dyn WindowUDFImpl {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
 }
 
 /// WindowUDF that adds an alias to the underlying function. It is better to
 /// implement [`WindowUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedWindowUDFImpl {
-    inner: Arc<dyn WindowUDFImpl>,
+    inner: UdfEq<Arc<dyn WindowUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -483,10 +490,14 @@ impl AliasedWindowUDFImpl {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
 
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl WindowUDFImpl for AliasedWindowUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -522,22 +533,7 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.simplify()
     }
 
-    fn equals(&self, other: &dyn WindowUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedWindowUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
-    }
-
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
-    }
-
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
         self.inner.field(field_args)
     }
 
@@ -549,54 +545,34 @@ impl WindowUDFImpl for AliasedWindowUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
+    fn reverse_expr(&self) -> ReversedUDWF {
+        self.inner.reverse_expr()
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
 
-// Window UDF doc sections for use in public documentation
-pub mod window_doc_sections {
-    use datafusion_doc::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_AGGREGATE,
-            DOC_SECTION_RANKING,
-            DOC_SECTION_ANALYTICAL,
-        ]
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        self.inner.limit_effect(args)
     }
-
-    pub const DOC_SECTION_AGGREGATE: DocSection = DocSection {
-        include: true,
-        label: "Aggregate Functions",
-        description: Some("All aggregate functions can be used as window functions."),
-    };
-
-    pub const DOC_SECTION_RANKING: DocSection = DocSection {
-        include: true,
-        label: "Ranking Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_ANALYTICAL: DocSection = DocSection {
-        include: true,
-        label: "Analytical Functions",
-        description: None,
-    };
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{PartitionEvaluator, WindowUDF, WindowUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use crate::{LimitEffect, PartitionEvaluator, WindowUDF, WindowUDFImpl};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_window_common::field::WindowUDFFieldArgs;
     use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AWindowUDF {
         signature: Signature,
     }
@@ -630,12 +606,16 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct BWindowUDF {
         signature: Signature,
     }
@@ -669,9 +649,23 @@ mod test {
         ) -> Result<Box<dyn PartitionEvaluator>> {
             unimplemented!()
         }
-        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
             unimplemented!()
         }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Unknown
+        }
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        let a1 = WindowUDF::from(AWindowUDF::new());
+        let a2 = WindowUDF::from(AWindowUDF::new());
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
     }
 
     #[test]
@@ -683,5 +677,11 @@ mod test {
         let b1 = WindowUDF::from(BWindowUDF::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

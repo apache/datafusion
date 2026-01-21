@@ -88,7 +88,7 @@ of hive-style partitioned parquet files:
 +-------+
 ```
 
-If the the data contains values of `x` and `y` in column1 and only `a` in
+If the data contains values of `x` and `y` in column1 and only `a` in
 column2, output files will appear in the following directory structure:
 
 ```text

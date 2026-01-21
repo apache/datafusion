@@ -17,11 +17,17 @@
   under the License.
 -->
 
-# DataFusion Function Library
+# Apache DataFusion Function Library
 
-[DataFusion][df] is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[Apache DataFusion] is an extensible query execution framework, written in Rust, that uses [Apache Arrow] as its in-memory format.
 
 This crate contains packages of function that can be used to customize the
 functionality of DataFusion.
 
-[df]: https://crates.io/crates/datafusion
+Most projects should use the [`datafusion`] crate directly, which re-exports
+this module. If you are already using the [`datafusion`] crate, there is no
+reason to use this crate directly in your project as well.
+
+[apache arrow]: https://arrow.apache.org/
+[apache datafusion]: https://datafusion.apache.org/
+[`datafusion`]: https://crates.io/crates/datafusion

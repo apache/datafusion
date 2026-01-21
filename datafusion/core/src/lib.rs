@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![deny(clippy::allow_attributes)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 //
@@ -35,11 +36,15 @@
     )
 )]
 #![warn(missing_docs, clippy::needless_borrow)]
+// Use `allow` instead of `expect` for test configuration to explicitly
+// disable the lint for all test code rather than expecting violations
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! [DataFusion] is an extensible query engine written in Rust that
 //! uses [Apache Arrow] as its in-memory format. DataFusion's target users are
 //! developers building fast and feature rich database and analytic systems,
-//! customized to particular workloads. See [use cases] for examples.
+//! customized to particular workloads. Please see the [DataFusion website] for
+//! additional documentation, [use cases] and examples.
 //!
 //! "Out of the box," DataFusion offers [SQL] and [`Dataframe`] APIs,
 //! excellent [performance], built-in support for CSV, Parquet, JSON, and Avro,
@@ -53,6 +58,7 @@
 //! See the [Architecture] section below for more details.
 //!
 //! [DataFusion]: https://datafusion.apache.org/
+//! [DataFusion website]: https://datafusion.apache.org
 //! [Apache Arrow]: https://arrow.apache.org
 //! [use cases]: https://datafusion.apache.org/user-guide/introduction.html#use-cases
 //! [SQL]: https://datafusion.apache.org/user-guide/sql/index.html
@@ -84,26 +90,29 @@
 //! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
-//! let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+//! let df = ctx
+//!     .read_csv("tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = df.filter(col("a").lt_eq(col("b")))?
-//!            .aggregate(vec![col("a")], vec![min(col("b"))])?
-//!            .limit(0, Some(100))?;
+//! let df = df
+//!     .filter(col("a").lt_eq(col("b")))?
+//!     .aggregate(vec![col("a")], vec![min(col("b"))])?
+//!     .limit(0, Some(100))?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!    .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(?table?.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -124,24 +133,27 @@
 //! # async fn main() -> Result<()> {
 //! let ctx = SessionContext::new();
 //!
-//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new()).await?;
+//! ctx.register_csv("example", "tests/data/example.csv", CsvReadOptions::new())
+//!     .await?;
 //!
 //! // create a plan
-//! let df = ctx.sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100").await?;
+//! let df = ctx
+//!     .sql("SELECT a, MIN(b) FROM example WHERE a <= b GROUP BY a LIMIT 100")
+//!     .await?;
 //!
 //! // execute the plan
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!   .to_string();
+//! let pretty_results =
+//!     arrow::util::pretty::pretty_format_batches(&results)?.to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
 //!     "| a | min(example.b) |",
 //!     "+---+----------------+",
 //!     "| 1 | 2              |",
-//!     "+---+----------------+"
+//!     "+---+----------------+",
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -311,17 +323,17 @@
 //! ```
 //!
 //! A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`],
-//! a [`TableProvider`] which reads individual files or directories of files
-//! ("partitioned datasets") of several common file formats. Uses can add
-//! support for new file formats by implementing the [`TableProvider`]
-//! trait.
+//! an [`ExecutionPlan`] for execution. DataFusion includes two built-in
+//! table providers that support common file formats and require no runtime services,
+//! [`ListingTable`] and [`MemTable`]. You can add support for any other data
+//! source and/or file formats by implementing the [`TableProvider`] trait.
 //!
 //! See also:
 //!
 //! 1. [`ListingTable`]: Reads data from one or more Parquet, JSON, CSV, or AVRO
-//!    files supporting HIVE style partitioning, optional compression, directly
-//!    reading from remote object store and more.
+//!    files in one or more local or remote directories. Supports HIVE style
+//!    partitioning, optional compression, directly reading from remote
+//!    object store, file metadata caching, and more.
 //!
 //! 2. [`MemTable`]: Reads data from in memory [`RecordBatch`]es.
 //!
@@ -340,17 +352,17 @@
 //! A [`LogicalPlan`] is a Directed Acyclic Graph (DAG) of other
 //! [`LogicalPlan`]s, each potentially containing embedded [`Expr`]s.
 //!
-//! `LogicalPlan`s can be rewritten with [`TreeNode`] API, see the
+//! [`LogicalPlan`]s can be rewritten with [`TreeNode`] API, see the
 //! [`tree_node module`] for more details.
 //!
 //! [`Expr`]s can also be rewritten with [`TreeNode`] API and simplified using
-//! [`ExprSimplifier`]. Examples of working with and executing `Expr`s can be
+//! [`ExprSimplifier`]. Examples of working with and executing [`Expr`]s can be
 //! found in the [`expr_api`.rs] example
 //!
 //! [`TreeNode`]: datafusion_common::tree_node::TreeNode
 //! [`tree_node module`]: datafusion_expr::logical_plan::tree_node
 //! [`ExprSimplifier`]: crate::optimizer::simplify_expressions::ExprSimplifier
-//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/expr_api.rs
+//! [`expr_api`.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/expr_api.rs
 //!
 //! ### Physical Plans
 //!
@@ -429,28 +441,51 @@
 //!
 //! ## Streaming Execution
 //!
-//! DataFusion is a "streaming" query engine which means `ExecutionPlan`s incrementally
+//! DataFusion is a "streaming" query engine which means [`ExecutionPlan`]s incrementally
 //! read from their input(s) and compute output one [`RecordBatch`] at a time
 //! by continually polling [`SendableRecordBatchStream`]s. Output and
-//! intermediate `RecordBatch`s each have approximately `batch_size` rows,
+//! intermediate [`RecordBatch`]s each have approximately `batch_size` rows,
 //! which amortizes per-batch overhead of execution.
 //!
 //! Note that certain operations, sometimes called "pipeline breakers",
 //! (for example full sorts or hash aggregations) are fundamentally non streaming and
 //! must read their input fully before producing **any** output. As much as possible,
 //! other operators read a single [`RecordBatch`] from their input to produce a
-//! single `RecordBatch` as output.
+//! single [`RecordBatch`] as output.
 //!
-//! For example, given this SQL query:
+//! For example, given this SQL:
+//!
+//! ```sql
+//! SELECT name FROM 'data.parquet' WHERE id > 10
+//! ```
+//!
+//! An simplified DataFusion execution plan is shown below. It first reads
+//! data from the Parquet file, then applies the filter, then the projection,
+//! and finally produces output. Each step processes one [`RecordBatch`] at a
+//! time. Multiple batches are processed concurrently on different CPU cores
+//! for plans with multiple partitions.
+//!
+//! ```text
+//! ┌─────────────┐    ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌──────────┐
+//! │ Parquet     │───▶│ DataSource   │───▶│ FilterExec     │───▶│ ProjectionExec   │───▶│ Results  │
+//! │ File        │    │              │    │                │    │                  │    │          │
+//! └─────────────┘    └──────────────┘    └────────────────┘    └──────────────────┘    └──────────┘
+//!                    (reads data)        (id > 10)             (keeps "name" col)
+//!                    RecordBatch ───▶    RecordBatch ────▶     RecordBatch ────▶        RecordBatch
+//! ```
+//!
+//! DataFusion uses the classic "pull" based control flow (explained more in the
+//! next section) to implement streaming execution. As an example,
+//! consider the following SQL query:
 //!
 //! ```sql
 //! SELECT date_trunc('month', time) FROM data WHERE id IN (10,20,30);
 //! ```
 //!
 //! The diagram below shows the call sequence when a consumer calls [`next()`] to
-//! get the next `RecordBatch` of output. While it is possible that some
+//! get the next [`RecordBatch`] of output. While it is possible that some
 //! steps run on different threads, typically tokio will use the same thread
-//! that called `next()` to read from the input, apply the filter, and
+//! that called [`next()`] to read from the input, apply the filter, and
 //! return the results without interleaving any other operations. This results
 //! in excellent cache locality as the same CPU core that produces the data often
 //! consumes it immediately as well.
@@ -488,39 +523,53 @@
 //! DataFusion automatically runs each plan with multiple CPU cores using
 //! a [Tokio] [`Runtime`] as a thread pool. While tokio is most commonly used
 //! for asynchronous network I/O, the combination of an efficient, work-stealing
-//! scheduler and first class compiler support for automatic continuation
-//! generation (`async`), also makes it a compelling choice for CPU intensive
+//! scheduler, and first class compiler support for automatic continuation
+//! generation (`async`) also makes it a compelling choice for CPU intensive
 //! applications as explained in the [Using Rustlang’s Async Tokio
 //! Runtime for CPU-Bound Tasks] blog.
 //!
 //! The number of cores used is determined by the `target_partitions`
 //! configuration setting, which defaults to the number of CPU cores.
 //! While preparing for execution, DataFusion tries to create this many distinct
-//! `async` [`Stream`]s for each `ExecutionPlan`.
-//! The `Stream`s for certain `ExecutionPlans`, such as as [`RepartitionExec`]
-//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that are run by
-//! threads managed by the `Runtime`.
-//! Many DataFusion `Stream`s perform CPU intensive processing.
+//! `async` [`Stream`]s for each [`ExecutionPlan`].
+//! The [`Stream`]s for certain [`ExecutionPlan`]s, such as [`RepartitionExec`]
+//! and [`CoalescePartitionsExec`], spawn [Tokio] [`task`]s, that run on
+//! threads managed by the [`Runtime`].
+//! Many DataFusion [`Stream`]s perform CPU intensive processing.
+//!
+//! ### Cooperative Scheduling
+//!
+//! DataFusion uses cooperative scheduling, which means that each [`Stream`]
+//! is responsible for yielding control back to the [`Runtime`] after
+//! some amount of work is done. Please see the [`coop`] module documentation
+//! for more details.
+//!
+//! [`coop`]: datafusion_physical_plan::coop
+//!
+//! ### Network I/O and CPU intensive tasks
 //!
 //! Using `async` for CPU intensive tasks makes it easy for [`TableProvider`]s
 //! to perform network I/O using standard Rust `async` during execution.
 //! However, this design also makes it very easy to mix CPU intensive and latency
 //! sensitive I/O work on the same thread pool ([`Runtime`]).
-//! Using the same (default) `Runtime` is convenient, and often works well for
+//! Using the same (default) [`Runtime`] is convenient, and often works well for
 //! initial development and processing local files, but it can lead to problems
 //! under load and/or when reading from network sources such as AWS S3.
+//!
+//! ### Optimizing Latency: Throttled CPU / IO under Highly Concurrent Load
 //!
 //! If your system does not fully utilize either the CPU or network bandwidth
 //! during execution, or you see significantly higher tail (e.g. p99) latencies
 //! responding to network requests, **it is likely you need to use a different
-//! `Runtime` for CPU intensive DataFusion plans**. This effect can be especially
-//! pronounced when running several queries concurrently.
+//! [`Runtime`] for DataFusion plans**. The [thread_pools example]
+//! has  an example of how to do so.
 //!
-//! As shown in the following figure, using the same `Runtime` for both CPU
-//! intensive processing and network requests can introduce significant
-//! delays in responding to those network requests. Delays in processing network
-//! requests can and does lead network flow control to throttle the available
-//! bandwidth in response.
+//! As shown below, using the same [`Runtime`] for both CPU intensive processing
+//! and network requests can introduce significant delays in responding to
+//! those network requests. Delays in processing network requests can and does
+//! lead network flow control to throttle the available bandwidth in response.
+//! This effect can be especially pronounced when running multiple queries
+//! concurrently.
 //!
 //! ```text
 //!                                                                          Legend
@@ -591,7 +640,7 @@
 //! └─────────────┘           ┗━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 //!                          ─────────────────────────────────────────────────────────────▶
 //!                                                                                           time
-//!```
+//! ```
 //!
 //! Note that DataFusion does not use [`tokio::task::spawn_blocking`] for
 //! CPU-bounded work, because `spawn_blocking` is designed for blocking **IO**,
@@ -602,6 +651,7 @@
 //!
 //! [Tokio]:  https://tokio.rs
 //! [`Runtime`]: tokio::runtime::Runtime
+//! [thread_pools example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/thread_pools.rs
 //! [`task`]: tokio::task
 //! [Using Rustlang’s Async Tokio Runtime for CPU-Bound Tasks]: https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
 //! [`RepartitionExec`]: physical_plan::repartition::RepartitionExec
@@ -617,8 +667,8 @@
 //! The state required to execute queries is managed by the following
 //! structures:
 //!
-//! 1. [`SessionContext`]: State needed for create [`LogicalPlan`]s such
-//!    as the table definitions, and the function registries.
+//! 1. [`SessionContext`]: State needed to create [`LogicalPlan`]s such
+//!    as the table definitions and the function registries.
 //!
 //! 2. [`TaskContext`]: State needed for execution such as the
 //!    [`MemoryPool`], [`DiskManager`], and [`ObjectStoreRegistry`].
@@ -717,6 +767,8 @@
 pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 extern crate core;
+
+#[cfg(feature = "sql")]
 extern crate sqlparser;
 
 pub mod dataframe;
@@ -727,10 +779,15 @@ pub mod physical_planner;
 pub mod prelude;
 pub mod scalar;
 
-// re-export dependencies from arrow-rs to minimize version maintenance for crate users
+// Re-export dependencies that are part of DataFusion public API (e.g. via DataFusionError)
 pub use arrow;
+pub use object_store;
+
 #[cfg(feature = "parquet")]
 pub use parquet;
+
+#[cfg(feature = "avro")]
+pub use datafusion_datasource_avro::apache_avro;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
@@ -786,6 +843,11 @@ pub mod physical_expr {
     pub use datafusion_physical_expr::*;
 }
 
+/// re-export of [`datafusion_physical_expr_adapter`] crate
+pub mod physical_expr_adapter {
+    pub use datafusion_physical_expr_adapter::*;
+}
+
 /// re-export of [`datafusion_physical_plan`] crate
 pub mod physical_plan {
     pub use datafusion_physical_plan::*;
@@ -796,6 +858,7 @@ pub use datafusion_common::assert_batches_eq;
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
+#[cfg(feature = "sql")]
 pub mod sql {
     pub use datafusion_sql::*;
 }
@@ -807,13 +870,6 @@ pub mod functions {
 
 /// re-export of [`datafusion_functions_nested`] crate, if "nested_expressions" feature is enabled
 pub mod functions_nested {
-    #[cfg(feature = "nested_expressions")]
-    pub use datafusion_functions_nested::*;
-}
-
-/// re-export of [`datafusion_functions_nested`] crate as [`functions_array`] for backward compatibility, if "nested_expressions" feature is enabled
-#[deprecated(since = "41.0.0", note = "use datafusion-functions-nested instead")]
-pub mod functions_array {
     #[cfg(feature = "nested_expressions")]
     pub use datafusion_functions_nested::*;
 }
@@ -876,6 +932,12 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 //
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/arrow-introduction.md",
+    user_guide_arrow_introduction
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/concepts-readings-events.md",
     user_guide_concepts_readings_events
 );
@@ -884,12 +946,6 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/user-guide/configs.md",
     user_guide_configs
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/runtime_configs.md",
-    user_guide_runtime_configs
 );
 
 #[cfg(doctest)]
@@ -1047,8 +1103,14 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/adding-udfs.md",
-    library_user_guide_adding_udfs
+    "../../../docs/source/library-user-guide/functions/adding-udfs.md",
+    library_user_guide_functions_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/functions/spark.md",
+    library_user_guide_functions_spark
 );
 
 #[cfg(doctest)]

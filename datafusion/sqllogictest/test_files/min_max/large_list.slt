@@ -1,0 +1,143 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+include ./init_data.slt.part
+
+## --------------------------------------
+## 1. Min/Max over integers
+## --------------------------------------
+statement ok
+create table min_max_int as (
+    select
+    arrow_cast(column1, 'LargeList(Int64)') as column1
+    from min_max_base_int
+    );
+
+## --------------------------------------
+## 2. Min/Max over strings
+## --------------------------------------
+statement ok
+create table min_max_string as (
+    select
+    arrow_cast(column1, 'LargeList(Utf8)') as column1
+from min_max_base_string);
+
+## --------------------------------------
+## 3. Min/Max over booleans
+## --------------------------------------
+statement ok
+create table min_max_bool as 
+(
+    select
+    arrow_cast(column1, 'LargeList(Boolean)') as column1
+from min_max_base_bool);
+
+## --------------------------------------
+## 4. Min/Max over nullable integers
+## --------------------------------------
+statement ok
+create table min_max_nullable_int as (
+    select
+    arrow_cast(column1, 'LargeList(Int64)') as column1
+    from min_max_base_nullable_int
+);
+
+## --------------------------------------
+## 5. Min/Max with mixed lengths and nulls
+## --------------------------------------
+statement ok
+create table min_max_mixed_lengths_nulls as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_max_base_mixed_lengths_nulls);
+
+## --------------------------------------
+## 6. Min/Max with only NULLs
+## --------------------------------------
+statement ok
+create table min_max_all_nulls as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_max_base_all_nulls);
+
+## --------------------------------------
+## 7. Min/Max with partial NULLs
+## --------------------------------------
+statement ok
+create table min_max_null_variants as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_max_base_null_variants);
+
+## --------------------------------------
+## 8. Min/Max grouped by key with NULLs and differing lengths
+## --------------------------------------
+statement ok
+create table min_max_grouped_nulls as (select
+  column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2
+from min_max_base_grouped_nulls);
+
+## --------------------------------------
+## 9. Min/Max grouped by key with only NULLs
+## --------------------------------------
+statement ok
+create table min_max_grouped_all_null as (select
+  column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2
+from min_max_base_grouped_all_null);
+
+## --------------------------------------
+## 10. Min/Max grouped with simple sizes
+## --------------------------------------
+statement ok
+create table min_max_grouped_simple as (select
+  column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2
+from min_max_base_grouped_simple);
+
+## --------------------------------------
+## 11. Min over with window function
+## --------------------------------------
+statement ok
+create table min_window_simple as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_base_window_simple);
+
+## --------------------------------------
+## 12. Min over with window + NULLs
+## --------------------------------------
+statement ok
+create table min_window_with_null as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_base_window_with_null);
+
+## --------------------------------------
+## 13. Min over with ROWS BETWEEN clause
+## --------------------------------------
+statement ok
+create table min_window_rows_between as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1
+from min_base_window_rows_between);
+
+## --------------------------------------
+## 14. Max over using different order column
+## --------------------------------------
+statement ok
+create table max_window_different_column as (select
+  arrow_cast(column1, 'LargeList(Int64)') as column1,
+  arrow_cast(column2, 'LargeList(Int64)') as column2
+from max_base_window_different_column);
+
+include ./queries.slt.part

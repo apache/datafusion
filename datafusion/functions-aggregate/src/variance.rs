@@ -18,26 +18,27 @@
 //! [`VarianceSample`]: variance sample aggregations.
 //! [`VariancePopulation`]: variance population aggregations.
 
+use arrow::datatypes::{FieldRef, Float64Type};
 use arrow::{
     array::{Array, ArrayRef, BooleanArray, Float64Array, UInt64Array},
     buffer::NullBuffer,
     compute::kernels::cast,
     datatypes::{DataType, Field},
 };
-use std::mem::{size_of, size_of_val};
-use std::{fmt::Debug, sync::Arc};
-
-use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, downcast_value, plan_err};
 use datafusion_expr::{
-    function::{AccumulatorArgs, StateFieldsArgs},
-    utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, Signature,
     Volatility,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
 };
+use datafusion_functions_aggregate_common::utils::GenericDistinctBuffer;
 use datafusion_functions_aggregate_common::{
     aggregate::groups_accumulator::accumulate::accumulate, stats::StatsType,
 };
 use datafusion_macros::user_doc;
+use std::mem::{size_of, size_of_val};
+use std::{fmt::Debug, sync::Arc};
 
 make_udaf_expr_and_func!(
     VarianceSample,
@@ -61,6 +62,7 @@ make_udaf_expr_and_func!(
     syntax_example = "var(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VarianceSample {
     signature: Signature,
     aliases: Vec<String>,
@@ -107,18 +109,37 @@ impl AggregateUDFImpl for VarianceSample {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
-        Ok(vec![
-            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-            Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-            Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ])
+        match args.is_distinct {
+            false => Ok(vec![
+                Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+            ]
+            .into_iter()
+            .map(Arc::new)
+            .collect()),
+            true => {
+                let field = Field::new_list_field(DataType::Float64, true);
+                let state_name = "distinct_var";
+                Ok(vec![
+                    Field::new(
+                        format_state_name(name, state_name),
+                        DataType::List(Arc::new(field)),
+                        true,
+                    )
+                    .into(),
+                ])
+            }
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("VAR(DISTINCT) aggregations are not available");
+            return Ok(Box::new(DistinctVarianceAccumulator::new(
+                StatsType::Sample,
+            )));
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
@@ -150,6 +171,7 @@ impl AggregateUDFImpl for VarianceSample {
     syntax_example = "var_pop(expression)",
     standard_argument(name = "expression", prefix = "Numeric")
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct VariancePopulation {
     signature: Signature,
     aliases: Vec<String>,
@@ -200,18 +222,39 @@ impl AggregateUDFImpl for VariancePopulation {
         Ok(DataType::Float64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let name = args.name;
-        Ok(vec![
-            Field::new(format_state_name(name, "count"), DataType::UInt64, true),
-            Field::new(format_state_name(name, "mean"), DataType::Float64, true),
-            Field::new(format_state_name(name, "m2"), DataType::Float64, true),
-        ])
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        match args.is_distinct {
+            false => {
+                let name = args.name;
+                Ok(vec![
+                    Field::new(format_state_name(name, "count"), DataType::UInt64, true),
+                    Field::new(format_state_name(name, "mean"), DataType::Float64, true),
+                    Field::new(format_state_name(name, "m2"), DataType::Float64, true),
+                ]
+                .into_iter()
+                .map(Arc::new)
+                .collect())
+            }
+            true => {
+                let field = Field::new_list_field(DataType::Float64, true);
+                let state_name = "distinct_var";
+                Ok(vec![
+                    Field::new(
+                        format_state_name(args.name, state_name),
+                        DataType::List(Arc::new(field)),
+                        true,
+                    )
+                    .into(),
+                ])
+            }
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if acc_args.is_distinct {
-            return not_impl_err!("VAR_POP(DISTINCT) aggregations are not available");
+            return Ok(Box::new(DistinctVarianceAccumulator::new(
+                StatsType::Population,
+            )));
         }
 
         Ok(Box::new(VarianceAccumulator::try_new(
@@ -570,6 +613,73 @@ impl GroupsAccumulator for VarianceGroupsAccumulator {
         self.m2s.capacity() * size_of::<f64>()
             + self.means.capacity() * size_of::<f64>()
             + self.counts.capacity() * size_of::<u64>()
+    }
+}
+
+#[derive(Debug)]
+pub struct DistinctVarianceAccumulator {
+    distinct_values: GenericDistinctBuffer<Float64Type>,
+    stat_type: StatsType,
+}
+
+impl DistinctVarianceAccumulator {
+    pub fn new(stat_type: StatsType) -> Self {
+        Self {
+            distinct_values: GenericDistinctBuffer::<Float64Type>::new(DataType::Float64),
+            stat_type,
+        }
+    }
+}
+
+impl Accumulator for DistinctVarianceAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let cast_values = cast(&values[0], &DataType::Float64)?;
+        self.distinct_values
+            .update_batch(vec![cast_values].as_ref())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let values = self
+            .distinct_values
+            .values
+            .iter()
+            .map(|v| v.0)
+            .collect::<Vec<_>>();
+
+        let count = match self.stat_type {
+            StatsType::Sample => {
+                if !values.is_empty() {
+                    values.len() - 1
+                } else {
+                    0
+                }
+            }
+            StatsType::Population => values.len(),
+        };
+
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        let m2 = values.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>();
+
+        Ok(ScalarValue::Float64(match values.len() {
+            0 => None,
+            1 => match self.stat_type {
+                StatsType::Population => Some(0.0),
+                StatsType::Sample => None,
+            },
+            _ => Some(m2 / count as f64),
+        }))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.distinct_values.size()
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        self.distinct_values.state()
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.distinct_values.merge_batch(states)
     }
 }
 

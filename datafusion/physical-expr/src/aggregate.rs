@@ -16,7 +16,7 @@
 // under the License.
 
 pub(crate) mod groups_accumulator {
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub(crate) mod accumulate {
         pub use datafusion_functions_aggregate_common::aggregate::groups_accumulator::accumulate::FlatNullState;
     }
@@ -28,10 +28,9 @@ pub(crate) mod stats {
     pub use datafusion_functions_aggregate_common::stats::StatsType;
 }
 pub mod utils {
-    #[allow(deprecated)] // allow adjust_output_array
     pub use datafusion_functions_aggregate_common::utils::{
-        adjust_output_array, get_accum_scalar_values_as_arrays, get_sort_options,
-        ordering_fields, DecimalAverager, Hashable,
+        DecimalAverager, Hashable, get_accum_scalar_values_as_arrays, get_sort_options,
+        ordering_fields,
     };
 }
 
@@ -41,8 +40,10 @@ use std::sync::Arc;
 use crate::expressions::Column;
 
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
+use datafusion_common::{
+    Result, ScalarValue, assert_or_internal_err, internal_err, not_impl_err,
+};
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -52,8 +53,7 @@ use datafusion_functions_aggregate_common::accumulator::{
 };
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_expr_common::utils::reverse_order_bys;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// Builder for physical [`AggregateFunctionExpr`]
 ///
@@ -70,7 +70,7 @@ pub struct AggregateExprBuilder {
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
-    ordering_req: LexOrdering,
+    order_bys: Vec<PhysicalSortExpr>,
     /// Whether to ignore null values
     ignore_nulls: bool,
     /// Whether is distinct aggregate function
@@ -87,7 +87,7 @@ impl AggregateExprBuilder {
             alias: None,
             human_display: String::default(),
             schema: Arc::new(Schema::empty()),
-            ordering_req: LexOrdering::default(),
+            order_bys: vec![],
             ignore_nulls: false,
             is_distinct: false,
             is_reversed: false,
@@ -106,13 +106,13 @@ impl AggregateExprBuilder {
     /// ```
     /// # use std::any::Any;
     /// # use std::sync::Arc;
-    /// # use arrow::datatypes::DataType;
+    /// # use arrow::datatypes::{DataType, FieldRef};
     /// # use datafusion_common::{Result, ScalarValue};
     /// # use datafusion_expr::{col, ColumnarValue, Documentation, Signature, Volatility, Expr};
     /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
     /// # use arrow::datatypes::Field;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     /// # struct FirstValueUdf {
     /// #     signature: Signature,
     /// # }
@@ -128,25 +128,28 @@ impl AggregateExprBuilder {
     /// # impl AggregateUDFImpl for FirstValueUdf {
     /// #     fn as_any(&self) -> &dyn Any {
     /// #         unimplemented!()
-    /// # }
+    /// #     }
+    /// #
     /// #     fn name(&self) -> &str {
     /// #         unimplemented!()
-    /// }
+    /// #     }
+    /// #
     /// #     fn signature(&self) -> &Signature {
     /// #         unimplemented!()
-    /// # }
+    /// #     }
+    /// #
     /// #     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
     /// #         unimplemented!()
     /// #     }
-    /// #     
+    /// #
     /// #     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
     /// #         unimplemented!()
     /// #         }
-    /// #     
-    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    /// #
+    /// #     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
     /// #         unimplemented!()
     /// #     }
-    /// #     
+    /// #
     /// #     fn documentation(&self) -> Option<&Documentation> {
     /// #         unimplemented!()
     /// #     }
@@ -169,16 +172,16 @@ impl AggregateExprBuilder {
     ///     }];
     ///
     ///     let first_value = AggregateUDF::from(FirstValueUdf::new());
-    ///     
+    ///
     ///     let aggregate_expr = AggregateExprBuilder::new(
     ///         Arc::new(first_value),
     ///         args
     ///     )
-    ///     .order_by(order_by.into())
+    ///     .order_by(order_by)
     ///     .alias("first_a_by_x")
     ///     .ignore_nulls()
     ///     .build()?;
-    ///     
+    ///
     ///     Ok(())
     /// }
     /// ```
@@ -192,61 +195,60 @@ impl AggregateExprBuilder {
             alias,
             human_display,
             schema,
-            ordering_req,
+            order_bys,
             ignore_nulls,
             is_distinct,
             is_reversed,
         } = self;
-        if args.is_empty() {
-            return internal_err!("args should not be empty");
-        }
+        assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
-        let mut ordering_fields = vec![];
-
-        if !ordering_req.is_empty() {
-            let ordering_types = ordering_req
-                .iter()
-                .map(|e| e.expr.data_type(&schema))
-                .collect::<Result<Vec<_>>>()?;
-
-            ordering_fields =
-                utils::ordering_fields(ordering_req.as_ref(), &ordering_types);
-        }
-
-        let input_exprs_types = args
+        let ordering_types = order_bys
             .iter()
-            .map(|arg| arg.data_type(&schema))
+            .map(|e| e.expr.data_type(&schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let ordering_fields = utils::ordering_fields(&order_bys, &ordering_types);
+
+        let input_exprs_fields = args
+            .iter()
+            .map(|arg| arg.return_field(&schema))
             .collect::<Result<Vec<_>>>()?;
 
         check_arg_count(
             fun.name(),
-            &input_exprs_types,
+            &input_exprs_fields,
             &fun.signature().type_signature,
         )?;
 
-        let data_type = fun.return_type(&input_exprs_types)?;
+        let return_field = fun.return_field(&input_exprs_fields)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
             None => {
                 return internal_err!(
                     "AggregateExprBuilder::alias must be provided prior to calling build"
-                )
+                );
             }
             Some(alias) => alias,
         };
 
+        let arg_fields = args
+            .iter()
+            .map(|e| e.return_field(schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
             args,
-            data_type,
+            arg_fields,
+            return_field,
             name,
             human_display,
             schema: Arc::unwrap_or_clone(schema),
-            ordering_req,
+            order_bys,
             ignore_nulls,
             ordering_fields,
             is_distinct,
-            input_types: input_exprs_types,
+            input_fields: input_exprs_fields,
             is_reversed,
             is_nullable,
         })
@@ -267,8 +269,8 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn order_by(mut self, order_by: LexOrdering) -> Self {
-        self.ordering_req = order_by;
+    pub fn order_by(mut self, order_bys: Vec<PhysicalSortExpr>) -> Self {
+        self.order_bys = order_bys;
         self
     }
 
@@ -310,22 +312,24 @@ impl AggregateExprBuilder {
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
     args: Vec<Arc<dyn PhysicalExpr>>,
-    /// Output / return type of this aggregate
-    data_type: DataType,
+    /// Fields corresponding to args (same order & length)
+    arg_fields: Vec<FieldRef>,
+    /// Output / return field of this aggregate
+    return_field: FieldRef,
     /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
     human_display: String,
     schema: Schema,
     // The physical order by expressions
-    ordering_req: LexOrdering,
+    order_bys: Vec<PhysicalSortExpr>,
     // Whether to ignore null values
     ignore_nulls: bool,
     // fields used for order sensitive aggregation functions
-    ordering_fields: Vec<Field>,
+    ordering_fields: Vec<FieldRef>,
     is_distinct: bool,
     is_reversed: bool,
-    input_types: Vec<DataType>,
+    input_fields: Vec<FieldRef>,
     is_nullable: bool,
 }
 
@@ -372,8 +376,12 @@ impl AggregateFunctionExpr {
     }
 
     /// the field of the final result of this aggregation.
-    pub fn field(&self) -> Field {
-        Field::new(&self.name, self.data_type.clone(), self.is_nullable)
+    pub fn field(&self) -> FieldRef {
+        self.return_field
+            .as_ref()
+            .clone()
+            .with_name(&self.name)
+            .into()
     }
 
     /// the accumulator used to accumulate values from the expressions.
@@ -381,10 +389,11 @@ impl AggregateFunctionExpr {
     /// return states with the same description as `state_fields`
     pub fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let acc_args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: self.ordering_req.as_ref(),
+            order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -395,11 +404,11 @@ impl AggregateFunctionExpr {
     }
 
     /// the field of the final result of this aggregation.
-    pub fn state_fields(&self) -> Result<Vec<Field>> {
+    pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
         let args = StateFieldsArgs {
             name: &self.name,
-            input_types: &self.input_types,
-            return_type: &self.data_type,
+            input_fields: &self.input_fields,
+            return_field: Arc::clone(&self.return_field),
             ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
         };
@@ -407,31 +416,24 @@ impl AggregateFunctionExpr {
         self.fun.state_fields(args)
     }
 
-    /// Order by requirements for the aggregate function
-    /// By default it is `None` (there is no requirement)
-    /// Order-sensitive aggregators, such as `FIRST_VALUE(x ORDER BY y)` should implement this
-    pub fn order_bys(&self) -> Option<&LexOrdering> {
-        if self.ordering_req.is_empty() {
-            return None;
+    /// Returns the ORDER BY expressions for the aggregate function.
+    pub fn order_bys(&self) -> &[PhysicalSortExpr] {
+        if self.order_sensitivity().is_insensitive() {
+            &[]
+        } else {
+            &self.order_bys
         }
-
-        if !self.order_sensitivity().is_insensitive() {
-            return Some(self.ordering_req.as_ref());
-        }
-
-        None
     }
 
     /// Indicates whether aggregator can produce the correct result with any
     /// arbitrary input ordering. By default, we assume that aggregate expressions
     /// are order insensitive.
     pub fn order_sensitivity(&self) -> AggregateOrderSensitivity {
-        if !self.ordering_req.is_empty() {
-            // If there is requirement, use the sensitivity of the implementation
-            self.fun.order_sensitivity()
-        } else {
-            // If no requirement, aggregator is order insensitive
+        if self.order_bys.is_empty() {
             AggregateOrderSensitivity::Insensitive
+        } else {
+            // If there is an ORDER BY clause, use the sensitivity of the implementation:
+            self.fun.order_sensitivity()
         }
     }
 
@@ -459,7 +461,7 @@ impl AggregateFunctionExpr {
         };
 
         AggregateExprBuilder::new(Arc::new(updated_fn), self.args.to_vec())
-            .order_by(self.ordering_req.clone())
+            .order_by(self.order_bys.clone())
             .schema(Arc::new(self.schema.clone()))
             .alias(self.name().to_string())
             .with_ignore_nulls(self.ignore_nulls)
@@ -472,10 +474,11 @@ impl AggregateFunctionExpr {
     /// Creates accumulator implementation that supports retract
     pub fn create_sliding_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: self.ordering_req.as_ref(),
+            order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -541,10 +544,11 @@ impl AggregateFunctionExpr {
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn groups_accumulator_supported(&self) -> bool {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: self.ordering_req.as_ref(),
+            order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -560,10 +564,11 @@ impl AggregateFunctionExpr {
     /// implemented in addition to [`Accumulator`].
     pub fn create_groups_accumulator(&self) -> Result<Box<dyn GroupsAccumulator>> {
         let args = AccumulatorArgs {
-            return_type: &self.data_type,
+            return_field: Arc::clone(&self.return_field),
             schema: &self.schema,
+            expr_fields: &self.arg_fields,
             ignore_nulls: self.ignore_nulls,
-            ordering_req: self.ordering_req.as_ref(),
+            order_bys: self.order_bys.as_ref(),
             is_distinct: self.is_distinct,
             name: &self.name,
             is_reversed: self.is_reversed,
@@ -581,18 +586,16 @@ impl AggregateFunctionExpr {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let reverse_ordering_req = reverse_order_bys(self.ordering_req.as_ref());
                 let mut name = self.name().to_string();
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if self.fun().name() == reverse_udf.name() {
-                } else {
+                if self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
                 replace_fn_name_clause(&mut name, self.fun.name(), reverse_udf.name());
 
                 AggregateExprBuilder::new(reverse_udf, self.args.to_vec())
-                    .order_by(reverse_ordering_req)
+                    .order_by(self.order_bys.iter().map(|e| e.reverse()).collect())
                     .schema(Arc::new(self.schema.clone()))
                     .alias(name)
                     .with_ignore_nulls(self.ignore_nulls)
@@ -608,14 +611,11 @@ impl AggregateFunctionExpr {
     /// These expressions are  (1)function arguments, (2) order by expressions.
     pub fn all_expressions(&self) -> AggregatePhysicalExpressions {
         let args = self.expressions();
-        let order_bys = self
+        let order_by_exprs = self
             .order_bys()
-            .cloned()
-            .unwrap_or_else(LexOrdering::default);
-        let order_by_exprs = order_bys
             .iter()
             .map(|sort_expr| Arc::clone(&sort_expr.expr))
-            .collect::<Vec<_>>();
+            .collect();
         AggregatePhysicalExpressions {
             args,
             order_by_exprs,
@@ -627,10 +627,45 @@ impl AggregateFunctionExpr {
     /// Returns `Some(Arc<dyn AggregateExpr>)` if re-write is supported, otherwise returns `None`.
     pub fn with_new_expressions(
         &self,
-        _args: Vec<Arc<dyn PhysicalExpr>>,
-        _order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<AggregateFunctionExpr> {
-        None
+        if args.len() != self.args.len()
+            || (self.order_sensitivity() != AggregateOrderSensitivity::Insensitive
+                && order_by_exprs.len() != self.order_bys.len())
+        {
+            return None;
+        }
+
+        let new_order_bys = self
+            .order_bys
+            .iter()
+            .zip(order_by_exprs)
+            .map(|(req, new_expr)| PhysicalSortExpr {
+                expr: new_expr,
+                options: req.options,
+            })
+            .collect();
+
+        Some(AggregateFunctionExpr {
+            fun: self.fun.clone(),
+            args,
+            // TODO: need to align arg_fields here with new args
+            //       https://github.com/apache/datafusion/issues/18149
+            arg_fields: self.arg_fields.clone(),
+            return_field: Arc::clone(&self.return_field),
+            name: self.name.clone(),
+            // TODO: Human name should be updated after re-write to not mislead
+            human_display: self.human_display.clone(),
+            schema: self.schema.clone(),
+            order_bys: new_order_bys,
+            ignore_nulls: self.ignore_nulls,
+            ordering_fields: self.ordering_fields.clone(),
+            is_distinct: self.is_distinct,
+            is_reversed: false,
+            input_fields: self.input_fields.clone(),
+            is_nullable: self.is_nullable,
+        })
     }
 
     /// If this function is max, return (output_field, true)
@@ -640,7 +675,7 @@ impl AggregateFunctionExpr {
     /// output_field is the name of the column produced by this aggregate
     ///
     /// Note: this is used to use special aggregate implementations in certain conditions
-    pub fn get_minmax_desc(&self) -> Option<(Field, bool)> {
+    pub fn get_minmax_desc(&self) -> Option<(FieldRef, bool)> {
         self.fun.is_descending().map(|flag| (self.field(), flag))
     }
 
@@ -685,7 +720,7 @@ pub struct AggregatePhysicalExpressions {
 impl PartialEq for AggregateFunctionExpr {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
-            && self.data_type == other.data_type
+            && self.return_field == other.return_field
             && self.fun == other.fun
             && self.args.len() == other.args.len()
             && self
@@ -704,18 +739,18 @@ fn replace_order_by_clause(order_by: &mut String) {
         (" ASC NULLS LAST]", " DESC NULLS FIRST]"),
     ];
 
-    if let Some(start) = order_by.find("ORDER BY [") {
-        if let Some(end) = order_by[start..].find(']') {
-            let order_by_start = start + 9;
-            let order_by_end = start + end;
+    if let Some(start) = order_by.find("ORDER BY [")
+        && let Some(end) = order_by[start..].find(']')
+    {
+        let order_by_start = start + 9;
+        let order_by_end = start + end;
 
-            let column_order = &order_by[order_by_start..=order_by_end];
-            for (suffix, replacement) in suffixes {
-                if column_order.ends_with(suffix) {
-                    let new_order = column_order.replace(suffix, replacement);
-                    order_by.replace_range(order_by_start..=order_by_end, &new_order);
-                    break;
-                }
+        let column_order = &order_by[order_by_start..=order_by_end];
+        for (suffix, replacement) in suffixes {
+            if column_order.ends_with(suffix) {
+                let new_order = column_order.replace(suffix, replacement);
+                order_by.replace_range(order_by_start..=order_by_end, &new_order);
+                break;
             }
         }
     }

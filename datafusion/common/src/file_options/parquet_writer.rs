@@ -17,25 +17,23 @@
 
 //! Options related to how parquet files should be written
 
-use base64::Engine;
 use std::sync::Arc;
 
 use crate::{
+    _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetOptions, TableParquetOptions},
-    DataFusionError, Result, _internal_datafusion_err,
 };
 
 use arrow::datatypes::Schema;
-// TODO: handle once deprecated
-#[allow(deprecated)]
+use parquet::arrow::encode_arrow_schema;
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::{
         metadata::KeyValue,
         properties::{
-            EnabledStatistics, WriterProperties, WriterPropertiesBuilder, WriterVersion,
-            DEFAULT_MAX_STATISTICS_SIZE, DEFAULT_STATISTICS_ENABLED,
+            DEFAULT_STATISTICS_ENABLED, EnabledStatistics, WriterProperties,
+            WriterPropertiesBuilder,
         },
     },
     schema::types::ColumnPath,
@@ -89,12 +87,15 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
     /// Convert the session's [`TableParquetOptions`] into a single write action's [`WriterPropertiesBuilder`].
     ///
     /// The returned [`WriterPropertiesBuilder`] includes customizations applicable per column.
+    /// Note that any encryption options are ignored as building the `FileEncryptionProperties`
+    /// might require other inputs besides the [`TableParquetOptions`].
     fn try_from(table_parquet_options: &TableParquetOptions) -> Result<Self> {
         // Table options include kv_metadata and col-specific options
         let TableParquetOptions {
             global,
             column_specific_options,
             key_value_metadata,
+            crypto: _,
         } = table_parquet_options;
 
         let mut builder = global.into_writer_properties_builder()?;
@@ -103,7 +104,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
         if !global.skip_arrow_metadata
             && !key_value_metadata.contains_key(ARROW_SCHEMA_META_KEY)
         {
-            return Err(_internal_datafusion_err!("arrow schema was not added to the kv_metadata, even though it is required by configuration settings"));
+            return Err(_internal_datafusion_err!(
+                "arrow schema was not added to the kv_metadata, even though it is required by configuration settings"
+            ));
         }
 
         // add kv_meta, if any
@@ -157,45 +160,10 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                 builder =
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
-
-            // max_statistics_size is deprecated, currently it is not being used
-            // TODO: remove once deprecated
-            #[allow(deprecated)]
-            if let Some(max_statistics_size) = options.max_statistics_size {
-                builder = {
-                    #[allow(deprecated)]
-                    builder.set_column_max_statistics_size(path, max_statistics_size)
-                }
-            }
         }
 
         Ok(builder)
     }
-}
-
-/// Encodes the Arrow schema into the IPC format, and base64 encodes it
-///
-/// TODO: use extern parquet's private method, once publicly available.
-/// Refer to <https://github.com/apache/arrow-rs/pull/6916>
-fn encode_arrow_schema(schema: &Arc<Schema>) -> String {
-    let options = arrow_ipc::writer::IpcWriteOptions::default();
-    let mut dictionary_tracker = arrow_ipc::writer::DictionaryTracker::new(true);
-    let data_gen = arrow_ipc::writer::IpcDataGenerator::default();
-    let mut serialized_schema = data_gen.schema_to_bytes_with_dictionary_tracker(
-        schema,
-        &mut dictionary_tracker,
-        &options,
-    );
-
-    // manually prepending the length to the schema as arrow uses the legacy IPC format
-    // TODO: change after addressing ARROW-9777
-    let schema_len = serialized_schema.ipc_message.len();
-    let mut len_prefix_schema = Vec::with_capacity(schema_len + 8);
-    len_prefix_schema.append(&mut vec![255u8, 255, 255, 255]);
-    len_prefix_schema.append((schema_len as u32).to_le_bytes().to_vec().as_mut());
-    len_prefix_schema.append(&mut serialized_schema.ipc_message);
-
-    base64::prelude::BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
 impl ParquetOptions {
@@ -206,7 +174,6 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
-        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -215,7 +182,6 @@ impl ParquetOptions {
             dictionary_enabled,
             dictionary_page_size_limit,
             statistics_enabled,
-            max_statistics_size,
             max_row_group_size,
             created_by,
             column_index_truncate_length,
@@ -233,6 +199,7 @@ impl ParquetOptions {
             metadata_size_hint: _,
             pushdown_filters: _,
             reorder_filters: _,
+            force_filter_selections: _, // not used for writer props
             allow_single_file_parallelism: _,
             maximum_parallel_row_group_writers: _,
             maximum_buffered_record_batches_per_stream: _,
@@ -241,12 +208,13 @@ impl ParquetOptions {
             binary_as_string: _, // not used for writer props
             coerce_int96: _,     // not used for writer props
             skip_arrow_metadata: _,
+            max_predicate_cache_size: _,
         } = self;
 
         let mut builder = WriterProperties::builder()
             .set_data_page_size_limit(*data_pagesize_limit)
             .set_write_batch_size(*write_batch_size)
-            .set_writer_version(parse_version_string(writer_version.as_str())?)
+            .set_writer_version((*writer_version).into())
             .set_dictionary_page_size_limit(*dictionary_page_size_limit)
             .set_statistics_enabled(
                 statistics_enabled
@@ -260,13 +228,6 @@ impl ParquetOptions {
             .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
-
-        builder = {
-            #[allow(deprecated)]
-            builder.set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
-        };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -300,7 +261,7 @@ pub(crate) fn parse_encoding_string(
         "plain" => Ok(parquet::basic::Encoding::PLAIN),
         "plain_dictionary" => Ok(parquet::basic::Encoding::PLAIN_DICTIONARY),
         "rle" => Ok(parquet::basic::Encoding::RLE),
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         "bit_packed" => Ok(parquet::basic::Encoding::BIT_PACKED),
         "delta_binary_packed" => Ok(parquet::basic::Encoding::DELTA_BINARY_PACKED),
         "delta_length_byte_array" => {
@@ -330,8 +291,7 @@ fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> 
             let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
                 DataFusionError::Configuration(format!(
                     "Could not parse compression string. \
-                    Got codec: {} and unknown level from {}",
-                    codec, str_setting
+                    Got codec: {codec} and unknown level from {str_setting}"
                 ))
             })?;
             Ok((codec.to_owned(), Some(*level)))
@@ -381,10 +341,6 @@ pub fn parse_compression_string(
                 level,
             )?))
         }
-        "lzo" => {
-            check_level_is_none(codec, &level)?;
-            Ok(parquet::basic::Compression::LZO)
-        }
         "brotli" => {
             let level = require_level(codec, level)?;
             Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
@@ -408,19 +364,7 @@ pub fn parse_compression_string(
         _ => Err(DataFusionError::Configuration(format!(
             "Unknown or unsupported parquet compression: \
         {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
-        lzo, brotli(level), lz4, zstd(level), and lz4_raw."
-        ))),
-    }
-}
-
-pub(crate) fn parse_version_string(str_setting: &str) -> Result<WriterVersion> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    match str_setting_lower {
-        "1.0" => Ok(WriterVersion::PARQUET_1_0),
-        "2.0" => Ok(WriterVersion::PARQUET_2_0),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet writer version {str_setting} \
-            valid options are 1.0 and 2.0"
+        brotli(level), lz4, zstd(level), and lz4_raw."
         ))),
     }
 }
@@ -441,18 +385,17 @@ pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatis
 #[cfg(feature = "parquet")]
 #[cfg(test)]
 mod tests {
-    use parquet::{
-        basic::Compression,
-        file::properties::{
-            BloomFilterProperties, EnabledStatistics, DEFAULT_BLOOM_FILTER_FPP,
-            DEFAULT_BLOOM_FILTER_NDV,
-        },
+    use super::*;
+    #[cfg(feature = "parquet_encryption")]
+    use crate::config::ConfigFileEncryptionProperties;
+    use crate::config::{ParquetColumnOptions, ParquetEncryptionOptions, ParquetOptions};
+    use crate::parquet_config::DFParquetWriterVersion;
+    use parquet::basic::Compression;
+    use parquet::file::properties::{
+        BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
+        EnabledStatistics,
     };
     use std::collections::HashMap;
-
-    use crate::config::{ParquetColumnOptions, ParquetOptions};
-
-    use super::*;
 
     const COL_NAME: &str = "configured";
 
@@ -460,12 +403,10 @@ mod tests {
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
-        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
-            max_statistics_size: Some(72),
             encoding: Some("RLE".into()),
             bloom_filter_enabled: Some(true),
             bloom_filter_fpp: Some(0.72),
@@ -475,22 +416,21 @@ mod tests {
 
     fn parquet_options_with_non_defaults() -> ParquetOptions {
         let defaults = ParquetOptions::default();
-        let writer_version = if defaults.writer_version.eq("1.0") {
-            "2.0"
+        let writer_version = if defaults.writer_version.eq(&DFParquetWriterVersion::V1_0)
+        {
+            DFParquetWriterVersion::V2_0
         } else {
-            "1.0"
+            DFParquetWriterVersion::V1_0
         };
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
-            writer_version: writer_version.into(),
+            writer_version,
             compression: Some("zstd(22)".into()),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 42,
             statistics_enabled: Some("chunk".into()),
-            max_statistics_size: Some(42),
             max_row_group_size: 42,
             created_by: "wordy".into(),
             column_index_truncate_length: Some(42),
@@ -508,6 +448,7 @@ mod tests {
             metadata_size_hint: defaults.metadata_size_hint,
             pushdown_filters: defaults.pushdown_filters,
             reorder_filters: defaults.reorder_filters,
+            force_filter_selections: defaults.force_filter_selections,
             allow_single_file_parallelism: defaults.allow_single_file_parallelism,
             maximum_parallel_row_group_writers: defaults
                 .maximum_parallel_row_group_writers,
@@ -518,6 +459,7 @@ mod tests {
             binary_as_string: defaults.binary_as_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
+            max_predicate_cache_size: defaults.max_predicate_cache_size,
         }
     }
 
@@ -527,7 +469,6 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
-        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -548,7 +489,6 @@ mod tests {
             ),
             bloom_filter_fpp: bloom_filter_default_props.map(|p| p.fpp),
             bloom_filter_ndv: bloom_filter_default_props.map(|p| p.ndv),
-            max_statistics_size: Some(props.max_statistics_size(&col)),
         }
     }
 
@@ -581,13 +521,20 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
-        #[allow(deprecated)] // max_statistics_size
+        #[cfg(feature = "parquet_encryption")]
+        let fep = props
+            .file_encryption_properties()
+            .map(ConfigFileEncryptionProperties::from);
+
+        #[cfg(not(feature = "parquet_encryption"))]
+        let fep = None;
+
         TableParquetOptions {
             global: ParquetOptions {
                 // global options
                 data_pagesize_limit: props.dictionary_page_size_limit(),
                 write_batch_size: props.write_batch_size(),
-                writer_version: format!("{}.0", props.writer_version().as_num()),
+                writer_version: props.writer_version().into(),
                 dictionary_page_size_limit: props.dictionary_page_size_limit(),
                 max_row_group_size: props.max_row_group_size(),
                 created_by: props.created_by().to_string(),
@@ -600,7 +547,6 @@ mod tests {
                 compression: default_col_props.compression,
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: default_col_props.statistics_enabled,
-                max_statistics_size: default_col_props.max_statistics_size,
                 bloom_filter_on_write: default_col_props
                     .bloom_filter_enabled
                     .unwrap_or_default(),
@@ -614,6 +560,7 @@ mod tests {
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,
                 reorder_filters: global_options_defaults.reorder_filters,
+                force_filter_selections: global_options_defaults.force_filter_selections,
                 allow_single_file_parallelism: global_options_defaults
                     .allow_single_file_parallelism,
                 maximum_parallel_row_group_writers: global_options_defaults
@@ -621,6 +568,8 @@ mod tests {
                 maximum_buffered_record_batches_per_stream: global_options_defaults
                     .maximum_buffered_record_batches_per_stream,
                 bloom_filter_on_read: global_options_defaults.bloom_filter_on_read,
+                max_predicate_cache_size: global_options_defaults
+                    .max_predicate_cache_size,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
@@ -628,6 +577,12 @@ mod tests {
             },
             column_specific_options,
             key_value_metadata,
+            crypto: ParquetEncryptionOptions {
+                file_encryption: fep,
+                file_decryption: None,
+                factory_id: None,
+                factory_options: Default::default(),
+            },
         }
     }
 
@@ -682,6 +637,7 @@ mod tests {
             )]
             .into(),
             key_value_metadata: [(key, value)].into(),
+            crypto: Default::default(),
         };
 
         let writer_props = WriterPropertiesBuilder::try_from(&table_parquet_opts)
@@ -702,8 +658,7 @@ mod tests {
         let mut default_table_writer_opts = TableParquetOptions::default();
         let default_parquet_opts = ParquetOptions::default();
         assert_eq!(
-            default_table_writer_opts.global,
-            default_parquet_opts,
+            default_table_writer_opts.global, default_parquet_opts,
             "should have matching defaults for TableParquetOptions.global and ParquetOptions",
         );
 
@@ -727,7 +682,9 @@ mod tests {
             "should have different created_by sources",
         );
         assert!(
-            default_writer_props.created_by().starts_with("parquet-rs version"),
+            default_writer_props
+                .created_by()
+                .starts_with("parquet-rs version"),
             "should indicate that writer_props defaults came from the extern parquet crate",
         );
         assert!(
@@ -761,8 +718,7 @@ mod tests {
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
-            default_table_writer_opts,
-            from_extern_parquet,
+            default_table_writer_opts, from_extern_parquet,
             "the default writer_props should have the same configuration as the session's default TableParquetOptions",
         );
     }

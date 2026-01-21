@@ -40,7 +40,7 @@ Let's see how DataFusion runs a query that selects the top 5 watch lists for the
 site `http://domcheloveplanet.ru/`:
 
 ```sql
-EXPLAIN SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
+EXPLAIN FORMAT INDENT SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
 FROM 'hits.parquet'
 WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
 ORDER BY wid ASC, ip DESC
@@ -225,14 +225,12 @@ Again, reading from bottom up:
 
 When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains the following metrics:
 
-- `page_index_rows_matched`: number of rows in pages that were tested by a page index filter, and passed
-- `page_index_rows_pruned`: number of rows in pages that were tested by a page index filter, and did not pass
-- `row_groups_matched_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and passed
-- `row_groups_pruned_bloom_filter`: number of rows in row groups that were tested by a Bloom Filter, and did not pass
-- `row_groups_matched_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and passed
-- `row_groups_pruned_statistics`: number of rows in row groups that were tested by row group statistics (min and max value), and did not pass
-- `pushdown_rows_matched`: rows that were tested by any of the above filtered, and passed all of them (this should be minimum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
-- `pushdown_rows_pruned`: rows that were tested by any of the above filtered, and did not pass one of them (this should be sum of `page_index_rows_matched`, `row_groups_pruned_bloom_filter`, and `row_groups_pruned_statistics`)
+- `page_index_rows_pruned`: number of rows evaluated by page index filters. The metric reports both how many rows were considered in total and how many matched (were not pruned).
+- `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.
+- `row_groups_pruned_statistics`: number of row groups evaluated by row-group statistics (min/max), reporting both total checked groups and groups that matched.
+- `limit_pruned_row_groups`: number of row groups pruned by the limit.
+- `pushdown_rows_matched`: rows that were tested by any of the above filters, and passed all of them.
+- `pushdown_rows_pruned`: rows that were tested by any of the above filters, and did not pass at least one of them.
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
 - `num_predicate_creation_errors`: number of errors creating predicates (expected to be zero in normal operation)
 - `bloom_filter_eval_time`: time spent parsing and evaluating Bloom Filters
@@ -249,7 +247,7 @@ a separate core. Data crosses between cores only within certain operators such a
 
 You can read more about this in the [Partitioning Docs].
 
-[partitoning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
+[partitioning docs]: https://docs.rs/datafusion/latest/datafusion/physical_expr/enum.Partitioning.html
 
 ## Example of an Aggregate Query
 
@@ -268,7 +266,7 @@ LIMIT 10;
 We can again see the query plan by using `EXPLAIN`:
 
 ```sql
-> EXPLAIN SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
+> EXPLAIN FORMAT INDENT SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+

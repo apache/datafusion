@@ -23,7 +23,6 @@ This crate contains benchmarks based on popular public data sets and
 open source benchmark suites, to help with performance and scalability
 testing of DataFusion.
 
-
 ## Other engines
 
 The benchmarks measure changes to DataFusion itself, rather than
@@ -31,11 +30,11 @@ its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
-* [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-* [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
+- [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
+- [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
-[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
-[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+[clickbench]: https://github.com/ClickHouse/ClickBench/tree/main
+[h2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
 
 # Running the benchmarks
 
@@ -65,44 +64,100 @@ Create / download a specific dataset (TPCH)
 ```shell
 ./bench.sh data tpch
 ```
+
 Data is placed in the `data` subdirectory.
 
 ## Running benchmarks
 
 Run benchmark for TPC-H dataset
+
 ```shell
 ./bench.sh run tpch
 ```
+
 or for TPC-H dataset scale 10
+
 ```shell
 ./bench.sh run tpch10
 ```
 
 To run for specific query, for example Q21
+
 ```shell
 ./bench.sh run tpch10 21
 ```
 
+## Compile profile benchmark
+
+Generate the data required for the compile profile helper (TPC-H SF=1):
+
+```shell
+./bench.sh data compile_profile
+```
+
+Run the benchmark across all default Cargo profiles (`dev`, `release`, `ci`, `release-nonlto`):
+
+```shell
+./bench.sh run compile_profile
+```
+
+Limit the run to a single profile:
+
+```shell
+./bench.sh run compile_profile dev
+```
+
+Or specify a subset of profiles:
+
+```shell
+./bench.sh run compile_profile dev release
+```
+
+You can also invoke the helper directly if you need to customise arguments further:
+
+```shell
+./benchmarks/compile_profile.py --profiles dev release --data /path/to/tpch_sf1
+```
+
 ## Benchmark with modified configurations
+
 ### Select join algorithm
+
 The benchmark runs with `prefer_hash_join == true` by default, which enforces HASH join algorithm.
 To run TPCH benchmarks with join other than HASH:
+
 ```shell
 PREFER_HASH_JOIN=false ./bench.sh run tpch
 ```
 
 ### Configure with environment variables
-Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided  environment variables are
+
+Any [datafusion options](https://datafusion.apache.org/user-guide/configs.html) that are provided environment variables are
 also considered by the benchmarks.
-The following configuration runs the TPCH benchmark with datafusion configured to *not* repartition join keys.
+The following configuration runs the TPCH benchmark with datafusion configured to _not_ repartition join keys.
+
 ```shell
 DATAFUSION_OPTIMIZER_REPARTITION_JOINS=false ./bench.sh run tpch
 ```
+
 You might want to adjust the results location to avoid overwriting previous results.
 Environment configuration that was picked up by datafusion is logged at `info` level.
 To verify that datafusion picked up your configuration, run the benchmarks with `RUST_LOG=info` or higher.
 
 ## Comparing performance of main and a branch
+
+For TPC-H
+```shell
+./benchmarks/compare_tpch.sh main mybranch
+```
+
+For TPC-DS. 
+To get data in `DATA_DIR` for TPCDS, please follow instructions in `./benchmarks/bench.sh data tcpds` 
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/compare_tpcds.sh main mybranch
+```
+
+Alternatively, you can compare manually following the example below
 
 ```shell
 git checkout main
@@ -185,6 +240,23 @@ Benchmark tpch_mem.json
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
+## Comparing performance of main and a PR
+
+### TPCDS
+
+Considering you already have TPCDS data locally
+
+```shell
+export DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/
+export PR_NUMBER=19464
+git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER
+git checkout main
+git pull
+./benchmarks/compare_tpcds.sh main pr-$PR_NUMBER
+```
+
+Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead of `git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER`
+
 ### Running Benchmarks Manually
 
 Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
@@ -200,27 +272,10 @@ See the help for more details.
 You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
 
 ```shell
-cargo run --release --features "mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
-```
-
-The benchmark program also supports CSV and Parquet input file formats and a utility is provided to convert from `tbl`
-(generated by the `dbgen` utility) to CSV and Parquet.
-
-```bash
-cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parquet --format parquet
+cargo run --release --features "mimalloc" --bin dfbench tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
-
-#### Sorted Conversion
-
-The TPCH tables generated by the dbgen utility are sorted by their first column (their primary key for most tables, the `l_orderkey` column for the `lineitem` table.)
-
-To preserve this sorted order information during conversion (useful for benchmarking execution on pre-sorted data) include the `--sort` flag:
-
-```bash
-cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-sorted-parquet --format parquet --sort
-```
 
 ### Comparing results between runs
 
@@ -311,6 +366,72 @@ FLAGS:
 ...
 ```
 
+# Profiling Memory Stats for each benchmark query
+
+The `mem_profile` program wraps benchmark execution to measure memory usage statistics, such as peak RSS. It runs each benchmark query in a separate subprocess, capturing the child process’s stdout to print structured output.
+
+Subcommands supported by mem_profile are the subset of those in `dfbench`.
+Currently supported benchmarks include: Clickbench, H2o, Imdb, SortTpch, Tpch, TPCDS
+
+Before running benchmarks, `mem_profile` automatically compiles the benchmark binary (`dfbench`) using `cargo build`. Note that the build profile used for `dfbench` is not tied to the profile used for running `mem_profile` itself. We can explicitly specify the desired build profile using the `--bench-profile` option (e.g. release-nonlto). By prebuilding the binary and running each query in a separate process, we can ensure accurate memory statistics.
+
+Currently, `mem_profile` only supports `mimalloc` as the memory allocator, since it relies on `mimalloc`'s API to collect memory statistics.
+
+Because it runs the compiled binary directly from the target directory, make sure your working directory is the top-level datafusion/ directory, where the target/ is also located.
+
+The benchmark subcommand (e.g., `tpch`) and all following arguments are passed directly to `dfbench`. Be sure to specify `--bench-profile` before the benchmark subcommand.
+
+Example:
+
+```shell
+datafusion$ cargo run --profile release-nonlto --bin mem_profile -- --bench-profile release-nonlto tpch --path benchmarks/data/tpch_sf1 --partitions 4 --format parquet
+```
+
+Example Output:
+
+```
+Query     Time (ms)     Peak RSS  Peak Commit  Major Page Faults
+----------------------------------------------------------------
+1            503.42     283.4 MB       3.0 GB                  0
+2            431.09     240.7 MB       3.0 GB                  0
+3            594.28     350.1 MB       3.0 GB                  0
+4            468.90     462.4 MB       3.0 GB                  0
+5            653.58     385.4 MB       3.0 GB                  0
+6            296.79     247.3 MB       2.0 GB                  0
+7            662.32     652.4 MB       3.0 GB                  0
+8            702.48     396.0 MB       3.0 GB                  0
+9            774.21     611.5 MB       3.0 GB                  0
+10           733.62     397.9 MB       3.0 GB                  0
+11           271.71     209.6 MB       3.0 GB                  0
+12           512.60     212.5 MB       2.0 GB                  0
+13           507.83     381.5 MB       2.0 GB                  0
+14           420.89     313.5 MB       3.0 GB                  0
+15           539.97     288.0 MB       2.0 GB                  0
+16           370.91     229.8 MB       3.0 GB                  0
+17           758.33     467.0 MB       2.0 GB                  0
+18          1112.32     638.9 MB       3.0 GB                  0
+19           712.72     280.9 MB       2.0 GB                  0
+20           620.64     402.9 MB       2.9 GB                  0
+21           971.63     388.9 MB       2.9 GB                  0
+22           404.50     164.8 MB       2.0 GB                  0
+```
+
+## Reported Metrics
+
+When running benchmarks, `mem_profile` collects several memory-related statistics using the mimalloc API:
+
+- Peak RSS (Resident Set Size):
+  The maximum amount of physical memory used by the process.
+  This is a process-level metric collected via OS-specific mechanisms and is not mimalloc-specific.
+
+- Peak Commit:
+  The peak amount of memory committed by the allocator (i.e., total virtual memory reserved).
+  This is mimalloc-specific. It gives a more allocator-aware view of memory usage than RSS.
+
+- Major Page Faults:
+  The number of major page faults triggered during execution.
+  This metric is obtained from the operating system and is not mimalloc-specific.
+
 # Writing a new benchmark
 
 ## Creating or downloading data outside of the benchmark
@@ -369,37 +490,6 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 
 The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
 
-## Cancellation
-
-Test performance of cancelling queries.
-
-Queries in DataFusion should stop executing "quickly" after they are
-cancelled (the output stream is dropped).
-
-The queries are executed on a synthetic dataset generated during
-the benchmark execution that is an anonymized version of a
-real-world data set.
-
-The query is an anonymized version of a real-world query, and the
-test starts the query then cancels it and reports how long it takes
-for the runtime to fully exit.
-
-Example output:
-
-```
-Using 7 files found on disk
-Starting to load data into in-memory object store
-Done loading data into in-memory object store
-in main, sleeping
-Starting spawned
-Creating logical plan...
-Creating physical plan...
-Executing physical plan...
-Getting results...
-cancelling thread
-done dropping runtime in 83.531417ms
-```
-
 ## ClickBench
 
 The ClickBench[1] benchmarks are widely cited in the industry and
@@ -419,7 +509,7 @@ logs.
 
 Example
 
-dfbench parquet-filter  --path ./data --scale-factor 1.0
+dfbench parquet-filter --path ./data --scale-factor 1.0
 
 generates the synthetic dataset at `./data/logs.parquet`. The size
 of the dataset can be controlled through the `size_factor`
@@ -451,6 +541,7 @@ Iteration 2 returned 1781686 rows in 1947 ms
 ```
 
 ## Sort
+
 Test performance of sorting large datasets
 
 This test sorts a a synthetic dataset generated during the
@@ -474,24 +565,37 @@ Additionally, an optional `--limit` flag is available for the sort benchmark. Wh
 See [`sort_tpch.rs`](src/sort_tpch.rs) for more details.
 
 ### Sort TPCH Benchmark Example Runs
+
 1. Run all queries with default setting:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
 ```
 
 2. Run a specific query:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json' --query 2
 ```
 
 3. Run all queries as TopK queries on presorted data:
+
 ```bash
  cargo run --release --bin dfbench -- sort-tpch --sorted --limit 10 -p './datafusion/benchmarks/data/tpch_sf1' -o '/tmp/sort_tpch.json'
 ```
 
 4. Run all queries with `bench.sh` script:
+
 ```bash
 ./bench.sh run sort_tpch
+```
+
+### TopK TPCH
+
+In addition, topk_tpch is available from the bench.sh script:
+
+```bash
+./bench.sh run topk_tpch
 ```
 
 ## IMDB
@@ -516,6 +620,34 @@ This benchmarks is derived from the [TPC-H][1] version
 [2]: https://github.com/databricks/tpch-dbgen.git,
 [2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 
+## TPCDS
+
+Run the tpcds benchmark.
+
+For data please clone `datafusion-benchmarks` repo which contains the predefined parquet data with SF1.
+
+```shell
+git clone https://github.com/apache/datafusion-benchmarks
+```
+
+Then run the benchmark with the following command:
+
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run tpcds
+```
+
+Alternatively benchmark the specific query
+
+```shell
+DATA_DIR=../../datafusion-benchmarks/tpcds/data/sf1/ ./benchmarks/bench.sh run tpcds 30
+```
+
+More help
+
+```shell
+cargo run --release --bin dfbench -- tpcds --help
+```
+
 ## External Aggregation
 
 Run the benchmark for aggregations with limited memory.
@@ -527,59 +659,78 @@ External aggregation benchmarks run several aggregation queries with different m
 This benchmark is inspired by [DuckDB's external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
 
 ### External Aggregation Example Runs
+
 1. Run all queries with predefined memory limits:
+
 ```bash
 # Under 'benchmarks/' directory
 cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json'
 ```
 
 2. Run a query with specific memory limit:
+
 ```bash
 cargo run --release --bin external_aggr -- benchmark -n 4 --iterations 3 -p '....../data/tpch_sf1' -o '/tmp/aggr.json' --query 1 --memory-limit 30M
 ```
 
 3. Run all queries with `bench.sh` script:
+
 ```bash
 ./bench.sh data external_aggr
 ./bench.sh run external_aggr
 ```
 
+## h2o.ai benchmarks
 
-## h2o benchmarks for groupby
+The h2o.ai benchmarks are a set of performance tests for groupby and join operations. Beyond the standard h2o benchmark, there is also an extended benchmark for window functions. These benchmarks use synthetic data with configurable sizes (small: 1e7 rows, medium: 1e8 rows, big: 1e9 rows) to evaluate DataFusion's performance across different data scales.
 
-### Generate data for h2o benchmarks
+Reference:
+
+- [H2O AI Benchmark](https://duckdb.org/2023/04/14/h2oai.html)
+- [Extended window benchmark](https://duckdb.org/2024/06/26/benchmarks-over-time.html#window-functions-benchmark)
+
+### h2o benchmarks for groupby
+
+#### Generate data for h2o benchmarks
+
 There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
 
 1. Generate small data (1e7 rows)
+
 ```bash
 ./bench.sh data h2o_small
 ```
 
-
 2. Generate medium data (1e8 rows)
+
 ```bash
 ./bench.sh data h2o_medium
 ```
 
-
 3. Generate large data (1e9 rows)
+
 ```bash
 ./bench.sh data h2o_big
 ```
 
-### Run h2o benchmarks
+#### Run h2o benchmarks
+
 There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+
 1. Run small data benchmark
+
 ```bash
 ./bench.sh run h2o_small
 ```
 
 2. Run medium data benchmark
+
 ```bash
 ./bench.sh run h2o_medium
 ```
 
 3. Run large data benchmark
+
 ```bash
 ./bench.sh run h2o_big
 ```
@@ -587,53 +738,165 @@ There are three options for running h2o benchmarks: `small`, `medium`, and `big`
 4. Run a specific query with a specific data path
 
 For example, to run query 1 with the small data generated above:
+
 ```bash
 cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
-## h2o benchmarks for join
+### h2o benchmarks for join
 
-### Generate data for h2o benchmarks
 There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
 
-1. Generate small data (4 table files, the largest is 1e7 rows)
+Here is a example to generate `small` dataset and run the benchmark. To run other
+dataset size configuration, change the command similar to the previous example.
+
 ```bash
+# Generate small data (4 table files, the largest is 1e7 rows)
 ./bench.sh data h2o_small_join
-```
 
-
-2. Generate medium data (4 table files, the largest is 1e8 rows)
-```bash
-./bench.sh data h2o_medium_join
-```
-
-3. Generate large data (4 table files, the largest is 1e9 rows)
-```bash
-./bench.sh data h2o_big_join
-```
-
-### Run h2o benchmarks
-There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
-1. Run small data benchmark
-```bash
+# Run the benchmark
 ./bench.sh run h2o_small_join
 ```
 
-2. Run medium data benchmark
-```bash
-./bench.sh run h2o_medium_join
-```
-
-3. Run large data benchmark
-```bash
-./bench.sh run h2o_big_join
-```
-
-4. Run a specific query with a specific join data paths, the data paths are including 4 table files.
+To run a specific query with a specific join data paths, the data paths are including 4 table files.
 
 For example, to run query 1 with the small data generated above:
+
 ```bash
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
 ```
-[1]: http://www.tpc.org/tpch/
-[2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+### Extended h2o benchmarks for window
+
+This benchmark extends the h2o benchmark suite to evaluate window function performance. H2o window benchmark uses the same dataset as the h2o join benchmark. There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`.
+
+Here is a example to generate `small` dataset and run the benchmark. To run other
+dataset size configuration, change the command similar to the previous example.
+
+```bash
+# Generate small data
+./bench.sh data h2o_small_window
+
+# Run the benchmark
+./bench.sh run h2o_small_window
+```
+
+To run a specific query with a specific window data paths, the data paths are including 4 table files (the same as h2o-join dataset)
+
+For example, to run query 1 with the small data generated above:
+
+```bash
+cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/window.sql --query 1
+```
+
+# Micro-Benchmarks
+
+## Nested Loop Join
+
+This benchmark focuses on the performance of queries with nested loop joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Different queries are included to test nested loop joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run nlj
+```
+
+## Hash Join
+
+This benchmark focuses on the performance of queries with hash joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test hash joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run hj
+```
+
+## Sort Merge Join
+
+This benchmark focuses on the performance of queries with sort merge joins joins, minimizing other overheads such as scanning data sources or evaluating predicates.
+
+Several queries are included to test sort merge joins under various workloads.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run smj
+```
+## Cancellation
+
+Test performance of cancelling queries.
+
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
+```
+
+## Sorted Data Benchmarks
+
+### Data Sorted ClickBench
+
+Benchmark for queries on pre-sorted data to test sort order optimization.
+This benchmark uses a subset of the ClickBench dataset (hits.parquet, ~14GB) that has been pre-sorted by the EventTime column. The queries are designed to test DataFusion's performance when the data is already sorted as is common in timeseries workloads.
+
+The benchmark includes queries that:
+- Scan pre-sorted data with ORDER BY clauses that match the sort order
+- Test reverse scans on sorted data
+- Verify the performance result
+
+#### Generating Sorted Data
+
+The sorted dataset is automatically generated from the ClickBench partitioned dataset. You can configure the memory used during the sorting process with the `DATAFUSION_MEMORY_GB` environment variable. The default memory limit is 12GB.
+```bash
+./bench.sh data data_sorted_clickbench
+```
+
+To create the sorted dataset, for example with 16GB of memory, run:
+
+```bash
+DATAFUSION_MEMORY_GB=16 ./bench.sh data data_sorted_clickbench
+```
+
+This command will:
+1. Download the ClickBench partitioned dataset if not present
+2. Sort hits.parquet by EventTime in ascending order
+3. Save the sorted file as hits_sorted.parquet
+
+#### Running the Benchmark
+
+```bash
+./bench.sh run data_sorted_clickbench
+```
+
+This runs queries against the pre-sorted dataset with the `--sorted-by EventTime` flag, which informs DataFusion that the data is pre-sorted, allowing it to optimize away redundant sort operations.

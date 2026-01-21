@@ -17,27 +17,28 @@
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
 
+use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
-use datafusion_common::config::SqlParserOptions;
-use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::TableReference;
+use datafusion_common::config::SqlParserOptions;
+use datafusion_common::datatype::{DataTypeExt, FieldExt};
+use datafusion_common::error::add_possible_columns_to_diag;
+use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
-    SchemaError,
+    DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
+    plan_datafusion_err,
 };
-use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use datafusion_expr::{col, Expr};
+use datafusion_expr::{Expr, col};
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-
-use crate::utils::make_decimal_type;
-pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
@@ -52,8 +53,10 @@ pub struct ParserOptions {
     pub enable_options_value_normalization: bool,
     /// Whether to collect spans
     pub collect_spans: bool,
-    /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
-    pub map_varchar_to_utf8view: bool,
+    /// Whether string types (VARCHAR, CHAR, Text, and String) are mapped to `Utf8View` during SQL planning.
+    pub map_string_types_to_utf8view: bool,
+    /// Default null ordering for sorting expressions.
+    pub default_null_ordering: NullOrdering,
 }
 
 impl ParserOptions {
@@ -72,9 +75,12 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            map_varchar_to_utf8view: false,
+            map_string_types_to_utf8view: true,
             enable_options_value_normalization: false,
             collect_spans: false,
+            // By default, `nulls_max` is used to follow Postgres's behavior.
+            // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
+            default_null_ordering: NullOrdering::NullsMax,
         }
     }
 
@@ -112,9 +118,9 @@ impl ParserOptions {
         self
     }
 
-    /// Sets the `map_varchar_to_utf8view` option.
-    pub fn with_map_varchar_to_utf8view(mut self, value: bool) -> Self {
-        self.map_varchar_to_utf8view = value;
+    /// Sets the `map_string_types_to_utf8view` option.
+    pub fn with_map_string_types_to_utf8view(mut self, value: bool) -> Self {
+        self.map_string_types_to_utf8view = value;
         self
     }
 
@@ -127,6 +133,12 @@ impl ParserOptions {
     /// Sets the `collect_spans` option.
     pub fn with_collect_spans(mut self, value: bool) -> Self {
         self.collect_spans = value;
+        self
+    }
+
+    /// Sets the `default_null_ordering` option.
+    pub fn with_default_null_ordering(mut self, value: NullOrdering) -> Self {
+        self.default_null_ordering = value;
         self
     }
 }
@@ -143,11 +155,63 @@ impl From<&SqlParserOptions> for ParserOptions {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
-            map_varchar_to_utf8view: options.map_varchar_to_utf8view,
+            map_string_types_to_utf8view: options.map_string_types_to_utf8view,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
+            default_null_ordering: options.default_null_ordering.as_str().into(),
         }
+    }
+}
+
+/// Represents the null ordering for sorting expressions.
+#[derive(Debug, Clone, Copy)]
+pub enum NullOrdering {
+    /// Nulls appear last in ascending order.
+    NullsMax,
+    /// Nulls appear first in descending order.
+    NullsMin,
+    /// Nulls appear first.
+    NullsFirst,
+    /// Nulls appear last.
+    NullsLast,
+}
+
+impl NullOrdering {
+    /// Evaluates the null ordering based on the given ascending flag.
+    ///
+    /// # Returns
+    /// * `true` if nulls should appear first.
+    /// * `false` if nulls should appear last.
+    pub fn nulls_first(&self, asc: bool) -> bool {
+        match self {
+            Self::NullsMax => !asc,
+            Self::NullsMin => asc,
+            Self::NullsFirst => true,
+            Self::NullsLast => false,
+        }
+    }
+}
+
+impl FromStr for NullOrdering {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "nulls_max" => Ok(Self::NullsMax),
+            "nulls_min" => Ok(Self::NullsMin),
+            "nulls_first" => Ok(Self::NullsFirst),
+            "nulls_last" => Ok(Self::NullsLast),
+            _ => plan_err!(
+                "Unknown null ordering: Expected one of 'nulls_first', 'nulls_last', 'nulls_min' or 'nulls_max'. Got {s}"
+            ),
+        }
+    }
+}
+
+impl From<&str> for NullOrdering {
+    fn from(s: &str) -> Self {
+        Self::from_str(s).unwrap_or(Self::NullsMax)
     }
 }
 
@@ -189,12 +253,11 @@ impl IdentNormalizer {
 /// This helps resolve scoping issues of CTEs.
 /// By using cloning, a subquery can inherit CTEs from the outer query
 /// and can also define its own private CTEs without affecting the outer query.
-///
 #[derive(Debug, Clone)]
 pub struct PlannerContext {
     /// Data types for numbered parameters ($1, $2, etc), if supplied
     /// in `PREPARE` statement
-    prepare_param_data_types: Arc<Vec<DataType>>,
+    prepare_param_data_types: Arc<Vec<FieldRef>>,
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
@@ -228,7 +291,7 @@ impl PlannerContext {
     /// Update the PlannerContext with provided prepare_param_data_types
     pub fn with_prepare_param_data_types(
         mut self,
-        prepare_param_data_types: Vec<DataType>,
+        prepare_param_data_types: Vec<FieldRef>,
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
@@ -285,7 +348,7 @@ impl PlannerContext {
     }
 
     /// Return the types of parameters (`$1`, `$2`, etc) if known
-    pub fn prepare_param_data_types(&self) -> &[DataType] {
+    pub fn prepare_param_data_types(&self) -> &[FieldRef] {
         &self.prepare_param_data_types
     }
 
@@ -366,16 +429,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
-            let data_type = self.convert_data_type(&column.data_type)?;
+            let data_type = self.convert_data_type_to_field(&column.data_type)?;
             let not_nullable = column
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::NotNull);
-            fields.push(Field::new(
-                self.ident_normalizer.normalize(column.name),
-                data_type,
-                !not_nullable,
-            ));
+            fields.push(
+                data_type
+                    .as_ref()
+                    .clone()
+                    .with_name(self.ident_normalizer.normalize(column.name))
+                    .with_nullable(!not_nullable),
+            );
         }
 
         Ok(Schema::new(fields))
@@ -391,7 +456,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Default expressions are restricted, column references are not allowed
         let empty_schema = DFSchema::empty();
         let error_desc = |e: DataFusionError| match e {
-            DataFusionError::SchemaError(SchemaError::FieldNotFound { .. }, _) => {
+            DataFusionError::SchemaError(ref err, _)
+                if matches!(**err, SchemaError::FieldNotFound { .. }) =>
+            {
                 plan_datafusion_err!(
                     "Column reference is not allowed in the DEFAULT expression : {}",
                     e
@@ -483,13 +550,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
                 .map_err(|err: DataFusionError| match &err {
-                    DataFusionError::SchemaError(
-                        SchemaError::FieldNotFound {
+                    DataFusionError::SchemaError(inner, _)
+                        if matches!(
+                            inner.as_ref(),
+                            SchemaError::FieldNotFound { .. }
+                        ) =>
+                    {
+                        let SchemaError::FieldNotFound {
                             field,
                             valid_fields,
-                        },
-                        _,
-                    ) => {
+                        } = inner.as_ref()
+                        else {
+                            unreachable!()
+                        };
                         let mut diagnostic = if let Some(relation) = &col.relation {
                             Diagnostic::new_error(
                                 format!(
@@ -517,40 +590,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
     }
 
-    pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+    pub(crate) fn convert_data_type_to_field(
+        &self,
+        sql_type: &SQLDataType,
+    ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
-        if let Some(type_planner) = self.context_provider.get_type_planner() {
-            if let Some(data_type) = type_planner.plan_type(sql_type)? {
-                return Ok(data_type);
-            }
+        if let Some(type_planner) = self.context_provider.get_type_planner()
+            && let Some(data_type) = type_planner.plan_type(sql_type)?
+        {
+            return Ok(data_type.into_nullable_field_ref());
         }
 
         // If no type_planner can handle this type, use the default conversion
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
-                let inner_data_type = self.convert_data_type(inner_sql_type)?;
-                Ok(DataType::new_list(inner_data_type, true))
+                Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
             }
             SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
                 inner_sql_type,
                 maybe_array_size,
             )) => {
-                let inner_data_type = self.convert_data_type(inner_sql_type)?;
+                let inner_field = self.convert_data_type_to_field(inner_sql_type)?;
                 if let Some(array_size) = maybe_array_size {
-                    Ok(DataType::new_fixed_size_list(
-                        inner_data_type,
-                        *array_size as i32,
-                        true,
-                    ))
+                    let array_size: i32 = (*array_size).try_into().map_err(|_| {
+                        plan_datafusion_err!(
+                            "Array size must be a positive 32 bit integer, got {array_size}"
+                        )
+                    })?;
+                    Ok(inner_field.into_fixed_size_list(array_size))
                 } else {
-                    Ok(DataType::new_list(inner_data_type, true))
+                    Ok(inner_field.into_list())
                 }
             }
             SQLDataType::Array(ArrayElemTypeDef::None) => {
                 not_impl_err!("Arrays with unspecified type is not supported")
             }
-            other => self.convert_simple_data_type(other),
+            other => Ok(self
+                .convert_simple_data_type(other)?
+                .into_nullable_field_ref()),
         }
     }
 
@@ -577,7 +655,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     please set `support_varchar_with_length` to be true"
                     ),
                     _ => {
-                        if self.options.map_varchar_to_utf8view {
+                        if self.options.map_string_types_to_utf8view {
                             Ok(DataType::Utf8View)
                         } else {
                             Ok(DataType::Utf8)
@@ -601,7 +679,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
-                Ok(DataType::Utf8)
+                if self.options.map_string_types_to_utf8view {
+                    Ok(DataType::Utf8View)
+                } else {
+                    Ok(DataType::Utf8)
+                }
             }
             SQLDataType::Timestamp(precision, tz_info)
                 if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
@@ -634,7 +716,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
-                    not_impl_err!("Unsupported SQL type {sql_type:?}")
+                    not_impl_err!("Unsupported SQL type {sql_type}")
                 }
             }
             SQLDataType::Numeric(exact_number_info)
@@ -646,25 +728,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (Some(precision), Some(scale))
                     }
                 };
-                make_decimal_type(precision, scale)
+                make_decimal_type(precision, scale.map(|s| s as u64))
             }
             SQLDataType::Bytea => Ok(DataType::Binary),
-            SQLDataType::Interval => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+            SQLDataType::Interval { fields, precision } => {
+                if fields.is_some() || precision.is_some() {
+                    return not_impl_err!("Unsupported SQL type {sql_type}");
+                }
+                Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+            }
             SQLDataType::Struct(fields, _) => {
                 let fields = fields
                     .iter()
                     .enumerate()
-                    .map(|(idx, field)| {
-                        let data_type = self.convert_data_type(&field.field_type)?;
-                        let field_name = match &field.field_name {
+                    .map(|(idx, sql_struct_field)| {
+                        let field = self.convert_data_type_to_field(&sql_struct_field.field_type)?;
+                        let field_name = match &sql_struct_field.field_name {
                             Some(ident) => ident.clone(),
                             None => Ident::new(format!("c{idx}")),
                         };
-                        Ok(Arc::new(Field::new(
-                            self.ident_normalizer.normalize(field_name),
-                            data_type,
-                            true,
-                        )))
+                        Ok(field.as_ref().clone().with_name(self.ident_normalizer.normalize(field_name)))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
@@ -735,8 +818,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::AnyType
             | SQLDataType::Table(_)
             | SQLDataType::VarBit(_)
-            | SQLDataType::GeometricType(_) => {
-                not_impl_err!("Unsupported SQL type {sql_type:?}")
+            | SQLDataType::UTinyInt
+            | SQLDataType::USmallInt
+            | SQLDataType::HugeInt
+            | SQLDataType::UHugeInt
+            | SQLDataType::UBigInt
+            | SQLDataType::TimestampNtz{..}
+            | SQLDataType::NamedTable { .. }
+            | SQLDataType::TsVector
+            | SQLDataType::TsQuery
+            | SQLDataType::GeometricType(_)
+            | SQLDataType::DecimalUnsigned(_) // deprecated mysql type
+            | SQLDataType::FloatUnsigned(_) // deprecated mysql type
+            | SQLDataType::RealUnsigned // deprecated mysql type
+            | SQLDataType::DecUnsigned(_) // deprecated mysql type
+            | SQLDataType::DoubleUnsigned(_) // deprecated mysql type
+            | SQLDataType::DoublePrecisionUnsigned // deprecated mysql type
+            => {
+                not_impl_err!("Unsupported SQL type {sql_type}")
             }
         }
     }
@@ -816,7 +915,7 @@ impl std::fmt::Display for IdentTaker {
             if !first {
                 write!(f, ".")?;
             }
-            write!(f, "{}", ident)?;
+            write!(f, "{ident}")?;
             first = false;
         }
 

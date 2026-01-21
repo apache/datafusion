@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::Operator;
 use sqlparser::ast::BinaryOperator;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    pub(crate) fn parse_sql_binary_op(&self, op: BinaryOperator) -> Result<Operator> {
-        match op {
+    pub(crate) fn parse_sql_binary_op(&self, op: &BinaryOperator) -> Result<Operator> {
+        match *op {
             BinaryOperator::Gt => Ok(Operator::Gt),
             BinaryOperator::GtEq => Ok(Operator::GtEq),
             BinaryOperator::Lt => Ok(Operator::Lt),

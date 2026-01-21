@@ -21,10 +21,10 @@
 //! Another `Sort` benchmark focus on single core execution. This benchmark
 //! runs end-to-end sort queries and test the performance on multiple CPU cores.
 
+use clap::Args;
 use futures::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use structopt::StructOpt;
 
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
@@ -36,48 +36,46 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{displayable, execute_stream};
 use datafusion::prelude::*;
+use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::DEFAULT_PARQUET_EXTENSION;
 
-use crate::util::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
 
-#[derive(Debug, StructOpt)]
+#[derive(Debug, Args)]
 pub struct RunOpt {
     /// Common options
-    #[structopt(flatten)]
+    #[command(flatten)]
     common: CommonOpt,
 
     /// Sort query number. If not specified, runs all queries
-    #[structopt(short, long)]
-    query: Option<usize>,
+    #[arg(short, long)]
+    pub query: Option<usize>,
 
     /// Path to data files (lineitem). Only parquet format is supported
-    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
+    #[arg(required = true, short = 'p', long = "path")]
     path: PathBuf,
 
     /// Path to JSON benchmark result to be compare using `compare.py`
-    #[structopt(parse(from_os_str), short = "o", long = "output")]
+    #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
     /// Load the data into a MemTable before executing the query
-    #[structopt(short = "m", long = "mem-table")]
+    #[arg(short = 'm', long = "mem-table")]
     mem_table: bool,
 
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
-    #[structopt(short = "t", long = "sorted")]
+    #[arg(short = 't', long = "sorted")]
     sorted: bool,
 
     /// Append a `LIMIT n` clause to the query
-    #[structopt(short = "l", long = "limit")]
+    #[arg(short = 'l', long = "limit")]
     limit: Option<usize>,
 }
 
-struct QueryResult {
-    elapsed: std::time::Duration,
-    row_count: usize,
-}
+pub const SORT_TPCH_QUERY_START_ID: usize = 1;
+pub const SORT_TPCH_QUERY_END_ID: usize = 11;
 
 impl RunOpt {
     const SORT_TABLES: [&'static str; 1] = ["lineitem"];
@@ -179,24 +177,32 @@ impl RunOpt {
     /// If query is specified from command line, run only that query.
     /// Otherwise, run all queries.
     pub async fn run(&self) -> Result<()> {
-        let mut benchmark_run = BenchmarkRun::new();
+        let mut benchmark_run: BenchmarkRun = BenchmarkRun::new();
 
         let query_range = match self.query {
             Some(query_id) => query_id..=query_id,
-            None => 1..=Self::SORT_QUERIES.len(),
+            None => SORT_TPCH_QUERY_START_ID..=SORT_TPCH_QUERY_END_ID,
         };
 
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("{query_id}"));
 
-            let query_results = self.benchmark_query(query_id).await?;
-            for iter in query_results {
-                benchmark_run.write_iter(iter.elapsed, iter.row_count);
+            let query_results = self.benchmark_query(query_id).await;
+            match query_results {
+                Ok(query_results) => {
+                    for iter in query_results {
+                        benchmark_run.write_iter(iter.elapsed, iter.row_count);
+                    }
+                }
+                Err(e) => {
+                    benchmark_run.mark_failed();
+                    eprintln!("Query {query_id} failed: {e}");
+                }
             }
         }
 
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
-
+        benchmark_run.maybe_print_failures();
         Ok(())
     }
 
@@ -235,13 +241,16 @@ impl RunOpt {
             millis.push(ms);
 
             println!(
-                "Q{query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
+                "Query {query_id} iteration {i} took {ms:.1} ms and returned {row_count} rows"
             );
             query_results.push(QueryResult { elapsed, row_count });
         }
 
         let avg = millis.iter().sum::<f64>() / millis.len() as f64;
-        println!("Q{query_id} avg time: {avg:.2} ms");
+        println!("Query {query_id} avg time: {avg:.2} ms");
+
+        // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
+        print_memory_stats();
 
         Ok(query_results)
     }
@@ -294,7 +303,7 @@ impl RunOpt {
 
         let mut stream = execute_stream(physical_plan.clone(), state.task_ctx())?;
         while let Some(batch) = stream.next().await {
-            row_count += batch.unwrap().num_rows();
+            row_count += batch?.num_rows();
         }
 
         if debug {
@@ -352,6 +361,6 @@ impl RunOpt {
     fn partitions(&self) -> usize {
         self.common
             .partitions
-            .unwrap_or(get_available_parallelism())
+            .unwrap_or_else(get_available_parallelism)
     }
 }

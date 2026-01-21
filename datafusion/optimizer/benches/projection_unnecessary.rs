@@ -16,11 +16,12 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ToDFSchema;
 use datafusion_common::{Column, TableReference};
-use datafusion_expr::{logical_plan::LogicalPlan, projection_schema, Expr};
+use datafusion_expr::{Expr, logical_plan::LogicalPlan, projection_schema};
 use datafusion_optimizer::optimize_projections::is_projection_unnecessary;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn is_projection_unnecessary_old(
@@ -30,7 +31,7 @@ fn is_projection_unnecessary_old(
     // First check if all expressions are trivial (cheaper operation than `projection_schema`)
     if !proj_exprs
         .iter()
-        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_)))
+        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_, _)))
     {
         return Ok(false);
     }
@@ -41,7 +42,7 @@ fn is_projection_unnecessary_old(
 fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
     // Create schema with many fields
     let fields = (0..num_exprs)
-        .map(|i| Field::new(format!("col{}", i), DataType::Int32, false))
+        .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
         .collect::<Vec<_>>();
     let schema = Schema::new(fields);
 
@@ -53,7 +54,7 @@ fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
 
     // Create projection expressions (just column references)
     let exprs = (0..num_exprs)
-        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{}", i))))
+        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{i}"))))
         .collect();
 
     (table_scan, exprs)

@@ -17,49 +17,49 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
+use clap::Args;
 use datafusion::{
     execution::{
-        disk_manager::DiskManagerConfig,
+        disk_manager::DiskManagerBuilder,
         memory_pool::{FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool},
         runtime_env::RuntimeEnvBuilder,
     },
     prelude::SessionConfig,
 };
 use datafusion_common::{DataFusionError, Result};
-use structopt::StructOpt;
 
 // Common benchmark options (don't use doc comments otherwise this doc
 // shows up in help files)
-#[derive(Debug, StructOpt, Clone)]
+#[derive(Debug, Args, Clone)]
 pub struct CommonOpt {
     /// Number of iterations of each test run
-    #[structopt(short = "i", long = "iterations", default_value = "3")]
+    #[arg(short = 'i', long = "iterations", default_value = "3")]
     pub iterations: usize,
 
     /// Number of partitions to process in parallel. Defaults to number of available cores.
-    #[structopt(short = "n", long = "partitions")]
+    #[arg(short = 'n', long = "partitions")]
     pub partitions: Option<usize>,
 
     /// Batch size when reading CSV or Parquet files
-    #[structopt(short = "s", long = "batch-size")]
+    #[arg(short = 's', long = "batch-size")]
     pub batch_size: Option<usize>,
 
     /// The memory pool type to use, should be one of "fair" or "greedy"
-    #[structopt(long = "mem-pool-type", default_value = "fair")]
+    #[arg(long = "mem-pool-type", default_value = "fair")]
     pub mem_pool_type: String,
 
     /// Memory limit (e.g. '100M', '1.5G'). If not specified, run all pre-defined memory limits for given query
     /// if there's any, otherwise run with no memory limit.
-    #[structopt(long = "memory-limit", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "memory-limit", value_parser = parse_memory_limit)]
     pub memory_limit: Option<usize>,
 
     /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
     /// if not specified.
-    #[structopt(long = "sort-spill-reservation-bytes", parse(try_from_str = parse_memory_limit))]
+    #[arg(long = "sort-spill-reservation-bytes", value_parser = parse_memory_limit)]
     pub sort_spill_reservation_bytes: Option<usize>,
 
     /// Activate debug mode to see more details
-    #[structopt(short, long)]
+    #[arg(short, long)]
     pub debug: bool,
 }
 
@@ -72,11 +72,11 @@ impl CommonOpt {
     /// Modify the existing config appropriately
     pub fn update_config(&self, mut config: SessionConfig) -> SessionConfig {
         if let Some(batch_size) = self.batch_size {
-            config = config.with_batch_size(batch_size)
+            config = config.with_batch_size(batch_size);
         }
 
         if let Some(partitions) = self.partitions {
-            config = config.with_target_partitions(partitions)
+            config = config.with_target_partitions(partitions);
         }
 
         if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
@@ -105,12 +105,12 @@ impl CommonOpt {
                     return Err(DataFusionError::Configuration(format!(
                         "Invalid memory pool type: {}",
                         self.mem_pool_type
-                    )))
+                    )));
                 }
             };
             rt_builder = rt_builder
                 .with_memory_pool(pool)
-                .with_disk_manager(DiskManagerConfig::NewOs);
+                .with_disk_manager_builder(DiskManagerBuilder::default());
         }
         Ok(rt_builder)
     }
@@ -122,15 +122,14 @@ fn parse_memory_limit(limit: &str) -> Result<usize, String> {
     let (number, unit) = limit.split_at(limit.len() - 1);
     let number: f64 = number
         .parse()
-        .map_err(|_| format!("Failed to parse number from memory limit '{}'", limit))?;
+        .map_err(|_| format!("Failed to parse number from memory limit '{limit}'"))?;
 
     match unit {
         "K" => Ok((number * 1024.0) as usize),
         "M" => Ok((number * 1024.0 * 1024.0) as usize),
         "G" => Ok((number * 1024.0 * 1024.0 * 1024.0) as usize),
         _ => Err(format!(
-            "Unsupported unit '{}' in memory limit '{}'",
-            unit, limit
+            "Unsupported unit '{unit}' in memory limit '{limit}'"
         )),
     }
 }

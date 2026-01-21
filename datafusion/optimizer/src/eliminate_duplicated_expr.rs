@@ -19,8 +19,8 @@
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
 use std::hash::{Hash, Hasher};
@@ -32,7 +32,7 @@ use indexmap::IndexSet;
 pub struct EliminateDuplicatedExpr;
 
 impl EliminateDuplicatedExpr {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -118,6 +118,7 @@ impl OptimizerRule for EliminateDuplicatedExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
     use datafusion_expr::{col, logical_plan::builder::LogicalPlanBuilder};
@@ -128,9 +129,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateDuplicatedExpr::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateDuplicatedExpr::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

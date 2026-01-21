@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -40,13 +43,23 @@ name = "datafusion_common"
 [features]
 avro = ["apache-avro"]
 backtrace = []
-pyarrow = ["pyo3", "arrow/pyarrow", "parquet"]
+parquet_encryption = [
+    "parquet",
+    "parquet/encryption",
+    "dep:hex",
+]
 force_hash_collisions = []
 recursive_protection = ["dep:recursive"]
+parquet = ["dep:parquet"]
+sql = ["sqlparser"]
+
+[[bench]]
+harness = false
+name = "with_hashes"
 
 [dependencies]
 ahash = { workspace = true }
-apache-avro = { version = "0.17", default-features = false, features = [
+apache-avro = { workspace = true, features = [
     "bzip",
     "snappy",
     "xz",
@@ -54,18 +67,18 @@ apache-avro = { version = "0.17", default-features = false, features = [
 ], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
-base64 = "0.22.1"
+chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
+hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
-libc = "0.2.172"
+libc = "0.2.180"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
-paste = "1.0.15"
-pyo3 = { version = "0.24.2", optional = true }
+paste = { workspace = true }
 recursive = { workspace = true, optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tokio = { workspace = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
@@ -73,5 +86,7 @@ web-time = "1.1.0"
 
 [dev-dependencies]
 chrono = { workspace = true }
+criterion = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }
+sqlparser = { workspace = true }

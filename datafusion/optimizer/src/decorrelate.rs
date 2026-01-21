@@ -26,17 +26,16 @@ use crate::simplify_expressions::ExprSimplifier;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
+use datafusion_common::{Column, DFSchemaRef, HashMap, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator,
+    BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan, LogicalPlanBuilder,
+    Operator, expr, lit,
 };
-use datafusion_physical_expr::execution_props::ExecutionProps;
 
 /// This struct rewrite the sub query plan by pull up the correlated
 /// expressions(contains outer reference columns) from the inner subquery's
@@ -71,6 +70,9 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
+    /// lateral joins, we need to produce a left outer join in such cases.
+    pub pulled_up_scalar_agg: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -91,6 +93,7 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            pulled_up_scalar_agg: false,
         }
     }
 
@@ -313,6 +316,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         missing_exprs.push(un_matched_row);
                     }
                 }
+                if aggregate.group_expr.is_empty() {
+                    // TODO: how do we handle the case where we have pulled multiple aggregations? For example,
+                    // a group agg with a scalar agg as child.
+                    self.pulled_up_scalar_agg = true;
+                }
                 let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
                     .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
                     .build()?;
@@ -485,9 +493,12 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::Int64(Some(0)),
+                                None,
+                            ))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::Literal(ScalarValue::Null, None))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -497,8 +508,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         let result_expr = result_expr.unalias();
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+        let info = SimplifyContext::default().with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         expr_result_map_for_count_bug.insert(e.schema_name().to_string(), result_expr);
@@ -531,8 +541,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
             .data()?;
 
         if result_expr.ne(expr) {
-            let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+            let info = SimplifyContext::default().with_schema(Arc::clone(schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -572,16 +581,15 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         .data()?;
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
-        let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema);
+        let info = SimplifyContext::default().with_schema(schema);
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(ScalarValue::Null, _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -596,7 +604,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null, None))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

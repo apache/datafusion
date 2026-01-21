@@ -29,13 +29,14 @@ use arrow::{
     datatypes::{Schema, SchemaRef},
 };
 use datafusion_common::ScalarValue;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
-use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_common::pruning::PruningStatistics;
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
+use datafusion_pruning::PruningPredicate;
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
-use parquet::format::PageLocation;
+use parquet::file::page_index::offset_index::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
     arrow::arrow_reader::{RowSelection, RowSelector},
@@ -89,7 +90,6 @@ use parquet::{
 ///  ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━━ ━━┛
 ///
 ///   Total rows: 300
-///
 /// ```
 ///
 /// Given the predicate `A > 35 AND B = 'F'`:
@@ -118,6 +118,7 @@ pub struct PagePruningAccessPlanFilter {
 impl PagePruningAccessPlanFilter {
     /// Create a new [`PagePruningAccessPlanFilter`] from a physical
     /// expression.
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(expr: &Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Self {
         // extract any single column predicates
         let predicates = split_conjunction(expr)
@@ -177,9 +178,10 @@ impl PagePruningAccessPlanFilter {
             || parquet_metadata.column_index().is_none()
         {
             debug!(
-                    "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
-                    parquet_metadata.offset_index().is_some(), parquet_metadata.column_index().is_some()
-                );
+                "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
+                parquet_metadata.offset_index().is_some(),
+                parquet_metadata.column_index().is_some()
+            );
             return access_plan;
         };
 
@@ -229,7 +231,8 @@ impl PagePruningAccessPlanFilter {
                     continue;
                 };
 
-                debug!("Use filter and page index to create RowSelection {:?} from predicate: {:?}",
+                debug!(
+                    "Use filter and page index to create RowSelection {:?} from predicate: {:?}",
                     &selection,
                     predicate.predicate_expr(),
                 );
@@ -252,7 +255,9 @@ impl PagePruningAccessPlanFilter {
                 let rows_selected = overall_selection.row_count();
                 if rows_selected > 0 {
                     let rows_skipped = overall_selection.skipped_row_count();
-                    trace!("Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}");
+                    trace!(
+                        "Overall selection from predicate skipped {rows_skipped}, selected {rows_selected}: {overall_selection:?}"
+                    );
                     total_skip += rows_skipped;
                     total_select += rows_selected;
                     access_plan.scan_selection(row_group_index, overall_selection)
@@ -269,8 +274,10 @@ impl PagePruningAccessPlanFilter {
             }
         }
 
-        file_metrics.page_index_rows_pruned.add(total_skip);
-        file_metrics.page_index_rows_matched.add(total_select);
+        file_metrics.page_index_rows_pruned.add_pruned(total_skip);
+        file_metrics
+            .page_index_rows_pruned
+            .add_matched(total_select);
         access_plan
     }
 
@@ -333,7 +340,7 @@ fn prune_pages_in_one_row_group(
     assert_eq!(page_row_counts.len(), values.len());
     let mut sum_row = *page_row_counts.first().unwrap();
     let mut selected = *values.first().unwrap();
-    trace!("Pruned to {:?} using {:?}", values, pruning_stats);
+    trace!("Pruned to {values:?} using {pruning_stats:?}");
     for (i, &f) in values.iter().enumerate().skip(1) {
         if f == selected {
             sum_row += *page_row_counts.get(i).unwrap();

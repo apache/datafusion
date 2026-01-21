@@ -26,28 +26,28 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use futures::StreamExt;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
-
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
-use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
-use datafusion::sql::parser::{DFParser, Statement};
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
-
-use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
+use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
+use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
-use rustyline::error::ReadlineError;
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use futures::StreamExt;
+use log::warn;
+use object_store::Error::Generic;
 use rustyline::Editor;
+use rustyline::error::ReadlineError;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::prelude::*;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -153,7 +153,7 @@ pub async fn exec_from_repl(
                                     }
                                 } else {
                                     eprintln!(
-                                        "'\\{}' is not a valid command",
+                                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
                                         &line[1..]
                                     );
                                 }
@@ -168,7 +168,10 @@ pub async fn exec_from_repl(
                         }
                     }
                 } else {
-                    eprintln!("'\\{}' is not a valid command", &line[1..]);
+                    eprintln!(
+                        "'\\{}' is not a valid command, you can use '\\?' to see all commands",
+                        &line[1..]
+                    );
                 }
             }
             Ok(line) => {
@@ -200,7 +203,7 @@ pub async fn exec_from_repl(
                 break;
             }
             Err(err) => {
-                eprintln!("Unknown error happened {:?}", err);
+                eprintln!("Unknown error happened {err:?}");
                 break;
             }
         }
@@ -214,7 +217,6 @@ pub(super) async fn exec_and_print(
     print_options: &PrintOptions,
     sql: String,
 ) -> Result<()> {
-    let now = Instant::now();
     let task_ctx = ctx.task_ctx();
     let options = task_ctx.session_config().options();
     let dialect = &options.sql_parser.dialect;
@@ -228,14 +230,43 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
-        let adjusted =
-            AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
+        StatementExecutor::new(statement)
+            .execute(ctx, print_options)
+            .await?;
+    }
 
-        let plan = create_plan(ctx, statement).await?;
-        let adjusted = adjusted.with_plan(&plan);
+    Ok(())
+}
 
-        let df = ctx.execute_logical_plan(plan).await?;
+/// Executor for SQL statements, including special handling for S3 region detection retry logic
+struct StatementExecutor {
+    statement: Statement,
+    statement_for_retry: Option<Statement>,
+}
+
+impl StatementExecutor {
+    fn new(statement: Statement) -> Self {
+        let statement_for_retry = matches!(statement, Statement::CreateExternalTable(_))
+            .then(|| statement.clone());
+
+        Self {
+            statement,
+            statement_for_retry,
+        }
+    }
+
+    async fn execute(
+        self,
+        ctx: &dyn CliSessionContext,
+        print_options: &PrintOptions,
+    ) -> Result<()> {
+        let now = Instant::now();
+        let (df, adjusted) = self
+            .create_and_execute_logical_plan(ctx, print_options)
+            .await?;
         let physical_plan = df.create_physical_plan().await?;
+        let task_ctx = ctx.task_ctx();
+        let options = task_ctx.session_config().options();
 
         // Track memory usage for the query result if it's bounded
         let mut reservation =
@@ -285,9 +316,40 @@ pub(super) async fn exec_and_print(
             )?;
             reservation.free();
         }
+
+        Ok(())
     }
 
-    Ok(())
+    async fn create_and_execute_logical_plan(
+        mut self,
+        ctx: &dyn CliSessionContext,
+        print_options: &PrintOptions,
+    ) -> Result<(datafusion::dataframe::DataFrame, AdjustedPrintOptions)> {
+        let adjusted = AdjustedPrintOptions::new(print_options.clone())
+            .with_statement(&self.statement);
+
+        let plan = create_plan(ctx, self.statement, false).await?;
+        let adjusted = adjusted.with_plan(&plan);
+
+        let df = match ctx.execute_logical_plan(plan).await {
+            Ok(df) => Ok(df),
+            Err(DataFusionError::ObjectStore(err))
+                if matches!(err.as_ref(), Generic { store, source: _ } if "S3".eq_ignore_ascii_case(store))
+                    && self.statement_for_retry.is_some() =>
+            {
+                warn!(
+                    "S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration."
+                );
+                let plan =
+                    create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
+                        .await?;
+                ctx.execute_logical_plan(plan).await
+            }
+            Err(e) => Err(e),
+        }?;
+
+        Ok((df, adjusted))
+    }
 }
 
 /// Track adjustments to the print options based on the plan / statement being executed
@@ -348,6 +410,7 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
 async fn create_plan(
     ctx: &dyn CliSessionContext,
     statement: Statement,
+    resolve_region: bool,
 ) -> Result<LogicalPlan, DataFusionError> {
     let mut plan = ctx.session_state().statement_to_plan(statement).await?;
 
@@ -362,6 +425,7 @@ async fn create_plan(
             &cmd.location,
             &cmd.options,
             format,
+            resolve_region,
         )
         .await?;
     }
@@ -374,6 +438,7 @@ async fn create_plan(
             &copy_to.output_url,
             &copy_to.options,
             format,
+            false,
         )
         .await?;
     }
@@ -412,6 +477,7 @@ pub(crate) async fn register_object_store_and_config_extensions(
     location: &String,
     options: &HashMap<String, String>,
     format: Option<ConfigFileType>,
+    resolve_region: bool,
 ) -> Result<()> {
     // Parse the location URL to extract the scheme and other components
     let table_path = ListingTableUrl::parse(location)?;
@@ -433,8 +499,14 @@ pub(crate) async fn register_object_store_and_config_extensions(
     table_options.alter_with_string_hash_map(options)?;
 
     // Retrieve the appropriate object store based on the scheme, URL, and modified table options
-    let store =
-        get_object_store(&ctx.session_state(), scheme, url, &table_options).await?;
+    let store = get_object_store(
+        &ctx.session_state(),
+        scheme,
+        url,
+        &table_options,
+        resolve_region,
+    )
+    .await?;
 
     // Register the retrieved object store in the session context's runtime environment
     ctx.register_object_store(url, store);
@@ -462,6 +534,7 @@ mod tests {
                 &cmd.location,
                 &cmd.options,
                 format,
+                false,
             )
             .await?;
         } else {
@@ -488,6 +561,7 @@ mod tests {
                 &cmd.output_url,
                 &cmd.options,
                 format,
+                false,
             )
             .await?;
         } else {
@@ -513,6 +587,19 @@ mod tests {
     }
     #[tokio::test]
     async fn copy_to_external_object_store_test() -> Result<()> {
+        let aws_envs = vec![
+            "AWS_ENDPOINT",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ALLOW_HTTP",
+        ];
+        for aws_env in aws_envs {
+            if std::env::var(aws_env).is_err() {
+                eprint!("aws envs not set, skipping s3 test");
+                return Ok(());
+            }
+        }
+
         let locations = vec![
             "s3://bucket/path/file.parquet",
             "oss://bucket/path/file.parquet",
@@ -530,11 +617,11 @@ mod tests {
             )
         })?;
         for location in locations {
-            let sql = format!("copy (values (1,2)) to '{}' STORED AS PARQUET;", location);
+            let sql = format!("copy (values (1,2)) to '{location}' STORED AS PARQUET;");
             let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
             for statement in statements {
                 //Should not fail
-                let mut plan = create_plan(&ctx, statement).await?;
+                let mut plan = create_plan(&ctx, statement, false).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());
@@ -617,8 +704,7 @@ mod tests {
     #[tokio::test]
     async fn create_object_store_table_gcs() -> Result<()> {
         let service_account_path = "fake_service_account_path";
-        let service_account_key =
-            "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
+        let service_account_key = "{\"private_key\": \"fake_private_key.pem\",\"client_email\":\"fake_client_email\", \"private_key_id\":\"id\"}";
         let application_credentials_path = "fake_application_credentials_path";
         let location = "gcs://bucket/path/file.parquet";
 
@@ -631,7 +717,9 @@ mod tests {
         assert!(err.to_string().contains("os error 2"));
 
         // for service_account_key
-        let sql = format!("CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS PARQUET OPTIONS('gcp.service_account_key' '{service_account_key}') LOCATION '{location}'"
+        );
         let err = create_external_table_test(location, &sql)
             .await
             .unwrap_err()
@@ -666,8 +754,9 @@ mod tests {
         let location = "path/to/file.cvs";
 
         // Test with format options
-        let sql =
-            format!("CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')");
+        let sql = format!(
+            "CREATE EXTERNAL TABLE test STORED AS CSV LOCATION '{location}' OPTIONS('format.has_header' 'true')"
+        );
         create_external_table_test(location, &sql).await.unwrap();
 
         Ok(())

@@ -52,7 +52,7 @@ use std::sync::Arc;
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -118,7 +118,8 @@ impl OptimizerRule for EliminateOuterJoin {
                         on: join.on.clone(),
                         filter: join.filter.clone(),
                         schema: Arc::clone(&join.schema),
-                        null_equals_null: join.null_equals_null,
+                        null_equality: join.null_equality,
+                        null_aware: join.null_aware,
                     }));
                     Filter::try_new(filter.predicate, new_join)
                         .map(|f| Transformed::yes(LogicalPlan::Filter(f)))
@@ -304,24 +305,27 @@ fn extract_non_nullable_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
+        Operator::{And, Or},
         binary_expr, cast, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
         try_cast,
-        Operator::{And, Or},
     };
 
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
-            @$expected:literal $(,)?
+            @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateOuterJoin::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateOuterJoin::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

@@ -17,70 +17,28 @@
 
 //! This program demonstrates the DataFusion expression simplification API.
 
+use insta::assert_snapshot;
+
 use arrow::array::types::IntervalDayTime;
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use chrono::{DateTime, TimeZone, Utc};
-use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
-use datafusion_common::cast::as_int32_array;
+use datafusion::{error::Result, prelude::*};
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_int32_array;
 use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::logical_plan::builder::table_scan_with_filters;
-use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    table_scan, Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF, Volatility,
+    Cast, ColumnarValue, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection,
+    ScalarUDF, Volatility, table_scan,
 };
 use datafusion_functions::math;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::simplify_expressions::{ExprSimplifier, SimplifyExpressions};
 use datafusion_optimizer::{OptimizerContext, OptimizerRule};
 use std::sync::Arc;
-
-/// In order to simplify expressions, DataFusion must have information
-/// about the expressions.
-///
-/// You can provide that information using DataFusion [DFSchema]
-/// objects or from some other implementation
-struct MyInfo {
-    /// The input schema
-    schema: DFSchemaRef,
-
-    /// Execution specific details needed for constant evaluation such
-    /// as the current time for `now()` and [VariableProviders]
-    execution_props: ExecutionProps,
-}
-
-impl SimplifyInfo for MyInfo {
-    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
-        Ok(matches!(
-            expr.get_type(self.schema.as_ref())?,
-            DataType::Boolean
-        ))
-    }
-
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        expr.nullable(self.schema.as_ref())
-    }
-
-    fn execution_props(&self) -> &ExecutionProps {
-        &self.execution_props
-    }
-
-    fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
-        expr.get_type(self.schema.as_ref())
-    }
-}
-
-impl From<DFSchemaRef> for MyInfo {
-    fn from(schema: DFSchemaRef) -> Self {
-        Self {
-            schema,
-            execution_props: ExecutionProps::new(),
-        }
-    }
-}
 
 /// A schema like:
 ///
@@ -130,14 +88,10 @@ fn test_evaluate_with_start_time(
     expected_expr: Expr,
     date_time: &DateTime<Utc>,
 ) {
-    let execution_props =
-        ExecutionProps::new().with_query_execution_start_time(*date_time);
-
-    let info: MyInfo = MyInfo {
-        schema: schema(),
-        execution_props,
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default()
+        .with_schema(schema())
+        .with_query_execution_start_time(Some(*date_time));
+    let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
         .expect("successfully evaluated");
@@ -199,7 +153,9 @@ fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
 
 #[test]
 fn basic() {
-    let info: MyInfo = schema().into();
+    let context = SimplifyContext::default()
+        .with_schema(schema())
+        .with_query_execution_start_time(Some(Utc::now()));
 
     // The `Expr` is a core concept in DataFusion, and DataFusion can
     // help simplify it.
@@ -208,21 +164,21 @@ fn basic() {
     // optimize form `a < 5` automatically
     let expr = col("a").lt(lit(2i32) + lit(3i32));
 
-    let simplifier = ExprSimplifier::new(info);
+    let simplifier = ExprSimplifier::new(context);
     let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, col("a").lt(lit(5i32)));
 }
 
 #[test]
 fn fold_and_simplify() {
-    let info: MyInfo = schema().into();
+    let context = SimplifyContext::default().with_schema(schema());
 
     // What will it do with the expression `concat('foo', 'bar') == 'foobar')`?
     let expr = concat(vec![lit("foo"), lit("bar")]).eq(lit("foobar"));
 
     // Since datafusion applies both simplification *and* rewriting
     // some expressions can be entirely simplified
-    let simplifier = ExprSimplifier::new(info);
+    let simplifier = ExprSimplifier::new(context);
     let simplified = simplifier.simplify(expr).unwrap();
     assert_eq!(simplified, lit(true))
 }
@@ -237,11 +193,15 @@ fn to_timestamp_expr_folded() -> Result<()> {
         .project(proj)?
         .build()?;
 
-    let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
-            \n  TableScan: test"
-        .to_string();
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatted = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatted.trim();
+    assert_snapshot!(
+        actual,
+        @r#"
+    Projection: TimestampNanosecond(1599566400000000000, None) AS to_timestamp(Utf8("2020-09-08T12:00:00+00:00"))
+      TableScan: test
+    "#
+    );
     Ok(())
 }
 
@@ -262,11 +222,16 @@ fn now_less_than_timestamp() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = "Filter: Boolean(true)\
-                        \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(plan, &time);
+    let formatted = get_optimized_plan_formatted(plan, &time);
+    let actual = formatted.trim();
 
-    assert_eq!(expected, actual);
+    assert_snapshot!(
+        actual,
+        @r"
+    Filter: Boolean(true)
+      TableScan: test
+    "
+    );
     Ok(())
 }
 
@@ -282,10 +247,13 @@ fn select_date_plus_interval() -> Result<()> {
 
     let date_plus_interval_expr = to_timestamp_expr(ts_string)
         .cast_to(&DataType::Date32, schema)?
-        + Expr::Literal(ScalarValue::IntervalDayTime(Some(IntervalDayTime {
-            days: 123,
-            milliseconds: 0,
-        })));
+        + Expr::Literal(
+            ScalarValue::IntervalDayTime(Some(IntervalDayTime {
+                days: 123,
+                milliseconds: 0,
+            })),
+            None,
+        );
 
     let plan = LogicalPlanBuilder::from(table_scan.clone())
         .project(vec![date_plus_interval_expr])?
@@ -293,11 +261,16 @@ fn select_date_plus_interval() -> Result<()> {
 
     // Note that constant folder runs and folds the entire
     // expression down to a single constant (true)
-    let expected = r#"Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
-  TableScan: test"#;
-    let actual = get_optimized_plan_formatted(plan, &time);
+    let formatted = get_optimized_plan_formatted(plan, &time);
+    let actual = formatted.trim();
 
-    assert_eq!(expected, actual);
+    assert_snapshot!(
+        actual,
+        @r#"
+    Projection: Date32("2021-01-09") AS to_timestamp(Utf8("2020-09-08T12:05:00+00:00")) + IntervalDayTime("IntervalDayTime { days: 123, milliseconds: 0 }")
+      TableScan: test
+    "#
+    );
     Ok(())
 }
 
@@ -311,10 +284,15 @@ fn simplify_project_scalar_fn() -> Result<()> {
 
     // before simplify: power(t.f, 1.0)
     // after simplify:  t.f as "power(t.f, 1.0)"
-    let expected = "Projection: test.f AS power(test.f,Float64(1))\
-                      \n  TableScan: test";
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatter = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatter.trim();
+    assert_snapshot!(
+        actual,
+        @r"
+    Projection: test.f AS power(test.f,Float64(1))
+      TableScan: test
+    "
+    );
     Ok(())
 }
 
@@ -334,9 +312,9 @@ fn simplify_scan_predicate() -> Result<()> {
 
     // before simplify: t.g = power(t.f, 1.0)
     // after simplify:  t.g = t.f"
-    let expected = "TableScan: test, full_filters=[g = f]";
-    let actual = get_optimized_plan_formatted(plan, &Utc::now());
-    assert_eq!(expected, actual);
+    let formatted = get_optimized_plan_formatted(plan, &Utc::now());
+    let actual = formatted.trim();
+    assert_snapshot!(actual, @"TableScan: test, full_filters=[g = f]");
     Ok(())
 }
 
@@ -490,14 +468,79 @@ fn multiple_now() -> Result<()> {
     // expect the same timestamp appears in both exprs
     let actual = get_optimized_plan_formatted(plan, &time);
     let expected = format!(
-        "Projection: TimestampNanosecond({}, Some(\"+00:00\")) AS now(), TimestampNanosecond({}, Some(\"+00:00\")) AS t2\
-            \n  TableScan: test",
+        "Projection: TimestampNanosecond({}, None) AS now(), TimestampNanosecond({}, None) AS t2\n  TableScan: test",
         time.timestamp_nanos_opt().unwrap(),
         time.timestamp_nanos_opt().unwrap()
     );
 
     assert_eq!(expected, actual);
     Ok(())
+}
+
+/// Unwraps an alias expression to get the inner expression
+fn unrwap_aliases(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Alias(alias) => unrwap_aliases(&alias.expr),
+        expr => expr,
+    }
+}
+
+/// Test that `now()` is simplified to a literal when execution start time is set,
+/// but remains as an expression when no execution start time is available.
+#[test]
+fn now_simplification_with_and_without_start_time() {
+    let plan = LogicalPlanBuilder::empty(false)
+        .project(vec![now()])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    // Case 1: With execution start time set, now() should be simplified to a literal
+    {
+        let time = DateTime::<Utc>::from_timestamp_nanos(123);
+        let ctx: OptimizerContext =
+            OptimizerContext::new().with_query_execution_start_time(time);
+        let optimizer = SimplifyExpressions {};
+        let simplified = optimizer
+            .rewrite(plan.clone(), &ctx)
+            .expect("rewrite should succeed")
+            .data;
+        let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
+            panic!("Expected Projection plan");
+        };
+        assert_eq!(expr.len(), 1);
+        let simplified = unrwap_aliases(expr.first().unwrap());
+        // Should be a literal timestamp
+        match simplified {
+            Expr::Literal(ScalarValue::TimestampNanosecond(Some(ts), _), _) => {
+                assert_eq!(*ts, time.timestamp_nanos_opt().unwrap());
+            }
+            other => panic!("Expected timestamp literal, got: {other:?}"),
+        }
+    }
+
+    // Case 2: Without execution start time, now() should remain as a function call
+    {
+        let ctx: OptimizerContext =
+            OptimizerContext::new().without_query_execution_start_time();
+        let optimizer = SimplifyExpressions {};
+        let simplified = optimizer
+            .rewrite(plan, &ctx)
+            .expect("rewrite should succeed")
+            .data;
+        let LogicalPlan::Projection(Projection { expr, .. }) = simplified else {
+            panic!("Expected Projection plan");
+        };
+        assert_eq!(expr.len(), 1);
+        let simplified = unrwap_aliases(expr.first().unwrap());
+        // Should still be a now() function call
+        match simplified {
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+                assert_eq!(func.name(), "now");
+            }
+            other => panic!("Expected now() function call, got: {other:?}"),
+        }
+    }
 }
 
 // ------------------------------
@@ -522,11 +565,8 @@ fn expr_test_schema() -> DFSchemaRef {
 }
 
 fn test_simplify(input_expr: Expr, expected_expr: Expr) {
-    let info: MyInfo = MyInfo {
-        schema: expr_test_schema(),
-        execution_props: ExecutionProps::new(),
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default().with_schema(expr_test_schema());
+    let simplifier = ExprSimplifier::new(context);
     let simplified_expr = simplifier
         .simplify(input_expr.clone())
         .expect("successfully evaluated");
@@ -541,11 +581,10 @@ fn test_simplify_with_cycle_count(
     expected_expr: Expr,
     expected_count: u32,
 ) {
-    let info: MyInfo = MyInfo {
-        schema: expr_test_schema(),
-        execution_props: ExecutionProps::new(),
-    };
-    let simplifier = ExprSimplifier::new(info);
+    let context = SimplifyContext::default()
+        .with_schema(expr_test_schema())
+        .with_query_execution_start_time(Some(Utc::now()));
+    let simplifier = ExprSimplifier::new(context);
     let (simplified_expr, count) = simplifier
         .simplify_with_cycle_count_transformed(input_expr.clone())
         .expect("successfully evaluated");

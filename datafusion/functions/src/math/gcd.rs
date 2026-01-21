@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{new_null_array, ArrayRef, AsArray, Int64Array, PrimitiveArray};
+use arrow::array::{ArrayRef, AsArray, Int64Array, PrimitiveArray, new_null_array};
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
@@ -23,7 +23,7 @@ use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
-use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -34,10 +34,18 @@ use datafusion_macros::user_doc;
     doc_section(label = "Math Functions"),
     description = "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
     syntax_example = "gcd(expression_x, expression_y)",
+    sql_example = r#"```sql
+> SELECT gcd(48, 18);
++------------+
+| gcd(48,18) |
++------------+
+| 6          |
++------------+
+```"#,
     standard_argument(name = "expression_x", prefix = "First numeric"),
     standard_argument(name = "expression_y", prefix = "Second numeric")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct GcdFunc {
     signature: Signature,
 }
@@ -86,20 +94,23 @@ impl ScalarUDFImpl for GcdFunc {
             [ColumnarValue::Array(a), ColumnarValue::Array(b)] => {
                 compute_gcd_for_arrays(&a, &b)
             }
-            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
-                match (a, b) {
-                    (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                        Some(compute_gcd(a, b)?),
-                    ))),
-                    _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
-                }
-            }
-            [ColumnarValue::Array(a), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
-                compute_gcd_with_scalar(&a, b)
-            }
-            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Array(b)] => {
-                compute_gcd_with_scalar(&b, a)
-            }
+            [
+                ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                ColumnarValue::Scalar(ScalarValue::Int64(b)),
+            ] => match (a, b) {
+                (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                    Some(compute_gcd(a, b)?),
+                ))),
+                _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+            },
+            [
+                ColumnarValue::Array(a),
+                ColumnarValue::Scalar(ScalarValue::Int64(b)),
+            ] => compute_gcd_with_scalar(&a, b),
+            [
+                ColumnarValue::Scalar(ScalarValue::Int64(a)),
+                ColumnarValue::Array(b),
+            ] => compute_gcd_with_scalar(&b, a),
             _ => exec_err!("Unsupported argument types for function gcd"),
         }
     }

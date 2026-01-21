@@ -17,17 +17,17 @@
 
 //! Tree node implementation for Logical Expressions
 
+use crate::Expr;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
-    WindowFunction, WindowFunctionParams,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, SetComparison,
+    TryCast, Unnest, WindowFunction, WindowFunctionParams,
 };
-use crate::{Expr, ExprFunctionExt};
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
 };
-use datafusion_common::Result;
 
 /// Implementation of the [`TreeNode`] trait
 ///
@@ -58,7 +58,8 @@ impl TreeNode for Expr {
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => expr.apply_elements(f),
+            | Expr::InSubquery(InSubquery { expr, .. })
+            | Expr::SetComparison(SetComparison { expr, .. }) => expr.apply_elements(f),
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
             Expr::ScalarFunction(ScalarFunction { args, .. }) => {
@@ -73,7 +74,7 @@ impl TreeNode for Expr {
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
+            | Expr::Literal(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard { .. }
@@ -92,14 +93,17 @@ impl TreeNode for Expr {
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
             Expr::AggregateFunction(AggregateFunction { params: AggregateFunctionParams { args, filter, order_by, ..}, .. }) =>
                 (args, filter, order_by).apply_ref_elements(f),
-            Expr::WindowFunction(WindowFunction {
-                params : WindowFunctionParams {
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunctionParams {
                     args,
                     partition_by,
                     order_by,
-                    ..}, ..}) => {
-                (args, partition_by, order_by).apply_ref_elements(f)
+                    filter,
+                    ..
+                } = &window_fun.as_ref().params;
+                (args, partition_by, order_by, filter).apply_ref_elements(f)
             }
+
             Expr::InList(InList { expr, list, .. }) => {
                 (expr, list).apply_ref_elements(f)
             }
@@ -124,7 +128,20 @@ impl TreeNode for Expr {
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Literal(_) => Transformed::no(self),
+            | Expr::Literal(_, _) => Transformed::no(self),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                })
+            }),
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),
@@ -230,27 +247,40 @@ impl TreeNode for Expr {
                     )))
                 })?
             }
-            Expr::WindowFunction(WindowFunction {
-                fun,
-                params:
-                    WindowFunctionParams {
-                        args,
-                        partition_by,
-                        order_by,
-                        window_frame,
-                        null_treatment,
-                    },
-            }) => (args, partition_by, order_by).map_elements(f)?.update_data(
-                |(new_args, new_partition_by, new_order_by)| {
-                    Expr::WindowFunction(WindowFunction::new(fun, new_args))
-                        .partition_by(new_partition_by)
-                        .order_by(new_order_by)
-                        .window_frame(window_frame)
-                        .null_treatment(null_treatment)
-                        .build()
-                        .unwrap()
-                },
-            ),
+            Expr::WindowFunction(window_fun) => {
+                let WindowFunction {
+                    fun,
+                    params:
+                        WindowFunctionParams {
+                            args,
+                            partition_by,
+                            order_by,
+                            window_frame,
+                            filter,
+                            null_treatment,
+                            distinct,
+                        },
+                } = *window_fun;
+
+                (args, partition_by, order_by, filter)
+                    .map_elements(f)?
+                    .map_data(
+                        |(new_args, new_partition_by, new_order_by, new_filter)| {
+                            Ok(Expr::from(WindowFunction {
+                                fun,
+                                params: WindowFunctionParams {
+                                    args: new_args,
+                                    partition_by: new_partition_by,
+                                    order_by: new_order_by,
+                                    window_frame,
+                                    filter: new_filter,
+                                    null_treatment,
+                                    distinct,
+                                },
+                            }))
+                        },
+                    )?
+            }
             Expr::AggregateFunction(AggregateFunction {
                 func,
                 params:

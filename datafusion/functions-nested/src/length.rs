@@ -19,18 +19,22 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, FixedSizeListArray, Int64Array, LargeListArray, ListArray,
+    OffsetSizeTrait, UInt64Array,
 };
 use arrow::datatypes::{
     DataType,
     DataType::{FixedSizeList, LargeList, List, UInt64},
 };
-use datafusion_common::cast::{as_generic_list_array, as_int64_array};
-use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
-use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+use datafusion_common::cast::{
+    as_fixed_size_list_array, as_generic_list_array, as_int64_array,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_common::{Result, exec_err};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -61,7 +65,7 @@ make_udf_expr_and_func!(
     ),
     argument(name = "dimension", description = "Array dimension.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayLength {
     signature: Signature,
     aliases: Vec<String>,
@@ -76,7 +80,22 @@ impl Default for ArrayLength {
 impl ArrayLength {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_length")],
         }
     }
@@ -94,13 +113,8 @@ impl ScalarUDFImpl for ArrayLength {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            List(_) | LargeList(_) | FixedSizeList(_, _) => UInt64,
-            _ => {
-                return plan_err!("The array_length function can only accept List/LargeList/FixedSizeList.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(UInt64)
     }
 
     fn invoke_with_args(
@@ -119,8 +133,24 @@ impl ScalarUDFImpl for ArrayLength {
     }
 }
 
-/// Array_length SQL function
-pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+macro_rules! array_length_impl {
+    ($array:expr, $dimension:expr) => {{
+        let array = $array;
+        let dimension = match $dimension {
+            Some(d) => as_int64_array(d)?.clone(),
+            None => Int64Array::from_value(1, array.len()),
+        };
+        let result = array
+            .iter()
+            .zip(dimension.iter())
+            .map(|(arr, dim)| compute_array_length(arr, dim))
+            .collect::<Result<UInt64Array>>()?;
+
+        Ok(Arc::new(result) as ArrayRef)
+    }};
+}
+
+fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return exec_err!("array_length expects one or two arguments");
     }
@@ -128,26 +158,18 @@ pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         List(_) => general_array_length::<i32>(args),
         LargeList(_) => general_array_length::<i64>(args),
-        array_type => exec_err!("array_length does not support type '{array_type:?}'"),
+        FixedSizeList(_, _) => fixed_size_array_length(args),
+        array_type => exec_err!("array_length does not support type '{array_type}'"),
     }
+}
+
+fn fixed_size_array_length(array: &[ArrayRef]) -> Result<ArrayRef> {
+    array_length_impl!(as_fixed_size_list_array(&array[0])?, array.get(1))
 }
 
 /// Dispatch array length computation based on the offset type.
 fn general_array_length<O: OffsetSizeTrait>(array: &[ArrayRef]) -> Result<ArrayRef> {
-    let list_array = as_generic_list_array::<O>(&array[0])?;
-    let dimension = if array.len() == 2 {
-        as_int64_array(&array[1])?.clone()
-    } else {
-        Int64Array::from_value(1, list_array.len())
-    };
-
-    let result = list_array
-        .iter()
-        .zip(dimension.iter())
-        .map(|(arr, dim)| compute_array_length(arr, dim))
-        .collect::<Result<UInt64Array>>()?;
-
-    Ok(Arc::new(result) as ArrayRef)
+    array_length_impl!(as_generic_list_array::<O>(&array[0])?, array.get(1))
 }
 
 /// Returns the length of a concrete array dimension
@@ -183,6 +205,10 @@ fn compute_array_length(
             }
             LargeList(..) => {
                 value = downcast_arg!(value, LargeListArray).value(0);
+                current_dimension += 1;
+            }
+            FixedSizeList(_, _) => {
+                value = downcast_arg!(value, FixedSizeListArray).value(0);
                 current_dimension += 1;
             }
             _ => return Ok(None),

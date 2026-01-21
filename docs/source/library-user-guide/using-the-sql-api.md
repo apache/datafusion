@@ -119,6 +119,8 @@ async fn main() -> Result<()> {
 DataFusion can also read Avro files using the `register_avro` method.
 
 ```rust
+# #[cfg(feature = "avro")]
+{
 use datafusion::arrow::util::pretty;
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -153,6 +155,7 @@ async fn main() -> Result<()> {
         &results
     );
     Ok(())
+}
 }
 ```
 

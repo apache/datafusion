@@ -20,27 +20,29 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Formatter, Write};
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
+use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
+use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
+    AggregateFunction, AggregateFunctionParams, ExprListDisplay, WindowFunctionParams,
     schema_name_from_exprs, schema_name_from_exprs_comma_separated_without_space,
-    schema_name_from_sorts, AggregateFunction, AggregateFunctionParams, ExprListDisplay,
-    WindowFunctionParams,
+    schema_name_from_sorts,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
-use crate::utils::format_state_name;
+use crate::udf_eq::UdfEq;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{expr_vec_fmt, Accumulator, Expr};
+use crate::utils::format_state_name;
+use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -70,10 +72,10 @@ use crate::{Documentation, Signature};
 ///
 /// [the examples]: https://github.com/apache/datafusion/tree/main/datafusion-examples#single-process
 /// [aggregate function]: https://en.wikipedia.org/wiki/Aggregate_function
-/// [`Accumulator`]: crate::Accumulator
+/// [`Accumulator`]: Accumulator
 /// [`create_udaf`]: crate::expr_fn::create_udaf
-/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udaf.rs
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`simple_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 #[derive(Debug, Clone, PartialOrd)]
 pub struct AggregateUDF {
     inner: Arc<dyn AggregateUDFImpl>,
@@ -81,7 +83,7 @@ pub struct AggregateUDF {
 
 impl PartialEq for AggregateUDF {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.equals(other.inner.as_ref())
+        self.inner.dyn_eq(other.inner.as_any())
     }
 }
 
@@ -89,7 +91,7 @@ impl Eq for AggregateUDF {}
 
 impl Hash for AggregateUDF {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.inner.hash_value().hash(state)
+        self.inner.dyn_hash(state)
     }
 }
 
@@ -158,7 +160,7 @@ impl AggregateUDF {
             args,
             false,
             None,
-            None,
+            vec![],
             None,
         ))
     }
@@ -168,6 +170,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    /// Returns the aliases for this function.
+    pub fn aliases(&self) -> &[String] {
+        self.inner.aliases()
     }
 
     /// See [`AggregateUDFImpl::schema_name`] for more details.
@@ -205,11 +212,6 @@ impl AggregateUDF {
         self.inner.is_nullable()
     }
 
-    /// Returns the aliases for this function.
-    pub fn aliases(&self) -> &[String] {
-        self.inner.aliases()
-    }
-
     /// Returns this function's signature (what input types are accepted)
     ///
     /// See [`AggregateUDFImpl::signature`] for more details.
@@ -224,6 +226,13 @@ impl AggregateUDF {
         self.inner.return_type(args)
     }
 
+    /// Return the field of the function given its input fields
+    ///
+    /// See [`AggregateUDFImpl::return_field`] for more details.
+    pub fn return_field(&self, args: &[FieldRef]) -> Result<FieldRef> {
+        self.inner.return_field(args)
+    }
+
     /// Return an accumulator the given aggregate, given its return datatype
     pub fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         self.inner.accumulator(acc_args)
@@ -234,7 +243,7 @@ impl AggregateUDF {
     /// for more details.
     ///
     /// This is used to support multi-phase aggregations
-    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    pub fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -320,9 +329,9 @@ impl AggregateUDF {
         self.inner.supports_null_handling_clause()
     }
 
-    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
-    pub fn is_ordered_set_aggregate(&self) -> bool {
-        self.inner.is_ordered_set_aggregate()
+    /// See [`AggregateUDFImpl::supports_within_group_clause`] for more details.
+    pub fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -351,13 +360,13 @@ where
 /// See [`advanced_udaf.rs`] for a full example with complete implementation and
 /// [`AggregateUDF`] for other available options.
 ///
-/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
+/// [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udaf.rs
 ///
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::LazyLock;
-/// # use arrow::datatypes::DataType;
+/// # use std::sync::{Arc, LazyLock};
+/// # use arrow::datatypes::{DataType, FieldRef};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
 /// # use datafusion_expr::{AggregateUDFImpl, AggregateUDF, Accumulator, function::{AccumulatorArgs, StateFieldsArgs}};
@@ -365,7 +374,7 @@ where
 /// # use arrow::datatypes::Schema;
 /// # use arrow::datatypes::Field;
 ///
-/// #[derive(Debug, Clone)]
+/// #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// struct GeoMeanUdf {
 ///   signature: Signature,
 /// }
@@ -387,7 +396,7 @@ where
 /// fn get_doc() -> &'static Documentation {
 ///     &DOCUMENTATION
 /// }
-///    
+///
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
 /// impl AggregateUDFImpl for GeoMeanUdf {
 ///    fn as_any(&self) -> &dyn Any { self }
@@ -401,14 +410,14 @@ where
 ///    }
 ///    // This is the accumulator factory; DataFusion uses it to create new accumulators.
 ///    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> { unimplemented!() }
-///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+///    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
 ///        Ok(vec![
-///             Field::new("value", args.return_type.clone(), true),
-///             Field::new("ordering", DataType::UInt32, true)
+///             Arc::new(args.return_field.as_ref().clone().with_name("value")),
+///             Arc::new(Field::new("ordering", DataType::UInt32, true))
 ///        ])
 ///    }
 ///    fn documentation(&self) -> Option<&Documentation> {
-///        Some(get_doc())  
+///        Some(get_doc())
 ///    }
 /// }
 ///
@@ -418,15 +427,20 @@ where
 /// // Call the function `geo_mean(col)`
 /// let expr = geometric_mean.call(vec![col("a")]);
 /// ```
-pub trait AggregateUDFImpl: Debug + Send + Sync {
-    // Note: When adding any methods (with default implementations), remember to add them also
-    // into the AliasedAggregateUDFImpl below!
-
+pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns this object as an [`Any`] trait object
     fn as_any(&self) -> &dyn Any;
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns any aliases (alternate names) for this function.
+    ///
+    /// Note: `aliases` should only include names other than [`Self::name`].
+    /// Defaults to `[]` (no aliases)
+    fn aliases(&self) -> &[String] {
+        &[]
+    }
 
     /// Returns the name of the column this expression would create
     ///
@@ -434,92 +448,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// Example of schema_name: count(DISTINCT column1) FILTER (WHERE column2 > 10) ORDER BY [..]
     fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
-        let AggregateFunctionParams {
-            args,
-            distinct,
-            filter,
-            order_by,
-            null_treatment,
-        } = params;
-
-        // exclude the first function argument(= column) in ordered set aggregate function,
-        // because it is duplicated with the WITHIN GROUP clause in schema name.
-        let args = if self.is_ordered_set_aggregate() {
-            &args[1..]
-        } else {
-            &args[..]
-        };
-
-        let mut schema_name = String::new();
-
-        schema_name.write_fmt(format_args!(
-            "{}({}{})",
-            self.name(),
-            if *distinct { "DISTINCT " } else { "" },
-            schema_name_from_exprs_comma_separated_without_space(args)?
-        ))?;
-
-        if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
-        }
-
-        if let Some(filter) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-        };
-
-        if let Some(order_by) = order_by {
-            let clause = match self.is_ordered_set_aggregate() {
-                true => "WITHIN GROUP",
-                false => "ORDER BY",
-            };
-
-            schema_name.write_fmt(format_args!(
-                " {} [{}]",
-                clause,
-                schema_name_from_sorts(order_by)?
-            ))?;
-        };
-
-        Ok(schema_name)
+        udaf_default_schema_name(self, params)
     }
 
     /// Returns a human readable expression.
     ///
     /// See [`Expr::human_display`] for details.
     fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
-        let AggregateFunctionParams {
-            args,
-            distinct,
-            filter,
-            order_by,
-            null_treatment,
-        } = params;
-
-        let mut schema_name = String::new();
-
-        schema_name.write_fmt(format_args!(
-            "{}({}{})",
-            self.name(),
-            if *distinct { "DISTINCT " } else { "" },
-            ExprListDisplay::comma_separated(args.as_slice())
-        ))?;
-
-        if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
-        }
-
-        if let Some(filter) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
-        };
-
-        if let Some(order_by) = order_by {
-            schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
-                schema_name_from_sorts(order_by)?
-            ))?;
-        };
-
-        Ok(schema_name)
+        udaf_default_human_display(self, params)
     }
 
     /// Returns the name of the column this expression would create
@@ -533,42 +469,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &self,
         params: &WindowFunctionParams,
     ) -> Result<String> {
-        let WindowFunctionParams {
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
-        } = params;
-
-        let mut schema_name = String::new();
-        schema_name.write_fmt(format_args!(
-            "{}({})",
-            self.name(),
-            schema_name_from_exprs(args)?
-        ))?;
-
-        if let Some(null_treatment) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
-        }
-
-        if !partition_by.is_empty() {
-            schema_name.write_fmt(format_args!(
-                " PARTITION BY [{}]",
-                schema_name_from_exprs(partition_by)?
-            ))?;
-        }
-
-        if !order_by.is_empty() {
-            schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
-                schema_name_from_sorts(order_by)?
-            ))?;
-        };
-
-        schema_name.write_fmt(format_args!(" {window_frame}"))?;
-
-        Ok(schema_name)
+        udaf_default_window_function_schema_name(self, params)
     }
 
     /// Returns the user-defined display name of function, given the arguments
@@ -578,40 +479,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     ///
     /// Defaults to `function_name([DISTINCT] column1, column2, ..) [null_treatment] [filter] [order_by [..]]`
     fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
-        let AggregateFunctionParams {
-            args,
-            distinct,
-            filter,
-            order_by,
-            null_treatment,
-        } = params;
-
-        let mut display_name = String::new();
-
-        display_name.write_fmt(format_args!(
-            "{}({}{})",
-            self.name(),
-            if *distinct { "DISTINCT " } else { "" },
-            expr_vec_fmt!(args)
-        ))?;
-
-        if let Some(nt) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", nt))?;
-        }
-        if let Some(fe) = filter {
-            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
-        }
-        if let Some(ob) = order_by {
-            display_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
-                ob.iter()
-                    .map(|o| format!("{o}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))?;
-        }
-
-        Ok(display_name)
+        udaf_default_display_name(self, params)
     }
 
     /// Returns the user-defined display name of function, given the arguments
@@ -626,44 +494,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         &self,
         params: &WindowFunctionParams,
     ) -> Result<String> {
-        let WindowFunctionParams {
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
-        } = params;
-
-        let mut display_name = String::new();
-
-        display_name.write_fmt(format_args!(
-            "{}({})",
-            self.name(),
-            expr_vec_fmt!(args)
-        ))?;
-
-        if let Some(null_treatment) = null_treatment {
-            display_name.write_fmt(format_args!(" {}", null_treatment))?;
-        }
-
-        if !partition_by.is_empty() {
-            display_name.write_fmt(format_args!(
-                " PARTITION BY [{}]",
-                expr_vec_fmt!(partition_by)
-            ))?;
-        }
-
-        if !order_by.is_empty() {
-            display_name
-                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
-        };
-
-        display_name.write_fmt(format_args!(
-            " {} BETWEEN {} AND {}",
-            window_frame.units, window_frame.start_bound, window_frame.end_bound
-        ))?;
-
-        Ok(display_name)
+        udaf_default_window_function_display_name(self, params)
     }
 
     /// Returns the function's [`Signature`] for information about what input
@@ -673,6 +504,27 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// What [`DataType`] will be returned by this function, given the types of
     /// the arguments
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
+
+    /// What type will be returned by this function, given the arguments?
+    ///
+    /// By default, this function calls [`Self::return_type`] with the
+    /// types of each argument.
+    ///
+    /// # Notes
+    ///
+    /// Most UDFs should implement [`Self::return_type`] and not this
+    /// function as the output type for most functions only depends on the types
+    /// of their inputs (e.g. `sum(f64)` is always `f64`).
+    ///
+    /// This function can be used for more advanced cases such as:
+    ///
+    /// 1. specifying nullability
+    /// 2. return types based on the **values** of the arguments (rather than
+    ///    their **types**.
+    /// 3. return types based on metadata within the fields of the inputs
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        udaf_default_return_field(self, arg_fields)
+    }
 
     /// Whether the aggregate function is nullable.
     ///
@@ -712,15 +564,17 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// The name of the fields must be unique within the query and thus should
     /// be derived from `name`. See [`format_state_name`] for a utility function
     /// to generate a unique name.
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        let fields = vec![Field::new(
-            format_state_name(args.name, "value"),
-            args.return_type.clone(),
-            true,
-        )];
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        let fields = vec![
+            args.return_field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(args.name, "value")),
+        ];
 
         Ok(fields
             .into_iter()
+            .map(Arc::new)
             .chain(args.ordering_fields.to_vec())
             .collect())
     }
@@ -751,20 +605,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     /// Sliding accumulator is an alternative accumulator that can be used for
     /// window functions. It has retract method to revert the previous update.
     ///
     /// See [retract_batch] for more details.
     ///
-    /// [retract_batch]: datafusion_expr_common::accumulator::Accumulator::retract_batch
+    /// [retract_batch]: Accumulator::retract_batch
     fn create_sliding_accumulator(
         &self,
         args: AccumulatorArgs,
@@ -821,11 +667,18 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// [None] if simplify is not defined or,
     ///
     /// Or, a closure with two arguments:
-    /// * 'aggregate_function': [crate::expr::AggregateFunction] for which simplified has been invoked
-    /// * 'info': [crate::simplify::SimplifyInfo]
+    /// * 'aggregate_function': [AggregateFunction] for which simplified has been invoked
+    /// * 'info': [crate::simplify::SimplifyContext]
     ///
     /// closure returns simplified [Expr] or an error.
     ///
+    /// # Notes
+    ///
+    /// The returned expression must have the same schema as the original
+    /// expression, including both the data type and nullability. For example,
+    /// if the original expression is nullable, the returned expression must
+    /// also be nullable, otherwise it may lead to schema verification errors
+    /// later in query planning.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }
@@ -858,33 +711,6 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         not_impl_err!("Function {} does not implement coerce_types", self.name())
     }
 
-    /// Return true if this aggregate UDF is equal to the other.
-    ///
-    /// Allows customizing the equality of aggregate UDFs.
-    /// Must be consistent with [`Self::hash_value`] and follow the same rules as [`Eq`]:
-    ///
-    /// - reflexive: `a.equals(a)`;
-    /// - symmetric: `a.equals(b)` implies `b.equals(a)`;
-    /// - transitive: `a.equals(b)` and `b.equals(c)` implies `a.equals(c)`.
-    ///
-    /// By default, compares [`Self::name`] and [`Self::signature`].
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        self.name() == other.name() && self.signature() == other.signature()
-    }
-
-    /// Returns a hash value for this aggregate UDF.
-    ///
-    /// Allows customizing the hash code of aggregate UDFs. Similarly to [`Hash`] and [`Eq`],
-    /// if [`Self::equals`] returns true for two UDFs, their `hash_value`s must be the same.
-    ///
-    /// By default, hashes [`Self::name`] and [`Self::signature`].
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.name().hash(hasher);
-        self.signature().hash(hasher);
-        hasher.finish()
-    }
-
     /// If this function is max, return true
     /// If the function is min, return false
     /// Otherwise return None (the default)
@@ -915,15 +741,66 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ScalarValue::try_from(data_type)
     }
 
-    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
-    /// If the function does not, return false
+    /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` SQL clause,
+    /// return `true`. Otherwise, return `false` which will cause an error to be
+    /// raised during SQL parsing if these clauses are detected for this function.
+    ///
+    /// Functions which implement this as `true` are expected to handle the resulting
+    /// null handling config present in [`AccumulatorArgs`], `ignore_nulls`.
     fn supports_null_handling_clause(&self) -> bool {
-        true
+        false
     }
 
-    /// If this function is ordered-set aggregate function, return true
-    /// If the function is not, return false
-    fn is_ordered_set_aggregate(&self) -> bool {
+    /// If this function supports the `WITHIN GROUP (ORDER BY column [ASC|DESC])`
+    /// SQL syntax, return `true`. Otherwise, return `false` (default) which will
+    /// cause an error when parsing SQL where this syntax is detected for this
+    /// function.
+    ///
+    /// This function should return `true` for ordered-set aggregate functions
+    /// only.
+    ///
+    /// # Ordered-set aggregate functions
+    ///
+    /// Ordered-set aggregate functions allow specifying a sort order that affects
+    /// how the function calculates its result, unlike other aggregate functions
+    /// like `sum` or `count`. For example, `percentile_cont` is an ordered-set
+    /// aggregate function that calculates the exact percentile value from a list
+    /// of values; the output of calculating the `0.75` percentile depends on if
+    /// you're calculating on an ascending or descending list of values.
+    ///
+    /// An example of how an ordered-set aggregate function is called with the
+    /// `WITHIN GROUP` SQL syntax:
+    ///
+    /// ```sql
+    /// -- Ascending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// -- Default ordering is ascending if not explicitly specified
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1) FROM table;
+    /// -- Descending
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 DESC) FROM table;
+    /// ```
+    ///
+    /// This calculates the `0.75` percentile of the column `c1` from `table`,
+    /// according to the specific ordering. The column specified in the `WITHIN GROUP`
+    /// ordering clause is taken as the column to calculate values on; specifying
+    /// the `WITHIN GROUP` clause is optional so these queries are equivalent:
+    ///
+    /// ```sql
+    /// -- If no WITHIN GROUP is specified then default ordering is implementation
+    /// -- dependent; in this case ascending for percentile_cont
+    /// SELECT percentile_cont(c1, 0.75) FROM table;
+    /// SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY c1 ASC) FROM table;
+    /// ```
+    ///
+    /// Aggregate UDFs can define their default ordering if the function is called
+    /// without the `WITHIN GROUP` clause, though a default of ascending is the
+    /// standard practice.
+    ///
+    /// Ordered-set aggregate function implementations are responsible for handling
+    /// the input sort order themselves (e.g. `percentile_cont` must buffer and
+    /// sort the values internally). That is, DataFusion does not introduce any
+    /// kind of sort into the plan for these functions with this syntax.
+    fn supports_within_group_clause(&self) -> bool {
         false
     }
 
@@ -944,20 +821,288 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
 impl PartialEq for dyn AggregateUDFImpl {
     fn eq(&self, other: &Self) -> bool {
-        self.equals(other)
+        self.dyn_eq(other.as_any())
     }
 }
 
-// Manual implementation of `PartialOrd`
-// There might be some wackiness with it, but this is based on the impl of eq for AggregateUDFImpl
-// https://users.rust-lang.org/t/how-to-compare-two-trait-objects-for-equality/88063/5
 impl PartialOrd for dyn AggregateUDFImpl {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.name().partial_cmp(other.name()) {
             Some(Ordering::Equal) => self.signature().partial_cmp(other.signature()),
             cmp => cmp,
         }
+        // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+        .filter(|cmp| *cmp != Ordering::Equal || self == other)
     }
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::schema_name`].
+pub fn udaf_default_schema_name<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    params: &AggregateFunctionParams,
+) -> Result<String> {
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = params;
+
+    // exclude the first function argument(= column) in ordered set aggregate function,
+    // because it is duplicated with the WITHIN GROUP clause in schema name.
+    let args = if func.supports_within_group_clause() && !order_by.is_empty() {
+        &args[1..]
+    } else {
+        &args[..]
+    };
+
+    let mut schema_name = String::new();
+
+    schema_name.write_fmt(format_args!(
+        "{}({}{})",
+        func.name(),
+        if *distinct { "DISTINCT " } else { "" },
+        schema_name_from_exprs_comma_separated_without_space(args)?
+    ))?;
+
+    if let Some(null_treatment) = null_treatment {
+        schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+    }
+
+    if let Some(filter) = filter {
+        schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+    };
+
+    if !order_by.is_empty() {
+        let clause = match func.supports_within_group_clause() {
+            true => "WITHIN GROUP",
+            false => "ORDER BY",
+        };
+
+        schema_name.write_fmt(format_args!(
+            " {} [{}]",
+            clause,
+            schema_name_from_sorts(order_by)?
+        ))?;
+    };
+
+    Ok(schema_name)
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::human_display`].
+pub fn udaf_default_human_display<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    params: &AggregateFunctionParams,
+) -> Result<String> {
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = params;
+
+    let mut schema_name = String::new();
+
+    schema_name.write_fmt(format_args!(
+        "{}({}{})",
+        func.name(),
+        if *distinct { "DISTINCT " } else { "" },
+        ExprListDisplay::comma_separated(args.as_slice())
+    ))?;
+
+    if let Some(null_treatment) = null_treatment {
+        schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+    }
+
+    if let Some(filter) = filter {
+        schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+    };
+
+    if !order_by.is_empty() {
+        schema_name.write_fmt(format_args!(
+            " ORDER BY [{}]",
+            schema_name_from_sorts(order_by)?
+        ))?;
+    };
+
+    Ok(schema_name)
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::window_function_schema_name`].
+pub fn udaf_default_window_function_schema_name<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    params: &WindowFunctionParams,
+) -> Result<String> {
+    let WindowFunctionParams {
+        args,
+        partition_by,
+        order_by,
+        window_frame,
+        filter,
+        null_treatment,
+        distinct,
+    } = params;
+
+    let mut schema_name = String::new();
+
+    // Inject DISTINCT into the schema name when requested
+    if *distinct {
+        schema_name.write_fmt(format_args!(
+            "{}(DISTINCT {})",
+            func.name(),
+            schema_name_from_exprs(args)?
+        ))?;
+    } else {
+        schema_name.write_fmt(format_args!(
+            "{}({})",
+            func.name(),
+            schema_name_from_exprs(args)?
+        ))?;
+    }
+
+    if let Some(null_treatment) = null_treatment {
+        schema_name.write_fmt(format_args!(" {null_treatment}"))?;
+    }
+
+    if let Some(filter) = filter {
+        schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+    }
+
+    if !partition_by.is_empty() {
+        schema_name.write_fmt(format_args!(
+            " PARTITION BY [{}]",
+            schema_name_from_exprs(partition_by)?
+        ))?;
+    }
+
+    if !order_by.is_empty() {
+        schema_name.write_fmt(format_args!(
+            " ORDER BY [{}]",
+            schema_name_from_sorts(order_by)?
+        ))?;
+    }
+
+    schema_name.write_fmt(format_args!(" {window_frame}"))?;
+
+    Ok(schema_name)
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::display_name`].
+pub fn udaf_default_display_name<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    params: &AggregateFunctionParams,
+) -> Result<String> {
+    let AggregateFunctionParams {
+        args,
+        distinct,
+        filter,
+        order_by,
+        null_treatment,
+    } = params;
+
+    let mut display_name = String::new();
+
+    display_name.write_fmt(format_args!(
+        "{}({}{})",
+        func.name(),
+        if *distinct { "DISTINCT " } else { "" },
+        expr_vec_fmt!(args)
+    ))?;
+
+    if let Some(nt) = null_treatment {
+        display_name.write_fmt(format_args!(" {nt}"))?;
+    }
+    if let Some(fe) = filter {
+        display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+    }
+    if !order_by.is_empty() {
+        display_name.write_fmt(format_args!(
+            " ORDER BY [{}]",
+            order_by
+                .iter()
+                .map(|o| format!("{o}"))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ))?;
+    }
+
+    Ok(display_name)
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::window_function_display_name`].
+pub fn udaf_default_window_function_display_name<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    params: &WindowFunctionParams,
+) -> Result<String> {
+    let WindowFunctionParams {
+        args,
+        partition_by,
+        order_by,
+        window_frame,
+        filter,
+        null_treatment,
+        distinct,
+    } = params;
+
+    let mut display_name = String::new();
+
+    if *distinct {
+        display_name.write_fmt(format_args!(
+            "{}(DISTINCT {})",
+            func.name(),
+            expr_vec_fmt!(args)
+        ))?;
+    } else {
+        display_name.write_fmt(format_args!(
+            "{}({})",
+            func.name(),
+            expr_vec_fmt!(args)
+        ))?;
+    }
+
+    if let Some(null_treatment) = null_treatment {
+        display_name.write_fmt(format_args!(" {null_treatment}"))?;
+    }
+
+    if let Some(fe) = filter {
+        display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+    }
+
+    if !partition_by.is_empty() {
+        display_name.write_fmt(format_args!(
+            " PARTITION BY [{}]",
+            expr_vec_fmt!(partition_by)
+        ))?;
+    }
+
+    if !order_by.is_empty() {
+        display_name
+            .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+    };
+
+    display_name.write_fmt(format_args!(
+        " {} BETWEEN {} AND {}",
+        window_frame.units, window_frame.start_bound, window_frame.end_bound
+    ))?;
+
+    Ok(display_name)
+}
+
+/// Encapsulates default implementation of [`AggregateUDFImpl::return_field`].
+pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    arg_fields: &[FieldRef],
+) -> Result<FieldRef> {
+    let arg_types: Vec<_> = arg_fields.iter().map(|f| f.data_type()).cloned().collect();
+    let data_type = func.return_type(&arg_types)?;
+
+    Ok(Arc::new(Field::new(
+        func.name(),
+        data_type,
+        func.is_nullable(),
+    )))
 }
 
 pub enum ReversedUDAF {
@@ -971,9 +1116,9 @@ pub enum ReversedUDAF {
 
 /// AggregateUDF that adds an alias to the underlying function. It is better to
 /// implement [`AggregateUDFImpl`], which supports aliases, directly if possible.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct AliasedAggregateUDFImpl {
-    inner: Arc<dyn AggregateUDFImpl>,
+    inner: UdfEq<Arc<dyn AggregateUDFImpl>>,
     aliases: Vec<String>,
 }
 
@@ -985,10 +1130,14 @@ impl AliasedAggregateUDFImpl {
         let mut aliases = inner.aliases().to_vec();
         aliases.extend(new_aliases.into_iter().map(|s| s.to_string()));
 
-        Self { inner, aliases }
+        Self {
+            inner: inner.into(),
+            aliases,
+        }
     }
 }
 
+#[warn(clippy::missing_trait_methods)] // Delegates, so it should implement every single trait method
 impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     fn as_any(&self) -> &dyn Any {
         self
@@ -1014,7 +1163,33 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self.aliases
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.schema_name(params)
+    }
+
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
+    }
+
+    fn window_function_schema_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_schema_name(params)
+    }
+
+    fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.display_name(params)
+    }
+
+    fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_display_name(params)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         self.inner.state_fields(args)
     }
 
@@ -1045,7 +1220,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
             .map(|udf| {
                 udf.map(|udf| {
                     Arc::new(AliasedAggregateUDFImpl {
-                        inner: udf,
+                        inner: udf.into(),
                         aliases: self.aliases.clone(),
                     }) as Arc<dyn AggregateUDFImpl>
                 })
@@ -1068,59 +1243,41 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.coerce_types(arg_types)
     }
 
-    fn equals(&self, other: &dyn AggregateUDFImpl) -> bool {
-        if let Some(other) = other.as_any().downcast_ref::<AliasedAggregateUDFImpl>() {
-            self.inner.equals(other.inner.as_ref()) && self.aliases == other.aliases
-        } else {
-            false
-        }
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        self.inner.return_field(arg_fields)
     }
 
-    fn hash_value(&self) -> u64 {
-        let hasher = &mut DefaultHasher::new();
-        self.inner.hash_value().hash(hasher);
-        self.aliases.hash(hasher);
-        hasher.finish()
+    fn is_nullable(&self) -> bool {
+        self.inner.is_nullable()
     }
 
     fn is_descending(&self) -> Option<bool> {
         self.inner.is_descending()
     }
 
+    fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
+        self.inner.value_from_stats(statistics_args)
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        self.inner.default_value(data_type)
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        self.inner.supports_null_handling_clause()
+    }
+
+    fn supports_within_group_clause(&self) -> bool {
+        self.inner.supports_within_group_clause()
+    }
+
+    fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
+        self.inner.set_monotonicity(data_type)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
-}
-
-// Aggregate UDF doc sections for use in public documentation
-pub mod aggregate_doc_sections {
-    use crate::DocSection;
-
-    pub fn doc_sections() -> Vec<DocSection> {
-        vec![
-            DOC_SECTION_GENERAL,
-            DOC_SECTION_STATISTICAL,
-            DOC_SECTION_APPROXIMATE,
-        ]
-    }
-
-    pub const DOC_SECTION_GENERAL: DocSection = DocSection {
-        include: true,
-        label: "General Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_STATISTICAL: DocSection = DocSection {
-        include: true,
-        label: "Statistical Functions",
-        description: None,
-    };
-
-    pub const DOC_SECTION_APPROXIMATE: DocSection = DocSection {
-        include: true,
-        label: "Approximate Functions",
-        description: None,
-    };
 }
 
 /// Indicates whether an aggregation function is monotonic as a set
@@ -1147,7 +1304,7 @@ pub enum SetMonotonicity {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
@@ -1156,8 +1313,9 @@ mod test {
     };
     use std::any::Any;
     use std::cmp::Ordering;
+    use std::hash::{DefaultHasher, Hash, Hasher};
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AMeanUdf {
         signature: Signature,
     }
@@ -1193,12 +1351,12 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct BMeanUdf {
         signature: Signature,
     }
@@ -1233,9 +1391,19 @@ mod test {
         ) -> Result<Box<dyn Accumulator>> {
             unimplemented!()
         }
-        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
         }
+    }
+
+    #[test]
+    fn test_partial_eq() {
+        let a1 = AggregateUDF::from(AMeanUdf::new());
+        let a2 = AggregateUDF::from(AMeanUdf::new());
+        let eq = a1 == a2;
+        assert!(eq);
+        assert_eq!(a1, a2);
+        assert_eq!(hash(a1), hash(a2));
     }
 
     #[test]
@@ -1249,5 +1417,11 @@ mod test {
         let b1 = AggregateUDF::from(BMeanUdf::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    fn hash<T: Hash>(value: T) -> u64 {
+        let hasher = &mut DefaultHasher::new();
+        value.hash(hasher);
+        hasher.finish()
     }
 }

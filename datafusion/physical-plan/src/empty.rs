@@ -21,18 +21,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics, common};
 use crate::{
-    execution_plan::{Boundedness, EmissionType},
     DisplayFormatType, ExecutionPlan, Partitioning,
+    execution_plan::{Boundedness, EmissionType},
 };
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
+use crate::execution_plan::SchedulingType;
 use log::trace;
 
 /// Execution plan for empty relation with produce_one_row=false
@@ -81,6 +82,7 @@ impl EmptyExec {
             EmissionType::Incremental,
             Boundedness::Bounded,
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
     }
 }
 
@@ -132,15 +134,19 @@ impl ExecutionPlan for EmptyExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start EmptyExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
-        if partition >= self.partitions {
-            return internal_err!(
-                "EmptyExec invalid partition {} (expected less than {})",
-                partition,
-                self.partitions
-            );
-        }
+        assert_or_internal_err!(
+            partition < self.partitions,
+            "EmptyExec invalid partition {} (expected less than {})",
+            partition,
+            self.partitions
+        );
 
         Ok(Box::pin(MemoryStream::try_new(
             self.data()?,
@@ -154,9 +160,15 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
+        if let Some(partition) = partition {
+            assert_or_internal_err!(
+                partition < self.partitions,
+                "EmptyExec invalid partition {} (expected less than {})",
+                partition,
+                self.partitions
+            );
         }
+
         let batch = self
             .data()
             .expect("Create empty RecordBatch should not fail");

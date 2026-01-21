@@ -264,7 +264,7 @@ logical_plan
 02)--TableScan: t projection=[id]
 physical_plan
 01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet, reverse_row_groups=true
 
 statement ok
 DROP TABLE t;
@@ -297,3 +297,9 @@ CREATE EXTERNAL TABLE staging.foo STORED AS parquet LOCATION '../../parquet-test
 # Create external table with qualified name, but no schema should error
 statement error DataFusion error: Error during planning: failed to resolve schema: release
 CREATE EXTERNAL TABLE release.bar STORED AS parquet LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+# Cannot create external table alongside `if_not_exists` and `or_replace`
+statement error DataFusion error: SQL error: ParserError\("'IF NOT EXISTS' cannot coexist with 'REPLACE'"\)
+CREATE OR REPLACE EXTERNAL TABLE IF NOT EXISTS t_conflict(c1 int)
+STORED AS CSV
+LOCATION 'foo.csv';

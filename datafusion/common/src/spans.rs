@@ -39,6 +39,7 @@ impl fmt::Debug for Location {
     }
 }
 
+#[cfg(feature = "sql")]
 impl From<sqlparser::tokenizer::Location> for Location {
     fn from(value: sqlparser::tokenizer::Location) -> Self {
         Self {
@@ -70,6 +71,7 @@ impl Span {
     /// Convert a [`Span`](sqlparser::tokenizer::Span) from the parser, into a
     /// DataFusion [`Span`]. If the input span is empty (line 0 column 0, to
     /// line 0 column 0), then [`None`] is returned.
+    #[cfg(feature = "sql")]
     pub fn try_from_sqlparser_span(span: sqlparser::tokenizer::Span) -> Option<Span> {
         if span == sqlparser::tokenizer::Span::empty() {
             None

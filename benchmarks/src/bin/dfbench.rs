@@ -18,7 +18,7 @@
 //! DataFusion benchmark runner
 use datafusion::error::Result;
 
-use structopt::StructOpt;
+use clap::{Parser, Subcommand};
 
 #[cfg(all(feature = "snmalloc", feature = "mimalloc"))]
 compile_error!(
@@ -34,21 +34,28 @@ static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use datafusion_benchmarks::{
-    cancellation, clickbench, h2o, imdb, parquet_filter, sort, sort_tpch, tpch,
+    cancellation, clickbench, h2o, hj, imdb, nlj, smj, sort_tpch, tpcds, tpch,
 };
 
-#[derive(Debug, StructOpt)]
-#[structopt(about = "benchmark command")]
+#[derive(Debug, Parser)]
+#[command(about = "benchmark command")]
+struct Cli {
+    #[command(subcommand)]
+    command: Options,
+}
+
+#[derive(Debug, Subcommand)]
 enum Options {
     Cancellation(cancellation::RunOpt),
     Clickbench(clickbench::RunOpt),
     H2o(h2o::RunOpt),
+    HJ(hj::RunOpt),
     Imdb(imdb::RunOpt),
-    ParquetFilter(parquet_filter::RunOpt),
-    Sort(sort::RunOpt),
+    Nlj(nlj::RunOpt),
+    Smj(smj::RunOpt),
     SortTpch(sort_tpch::RunOpt),
     Tpch(tpch::RunOpt),
-    TpchConvert(tpch::ConvertOpt),
+    Tpcds(tpcds::RunOpt),
 }
 
 // Main benchmark runner entrypoint
@@ -56,15 +63,17 @@ enum Options {
 pub async fn main() -> Result<()> {
     env_logger::init();
 
-    match Options::from_args() {
+    let cli = Cli::parse();
+    match cli.command {
         Options::Cancellation(opt) => opt.run().await,
         Options::Clickbench(opt) => opt.run().await,
         Options::H2o(opt) => opt.run().await,
-        Options::Imdb(opt) => opt.run().await,
-        Options::ParquetFilter(opt) => opt.run().await,
-        Options::Sort(opt) => opt.run().await,
+        Options::HJ(opt) => opt.run().await,
+        Options::Imdb(opt) => Box::pin(opt.run()).await,
+        Options::Nlj(opt) => opt.run().await,
+        Options::Smj(opt) => opt.run().await,
         Options::SortTpch(opt) => opt.run().await,
-        Options::Tpch(opt) => opt.run().await,
-        Options::TpchConvert(opt) => opt.run().await,
+        Options::Tpch(opt) => Box::pin(opt.run()).await,
+        Options::Tpcds(opt) => Box::pin(opt.run()).await,
     }
 }

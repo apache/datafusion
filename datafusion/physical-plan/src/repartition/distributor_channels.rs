@@ -43,8 +43,8 @@ use std::{
     ops::DerefMut,
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     task::{Context, Poll, Waker},
 };
@@ -151,7 +151,7 @@ impl<T> Clone for DistributionSender<T> {
 impl<T> Drop for DistributionSender<T> {
     fn drop(&mut self) {
         let n_senders_pre = self.channel.n_senders.fetch_sub(1, Ordering::SeqCst);
-        // is the the last copy of the sender side?
+        // is the last copy of the sender side?
         if n_senders_pre > 1 {
             return;
         }
@@ -476,7 +476,7 @@ type SharedGate = Arc<Gate>;
 mod tests {
     use std::sync::atomic::AtomicBool;
 
-    use futures::{task::ArcWake, FutureExt};
+    use futures::{FutureExt, task::ArcWake};
 
     use super::*;
 

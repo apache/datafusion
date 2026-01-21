@@ -21,9 +21,9 @@ use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::on_lr_is_preserved;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::Result;
+use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{logical_plan::Filter, Expr, ExprSchemable, LogicalPlan};
+use datafusion_expr::{Expr, ExprSchemable, LogicalPlan, logical_plan::Filter};
 use std::sync::Arc;
 
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
@@ -51,7 +51,8 @@ impl OptimizerRule for FilterNullJoinKeys {
         }
         match plan {
             LogicalPlan::Join(mut join)
-                if !join.on.is_empty() && !join.null_equals_null =>
+                if !join.on.is_empty()
+                    && join.null_equality == NullEquality::NullEqualsNothing =>
             {
                 let (left_preserved, right_preserved) =
                     on_lr_is_preserved(join.join_type);
@@ -107,20 +108,23 @@ fn create_not_null_predicate(filters: Vec<Expr>) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Column;
     use datafusion_expr::logical_plan::table_scan;
-    use datafusion_expr::{col, lit, JoinType, LogicalPlanBuilder};
+    use datafusion_expr::{JoinType, LogicalPlanBuilder, col, lit};
 
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(FilterNullJoinKeys {});
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(FilterNullJoinKeys {})];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )

@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::datetime::common::*;
+use arrow::compute::cast_with_options;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use arrow::error::ArrowError::ParseError;
 use arrow::{array::types::Date32Type, compute::kernels::cast_utils::Parser};
-use datafusion_common::error::DataFusionError;
-use datafusion_common::{arrow_err, exec_err, internal_datafusion_err, Result};
+use datafusion_common::format::DEFAULT_CAST_OPTIONS;
+use datafusion_common::{Result, arrow_err, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -31,7 +32,7 @@ use std::any::Any;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r"Converts a value to a date (`YYYY-MM-DD`).
-Supports strings, integer and double types as input.
+Supports strings, numeric and timestamp types as input.
 Strings are parsed as YYYY-MM-DD (e.g. '2023-07-20') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided.
 Integers and doubles are interpreted as days since the unix epoch (`1970-01-01T00:00:00Z`).
 Returns the corresponding date.
@@ -39,7 +40,7 @@ Returns the corresponding date.
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.",
     syntax_example = "to_date('2017-05-31', '%Y-%m-%d')",
     sql_example = r#"```sql
-> select to_date('2023-01-31'); 
+> select to_date('2023-01-31');
 +-------------------------------+
 | to_date(Utf8("2023-01-31")) |
 +-------------------------------+
@@ -53,7 +54,7 @@ Note: `to_date` returns Date32, which represents its values as the number of day
 +---------------------------------------------------------------------+
 ```
 
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/to_date.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
 "#,
     standard_argument(name = "expression", prefix = "String"),
     argument(
@@ -63,7 +64,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   an error will be returned."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ToDateFunc {
     signature: Signature,
 }
@@ -83,7 +84,7 @@ impl ToDateFunc {
 
     fn to_date(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         match args.len() {
-            1 => handle::<Date32Type, _, Date32Type>(
+            1 => handle::<Date32Type, _>(
                 args,
                 |s| match Date32Type::parse(s) {
                     Some(v) => Ok(v),
@@ -93,8 +94,9 @@ impl ToDateFunc {
                     )),
                 },
                 "to_date",
+                &Date32,
             ),
-            2.. => handle_multiple::<Date32Type, _, Date32Type, _>(
+            2.. => handle_multiple::<Date32Type, _, _>(
                 args,
                 |s, format| {
                     string_to_timestamp_millis_formatted(s, format)
@@ -107,6 +109,7 @@ impl ToDateFunc {
                 },
                 |n| n,
                 "to_date",
+                &Date32,
             ),
             0 => exec_err!("Unsupported 0 argument count for function to_date"),
         }
@@ -145,12 +148,45 @@ impl ScalarUDFImpl for ToDateFunc {
         }
 
         match args[0].data_type() {
-            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
+            Null | Int32 | Int64 | Date32 | Date64 | Timestamp(_, _) => {
                 args[0].cast_to(&Date32, None)
+            }
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 => {
+                // Arrow cast doesn't support direct casting of these types to date32
+                // as it only supports Int32 and Int64. To work around that limitation,
+                // use cast_with_options to cast to Int32 and then cast the result of
+                // that to Date32.
+                match &args[0] {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(cast_with_options(
+                            &cast_with_options(&array, &Int32, &DEFAULT_CAST_OPTIONS)?,
+                            &Date32,
+                            &DEFAULT_CAST_OPTIONS,
+                        )?))
+                    }
+                    ColumnarValue::Scalar(scalar) => {
+                        let sv =
+                            scalar.cast_to_with_options(&Int32, &DEFAULT_CAST_OPTIONS)?;
+                        Ok(ColumnarValue::Scalar(
+                            sv.cast_to_with_options(&Date32, &DEFAULT_CAST_OPTIONS)?,
+                        ))
+                    }
+                }
+            }
+            Float16
+            | Float32
+            | Float64
+            | Decimal32(_, _)
+            | Decimal64(_, _)
+            | Decimal128(_, _)
+            | Decimal256(_, _) => {
+                // The only way this makes sense is to get the Int64 value of the float
+                // or decimal and then cast that to Date32.
+                args[0].cast_to(&Int64, None)?.cast_to(&Date32, None)
             }
             Utf8View | LargeUtf8 | Utf8 => self.to_date(&args),
             other => {
-                exec_err!("Unsupported data type {:?} for function to_date", other)
+                exec_err!("Unsupported data type {} for function to_date", other)
             }
         }
     }
@@ -162,14 +198,14 @@ impl ScalarUDFImpl for ToDateFunc {
 
 #[cfg(test)]
 mod tests {
+    use super::ToDateFunc;
     use arrow::array::{Array, Date32Array, GenericStringArray, StringViewArray};
     use arrow::datatypes::{DataType, Field};
     use arrow::{compute::kernels::cast_utils::Parser, datatypes::Date32Type};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{DataFusionError, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
-
-    use super::ToDateFunc;
 
     fn invoke_to_date_with_args(
         args: Vec<ColumnarValue>,
@@ -177,14 +213,15 @@ mod tests {
     ) -> Result<ColumnarValue, DataFusionError> {
         let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type(), true))
+            .map(|arg| Field::new("a", arg.data_type(), true).into())
             .collect::<Vec<_>>();
 
         let args = datafusion_expr::ScalarFunctionArgs {
             args,
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows,
-            return_field: &Field::new("f", DataType::Date32, true),
+            return_field: Field::new("f", DataType::Date32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         ToDateFunc::new().invoke_with_args(args)
     }
@@ -351,7 +388,11 @@ mod tests {
             match to_date_result {
                 Ok(ColumnarValue::Scalar(ScalarValue::Date32(date_val))) => {
                     let expected = Date32Type::parse_formatted(tc.date_str, "%Y-%m-%d");
-                    assert_eq!(date_val, expected, "{}: to_date created wrong value for date '{}' with format string '{}'", tc.name, tc.formatted_date, tc.format_str);
+                    assert_eq!(
+                        date_val, expected,
+                        "{}: to_date created wrong value for date '{}' with format string '{}'",
+                        tc.name, tc.formatted_date, tc.format_str
+                    );
                 }
                 _ => panic!(
                     "Could not convert '{}' with format string '{}'to Date",
@@ -385,7 +426,8 @@ mod tests {
                     builder.append_value(expected.unwrap());
 
                     assert_eq!(
-                        &builder.finish() as &dyn Array, a.as_ref(),
+                        &builder.finish() as &dyn Array,
+                        a.as_ref(),
                         "{}: to_date created wrong value for date '{}' with format string '{}'",
                         tc.name,
                         tc.formatted_date,
@@ -447,7 +489,7 @@ mod tests {
                     let expected = Date32Type::parse_formatted("2020-09-08", "%Y-%m-%d");
                     assert_eq!(date_val, expected, "to_date created wrong value");
                 }
-                _ => panic!("Conversion of {} failed", date_str),
+                _ => panic!("Conversion of {date_str} failed"),
             }
         }
     }
@@ -465,11 +507,10 @@ mod tests {
                 let expected = Date32Type::parse_formatted("2024-12-31", "%Y-%m-%d");
                 assert_eq!(
                     date_val, expected,
-                    "to_date created wrong value for {}",
-                    date_str
+                    "to_date created wrong value for {date_str}"
                 );
             }
-            _ => panic!("Conversion of {} failed", date_str),
+            _ => panic!("Conversion of {date_str} failed"),
         }
     }
 
@@ -482,10 +523,7 @@ mod tests {
             invoke_to_date_with_args(vec![ColumnarValue::Scalar(date_scalar)], 1);
 
         if let Ok(ColumnarValue::Scalar(ScalarValue::Date32(_))) = to_date_result {
-            panic!(
-                "Conversion of {} succeeded, but should have failed, ",
-                date_str
-            );
+            panic!("Conversion of {date_str} succeeded, but should have failed. ");
         }
     }
 }

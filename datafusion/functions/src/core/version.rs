@@ -18,7 +18,7 @@
 //! [`VersionFunc`]: Implementation of the `version` function.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{utils::take_function_args, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -39,7 +39,7 @@ use std::any::Any;
 +--------------------------------------------+
 ```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct VersionFunc {
     signature: Signature,
 }
@@ -53,7 +53,7 @@ impl Default for VersionFunc {
 impl VersionFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Immutable),
+            signature: Signature::nullary(Volatility::Immutable),
         }
     }
 }
@@ -98,7 +98,9 @@ impl ScalarUDFImpl for VersionFunc {
 mod test {
     use super::*;
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarUDF;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_version_udf() {
@@ -108,7 +110,8 @@ mod test {
                 args: vec![],
                 arg_fields: vec![],
                 number_rows: 0,
-                return_field: &Field::new("f", DataType::Utf8, true),
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
             })
             .unwrap();
 

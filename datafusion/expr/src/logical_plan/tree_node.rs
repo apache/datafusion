@@ -38,20 +38,20 @@
 //! * [`LogicalPlan::expressions`]: Return a copy of the plan's expressions
 
 use crate::{
-    dml::CopyTo, Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement,
-    Distinct, DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition,
-    Sort, Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest,
-    UserDefinedLogicalNode, Values, Window,
+    Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
+    DistinctOn, DmlStatement, Execute, Explain, Expr, Extension, Filter, Join, Limit,
+    LogicalPlan, Partitioning, Prepare, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, TableScan, Union, Unnest, UserDefinedLogicalNode,
+    Values, Window, dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
-use crate::expr::{Exists, InSubquery};
+use crate::expr::{Exists, InSubquery, SetComparison};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeIterator, TreeNodeRecursion,
     TreeNodeRewriter, TreeNodeVisitor,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 
 impl TreeNode for LogicalPlan {
     fn apply_children<'n, F: FnMut(&'n Self) -> Result<TreeNodeRecursion>>(
@@ -85,17 +85,9 @@ impl TreeNode for LogicalPlan {
                     schema,
                 })
             }),
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input,
-                having,
-            }) => input.map_elements(f)?.update_data(|input| {
-                LogicalPlan::Filter(Filter {
-                    predicate,
-                    input,
-                    having,
-                })
-            }),
+            LogicalPlan::Filter(Filter { predicate, input }) => input
+                .map_elements(f)?
+                .update_data(|input| LogicalPlan::Filter(Filter { predicate, input })),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
@@ -140,7 +132,8 @@ impl TreeNode for LogicalPlan {
                 join_type,
                 join_constraint,
                 schema,
-                null_equals_null,
+                null_equality,
+                null_aware,
             }) => (left, right).map_elements(f)?.update_data(|(left, right)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -150,7 +143,8 @@ impl TreeNode for LogicalPlan {
                     join_type,
                     join_constraint,
                     schema,
-                    null_equals_null,
+                    null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Limit(Limit { skip, fetch, input }) => input
@@ -251,6 +245,7 @@ impl TreeNode for LogicalPlan {
                 partition_by,
                 file_type,
                 options,
+                output_schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Copy(CopyTo {
                     input,
@@ -258,6 +253,7 @@ impl TreeNode for LogicalPlan {
                     partition_by,
                     file_type,
                     options,
+                    output_schema,
                 })
             }),
             LogicalPlan::Ddl(ddl) => {
@@ -321,9 +317,9 @@ impl TreeNode for LogicalPlan {
                 LogicalPlan::Unnest(Unnest {
                     input,
                     exec_columns: input_columns,
-                    dependency_indices,
                     list_type_columns,
                     struct_type_columns,
+                    dependency_indices,
                     schema,
                     options,
                 })
@@ -444,11 +440,11 @@ impl LogicalPlan {
                 filters.apply_elements(f)
             }
             LogicalPlan::Unnest(unnest) => {
-                let columns = unnest.exec_columns.clone();
-
-                let exprs = columns
+                let exprs = unnest
+                    .exec_columns
                     .iter()
-                    .map(|c| Expr::Column(c.clone()))
+                    .cloned()
+                    .map(Expr::Column)
                     .collect::<Vec<_>>();
                 exprs.apply_elements(f)
             }
@@ -509,17 +505,10 @@ impl LogicalPlan {
             LogicalPlan::Values(Values { schema, values }) => values
                 .map_elements(f)?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),
-            LogicalPlan::Filter(Filter {
-                predicate,
-                input,
-                having,
-            }) => f(predicate)?.update_data(|predicate| {
-                LogicalPlan::Filter(Filter {
-                    predicate,
-                    input,
-                    having,
-                })
-            }),
+            LogicalPlan::Filter(Filter { predicate, input }) => f(predicate)?
+                .update_data(|predicate| {
+                    LogicalPlan::Filter(Filter { predicate, input })
+                }),
             LogicalPlan::Repartition(Repartition {
                 input,
                 partitioning_scheme,
@@ -576,7 +565,8 @@ impl LogicalPlan {
                 join_type,
                 join_constraint,
                 schema,
-                null_equals_null,
+                null_equality,
+                null_aware,
             }) => (on, filter).map_elements(f)?.update_data(|(on, filter)| {
                 LogicalPlan::Join(Join {
                     left,
@@ -586,7 +576,8 @@ impl LogicalPlan {
                     join_type,
                     join_constraint,
                     schema,
-                    null_equals_null,
+                    null_equality,
+                    null_aware,
                 })
             }),
             LogicalPlan::Sort(Sort { expr, input, fetch }) => expr
@@ -828,6 +819,7 @@ impl LogicalPlan {
             expr.apply(|expr| match expr {
                 Expr::Exists(Exists { subquery, .. })
                 | Expr::InSubquery(InSubquery { subquery, .. })
+                | Expr::SetComparison(SetComparison { subquery, .. })
                 | Expr::ScalarSubquery(subquery) => {
                     // use a synthetic plan so the collector sees a
                     // LogicalPlan::Subquery (even though it is
@@ -867,6 +859,22 @@ impl LogicalPlan {
                         subquery,
                         negated,
                     })),
+                    _ => internal_err!("Transformation should return Subquery"),
+                }),
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                }) => f(LogicalPlan::Subquery(subquery))?.map_data(|s| match s {
+                    LogicalPlan::Subquery(subquery) => {
+                        Ok(Expr::SetComparison(SetComparison {
+                            expr,
+                            subquery,
+                            op,
+                            quantifier,
+                        }))
+                    }
                     _ => internal_err!("Transformation should return Subquery"),
                 }),
                 Expr::ScalarSubquery(subquery) => f(LogicalPlan::Subquery(subquery))?

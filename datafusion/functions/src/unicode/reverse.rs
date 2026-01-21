@@ -19,16 +19,16 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringBuilder, OffsetSizeTrait, StringArrayType,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -44,7 +44,7 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
 ```"#,
     standard_argument(name = "str", prefix = "String")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ReverseFunc {
     signature: Signature,
 }
@@ -106,16 +106,16 @@ impl ScalarUDFImpl for ReverseFunc {
 
 /// Reverses the order of the characters in the string `reverse('abcde') = 'edcba'`.
 /// The implementation uses UTF-8 code points as characters
-pub fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn reverse<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args[0].data_type() == &Utf8View {
-        reverse_impl::<T, _>(args[0].as_string_view())
+        reverse_impl::<T, _>(&args[0].as_string_view())
     } else {
-        reverse_impl::<T, _>(args[0].as_string::<T>())
+        reverse_impl::<T, _>(&args[0].as_string::<T>())
     }
 }
 
 fn reverse_impl<'a, T: OffsetSizeTrait, V: StringArrayType<'a>>(
-    string_array: V,
+    string_array: &V,
 ) -> Result<ArrayRef> {
     let mut builder = GenericStringBuilder::<T>::with_capacity(string_array.len(), 1024);
 

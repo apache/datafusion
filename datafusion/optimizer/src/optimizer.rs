@@ -22,17 +22,18 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{assert_expected_schema, InvariantLevel};
+use datafusion_expr::{InvariantLevel, assert_expected_schema};
 use log::{debug, warn};
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
+use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
+use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
@@ -40,17 +41,17 @@ use crate::eliminate_filter::EliminateFilter;
 use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
-use crate::eliminate_nested_union::EliminateNestedUnion;
-use crate::eliminate_one_union::EliminateOneUnion;
 use crate::eliminate_outer_join::EliminateOuterJoin;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::filter_null_join_keys::FilterNullJoinKeys;
 use crate::optimize_projections::OptimizeProjections;
+use crate::optimize_unions::OptimizeUnions;
 use crate::plan_signature::LogicalPlanSignature;
 use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -100,13 +101,14 @@ pub trait OptimizerRule: Debug {
 /// Options to control the DataFusion Optimizer.
 pub trait OptimizerConfig {
     /// Return the time at which the query execution started. This
-    /// time is used as the value for now()
-    fn query_execution_start_time(&self) -> DateTime<Utc>;
+    /// time is used as the value for `now()`. If `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>>;
 
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
-    fn options(&self) -> &ConfigOptions;
+    fn options(&self) -> Arc<ConfigOptions>;
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         None
@@ -118,13 +120,14 @@ pub trait OptimizerConfig {
 #[derive(Debug)]
 pub struct OptimizerContext {
     /// Query execution start time that can be used to rewrite
-    /// expressions such as `now()` to use a literal value instead
-    query_execution_start_time: DateTime<Utc>,
+    /// expressions such as `now()` to use a literal value instead.
+    /// If `None`, time-dependent functions will not be simplified.
+    query_execution_start_time: Option<DateTime<Utc>>,
 
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
-    options: ConfigOptions,
+    options: Arc<ConfigOptions>,
 }
 
 impl OptimizerContext {
@@ -133,8 +136,13 @@ impl OptimizerContext {
         let mut options = ConfigOptions::default();
         options.optimizer.filter_null_join_keys = true;
 
+        Self::new_with_config_options(Arc::new(options))
+    }
+
+    /// Create a optimizer config with provided [ConfigOptions].
+    pub fn new_with_config_options(options: Arc<ConfigOptions>) -> Self {
         Self {
-            query_execution_start_time: Utc::now(),
+            query_execution_start_time: Some(Utc::now()),
             alias_generator: Arc::new(AliasGenerator::new()),
             options,
         }
@@ -142,30 +150,38 @@ impl OptimizerContext {
 
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
-        self.options.optimizer.filter_null_join_keys = filter_null_keys;
+        Arc::make_mut(&mut self.options)
+            .optimizer
+            .filter_null_join_keys = filter_null_keys;
         self
     }
 
-    /// Specify whether the optimizer should skip rules that produce
-    /// errors, or fail the query
+    /// Set the query execution start time
     pub fn with_query_execution_start_time(
         mut self,
-        query_execution_tart_time: DateTime<Utc>,
+        query_execution_start_time: DateTime<Utc>,
     ) -> Self {
-        self.query_execution_start_time = query_execution_tart_time;
+        self.query_execution_start_time = Some(query_execution_start_time);
+        self
+    }
+
+    /// Clear the query execution start time. When `None`, time-dependent
+    /// functions like `now()` will not be simplified during optimization.
+    pub fn without_query_execution_start_time(mut self) -> Self {
+        self.query_execution_start_time = None;
         self
     }
 
     /// Specify whether the optimizer should skip rules that produce
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
-        self.options.optimizer.skip_failed_rules = b;
+        Arc::make_mut(&mut self.options).optimizer.skip_failed_rules = b;
         self
     }
 
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
-        self.options.optimizer.max_passes = v as usize;
+        Arc::make_mut(&mut self.options).optimizer.max_passes = v as usize;
         self
     }
 }
@@ -178,7 +194,7 @@ impl Default for OptimizerContext {
 }
 
 impl OptimizerConfig for OptimizerContext {
-    fn query_execution_start_time(&self) -> DateTime<Utc> {
+    fn query_execution_start_time(&self) -> Option<DateTime<Utc>> {
         self.query_execution_start_time
     }
 
@@ -186,8 +202,8 @@ impl OptimizerConfig for OptimizerContext {
         &self.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        &self.options
+    fn options(&self) -> Arc<ConfigOptions> {
+        Arc::clone(&self.options)
     }
 }
 
@@ -220,20 +236,20 @@ impl Optimizer {
     /// Create a new optimizer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
-            Arc::new(EliminateNestedUnion::new()),
+            Arc::new(RewriteSetComparison::new()),
+            Arc::new(OptimizeUnions::new()),
             Arc::new(SimplifyExpressions::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
             Arc::new(ScalarSubqueryToJoin::new()),
+            Arc::new(DecorrelateLateralJoin::new()),
             Arc::new(ExtractEquijoinPredicate::new()),
             Arc::new(EliminateDuplicatedExpr::new()),
             Arc::new(EliminateFilter::new()),
             Arc::new(EliminateCrossJoin::new()),
             Arc::new(EliminateLimit::new()),
             Arc::new(PropagateEmptyRelation::new()),
-            // Must be after PropagateEmptyRelation
-            Arc::new(EliminateOneUnion::new()),
             Arc::new(FilterNullJoinKeys::default()),
             Arc::new(EliminateOuterJoin::new()),
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
@@ -282,9 +298,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::TopDown {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -292,9 +306,7 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::BottomUp {
-            {
-                self.rule.rewrite(node, self.config)
-            }
+            self.rule.rewrite(node, self.config)
         } else {
             Ok(Transformed::no(node))
         }
@@ -413,7 +425,7 @@ impl Optimizer {
                 previous_plans.insert(LogicalPlanSignature::new(&new_plan));
             if !plan_is_fresh {
                 // plan did not change, so no need to continue trying to optimize
-                debug!("optimizer pass {} did not make changes", i);
+                debug!("optimizer pass {i} did not make changes");
                 break;
             }
             i += 1;
@@ -458,10 +470,10 @@ mod tests {
 
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        assert_contains, plan_err, DFSchema, DFSchemaRef, DataFusionError, Result,
+        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{col, lit, LogicalPlan, LogicalPlanBuilder, Projection};
+    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Projection, col, lit};
 
     use crate::optimizer::Optimizer;
     use crate::test::test_table_scan;

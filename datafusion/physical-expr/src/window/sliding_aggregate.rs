@@ -22,18 +22,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::AggregateWindowExpr;
+use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
-use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 
-use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::Field;
+use arrow::array::{ArrayRef, BooleanArray};
+use arrow::datatypes::FieldRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function that
 /// can be incrementally computed over sliding windows.
@@ -43,8 +42,9 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 pub struct SlidingAggregateWindowExpr {
     aggregate: Arc<AggregateFunctionExpr>,
     partition_by: Vec<Arc<dyn PhysicalExpr>>,
-    order_by: LexOrdering,
+    order_by: Vec<PhysicalSortExpr>,
     window_frame: Arc<WindowFrame>,
+    filter: Option<Arc<dyn PhysicalExpr>>,
 }
 
 impl SlidingAggregateWindowExpr {
@@ -52,14 +52,16 @@ impl SlidingAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: &LexOrdering,
+        order_by: &[PhysicalSortExpr],
         window_frame: Arc<WindowFrame>,
+        filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: order_by.clone(),
+            order_by: order_by.to_vec(),
             window_frame,
+            filter,
         }
     }
 
@@ -80,7 +82,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         self
     }
 
-    fn field(&self) -> Result<Field> {
+    fn field(&self) -> Result<FieldRef> {
         Ok(self.aggregate.field())
     }
 
@@ -108,8 +110,8 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> &LexOrdering {
-        self.order_by.as_ref()
+    fn order_by(&self) -> &[PhysicalSortExpr] {
+        &self.order_by
     }
 
     fn get_window_frame(&self) -> &Arc<WindowFrame> {
@@ -123,15 +125,25 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    &self
+                        .order_by
+                        .iter()
+                        .map(|e| e.reverse())
+                        .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
+                    self.filter.clone(),
                 )) as _
             } else {
                 Arc::new(SlidingAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),
-                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    &self
+                        .order_by
+                        .iter()
+                        .map(|e| e.reverse())
+                        .collect::<Vec<_>>(),
                     Arc::new(self.window_frame.reverse()),
+                    self.filter.clone(),
                 )) as _
             }
         })
@@ -157,7 +169,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
                 expr: new_expr,
                 options: req.options,
             })
-            .collect::<LexOrdering>();
+            .collect();
         Some(Arc::new(SlidingAggregateWindowExpr {
             aggregate: self
                 .aggregate
@@ -166,13 +178,22 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             partition_by: partition_bys,
             order_by: new_order_by,
             window_frame: Arc::clone(&self.window_frame),
+            filter: self.filter.clone(),
         }))
+    }
+
+    fn create_window_fn(&self) -> Result<WindowFn> {
+        Ok(WindowFn::Aggregate(self.get_accumulator()?))
     }
 }
 
 impl AggregateWindowExpr for SlidingAggregateWindowExpr {
     fn get_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         self.aggregate.create_sliding_accumulator()
+    }
+
+    fn filter_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
+        self.filter.as_ref()
     }
 
     /// Given current range and the last range, calculates the accumulator
@@ -183,6 +204,7 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         cur_range: &Range<usize>,
         value_slice: &[ArrayRef],
         accumulator: &mut Box<dyn Accumulator>,
+        filter_mask: Option<&BooleanArray>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
             self.aggregate
@@ -191,23 +213,39 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
             // Accumulate any new rows that have entered the window:
             let update_bound = cur_range.end - last_range.end;
             if update_bound > 0 {
+                let slice_mask =
+                    filter_mask.map(|m| m.slice(last_range.end, update_bound));
                 let update: Vec<ArrayRef> = value_slice
                     .iter()
                     .map(|v| v.slice(last_range.end, update_bound))
-                    .collect();
+                    .map(|arr| match &slice_mask {
+                        Some(m) => filter_array(&arr, m),
+                        None => Ok(arr),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 accumulator.update_batch(&update)?
             }
 
             // Remove rows that have now left the window:
             let retract_bound = cur_range.start - last_range.start;
             if retract_bound > 0 {
+                let slice_mask =
+                    filter_mask.map(|m| m.slice(last_range.start, retract_bound));
                 let retract: Vec<ArrayRef> = value_slice
                     .iter()
                     .map(|v| v.slice(last_range.start, retract_bound))
-                    .collect();
+                    .map(|arr| match &slice_mask {
+                        Some(m) => filter_array(&arr, m),
+                        None => Ok(arr),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
                 accumulator.retract_batch(&retract)?
             }
             accumulator.evaluate()
         }
+    }
+
+    fn is_constant_in_partition(&self) -> bool {
+        false
     }
 }

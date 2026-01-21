@@ -22,12 +22,15 @@ edition = { workspace = true }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
 [dependencies]
 arrow = { workspace = true }
-chrono-tz = { version = "0.10.3", default-features = false }
+chrono-tz = { version = "0.10.4", default-features = false }
 datafusion-common = { workspace = true, default-features = true }
 env_logger = { workspace = true }
 rand = { workspace = true }

@@ -18,13 +18,13 @@
 use std::any::Any;
 use std::sync::{Arc, Weak};
 
-use crate::object_storage::{get_object_store, AwsOptions, GcpOptions};
+use crate::object_storage::{AwsOptions, GcpOptions, get_object_store};
 
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 
 use datafusion::common::plan_datafusion_err;
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::TableProvider;
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -152,10 +152,10 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
 
     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let inner_table = self.inner.table(name).await;
-        if inner_table.is_ok() {
-            if let Some(inner_table) = inner_table? {
-                return Ok(Some(inner_table));
-            }
+        if inner_table.is_ok()
+            && let Some(inner_table) = inner_table?
+        {
+            return Ok(Some(inner_table));
         }
 
         // if the inner schema provider didn't have a table by
@@ -200,6 +200,7 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
                     table_url.scheme(),
                     url,
                     &state.default_table_options(),
+                    false,
                 )
                 .await?;
                 state.runtime_env().register_object_store(url, store);
@@ -218,17 +219,18 @@ impl SchemaProvider for DynamicObjectStoreSchemaProvider {
 }
 
 pub fn substitute_tilde(cur: String) -> String {
-    if let Some(usr_dir_path) = home_dir() {
-        if let Some(usr_dir) = usr_dir_path.to_str() {
-            if cur.starts_with('~') && !usr_dir.is_empty() {
-                return cur.replacen('~', usr_dir, 1);
-            }
-        }
+    if let Some(usr_dir_path) = home_dir()
+        && let Some(usr_dir) = usr_dir_path.to_str()
+        && cur.starts_with('~')
+        && !usr_dir.is_empty()
+    {
+        return cur.replacen('~', usr_dir, 1);
     }
     cur
 }
 #[cfg(test)]
 mod tests {
+    use std::{env, vec};
 
     use super::*;
 
@@ -284,6 +286,19 @@ mod tests {
 
     #[tokio::test]
     async fn query_s3_location_test() -> Result<()> {
+        let aws_envs = vec![
+            "AWS_ENDPOINT",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_ALLOW_HTTP",
+        ];
+        for aws_env in aws_envs {
+            if env::var(aws_env).is_err() {
+                eprint!("aws envs not set, skipping s3 test");
+                return Ok(());
+            }
+        }
+
         let bucket = "examples3bucket";
         let location = format!("s3://{bucket}/file.parquet");
 
@@ -337,38 +352,42 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_substitute_tilde() {
-        use std::env;
-        use std::path::MAIN_SEPARATOR;
+        use std::{env, path::PathBuf};
         let original_home = home_dir();
         let test_home_path = if cfg!(windows) {
             "C:\\Users\\user"
         } else {
             "/home/user"
         };
-        env::set_var(
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            test_home_path,
-        );
+        unsafe {
+            env::set_var(
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                test_home_path,
+            );
+        }
         let input = "~/Code/datafusion/benchmarks/data/tpch_sf1/part/part-0.parquet";
-        let expected = format!(
-            "{}{}Code{}datafusion{}benchmarks{}data{}tpch_sf1{}part{}part-0.parquet",
-            test_home_path,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR,
-            MAIN_SEPARATOR
-        );
+        let expected = PathBuf::from(test_home_path)
+            .join("Code")
+            .join("datafusion")
+            .join("benchmarks")
+            .join("data")
+            .join("tpch_sf1")
+            .join("part")
+            .join("part-0.parquet")
+            .to_string_lossy()
+            .to_string();
         let actual = substitute_tilde(input.to_string());
         assert_eq!(actual, expected);
-        match original_home {
-            Some(home_path) => env::set_var(
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-                home_path.to_str().unwrap(),
-            ),
-            None => env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }),
+        unsafe {
+            match original_home {
+                Some(home_path) => env::set_var(
+                    if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+                    home_path.to_str().unwrap(),
+                ),
+                None => {
+                    env::remove_var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                }
+            }
         }
     }
 }

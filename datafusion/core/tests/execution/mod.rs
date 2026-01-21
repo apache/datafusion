@@ -15,4 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod coop;
+mod datasource_split;
 mod logical_plan;
+mod register_arrow;

@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{new_null_array, BooleanArray};
-use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, is_not_null, is_null};
-use arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_err, internal_err, Result};
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
+use datafusion_expr::conditional_expressions::CaseBuilder;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -46,9 +45,9 @@ use std::any::Any;
         description = "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CoalesceFunc {
-    signature: Signature,
+    pub(super) signature: Signature,
 }
 
 impl Default for CoalesceFunc {
@@ -82,7 +81,7 @@ impl ScalarUDFImpl for CoalesceFunc {
         internal_err!("return_field_from_args should be called instead")
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // If any the arguments in coalesce is non-null, the result is non-null
         let nullable = args.arg_fields.iter().all(|f| f.is_nullable());
         let return_type = args
@@ -92,64 +91,48 @@ impl ScalarUDFImpl for CoalesceFunc {
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        Ok(Field::new(self.name(), return_type, nullable))
+        Ok(Field::new(self.name(), return_type, nullable).into())
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        if args.is_empty() {
+            return plan_err!("coalesce must have at least one argument");
+        }
+        if args.len() == 1 {
+            return Ok(ExprSimplifyResult::Simplified(
+                args.into_iter().next().unwrap(),
+            ));
+        }
+
+        let n = args.len();
+        let (init, last_elem) = args.split_at(n - 1);
+        let whens = init
+            .iter()
+            .map(|x| x.clone().is_not_null())
+            .collect::<Vec<_>>();
+        let cases = init.to_vec();
+        Ok(ExprSimplifyResult::Simplified(
+            CaseBuilder::new(None, whens, cases, Some(Box::new(last_elem[0].clone())))
+                .end()?,
+        ))
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = args.args;
-        // do not accept 0 arguments.
-        if args.is_empty() {
-            return exec_err!(
-                "coalesce was called with {} arguments. It requires at least 1.",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        internal_err!("coalesce should have been simplified to case")
+    }
 
-        let return_type = args[0].data_type();
-        let mut return_array = args.iter().filter_map(|x| match x {
-            ColumnarValue::Array(array) => Some(array.len()),
-            _ => None,
-        });
-
-        if let Some(size) = return_array.next() {
-            // start with nulls as default output
-            let mut current_value = new_null_array(&return_type, size);
-            let mut remainder = BooleanArray::from(vec![true; size]);
-
-            for arg in args {
-                match arg {
-                    ColumnarValue::Array(ref array) => {
-                        let to_apply = and(&remainder, &is_not_null(array.as_ref())?)?;
-                        current_value = zip(&to_apply, array, &current_value)?;
-                        remainder = and(&remainder, &is_null(array)?)?;
-                    }
-                    ColumnarValue::Scalar(value) => {
-                        if value.is_null() {
-                            continue;
-                        } else {
-                            let last_value = value.to_scalar()?;
-                            current_value = zip(&remainder, &last_value, &current_value)?;
-                            break;
-                        }
-                    }
-                }
-                if remainder.iter().all(|x| x == Some(false)) {
-                    break;
-                }
-            }
-            Ok(ColumnarValue::Array(current_value))
-        } else {
-            let result = args
-                .iter()
-                .filter_map(|x| match x {
-                    ColumnarValue::Scalar(s) if !s.is_null() => Some(x.clone()),
-                    _ => None,
-                })
-                .next()
-                .unwrap_or_else(|| args[0].clone());
-            Ok(result)
-        }
+    fn conditional_arguments<'a>(
+        &self,
+        args: &'a [Expr],
+    ) -> Option<(Vec<&'a Expr>, Vec<&'a Expr>)> {
+        let eager = vec![&args[0]];
+        let lazy = args[1..].iter().collect();
+        Some((eager, lazy))
     }
 
     fn short_circuits(&self) -> bool {

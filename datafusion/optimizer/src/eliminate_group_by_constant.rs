@@ -19,8 +19,8 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
+use datafusion_common::tree_node::Transformed;
 use datafusion_expr::{Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
@@ -101,7 +101,7 @@ fn is_constant_expression(expr: &Expr) -> bool {
         Expr::BinaryExpr(e) => {
             is_constant_expression(&e.left) && is_constant_expression(&e.right)
         }
-        Expr::Literal(_) => true,
+        Expr::Literal(_, _) => true,
         Expr::ScalarFunction(e) => {
             matches!(
                 e.func.signature().volatility,
@@ -115,6 +115,7 @@ fn is_constant_expression(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
 
@@ -122,8 +123,8 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{
-        col, lit, ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF,
-        ScalarUDFImpl, Signature, TypeSignature,
+        ColumnarValue, LogicalPlanBuilder, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+        Signature, TypeSignature, col, lit,
     };
 
     use datafusion_functions_aggregate::expr_fn::count;
@@ -135,16 +136,18 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateGroupByConstant::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateGroupByConstant::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
         }};
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct ScalarUDFMock {
         signature: Signature,
     }

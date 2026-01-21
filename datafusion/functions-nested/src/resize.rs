@@ -19,19 +19,19 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    new_null_array, Array, ArrayRef, Capacities, GenericListArray, Int64Array,
-    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, GenericListArray, Int64Array, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{ArrowNativeType, Field};
 use arrow::datatypes::{
-    DataType::{FixedSizeList, LargeList, List},
+    DataType::{LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -70,7 +70,7 @@ make_udf_expr_and_func!(
         description = "Defines new elements' value or empty if value is not set."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayResize {
     signature: Signature,
     aliases: Vec<String>,
@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArrayResize {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
+            List(field) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
             DataType::Null => {
                 Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
@@ -152,8 +152,7 @@ impl ScalarUDFImpl for ArrayResize {
     }
 }
 
-/// array_resize SQL function
-pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     if arg.len() < 2 || arg.len() > 3 {
         return exec_err!("array_resize needs two or three arguments");
     }
@@ -169,7 +168,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
                 return exec_err!(
                     "array_resize does not support type '{:?}'.",
                     array.data_type()
-                )
+                );
             }
         };
         return Ok(new_null_array(&return_type, array.len()));
@@ -191,7 +190,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
             let array = as_large_list_array(&arg[0])?;
             general_list_resize::<i64>(array, new_len, field, new_element)
         }
-        array_type => exec_err!("array_resize does not support type '{array_type:?}'."),
+        array_type => exec_err!("array_resize does not support type '{array_type}'."),
     }
 }
 

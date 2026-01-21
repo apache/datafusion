@@ -17,18 +17,19 @@
 
 use arrow::array::ArrowPrimitiveType;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTime,
-    IntervalDayTimeType, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
-    Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
+    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
+    DurationSecondType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, IntervalDayTime, IntervalDayTimeType, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, i256,
 };
-use rand::distributions::Standard;
+use rand::Rng;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
-use rand::Rng;
 
 /// Generate corresponding NativeType value randomly according to
 /// ArrowPrimitiveType.
@@ -40,11 +41,11 @@ macro_rules! basic_random_data {
     ($ARROW_TYPE: ty) => {
         impl RandomNativeData for $ARROW_TYPE
         where
-            Standard: Distribution<Self::Native>,
+            StandardUniform: Distribution<Self::Native>,
         {
             #[inline]
             fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
-                rng.gen::<Self::Native>()
+                rng.random::<Self::Native>()
             }
         }
     };
@@ -66,16 +67,23 @@ basic_random_data!(Time32MillisecondType);
 basic_random_data!(Time64MicrosecondType);
 basic_random_data!(Time64NanosecondType);
 basic_random_data!(IntervalYearMonthType);
+basic_random_data!(Decimal32Type);
+basic_random_data!(Decimal64Type);
 basic_random_data!(Decimal128Type);
 basic_random_data!(TimestampSecondType);
 basic_random_data!(TimestampMillisecondType);
 basic_random_data!(TimestampMicrosecondType);
 basic_random_data!(TimestampNanosecondType);
+// Note DurationSecondType is restricted to i64::MIN / 1000 to i64::MAX / 1000
+// due to https://github.com/apache/arrow-rs/issues/7533 so handle it specially below
+basic_random_data!(DurationMillisecondType);
+basic_random_data!(DurationMicrosecondType);
+basic_random_data!(DurationNanosecondType);
 
 impl RandomNativeData for Date64Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         // TODO: constrain this range to valid dates if necessary
-        let date_value = rng.gen_range(i64::MIN..=i64::MAX);
+        let date_value = rng.random_range(i64::MIN..=i64::MAX);
         let millis_per_day = 86_400_000;
         date_value - (date_value % millis_per_day)
     }
@@ -84,8 +92,8 @@ impl RandomNativeData for Date64Type {
 impl RandomNativeData for IntervalDayTimeType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         IntervalDayTime {
-            days: rng.gen::<i32>(),
-            milliseconds: rng.gen::<i32>(),
+            days: rng.random::<i32>(),
+            milliseconds: rng.random::<i32>(),
         }
     }
 }
@@ -93,15 +101,24 @@ impl RandomNativeData for IntervalDayTimeType {
 impl RandomNativeData for IntervalMonthDayNanoType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         IntervalMonthDayNano {
-            months: rng.gen::<i32>(),
-            days: rng.gen::<i32>(),
-            nanoseconds: rng.gen::<i64>(),
+            months: rng.random::<i32>(),
+            days: rng.random::<i32>(),
+            nanoseconds: rng.random::<i64>(),
         }
+    }
+}
+
+// Restrict Duration(Seconds) to i64::MIN / 1000 to i64::MAX / 1000 to
+// avoid panics on pretty printing. See
+// https://github.com/apache/arrow-rs/issues/7533
+impl RandomNativeData for DurationSecondType {
+    fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
+        rng.random::<i64>() / 1000
     }
 }
 
 impl RandomNativeData for Decimal256Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
-        i256::from_parts(rng.gen::<u128>(), rng.gen::<i128>())
+        i256::from_parts(rng.random::<u128>(), rng.random::<i128>())
     }
 }

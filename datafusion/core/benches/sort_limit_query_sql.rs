@@ -37,6 +37,7 @@ use datafusion::execution::context::SessionContext;
 
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     // execute the query
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
@@ -97,8 +98,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
         ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().first().unwrap().clone();
-    ctx
+    ctx_holder.lock().first().unwrap().clone()
 }
 
 fn criterion_benchmark(c: &mut Criterion) {

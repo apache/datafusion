@@ -19,53 +19,47 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
-use arrow::datatypes::Fields;
+use arrow::datatypes::{Fields, Schema};
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion::common::DataFusionError;
+use datafusion::common::internal_datafusion_err;
 use datafusion::config::ConfigField;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Converts `batches` to a result as expected by sqllogictest.
 pub fn convert_batches(
+    schema: &Schema,
     batches: Vec<RecordBatch>,
     is_spark_path: bool,
 ) -> Result<Vec<Vec<String>>> {
-    if batches.is_empty() {
-        Ok(vec![])
-    } else {
-        let schema = batches[0].schema();
-        let mut rows = vec![];
-        for batch in batches {
-            // Verify schema
-            if !schema.contains(&batch.schema()) {
-                return Err(DFSqlLogicTestError::DataFusion(DataFusionError::Internal(
-                    format!(
-                        "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
-                        &schema,
-                        batch.schema()
-                    ),
-                )));
-            }
-
-            // Convert a single batch to a `Vec<Vec<String>>` for comparison, flatten expanded rows, and normalize each.
-            let new_rows = (0..batch.num_rows())
-                .map(|row| {
-                    batch
-                        .columns()
-                        .iter()
-                        .map(|col| cell_to_string(col, row, is_spark_path))
-                        .collect::<Result<Vec<String>>>()
-                })
-                .collect::<Result<Vec<Vec<String>>>>()?
-                .into_iter()
-                .flat_map(expand_row)
-                .map(normalize_paths);
-            rows.extend(new_rows);
+    let mut rows = vec![];
+    for batch in batches {
+        // Verify schema
+        if !schema.contains(&batch.schema()) {
+            return Err(DFSqlLogicTestError::DataFusion(internal_datafusion_err!(
+                "Schema mismatch. Previously had\n{:#?}\n\nGot:\n{:#?}",
+                &schema,
+                batch.schema()
+            )));
         }
-        Ok(rows)
+
+        // Convert a single batch to a `Vec<Vec<String>>` for comparison, flatten expanded rows, and normalize each.
+        let new_rows = (0..batch.num_rows())
+            .map(|row| {
+                batch
+                    .columns()
+                    .iter()
+                    .map(|col| cell_to_string(col, row, is_spark_path))
+                    .collect::<Result<Vec<String>>>()
+            })
+            .collect::<Result<Vec<Vec<String>>>>()?
+            .into_iter()
+            .flat_map(expand_row)
+            .map(normalize_paths);
+        rows.extend(new_rows);
     }
+    Ok(rows)
 }
 
 /// special case rows that have newlines in them (like explain plans)
@@ -191,7 +185,6 @@ macro_rules! get_row_value {
 /// [NULL Values and empty strings]: https://duckdb.org/dev/sqllogictest/result_verification#null-values-and-empty-strings
 ///
 /// Floating numbers are rounded to have a consistent representation with the Postgres runner.
-///
 pub fn cell_to_string(col: &ArrayRef, row: usize, is_spark_path: bool) -> Result<String> {
     if !col.is_valid(row) {
         // represent any null value with the string "NULL"
@@ -292,7 +285,9 @@ pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
                 if key_type.is_integer() {
                     // mapping dictionary string types to Text
                     match value_type.as_ref() {
-                        DataType::Utf8 | DataType::LargeUtf8 => DFColumnType::Text,
+                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                            DFColumnType::Text
+                        }
                         _ => DFColumnType::Another,
                     }
                 } else {

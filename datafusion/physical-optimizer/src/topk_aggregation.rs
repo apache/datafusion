@@ -20,17 +20,16 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use arrow::datatypes::DataType;
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::aggregates::LimitOptions;
+use datafusion_physical_plan::aggregates::{AggregateExec, topk_types_supported};
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -49,40 +48,47 @@ impl TopKAggregation {
         order_desc: bool,
         limit: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
-        // ensure the sort direction matches aggregate function
-        let (field, desc) = aggr.get_minmax_desc()?;
-        if desc != order_desc {
-            return None;
-        }
-        let group_key = aggr.group_expr().expr().iter().exactly_one().ok()?;
-        let kt = group_key.0.data_type(&aggr.input().schema()).ok()?;
-        if !kt.is_primitive()
-            && kt != DataType::Utf8
-            && kt != DataType::Utf8View
-            && kt != DataType::LargeUtf8
-        {
+        // Current only support single group key
+        let (group_key, group_key_alias) =
+            aggr.group_expr().expr().iter().exactly_one().ok()?;
+        let kt = group_key.data_type(&aggr.input().schema()).ok()?;
+        let vt = if let Some((field, _)) = aggr.get_minmax_desc() {
+            field.data_type().clone()
+        } else {
+            kt.clone()
+        };
+        if !topk_types_supported(&kt, &vt) {
             return None;
         }
         if aggr.filter_expr().iter().any(|e| e.is_some()) {
             return None;
         }
 
-        // ensure the sort is on the same field as the aggregate output
-        if order_by != field.name() {
+        // Check if this is ordering by an aggregate function (MIN/MAX)
+        if let Some((field, desc)) = aggr.get_minmax_desc() {
+            // ensure the sort direction matches aggregate function
+            if desc != order_desc {
+                return None;
+            }
+            // ensure the sort is on the same field as the aggregate output
+            if order_by != field.name() {
+                return None;
+            }
+        } else if aggr.aggr_expr().is_empty() {
+            // This is a GROUP BY without aggregates, check if ordering is on the group key itself
+            if order_by != group_key_alias {
+                return None;
+            }
+        } else {
+            // Has aggregates but not MIN/MAX, or doesn't DISTINCT
             return None;
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
-            *aggr.mode(),
-            aggr.group_expr().clone(),
-            aggr.aggr_expr().to_vec(),
-            aggr.filter_expr().to_vec(),
-            Arc::clone(aggr.input()),
-            aggr.input_schema(),
-        )
-        .expect("Unable to copy Aggregate!")
-        .with_limit(Some(limit));
+        let new_aggr = AggregateExec::with_new_limit_options(
+            aggr,
+            Some(LimitOptions::new_with_order(limit, order_desc)),
+        );
         Some(Arc::new(new_aggr))
     }
 
@@ -111,11 +117,12 @@ impl TopKAggregation {
                 }
             } else if let Some(proj) = plan.as_any().downcast_ref::<ProjectionExec>() {
                 // track renames due to successive projections
-                for (src_expr, proj_name) in proj.expr() {
-                    let Some(src_col) = src_expr.as_any().downcast_ref::<Column>() else {
+                for proj_expr in proj.expr() {
+                    let Some(src_col) = proj_expr.expr.as_any().downcast_ref::<Column>()
+                    else {
                         continue;
                     };
-                    if *proj_name == cur_col_name {
+                    if proj_expr.alias == cur_col_name {
                         cur_col_name = src_col.name().to_string();
                     }
                 }
@@ -131,7 +138,7 @@ impl TopKAggregation {
             Ok(Transformed::no(plan))
         };
         let child = Arc::clone(child).transform_down(closure).data().ok()?;
-        let sort = SortExec::new(LexOrdering::new(sort.expr().to_vec()), child)
+        let sort = SortExec::new(sort.expr().clone(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());
         Some(Arc::new(sort))

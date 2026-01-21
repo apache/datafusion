@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::logical_plan::consumer::{
-    from_substrait_func_args, substrait_fun_name, SubstraitConsumer,
+    SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
 };
-use datafusion::common::{not_impl_datafusion_err, plan_err, DFSchema, ScalarValue};
+use datafusion::common::{DFSchema, ScalarValue, not_impl_datafusion_err, plan_err};
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{expr, Expr, SortExpr};
+use datafusion::logical_expr::{Expr, SortExpr, expr};
 use std::sync::Arc;
 use substrait::proto::AggregateFunction;
 
@@ -30,7 +30,7 @@ pub async fn from_substrait_agg_func(
     f: &AggregateFunction,
     input_schema: &DFSchema,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<SortExpr>>,
+    order_by: Vec<SortExpr>,
     distinct: bool,
 ) -> datafusion::common::Result<Arc<Expr>> {
     let Some(fn_signature) = consumer
@@ -60,7 +60,7 @@ pub async fn from_substrait_agg_func(
     // we inject a dummy argument that does not affect the query, but allows
     // us to bypass this limitation.
     let args = if udaf.name() == "count" && args.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
+        vec![Expr::Literal(ScalarValue::Int64(Some(1)), None)]
     } else {
         args
     };

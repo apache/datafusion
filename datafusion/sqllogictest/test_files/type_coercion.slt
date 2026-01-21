@@ -47,7 +47,7 @@ query error DataFusion error: Error during planning: Cannot coerce arithmetic ex
 select interval '1 month' - '2023-05-01'::date;
 
 # interval - timestamp
-query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(Nanosecond, None\) to valid types
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Interval\(MonthDayNano\) \- Timestamp\(ns\) to valid types
 SELECT interval '1 month' - '2023-05-01 12:30:00'::timestamp;
 
 # dictionary(int32, utf8) -> utf8
@@ -128,9 +128,9 @@ EXPLAIN SELECT 1, 2 UNION ALL SELECT 3, 4
 logical_plan
 01)Union
 02)--Projection: Int64(1) AS Int64(1), Int64(2) AS Int64(2)
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 04)--Projection: Int64(3) AS Int64(1), Int64(4) AS Int64(2)
-05)----EmptyRelation
+05)----EmptyRelation: rows=1
 
 # union_with_incompatible_data_type()
 query error Incompatible inputs for Union: Previous inputs were of type Interval\(MonthDayNano\), but got incompatible type Int64 on column 'Int64\(1\)'
@@ -143,9 +143,9 @@ EXPLAIN SELECT 1 a UNION ALL SELECT 1.1 a
 logical_plan
 01)Union
 02)--Projection: CAST(Int64(1) AS Float64) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 04)--Projection: Float64(1.1) AS a
-05)----EmptyRelation
+05)----EmptyRelation: rows=1
 
 # union_with_null()
 query TT
@@ -154,9 +154,9 @@ EXPLAIN SELECT NULL a UNION ALL SELECT 1.1 a
 logical_plan
 01)Union
 02)--Projection: CAST(NULL AS Float64) AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 04)--Projection: Float64(1.1) AS a
-05)----EmptyRelation
+05)----EmptyRelation: rows=1
 
 # union_with_float_and_string()
 query TT
@@ -165,9 +165,9 @@ EXPLAIN SELECT 'a' a UNION ALL SELECT 1.1 a
 logical_plan
 01)Union
 02)--Projection: Utf8("a") AS a
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 04)--Projection: CAST(Float64(1.1) AS Utf8) AS a
-05)----EmptyRelation
+05)----EmptyRelation: rows=1
 
 # union_with_multiply_cols()
 query TT
@@ -176,9 +176,9 @@ EXPLAIN SELECT 'a' a, 1 b UNION ALL SELECT 1.1 a, 1.1 b
 logical_plan
 01)Union
 02)--Projection: Utf8("a") AS a, CAST(Int64(1) AS Float64) AS b
-03)----EmptyRelation
+03)----EmptyRelation: rows=1
 04)--Projection: CAST(Float64(1.1) AS Utf8) AS a, Float64(1.1) AS b
-05)----EmptyRelation
+05)----EmptyRelation: rows=1
 
 # sorted_union_with_different_types_and_group_by()
 query TT
@@ -193,12 +193,12 @@ logical_plan
 04)------Aggregate: groupBy=[[x.a]], aggr=[[]]
 05)--------SubqueryAlias: x
 06)----------Projection: Int64(1) AS a
-07)------------EmptyRelation
+07)------------EmptyRelation: rows=1
 08)----Projection: x.a
 09)------Aggregate: groupBy=[[x.a]], aggr=[[]]
 10)--------SubqueryAlias: x
 11)----------Projection: Float64(1.1) AS a
-12)------------EmptyRelation
+12)------------EmptyRelation: rows=1
 
 # union_with_binary_expr_and_cast()
 query TT
@@ -212,12 +212,12 @@ logical_plan
 03)----Aggregate: groupBy=[[CAST(Float64(0) + CAST(x.a AS Float64) AS Int32)]], aggr=[[]]
 04)------SubqueryAlias: x
 05)--------Projection: Int64(1) AS a
-06)----------EmptyRelation
+06)----------EmptyRelation: rows=1
 07)--Projection: Float64(2.1) + x.a AS Float64(0) + x.a
 08)----Aggregate: groupBy=[[Float64(2.1) + CAST(x.a AS Float64)]], aggr=[[]]
 09)------SubqueryAlias: x
 10)--------Projection: Int64(1) AS a
-11)----------EmptyRelation
+11)----------EmptyRelation: rows=1
 
 # union_with_aliases()
 query TT
@@ -231,12 +231,12 @@ logical_plan
 03)----Aggregate: groupBy=[[x.a]], aggr=[[]]
 04)------SubqueryAlias: x
 05)--------Projection: Int64(1) AS a
-06)----------EmptyRelation
+06)----------EmptyRelation: rows=1
 07)--Projection: x.a AS a1
 08)----Aggregate: groupBy=[[x.a]], aggr=[[]]
 09)------SubqueryAlias: x
 10)--------Projection: Float64(1.1) AS a
-11)----------EmptyRelation
+11)----------EmptyRelation: rows=1
 
 # union_with_incompatible_data_types()
 query error Incompatible inputs for Union: Previous inputs were of type Utf8, but got incompatible type Boolean on column 'a'

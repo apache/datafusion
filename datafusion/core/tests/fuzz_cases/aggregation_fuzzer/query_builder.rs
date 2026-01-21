@@ -17,14 +17,14 @@
 
 use std::{collections::HashSet, str::FromStr};
 
-use rand::{seq::SliceRandom, thread_rng, Rng};
+use rand::{Rng, rng, seq::SliceRandom};
 
 /// Random aggregate query builder
 ///
 /// Creates queries like
 /// ```sql
 /// SELECT AGG(..) FROM table_name GROUP BY <group_by_columns>
-///```
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct QueryBuilder {
     // ===================================
@@ -95,7 +95,6 @@ pub struct QueryBuilder {
     /// More details can see [`GroupOrdering`].
     ///
     /// [`GroupOrdering`]:  datafusion_physical_plan::aggregates::order::GroupOrdering
-    ///
     dataset_sort_keys: Vec<Vec<String>>,
 
     /// If we will also test the no grouping case like:
@@ -103,7 +102,6 @@ pub struct QueryBuilder {
     /// ```text
     ///   SELECT aggr FROM t;
     /// ```
-    ///
     no_grouping: bool,
 
     // ====================================
@@ -276,8 +274,8 @@ impl QueryBuilder {
     /// * `alias` is a unique alias `colN` for the column (to avoid duplicate column names)
     fn random_aggregate_functions(&self, group_by_cols: &[String]) -> Vec<String> {
         const MAX_NUM_FUNCTIONS: usize = 5;
-        let mut rng = thread_rng();
-        let num_aggregate_functions = rng.gen_range(1..=MAX_NUM_FUNCTIONS);
+        let mut rng = rng();
+        let num_aggregate_functions = rng.random_range(1..=MAX_NUM_FUNCTIONS);
 
         let mut alias_gen = 1;
 
@@ -291,10 +289,10 @@ impl QueryBuilder {
         }
 
         while aggregate_functions.len() < num_aggregate_functions {
-            let idx = rng.gen_range(0..self.aggregate_functions.len());
+            let idx = rng.random_range(0..self.aggregate_functions.len());
             let (function_name, is_distinct) = &self.aggregate_functions[idx];
             let argument = self.random_argument();
-            let alias = format!("col{}", alias_gen);
+            let alias = format!("col{alias_gen}");
             let distinct = if *is_distinct { "DISTINCT " } else { "" };
             alias_gen += 1;
 
@@ -319,8 +317,8 @@ impl QueryBuilder {
 
     /// Pick a random aggregate function argument
     fn random_argument(&self) -> String {
-        let mut rng = thread_rng();
-        let idx = rng.gen_range(0..self.arguments.len());
+        let mut rng = rng();
+        let idx = rng.random_range(0..self.arguments.len());
         self.arguments[idx].clone()
     }
 
@@ -332,25 +330,25 @@ impl QueryBuilder {
             .cloned()
             .collect();
 
-        available_columns.shuffle(&mut thread_rng());
+        available_columns.shuffle(&mut rng());
 
         let num_of_order_by_col = 12;
         let column_count = std::cmp::min(num_of_order_by_col, available_columns.len());
 
         let selected_columns = &available_columns[0..column_count];
 
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut result = String::from_str(" order by ").unwrap();
         for col in selected_columns {
-            let order = if rng.gen_bool(0.5) { "ASC" } else { "DESC" };
-            result.push_str(&format!("{} {},", col, order));
+            let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
+            result.push_str(&format!("{col} {order},"));
         }
 
         result.strip_suffix(",").unwrap().to_string()
     }
 
     fn null_opt(&self) -> String {
-        if thread_rng().gen_bool(0.5) {
+        if rng().random_bool(0.5) {
             "RESPECT NULLS".to_string()
         } else {
             "IGNORE NULLS".to_string()
@@ -362,18 +360,18 @@ impl QueryBuilder {
     /// Limited to `max_group_by_columns` group by columns to ensure coverage for large groups.
     /// With larger numbers of columns, each group has many fewer values.
     fn random_group_by(&self) -> Vec<String> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let min_groups = self.min_group_by_columns;
         let max_groups = self.max_group_by_columns;
         assert!(min_groups <= max_groups);
-        let num_group_by = rng.gen_range(min_groups..=max_groups);
+        let num_group_by = rng.random_range(min_groups..=max_groups);
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
         while group_by.len() < num_group_by
             && already_used.len() != self.group_by_columns.len()
         {
-            let idx = rng.gen_range(0..self.group_by_columns.len());
+            let idx = rng.random_range(0..self.group_by_columns.len());
             if already_used.insert(idx) {
                 group_by.push(self.group_by_columns[idx].clone());
             }

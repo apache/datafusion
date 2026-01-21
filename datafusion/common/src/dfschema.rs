@@ -23,10 +23,10 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
+use crate::error::{_plan_err, _schema_err, DataFusionError, Result};
 use crate::{
-    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    SchemaError, TableReference,
+    Column, FunctionalDependencies, SchemaError, TableReference, field_not_found,
+    unqualified_field_not_found,
 };
 
 use arrow::compute::can_cast_types;
@@ -37,7 +37,7 @@ use arrow::datatypes::{
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
 
-/// DFSchema wraps an Arrow schema and adds relation names.
+/// DFSchema wraps an Arrow schema and add a relation (table) name.
 ///
 /// The schema may hold the fields across multiple tables. Some fields may be
 /// qualified and some unqualified. A qualified field is a field that has a
@@ -47,8 +47,14 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// have a distinct name from any qualified field names. This allows finding a
 /// qualified field by name to be possible, so long as there aren't multiple
 /// qualified fields with the same name.
+///]
+/// # See Also
+/// * [DFSchemaRef], an alias to `Arc<DFSchema>`
+/// * [DataTypeExt], common methods for working with Arrow [DataType]s
+/// * [FieldExt], extension methods for working with Arrow [Field]s
 ///
-/// There is an alias to `Arc<DFSchema>` named [DFSchemaRef].
+/// [DataTypeExt]: crate::datatype::DataTypeExt
+/// [FieldExt]: crate::datatype::FieldExt
 ///
 /// # Creating qualified schemas
 ///
@@ -56,12 +62,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// an Arrow schema.
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from_qualified_schema("t1", &arrow_schema).unwrap();
 /// let column = Column::from_qualified_name("t1.c1");
@@ -77,12 +81,10 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Create an unqualified schema using TryFrom:
 ///
 /// ```rust
-/// use datafusion_common::{DFSchema, Column};
 /// use arrow::datatypes::{DataType, Field, Schema};
+/// use datafusion_common::{Column, DFSchema};
 ///
-/// let arrow_schema = Schema::new(vec![
-///    Field::new("c1", DataType::Int32, false),
-/// ]);
+/// let arrow_schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
 ///
 /// let df_schema = DFSchema::try_from(arrow_schema).unwrap();
 /// let column = Column::new_unqualified("c1");
@@ -94,14 +96,16 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// Use the `Into` trait to convert `DFSchema` into an Arrow schema:
 ///
 /// ```rust
+/// use arrow::datatypes::{Field, Schema};
 /// use datafusion_common::DFSchema;
-/// use arrow::datatypes::{Schema, Field};
 /// use std::collections::HashMap;
 ///
-/// let df_schema = DFSchema::from_unqualified_fields(vec![
-///    Field::new("c1", arrow::datatypes::DataType::Int32, false),
-/// ].into(),HashMap::new()).unwrap();
-/// let schema = Schema::from(df_schema);
+/// let df_schema = DFSchema::from_unqualified_fields(
+///     vec![Field::new("c1", arrow::datatypes::DataType::Int32, false)].into(),
+///     HashMap::new(),
+/// )
+/// .unwrap();
+/// let schema: &Schema = df_schema.as_arrow();
 /// assert_eq!(schema.fields().len(), 1);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +210,25 @@ impl DFSchema {
         Ok(dfschema)
     }
 
+    /// Return the same schema, where all fields have a given qualifier.
+    pub fn with_field_specific_qualified_schema(
+        &self,
+        qualifiers: Vec<Option<TableReference>>,
+    ) -> Result<Self> {
+        if qualifiers.len() != self.fields().len() {
+            return _plan_err!(
+                "Number of qualifiers must match number of fields. Expected {}, got {}",
+                self.fields().len(),
+                qualifiers.len()
+            );
+        }
+        Ok(DFSchema {
+            inner: Arc::clone(&self.inner),
+            field_qualifiers: qualifiers,
+            functional_dependencies: self.functional_dependencies.clone(),
+        })
+    }
+
     /// Check if the schema have some fields with the same name
     pub fn check_names(&self) -> Result<()> {
         let mut qualified_names = BTreeSet::new();
@@ -229,7 +252,7 @@ impl DFSchema {
         for (qualifier, name) in qualified_names {
             if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
-                    field: Column::new(Some(qualifier.clone()), name)
+                    field: Box::new(Column::new(Some(qualifier.clone()), name))
                 });
             }
         }
@@ -278,6 +301,20 @@ impl DFSchema {
 
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
     /// duplicate fields.
+    ///
+    /// ## Merge Precedence
+    ///
+    /// **Schema-level metadata**: Metadata from both schemas is merged.
+    /// If both schemas have the same metadata key, the value from the `other_schema` parameter takes precedence.
+    ///
+    /// **Field-level merging**: Only non-duplicate fields are added. This means that the
+    /// `self` fields will always take precedence over the `other_schema` fields.
+    /// Duplicate field detection is based on:
+    /// - For qualified fields: both qualifier and field name must match
+    /// - For unqualified fields: only field name needs to match
+    ///
+    /// Take note how the precedence for fields & metadata merging differs;
+    /// merging prefers fields from `self` but prefers metadata from `other_schema`.
     pub fn merge(&mut self, other_schema: &DFSchema) {
         if other_schema.inner.fields.is_empty() {
             return;
@@ -315,20 +352,22 @@ impl DFSchema {
         self.field_qualifiers.extend(qualifiers);
     }
 
-    /// Get a list of fields
+    /// Get a list of fields for this schema
     pub fn fields(&self) -> &Fields {
         &self.inner.fields
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
-    /// offset within the internal `fields` vector
-    pub fn field(&self, i: usize) -> &Field {
+    /// Returns a reference to [`FieldRef`] for a column at specific index
+    /// within the schema.
+    ///
+    /// See also [Self::qualified_field] to get both qualifier and field
+    pub fn field(&self, i: usize) -> &FieldRef {
         &self.inner.fields[i]
     }
 
-    /// Returns an immutable reference of a specific `Field` instance selected using an
-    /// offset within the internal `fields` vector and its qualifier
-    pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &Field) {
+    /// Returns the qualifier (if any) and [`FieldRef`] for a column at specific
+    /// index within the schema.
+    pub fn qualified_field(&self, i: usize) -> (Option<&TableReference>, &FieldRef) {
         (self.field_qualifiers[i].as_ref(), self.field(i))
     }
 
@@ -379,12 +418,12 @@ impl DFSchema {
             .is_some()
     }
 
-    /// Find the field with the given name
+    /// Find the [`FieldRef`] with the given name and optional qualifier
     pub fn field_with_name(
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<&Field> {
+    ) -> Result<&FieldRef> {
         if let Some(qualifier) = qualifier {
             self.field_with_qualified_name(qualifier, name)
         } else {
@@ -397,7 +436,7 @@ impl DFSchema {
         &self,
         qualifier: Option<&TableReference>,
         name: &str,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         if let Some(qualifier) = qualifier {
             let idx = self
                 .index_of_column_by_name(Some(qualifier), name)
@@ -409,10 +448,10 @@ impl DFSchema {
     }
 
     /// Find all fields having the given qualifier
-    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&Field> {
+    pub fn fields_with_qualified(&self, qualifier: &TableReference) -> Vec<&FieldRef> {
         self.iter()
             .filter(|(q, _)| q.map(|q| q.eq(qualifier)).unwrap_or(false))
-            .map(|(_, f)| f.as_ref())
+            .map(|(_, f)| f)
             .collect()
     }
 
@@ -428,11 +467,10 @@ impl DFSchema {
     }
 
     /// Find all fields that match the given name
-    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&Field> {
+    pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&FieldRef> {
         self.fields()
             .iter()
             .filter(|field| field.name() == name)
-            .map(|f| f.as_ref())
             .collect()
     }
 
@@ -440,10 +478,9 @@ impl DFSchema {
     pub fn qualified_fields_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Vec<(Option<&TableReference>, &Field)> {
+    ) -> Vec<(Option<&TableReference>, &FieldRef)> {
         self.iter()
             .filter(|(_, field)| field.name() == name)
-            .map(|(qualifier, field)| (qualifier, field.as_ref()))
             .collect()
     }
 
@@ -468,7 +505,7 @@ impl DFSchema {
     pub fn qualified_field_with_unqualified_name(
         &self,
         name: &str,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         let matches = self.qualified_fields_with_unqualified_name(name);
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
@@ -489,7 +526,7 @@ impl DFSchema {
                     Ok((fields_without_qualifier[0].0, fields_without_qualifier[0].1))
                 } else {
                     _schema_err!(SchemaError::AmbiguousReference {
-                        field: Column::new_unqualified(name.to_string(),),
+                        field: Box::new(Column::new_unqualified(name.to_string()))
                     })
                 }
             }
@@ -497,7 +534,7 @@ impl DFSchema {
     }
 
     /// Find the field with the given name
-    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&Field> {
+    pub fn field_with_unqualified_name(&self, name: &str) -> Result<&FieldRef> {
         self.qualified_field_with_unqualified_name(name)
             .map(|(_, field)| field)
     }
@@ -507,7 +544,7 @@ impl DFSchema {
         &self,
         qualifier: &TableReference,
         name: &str,
-    ) -> Result<&Field> {
+    ) -> Result<&FieldRef> {
         let idx = self
             .index_of_column_by_name(Some(qualifier), name)
             .ok_or_else(|| field_not_found(Some(qualifier.clone()), name, self))?;
@@ -519,7 +556,7 @@ impl DFSchema {
     pub fn qualified_field_from_column(
         &self,
         column: &Column,
-    ) -> Result<(Option<&TableReference>, &Field)> {
+    ) -> Result<(Option<&TableReference>, &FieldRef)> {
         self.qualified_field_with_name(column.relation.as_ref(), &column.name)
     }
 
@@ -561,7 +598,7 @@ impl DFSchema {
         &self,
         arrow_schema: &Schema,
     ) -> Result<()> {
-        let self_arrow_schema: Schema = self.into();
+        let self_arrow_schema = self.as_arrow();
         self_arrow_schema
             .fields()
             .iter()
@@ -636,8 +673,8 @@ impl DFSchema {
                         ))
                     {
                         _plan_err!(
-                            "Schema mismatch: Expected field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Schema mismatch: Expected field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -714,7 +751,8 @@ impl DFSchema {
     }
 
     /// Returns true of two [`DataType`]s are semantically equal (same
-    /// name and type), ignoring both metadata and nullability, and decimal precision/scale.
+    /// name and type), ignoring both metadata and nullability, decimal precision/scale,
+    /// and timezone time units/timezones.
     ///
     /// request to upstream: <https://github.com/apache/arrow-rs/issues/3199>
     pub fn datatype_is_semantically_equal(dt1: &DataType, dt2: &DataType) -> bool {
@@ -766,12 +804,24 @@ impl DFSchema {
                         .all(|((t1, f1), (t2, f2))| t1 == t2 && Self::field_is_semantically_equal(f1, f2))
             }
             (
+                DataType::Decimal32(_l_precision, _l_scale),
+                DataType::Decimal32(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Decimal64(_l_precision, _l_scale),
+                DataType::Decimal64(_r_precision, _r_scale),
+            ) => true,
+            (
                 DataType::Decimal128(_l_precision, _l_scale),
                 DataType::Decimal128(_r_precision, _r_scale),
             ) => true,
             (
                 DataType::Decimal256(_l_precision, _l_scale),
                 DataType::Decimal256(_r_precision, _r_scale),
+            ) => true,
+            (
+                DataType::Timestamp(_l_time_unit, _l_timezone),
+                DataType::Timestamp(_r_time_unit, _r_timezone),
             ) => true,
             _ => dt1 == dt2,
         }
@@ -830,21 +880,216 @@ impl DFSchema {
             .zip(self.inner.fields().iter())
             .map(|(qualifier, field)| (qualifier.as_ref(), field))
     }
-}
+    /// Returns a tree-like string representation of the schema.
+    ///
+    /// This method formats the schema
+    /// with a tree-like structure showing field names, types, and nullability.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::DFSchema;
+    /// use std::collections::HashMap;
+    ///
+    /// let schema = DFSchema::from_unqualified_fields(
+    ///     vec![
+    ///         Field::new("id", DataType::Int32, false),
+    ///         Field::new("name", DataType::Utf8, true),
+    ///     ]
+    ///     .into(),
+    ///     HashMap::new(),
+    /// )
+    /// .unwrap();
+    ///
+    /// assert_eq!(
+    ///     schema.tree_string().to_string(),
+    ///     r#"root
+    ///  |-- id: int32 (nullable = false)
+    ///  |-- name: utf8 (nullable = true)"#
+    /// );
+    /// ```
+    pub fn tree_string(&self) -> impl Display + '_ {
+        let mut result = String::from("root\n");
 
-impl From<DFSchema> for Schema {
-    /// Convert DFSchema into a Schema
-    fn from(df_schema: DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
+        for (qualifier, field) in self.iter() {
+            let field_name = match qualifier {
+                Some(q) => format!("{}.{}", q, field.name()),
+                None => field.name().to_string(),
+            };
+
+            format_field_with_indent(
+                &mut result,
+                &field_name,
+                field.data_type(),
+                field.is_nullable(),
+                " ",
+            );
+        }
+
+        // Remove the trailing newline
+        if result.ends_with('\n') {
+            result.pop();
+        }
+
+        result
     }
 }
 
-impl From<&DFSchema> for Schema {
-    /// Convert DFSchema reference into a Schema
-    fn from(df_schema: &DFSchema) -> Self {
-        let fields: Fields = df_schema.inner.fields.clone();
-        Schema::new_with_metadata(fields, df_schema.inner.metadata.clone())
+/// Format field with proper nested indentation for complex types
+fn format_field_with_indent(
+    result: &mut String,
+    field_name: &str,
+    data_type: &DataType,
+    nullable: bool,
+    indent: &str,
+) {
+    let nullable_str = nullable.to_string().to_lowercase();
+    let child_indent = format!("{indent}|    ");
+
+    match data_type {
+        DataType::List(field) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::LargeList(field) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: large list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::FixedSizeList(field, _size) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})\n"
+            ));
+            format_field_with_indent(
+                result,
+                field.name(),
+                field.data_type(),
+                field.is_nullable(),
+                &child_indent,
+            );
+        }
+        DataType::Map(field, _) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
+            ));
+            if let DataType::Struct(inner_fields) = field.data_type()
+                && inner_fields.len() == 2
+            {
+                format_field_with_indent(
+                    result,
+                    "key",
+                    inner_fields[0].data_type(),
+                    inner_fields[0].is_nullable(),
+                    &child_indent,
+                );
+                let value_contains_null = field.is_nullable().to_string().to_lowercase();
+                // Handle complex value types properly
+                match inner_fields[1].data_type() {
+                    DataType::Struct(_)
+                    | DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::FixedSizeList(_, _)
+                    | DataType::Map(_, _) => {
+                        format_field_with_indent(
+                            result,
+                            "value",
+                            inner_fields[1].data_type(),
+                            inner_fields[1].is_nullable(),
+                            &child_indent,
+                        );
+                    }
+                    _ => {
+                        result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
+                                format_simple_data_type(inner_fields[1].data_type())));
+                    }
+                }
+            }
+        }
+        DataType::Struct(fields) => {
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: struct (nullable = {nullable_str})\n"
+            ));
+            for struct_field in fields {
+                format_field_with_indent(
+                    result,
+                    struct_field.name(),
+                    struct_field.data_type(),
+                    struct_field.is_nullable(),
+                    &child_indent,
+                );
+            }
+        }
+        _ => {
+            let type_str = format_simple_data_type(data_type);
+            result.push_str(&format!(
+                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})\n"
+            ));
+        }
+    }
+}
+
+/// Format simple DataType in lowercase format (for leaf nodes)
+fn format_simple_data_type(data_type: &DataType) -> String {
+    match data_type {
+        DataType::Boolean => "boolean".to_string(),
+        DataType::Int8 => "int8".to_string(),
+        DataType::Int16 => "int16".to_string(),
+        DataType::Int32 => "int32".to_string(),
+        DataType::Int64 => "int64".to_string(),
+        DataType::UInt8 => "uint8".to_string(),
+        DataType::UInt16 => "uint16".to_string(),
+        DataType::UInt32 => "uint32".to_string(),
+        DataType::UInt64 => "uint64".to_string(),
+        DataType::Float16 => "float16".to_string(),
+        DataType::Float32 => "float32".to_string(),
+        DataType::Float64 => "float64".to_string(),
+        DataType::Utf8 => "utf8".to_string(),
+        DataType::LargeUtf8 => "large_utf8".to_string(),
+        DataType::Binary => "binary".to_string(),
+        DataType::LargeBinary => "large_binary".to_string(),
+        DataType::FixedSizeBinary(_) => "fixed_size_binary".to_string(),
+        DataType::Date32 => "date32".to_string(),
+        DataType::Date64 => "date64".to_string(),
+        DataType::Time32(_) => "time32".to_string(),
+        DataType::Time64(_) => "time64".to_string(),
+        DataType::Timestamp(_, tz) => match tz {
+            Some(tz_str) => format!("timestamp ({tz_str})"),
+            None => "timestamp".to_string(),
+        },
+        DataType::Interval(_) => "interval".to_string(),
+        DataType::Dictionary(_, value_type) => {
+            format_simple_data_type(value_type.as_ref())
+        }
+        DataType::Decimal32(precision, scale) => {
+            format!("decimal32({precision}, {scale})")
+        }
+        DataType::Decimal64(precision, scale) => {
+            format!("decimal64({precision}, {scale})")
+        }
+        DataType::Decimal128(precision, scale) => {
+            format!("decimal128({precision}, {scale})")
+        }
+        DataType::Decimal256(precision, scale) => {
+            format!("decimal256({precision}, {scale})")
+        }
+        DataType::Null => "null".to_string(),
+        _ => format!("{data_type}").to_lowercase(),
     }
 }
 
@@ -880,13 +1125,18 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
+        // Without checking names, because schema here may have duplicate field names.
+        // For example, Partial AggregateMode will generate duplicate field names from
+        // state_fields.
+        // See <https://github.com/apache/datafusion/issues/17715>
+        // dfschema.check_names()?;
         Ok(dfschema)
     }
 }
 
 impl From<DFSchema> for SchemaRef {
-    fn from(df_schema: DFSchema) -> Self {
-        SchemaRef::new(df_schema.into())
+    fn from(dfschema: DFSchema) -> Self {
+        Arc::clone(&dfschema.inner)
     }
 }
 
@@ -982,7 +1232,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     // Return the column's field
-    fn field_from_column(&self, col: &Column) -> Result<&Field>;
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef>;
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -1003,13 +1253,13 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type_and_nullable(col)
     }
 
-    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         self.as_ref().field_from_column(col)
     }
 }
 
 impl ExprSchema for DFSchema {
-    fn field_from_column(&self, col: &Column) -> Result<&Field> {
+    fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         match &col.relation {
             Some(r) => self.field_with_qualified_name(r, &col.name),
             None => self.field_with_unqualified_name(&col.name),
@@ -1072,8 +1322,8 @@ impl SchemaExt for Schema {
                 .try_for_each(|(f1, f2)| {
                     if f1.name() != f2.name() || (!DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) && !can_cast_types(f2.data_type(), f1.data_type())) {
                         _plan_err!(
-                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
-                            but got '{}' with type {:?}.",
+                            "Inserting query schema mismatch: Expected table field '{}' with type {}, \
+                            but got '{}' with type {}.",
                             f1.name(),
                             f1.data_type(),
                             f2.name(),
@@ -1088,7 +1338,7 @@ impl SchemaExt for Schema {
 
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
     match qualifier {
-        Some(q) => format!("{}.{}", q, name),
+        Some(q) => format!("{q}.{name}"),
         None => name.to_string(),
     }
 }
@@ -1179,10 +1429,8 @@ mod tests {
     #[test]
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }";
-        assert_eq!(expected, arrow_schema.to_string());
+        let arrow_schema = schema.as_arrow();
+        insta::assert_snapshot!(arrow_schema.to_string(), @r#"Field { "c0": nullable Boolean }, Field { "c1": nullable Boolean }"#);
         Ok(())
     }
 
@@ -1196,12 +1444,14 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t2"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t2"), "c0")
+                .is_ok()
+        );
         // test invalid access
         assert!(join.field_with_unqualified_name("c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
@@ -1243,18 +1493,20 @@ mod tests {
             join.to_string()
         );
         // test valid access
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare("t1"), "c0")
-            .is_ok());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare("t1"), "c0")
+                .is_ok()
+        );
         assert!(join.field_with_unqualified_name("c0").is_ok());
         assert!(join.field_with_unqualified_name("c100").is_ok());
         assert!(join.field_with_name(None, "c100").is_ok());
         // test invalid access
         assert!(join.field_with_unqualified_name("t1.c0").is_err());
         assert!(join.field_with_unqualified_name("t1.c100").is_err());
-        assert!(join
-            .field_with_qualified_name(&TableReference::bare(""), "c100")
-            .is_err());
+        assert!(
+            join.field_with_qualified_name(&TableReference::bare(""), "c100")
+                .is_err()
+        );
         Ok(())
     }
 
@@ -1263,9 +1515,11 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_1())?;
         let join = left.join(&right);
-        assert_contains!(join.unwrap_err().to_string(),
-                         "Schema error: Schema contains qualified \
-                          field name t1.c0 and unqualified field name c0 which would be ambiguous");
+        assert_contains!(
+            join.unwrap_err().to_string(),
+            "Schema error: Schema contains qualified \
+                          field name t1.c0 and unqualified field name c0 which would be ambiguous"
+        );
         Ok(())
     }
 
@@ -1558,6 +1812,36 @@ mod tests {
             &DataType::Int16
         ));
 
+        // Succeeds if decimal precision and scale are different
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal32(1, 2),
+            &DataType::Decimal32(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal64(1, 2),
+            &DataType::Decimal64(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal128(1, 2),
+            &DataType::Decimal128(2, 1),
+        ));
+
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Decimal256(1, 2),
+            &DataType::Decimal256(2, 1),
+        ));
+
+        // Any two timestamp types should match
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("UTC".into())
+            ),
+            &DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
+        ));
+
         // Test lists
 
         // Succeeds if both have the same element type, disregards names and nullability
@@ -1699,5 +1983,489 @@ mod tests {
 
     fn test_metadata_n(n: usize) -> HashMap<String, String> {
         (0..n).map(|i| (format!("k{i}"), format!("v{i}"))).collect()
+    }
+
+    #[test]
+    fn test_print_schema_unqualified() {
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("age", DataType::Int64, true),
+                Field::new("active", DataType::Boolean, false),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- age: int64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_qualified() {
+        let schema = DFSchema::try_from_qualified_schema(
+            "table1",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("name", DataType::Utf8, true),
+            ]),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- table1.name: utf8 (nullable = true)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_complex_types() {
+        let struct_field = Field::new(
+            "address",
+            DataType::Struct(Fields::from(vec![
+                Field::new("street", DataType::Utf8, true),
+                Field::new("city", DataType::Utf8, true),
+            ])),
+            true,
+        );
+
+        let list_field = Field::new(
+            "tags",
+            DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("id", DataType::Int32, false),
+                struct_field,
+                list_field,
+                Field::new("score", DataType::Decimal128(10, 2), true),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- id: int32 (nullable = false)
+         |-- address: struct (nullable = true)
+         |    |-- street: utf8 (nullable = true)
+         |    |-- city: utf8 (nullable = true)
+         |-- tags: list (nullable = true)
+         |    |-- item: utf8 (nullable = true)
+         |-- score: decimal128(10, 2) (nullable = true)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_empty() {
+        let schema = DFSchema::empty();
+        let output = schema.tree_string();
+        insta::assert_snapshot!(output, @"root");
+    }
+
+    #[test]
+    fn test_print_schema_deeply_nested_types() {
+        // Create a deeply nested structure to test indentation and complex type formatting
+        let inner_struct = Field::new(
+            "inner",
+            DataType::Struct(Fields::from(vec![
+                Field::new("level1", DataType::Utf8, true),
+                Field::new("level2", DataType::Int32, false),
+            ])),
+            true,
+        );
+
+        let nested_list = Field::new(
+            "nested_list",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("value", DataType::Float64, true),
+                ])),
+                true,
+            ))),
+            true,
+        );
+
+        let map_field = Field::new(
+            "map_data",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new(
+                            "value",
+                            DataType::List(Arc::new(Field::new(
+                                "item",
+                                DataType::Int32,
+                                true,
+                            ))),
+                            true,
+                        ),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("simple_field", DataType::Utf8, true),
+                inner_struct,
+                nested_list,
+                map_field,
+                Field::new(
+                    "timestamp_field",
+                    DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    ),
+                    false,
+                ),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- simple_field: utf8 (nullable = true)
+         |-- inner: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: int32 (nullable = false)
+         |-- nested_list: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int64 (nullable = false)
+         |    |    |-- value: float64 (nullable = true)
+         |-- map_data: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: list (nullable = true)
+         |    |    |-- item: int32 (nullable = true)
+         |-- timestamp_field: timestamp (UTC) (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_mixed_qualified_unqualified() {
+        // Test a schema with mixed qualified and unqualified fields
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some("table1".into()),
+                    Arc::new(Field::new("id", DataType::Int32, false)),
+                ),
+                (None, Arc::new(Field::new("name", DataType::Utf8, true))),
+                (
+                    Some("table2".into()),
+                    Arc::new(Field::new("score", DataType::Float64, true)),
+                ),
+                (
+                    None,
+                    Arc::new(Field::new("active", DataType::Boolean, false)),
+                ),
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- table1.id: int32 (nullable = false)
+         |-- name: utf8 (nullable = true)
+         |-- table2.score: float64 (nullable = true)
+         |-- active: boolean (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_array_of_map() {
+        // Test the specific example from user feedback: array of map
+        let map_field = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Utf8, false),
+            ])),
+            false,
+        );
+
+        let array_of_map_field = Field::new(
+            "array_map_field",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Map(Arc::new(map_field), false),
+                false,
+            ))),
+            false,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![array_of_map_field].into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- array_map_field: list (nullable = false)
+         |    |-- item: map (nullable = false)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: utf8 (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_complex_type_combinations() {
+        // Test various combinations of list, struct, and map types
+
+        // List of structs
+        let list_of_structs = Field::new(
+            "list_of_structs",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("name", DataType::Utf8, true),
+                    Field::new("score", DataType::Float64, true),
+                ])),
+                true,
+            ))),
+            true,
+        );
+
+        // Struct containing lists
+        let struct_with_lists = Field::new(
+            "struct_with_lists",
+            DataType::Struct(Fields::from(vec![
+                Field::new(
+                    "tags",
+                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    true,
+                ),
+                Field::new(
+                    "scores",
+                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                    false,
+                ),
+                Field::new("metadata", DataType::Utf8, true),
+            ])),
+            false,
+        );
+
+        // Map with struct values
+        let map_with_struct_values = Field::new(
+            "map_with_struct_values",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new(
+                            "value",
+                            DataType::Struct(Fields::from(vec![
+                                Field::new("count", DataType::Int64, false),
+                                Field::new("active", DataType::Boolean, true),
+                            ])),
+                            true,
+                        ),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        );
+
+        // List of maps
+        let list_of_maps = Field::new(
+            "list_of_maps",
+            DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int32, true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ))),
+            true,
+        );
+
+        // Deeply nested: struct containing list of structs containing maps
+        let deeply_nested = Field::new(
+            "deeply_nested",
+            DataType::Struct(Fields::from(vec![
+                Field::new("level1", DataType::Utf8, true),
+                Field::new(
+                    "level2",
+                    DataType::List(Arc::new(Field::new(
+                        "item",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("id", DataType::Int32, false),
+                            Field::new(
+                                "properties",
+                                DataType::Map(
+                                    Arc::new(Field::new(
+                                        "entries",
+                                        DataType::Struct(Fields::from(vec![
+                                            Field::new("key", DataType::Utf8, false),
+                                            Field::new("value", DataType::Float64, true),
+                                        ])),
+                                        false,
+                                    )),
+                                    false,
+                                ),
+                                true,
+                            ),
+                        ])),
+                        true,
+                    ))),
+                    false,
+                ),
+            ])),
+            true,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                list_of_structs,
+                struct_with_lists,
+                map_with_struct_values,
+                list_of_maps,
+                deeply_nested,
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- list_of_structs: list (nullable = true)
+         |    |-- item: struct (nullable = true)
+         |    |    |-- id: int32 (nullable = false)
+         |    |    |-- name: utf8 (nullable = true)
+         |    |    |-- score: float64 (nullable = true)
+         |-- struct_with_lists: struct (nullable = false)
+         |    |-- tags: list (nullable = true)
+         |    |    |-- item: utf8 (nullable = true)
+         |    |-- scores: list (nullable = false)
+         |    |    |-- item: int32 (nullable = true)
+         |    |-- metadata: utf8 (nullable = true)
+         |-- map_with_struct_values: map (nullable = true)
+         |    |-- key: utf8 (nullable = false)
+         |    |-- value: struct (nullable = true)
+         |    |    |-- count: int64 (nullable = false)
+         |    |    |-- active: boolean (nullable = true)
+         |-- list_of_maps: list (nullable = true)
+         |    |-- item: map (nullable = true)
+         |    |    |-- key: utf8 (nullable = false)
+         |    |    |-- value: int32 (nullable = false)
+         |-- deeply_nested: struct (nullable = true)
+         |    |-- level1: utf8 (nullable = true)
+         |    |-- level2: list (nullable = false)
+         |    |    |-- item: struct (nullable = true)
+         |    |    |    |-- id: int32 (nullable = false)
+         |    |    |    |-- properties: map (nullable = true)
+         |    |    |    |    |-- key: utf8 (nullable = false)
+         |    |    |    |    |-- value: float64 (nullable = false)
+        ");
+    }
+
+    #[test]
+    fn test_print_schema_edge_case_types() {
+        // Test edge cases and special types
+        let schema = DFSchema::from_unqualified_fields(
+            vec![
+                Field::new("null_field", DataType::Null, true),
+                Field::new("binary_field", DataType::Binary, false),
+                Field::new("large_binary", DataType::LargeBinary, true),
+                Field::new("large_utf8", DataType::LargeUtf8, false),
+                Field::new("fixed_size_binary", DataType::FixedSizeBinary(16), true),
+                Field::new(
+                    "fixed_size_list",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("item", DataType::Int32, true)),
+                        5,
+                    ),
+                    false,
+                ),
+                Field::new("decimal32", DataType::Decimal32(9, 4), true),
+                Field::new("decimal64", DataType::Decimal64(9, 4), true),
+                Field::new("decimal128", DataType::Decimal128(18, 4), true),
+                Field::new("decimal256", DataType::Decimal256(38, 10), false),
+                Field::new("date32", DataType::Date32, true),
+                Field::new("date64", DataType::Date64, false),
+                Field::new(
+                    "time32_seconds",
+                    DataType::Time32(arrow::datatypes::TimeUnit::Second),
+                    true,
+                ),
+                Field::new(
+                    "time64_nanoseconds",
+                    DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond),
+                    false,
+                ),
+            ]
+            .into(),
+            HashMap::new(),
+        )
+        .unwrap();
+
+        let output = schema.tree_string();
+
+        insta::assert_snapshot!(output, @r"
+        root
+         |-- null_field: null (nullable = true)
+         |-- binary_field: binary (nullable = false)
+         |-- large_binary: large_binary (nullable = true)
+         |-- large_utf8: large_utf8 (nullable = false)
+         |-- fixed_size_binary: fixed_size_binary (nullable = true)
+         |-- fixed_size_list: fixed size list (nullable = false)
+         |    |-- item: int32 (nullable = true)
+         |-- decimal32: decimal32(9, 4) (nullable = true)
+         |-- decimal64: decimal64(9, 4) (nullable = true)
+         |-- decimal128: decimal128(18, 4) (nullable = true)
+         |-- decimal256: decimal256(38, 10) (nullable = false)
+         |-- date32: date32 (nullable = true)
+         |-- date64: date64 (nullable = false)
+         |-- time32_seconds: time32 (nullable = true)
+         |-- time64_nanoseconds: time64 (nullable = false)
+        ");
     }
 }

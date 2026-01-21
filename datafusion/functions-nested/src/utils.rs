@@ -28,9 +28,10 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
+use itertools::Itertools as _;
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -39,7 +40,10 @@ pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
             || arg.data_type().equals_datatype(&DataType::Null)
     }) {
         let types = args.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
-        return plan_err!("{name} received incompatible types: '{types:?}'.");
+        return plan_err!(
+            "{name} received incompatible types: {}",
+            types.iter().join(", ")
+        );
     }
 
     Ok(())
@@ -260,7 +264,7 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
                 }
             }
         }
-        _ => internal_err!("Expected a Map type, got {:?}", data_type),
+        _ => internal_err!("Expected a Map type, got {data_type}"),
     }
 }
 

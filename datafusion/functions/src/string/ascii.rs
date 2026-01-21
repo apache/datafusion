@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
+use arrow::array::{ArrayRef, AsArray, Int32Array, StringArrayType};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns the Unicode character code of the first character in a string.",
+    description = "Returns the first Unicode scalar value of a string.",
     syntax_example = "ascii(str)",
     sql_example = r#"```sql
 > select ascii('abc');
@@ -49,7 +49,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     related_udf(name = "chr")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct AsciiFunc {
     signature: Signature,
 }
@@ -87,9 +87,7 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        use DataType::*;
-
-        Ok(Int32)
+        Ok(DataType::Int32)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -101,21 +99,24 @@ impl ScalarUDFImpl for AsciiFunc {
     }
 }
 
-fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
+fn calculate_ascii<'a, V>(array: &V) -> Result<ArrayRef, ArrowError>
 where
-    V: ArrayAccessor<Item = &'a str>,
+    V: StringArrayType<'a, Item = &'a str>,
 {
-    let iter = ArrayIter::new(array);
-    let result = iter
-        .map(|string| {
-            string.map(|s| {
-                let mut chars = s.chars();
-                chars.next().map_or(0, |v| v as i32)
-            })
+    let values: Vec<_> = (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                0
+            } else {
+                let s = array.value(i);
+                s.chars().next().map_or(0, |c| c as i32)
+            }
         })
-        .collect::<Int32Array>();
+        .collect();
 
-    Ok(Arc::new(result) as ArrayRef)
+    let array = Int32Array::new(values.into(), array.nulls().cloned());
+
+    Ok(Arc::new(array))
 }
 
 /// Returns the numeric code of the first character of the argument.
@@ -123,15 +124,15 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            Ok(calculate_ascii(string_array)?)
+            Ok(calculate_ascii(&string_array)?)
         }
         _ => internal_err!("Unsupported data type"),
     }
@@ -182,6 +183,9 @@ mod tests {
         test_ascii!(Some(String::from("x")), Ok(Some(120)));
         test_ascii!(Some(String::from("a")), Ok(Some(97)));
         test_ascii!(Some(String::from("")), Ok(Some(0)));
+        test_ascii!(Some(String::from("🚀")), Ok(Some(128640)));
+        test_ascii!(Some(String::from("\n")), Ok(Some(10)));
+        test_ascii!(Some(String::from("\t")), Ok(Some(9)));
         test_ascii!(None, Ok(None));
         Ok(())
     }

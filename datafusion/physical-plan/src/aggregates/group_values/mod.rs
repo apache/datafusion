@@ -22,13 +22,13 @@ use arrow::array::types::{
     Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
-use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, downcast_primitive};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 
 use datafusion_expr::EmitTo;
 
-pub(crate) mod multi_group_by;
+pub mod multi_group_by;
 
 mod row;
 mod single_group_by;
@@ -40,13 +40,16 @@ pub(crate) use single_group_by::primitive::HashValue;
 
 use crate::aggregates::{
     group_values::single_group_by::{
-        bytes::GroupValuesByes, bytes_view::GroupValuesBytesView,
-        primitive::GroupValuesPrimitive,
+        boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
+        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
     },
     order::GroupOrdering,
 };
 
+mod metrics;
 mod null_builder;
+
+pub(crate) use metrics::GroupByMetrics;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -84,7 +87,7 @@ mod null_builder;
 /// Each distinct group in a hash aggregation is identified by a unique group id
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
-pub(crate) trait GroupValues: Send {
+pub trait GroupValues: Send {
     /// Calculates the group id for each input row of `cols`, assigning new
     /// group ids as necessary.
     ///
@@ -109,7 +112,7 @@ pub(crate) trait GroupValues: Send {
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>>;
 
     /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
-    fn clear_shrink(&mut self, batch: &RecordBatch);
+    fn clear_shrink(&mut self, num_rows: usize);
 
     /// Returns `true` if this accumulator supports blocked groups.
     ///
@@ -164,15 +167,16 @@ pub(crate) trait GroupValues: Send {
 ///   - If group by single column, and type of this column has
 ///     the specific [`GroupValues`] implementation, such implementation
 ///     will be chosen.
-///   
+///
 ///   - If group by multiple columns, and all column types have the specific
-///     [`GroupColumn`] implementations, [`GroupValuesColumn`] will be chosen.
+///     `GroupColumn` implementations, `GroupValuesColumn` will be chosen.
 ///
-///   - Otherwise, the general implementation [`GroupValuesRows`] will be chosen.
+///   - Otherwise, the general implementation `GroupValuesRows` will be chosen.
 ///
-/// [`GroupColumn`]:  crate::aggregates::group_values::multi_group_by::GroupColumn
-///
-pub(crate) fn new_group_values(
+/// `GroupColumn`:  crate::aggregates::group_values::multi_group_by::GroupColumn
+/// `GroupValuesColumn`: crate::aggregates::group_values::multi_group_by::GroupValuesColumn
+/// `GroupValuesRows`: crate::aggregates::group_values::row::GroupValuesRows
+pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
@@ -217,22 +221,25 @@ pub(crate) fn new_group_values(
                 downcast_helper!(Decimal128Type, d);
             }
             DataType::Utf8 => {
-                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Utf8)));
             }
             DataType::LargeUtf8 => {
-                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Utf8)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Utf8)));
             }
             DataType::Utf8View => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::Utf8View)));
             }
             DataType::Binary => {
-                return Ok(Box::new(GroupValuesByes::<i32>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i32>::new(OutputType::Binary)));
             }
             DataType::LargeBinary => {
-                return Ok(Box::new(GroupValuesByes::<i64>::new(OutputType::Binary)));
+                return Ok(Box::new(GroupValuesBytes::<i64>::new(OutputType::Binary)));
             }
             DataType::BinaryView => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
+            }
+            DataType::Boolean => {
+                return Ok(Box::new(GroupValuesBoolean::new()));
             }
             _ => {}
         }

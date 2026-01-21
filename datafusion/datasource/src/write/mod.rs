@@ -28,9 +28,9 @@ use datafusion_common::error::Result;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use bytes::Bytes;
+use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use object_store::ObjectStore;
 use tokio::io::AsyncWrite;
 
 pub mod demux;
@@ -131,6 +131,8 @@ pub struct ObjectWriterBuilder {
     object_store: Arc<dyn ObjectStore>,
     /// The size of the buffer for the object writer.
     buffer_size: Option<usize>,
+    /// The compression level for the object writer.
+    compression_level: Option<u32>,
 }
 
 impl ObjectWriterBuilder {
@@ -145,6 +147,7 @@ impl ObjectWriterBuilder {
             location: location.clone(),
             object_store,
             buffer_size: None,
+            compression_level: None,
         }
     }
 
@@ -162,7 +165,11 @@ impl ObjectWriterBuilder {
     /// # let object_store = Arc::new(InMemory::new());
     /// let mut builder = ObjectWriterBuilder::new(compression_type, &location, object_store);
     /// builder.set_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
-    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// assert_eq!(
+    ///     builder.get_buffer_size(),
+    ///     Some(20 * 1024 * 1024),
+    ///     "Internal error: Builder buffer size doesn't match"
+    /// );
     /// ```
     pub fn set_buffer_size(&mut self, buffer_size: Option<usize>) {
         self.buffer_size = buffer_size;
@@ -182,7 +189,11 @@ impl ObjectWriterBuilder {
     /// # let object_store = Arc::new(InMemory::new());
     /// let builder = ObjectWriterBuilder::new(compression_type, &location, object_store)
     ///     .with_buffer_size(Some(20 * 1024 * 1024)); //20 MiB
-    /// assert_eq!(builder.get_buffer_size(), Some(20 * 1024 * 1024), "Internal error: Builder buffer size doesn't match");
+    /// assert_eq!(
+    ///     builder.get_buffer_size(),
+    ///     Some(20 * 1024 * 1024),
+    ///     "Internal error: Builder buffer size doesn't match"
+    /// );
     /// ```
     pub fn with_buffer_size(mut self, buffer_size: Option<usize>) -> Self {
         self.buffer_size = buffer_size;
@@ -192,6 +203,22 @@ impl ObjectWriterBuilder {
     /// Currently specified buffer size in bytes.
     pub fn get_buffer_size(&self) -> Option<usize> {
         self.buffer_size
+    }
+
+    /// Set compression level for object writer.
+    pub fn set_compression_level(&mut self, compression_level: Option<u32>) {
+        self.compression_level = compression_level;
+    }
+
+    /// Set compression level for object writer, returning the builder.
+    pub fn with_compression_level(mut self, compression_level: Option<u32>) -> Self {
+        self.compression_level = compression_level;
+        self
+    }
+
+    /// Currently specified compression level.
+    pub fn get_compression_level(&self) -> Option<u32> {
+        self.compression_level
     }
 
     /// Return a writer object that writes to the object store location.
@@ -207,6 +234,7 @@ impl ObjectWriterBuilder {
             location,
             object_store,
             buffer_size,
+            compression_level,
         } = self;
 
         let buf_writer = match buffer_size {
@@ -214,6 +242,7 @@ impl ObjectWriterBuilder {
             None => BufWriter::new(object_store, location),
         };
 
-        file_compression_type.convert_async_writer(buf_writer)
+        file_compression_type
+            .convert_async_writer_with_level(buf_writer, compression_level)
     }
 }

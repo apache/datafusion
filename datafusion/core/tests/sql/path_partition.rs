@@ -25,86 +25,32 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
     },
     error::Result,
-    physical_plan::ColumnStatistics,
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use datafusion_catalog::TableProvider;
+use datafusion_common::ScalarValue;
 use datafusion_common::stats::Precision;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
+use object_store::{Attributes, MultipartUpload, PutMultipartOptions, PutPayload};
 use object_store::{
-    path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
-    ObjectStore, PutOptions, PutResult,
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
+    PutOptions, PutResult, path::Path,
 };
-use object_store::{Attributes, MultipartUpload, PutMultipartOpts, PutPayload};
 use url::Url;
-
-#[tokio::test]
-async fn parquet_partition_pruning_filter() -> Result<()> {
-    let ctx = SessionContext::new();
-
-    let table = create_partitioned_alltypes_parquet_table(
-        &ctx,
-        &[
-            "year=2021/month=09/day=09/file.parquet",
-            "year=2021/month=10/day=09/file.parquet",
-            "year=2021/month=10/day=28/file.parquet",
-        ],
-        &[
-            ("year", DataType::Int32),
-            ("month", DataType::Int32),
-            ("day", DataType::Int32),
-        ],
-        "mirror:///",
-        "alltypes_plain.parquet",
-    )
-    .await;
-
-    // The first three filters can be resolved using only the partition columns.
-    let filters = [
-        Expr::eq(col("year"), lit(2021)),
-        Expr::eq(col("month"), lit(10)),
-        Expr::eq(col("day"), lit(28)),
-        Expr::gt(col("id"), lit(1)),
-    ];
-    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    if let Some((_, parquet_config)) =
-        data_source_exec.downcast_to_file_source::<ParquetSource>()
-    {
-        let pred = parquet_config.predicate().unwrap();
-        // Only the last filter should be pushdown to TableScan
-        let expected = Arc::new(BinaryExpr::new(
-            Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
-            Operator::Gt,
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-        ));
-
-        assert!(pred.as_any().is::<BinaryExpr>());
-        let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
-
-        assert_eq!(pred, expected.as_ref());
-    }
-    Ok(())
-}
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
@@ -484,7 +430,9 @@ async fn parquet_multiple_nonstring_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_statistics() -> Result<()> {
-    let ctx = SessionContext::new();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.collect_statistics = true;
+    let ctx = SessionContext::new_with_config(config);
 
     register_partitioned_alltypes_parquet(
         &ctx,
@@ -515,10 +463,19 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(stat_cols.len(), 4);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(3));
-    // TODO assert partition column (1,2,3) stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown(),);
-    assert_eq!(stat_cols[2], ColumnStatistics::new_unknown(),);
-    assert_eq!(stat_cols[3], ColumnStatistics::new_unknown(),);
+    // Partition column statistics (year=2021 for all 3 rows)
+    assert_eq!(stat_cols[1].null_count, Precision::Exact(0));
+    assert_eq!(
+        stat_cols[1].min_value,
+        Precision::Exact(ScalarValue::Int32(Some(2021)))
+    );
+    assert_eq!(
+        stat_cols[1].max_value,
+        Precision::Exact(ScalarValue::Int32(Some(2021)))
+    );
+    // month and day are Utf8 partition columns with statistics
+    assert_eq!(stat_cols[2].null_count, Precision::Exact(0));
+    assert_eq!(stat_cols[3].null_count, Precision::Exact(0));
 
     //// WITH PROJECTION ////
     let dataframe = ctx.sql("SELECT mycol, day FROM t WHERE day='28'").await?;
@@ -530,8 +487,16 @@ async fn parquet_statistics() -> Result<()> {
     assert_eq!(stat_cols.len(), 2);
     // stats for the first col are read from the parquet file
     assert_eq!(stat_cols[0].null_count, Precision::Exact(1));
-    // TODO assert partition column stats once implemented (#1186)
-    assert_eq!(stat_cols[1], ColumnStatistics::new_unknown());
+    // Partition column statistics for day='28' (1 row)
+    assert_eq!(stat_cols[1].null_count, Precision::Exact(0));
+    assert_eq!(
+        stat_cols[1].min_value,
+        Precision::Exact(ScalarValue::Utf8(Some("28".to_string())))
+    );
+    assert_eq!(
+        stat_cols[1].max_value,
+        Precision::Exact(ScalarValue::Utf8(Some("28".to_string())))
+    );
 
     Ok(())
 }
@@ -636,7 +601,8 @@ async fn create_partitioned_alltypes_parquet_table(
                 .iter()
                 .map(|x| (x.0.to_owned(), x.1.clone()))
                 .collect::<Vec<_>>(),
-        );
+        )
+        .with_session_config_options(&ctx.copied_config());
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =
@@ -695,7 +661,7 @@ impl ObjectStore for MirroringObjectStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         unimplemented!()
     }

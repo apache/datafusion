@@ -20,13 +20,14 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use arrow::{array::StringArray, record_batch::RecordBatch};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::{and, binary_expr, col, lit, or, Operator};
+use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_expr::{Operator, and, binary_expr, col, lit, or};
 use datafusion_physical_expr::{
+    PhysicalExpr,
     expressions::{BinaryExpr, Column},
     planner::logical2physical,
-    PhysicalExpr,
 };
+use std::hint::black_box;
 use std::sync::Arc;
 
 /// Generates BooleanArrays with different true/false distributions for benchmarking.
@@ -215,7 +216,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Each scenario when the test operator is `and`
     {
         for (name, batch) in batches_and.into_iter() {
-            c.bench_function(&format!("short_circuit/and/{}", name), |b| {
+            c.bench_function(&format!("short_circuit/and/{name}"), |b| {
                 b.iter(|| expr_and.evaluate(black_box(&batch)).unwrap())
             });
         }
@@ -223,7 +224,7 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     // Each scenario when the test operator is `or`
     {
         for (name, batch) in batches_or.into_iter() {
-            c.bench_function(&format!("short_circuit/or/{}", name), |b| {
+            c.bench_function(&format!("short_circuit/or/{name}"), |b| {
                 b.iter(|| expr_or.evaluate(black_box(&batch)).unwrap())
             });
         }
@@ -285,6 +286,7 @@ fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
 /// Creates record batches with boolean arrays that test different short-circuit scenarios.
 /// When TEST_ALL_FALSE = true: creates data for AND operator benchmarks (needs early false exit)
 /// When TEST_ALL_FALSE = false: creates data for OR operator benchmarks (needs early true exit)
+#[expect(clippy::needless_pass_by_value)]
 fn create_record_batch<const TEST_ALL_FALSE: bool>(
     schema: Arc<Schema>,
     b_values: &[String],

@@ -17,12 +17,38 @@
 
 use std::sync::Arc;
 
-use crate::create_physical_expr;
+use crate::expressions::{self, Column};
+use crate::{LexOrdering, PhysicalSortExpr, create_physical_expr};
+
+use arrow::compute::SortOptions;
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{DFSchema, HashMap};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::execution_props::ExecutionProps;
-pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-pub use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
+use datafusion_expr::{Expr, SortExpr};
+
 use itertools::izip;
+// Exports:
+pub(crate) use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+/// Adds the `offset` value to `Column` indices inside `expr`. This function is
+/// generally used during the update of the right table schema in join operations.
+pub fn add_offset_to_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    offset: isize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_down(|e| match e.as_any().downcast_ref::<Column>() {
+        Some(col) => {
+            let Some(idx) = col.index().checked_add_signed(offset) else {
+                return plan_err!("Column index overflow");
+            };
+            Ok(Transformed::yes(Arc::new(Column::new(col.name(), idx))))
+        }
+        None => Ok(Transformed::no(e)),
+    })
+    .data()
+}
 
 /// This function is similar to the `contains` method of `Vec`. It finds
 /// whether `expr` is among `physical_exprs`.
@@ -60,26 +86,21 @@ pub fn physical_exprs_bag_equal(
     multi_set_lhs == multi_set_rhs
 }
 
-use crate::{expressions, LexOrdering, PhysicalSortExpr};
-use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
-use datafusion_common::plan_err;
-use datafusion_common::Result;
-use datafusion_expr::{Expr, SortExpr};
-
-/// Converts logical sort expressions to physical sort expressions
+/// Converts logical sort expressions to physical sort expressions.
 ///
-/// This function transforms a collection of logical sort expressions into their physical
-/// representation that can be used during query execution.
+/// This function transforms a collection of logical sort expressions into their
+/// physical representation that can be used during query execution.
 ///
 /// # Arguments
 ///
-/// * `schema` - The schema containing column definitions
-/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
+/// * `schema` - The schema containing column definitions.
+/// * `sort_order` - A collection of logical sort expressions grouped into
+///   lexicographic orderings.
 ///
 /// # Returns
 ///
-/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
+/// A vector of lexicographic orderings for physical execution, or an error if
+/// the transformation fails.
 ///
 /// # Examples
 ///
@@ -97,12 +118,16 @@ use datafusion_expr::{Expr, SortExpr};
 /// ]);
 ///
 /// let sort_exprs = vec![
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
-///     ],
-///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
-///     ]
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "id")),
+///         asc: true,
+///         nulls_first: false,
+///     }],
+///     vec![SortExpr {
+///         expr: Expr::Column(Column::new(Some("t"), "name")),
+///         asc: false,
+///         nulls_first: true,
+///     }],
 /// ];
 /// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
@@ -114,18 +139,13 @@ pub fn create_ordering(
 
     for (group_idx, exprs) in sort_order.iter().enumerate() {
         // Construct PhysicalSortExpr objects from Expr objects:
-        let mut sort_exprs = LexOrdering::default();
+        let mut sort_exprs = vec![];
         for (expr_idx, sort) in exprs.iter().enumerate() {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
-                        sort_exprs.push(PhysicalSortExpr {
-                            expr,
-                            options: SortOptions {
-                                descending: !sort.asc,
-                                nulls_first: sort.nulls_first,
-                            },
-                        });
+                        let opts = SortOptions::new(!sort.asc, sort.nulls_first);
+                        sort_exprs.push(PhysicalSortExpr::new(expr, opts));
                     }
                     // Cannot find expression in the projected_schema, stop iterating
                     // since rest of the orderings are violated
@@ -141,9 +161,33 @@ pub fn create_ordering(
                 }
             }
         }
-        if !sort_exprs.is_empty() {
-            all_sort_orders.push(sort_exprs);
-        }
+        all_sort_orders.extend(LexOrdering::new(sort_exprs));
+    }
+    Ok(all_sort_orders)
+}
+
+/// Creates a vector of [LexOrdering] from a vector of logical expression
+pub fn create_lex_ordering(
+    schema: &SchemaRef,
+    sort_order: &[Vec<SortExpr>],
+    execution_props: &ExecutionProps,
+) -> Result<Vec<LexOrdering>> {
+    // Try the fast path that only supports column references first
+    // This avoids creating a DFSchema
+    if let Ok(ordering) = create_ordering(schema, sort_order) {
+        return Ok(ordering);
+    }
+
+    let df_schema = DFSchema::try_from(Arc::clone(schema))?;
+
+    let mut all_sort_orders = vec![];
+
+    for exprs in sort_order.iter() {
+        all_sort_orders.extend(LexOrdering::new(create_physical_sort_exprs(
+            exprs,
+            &df_schema,
+            execution_props,
+        )?));
     }
     Ok(all_sort_orders)
 }
@@ -154,17 +198,9 @@ pub fn create_physical_sort_expr(
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
-    let SortExpr {
-        expr,
-        asc,
-        nulls_first,
-    } = e;
-    Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-        options: SortOptions {
-            descending: !asc,
-            nulls_first: *nulls_first,
-        },
+    create_physical_expr(&e.expr, input_dfschema, execution_props).map(|expr| {
+        let options = SortOptions::new(!e.asc, e.nulls_first);
+        PhysicalSortExpr::new(expr, options)
     })
 }
 
@@ -173,23 +209,43 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
-) -> Result<LexOrdering> {
+) -> Result<Vec<PhysicalSortExpr>> {
     exprs
         .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
-        .collect::<Result<LexOrdering>>()
+        .map(|e| create_physical_sort_expr(e, input_dfschema, execution_props))
+        .collect()
+}
+
+pub fn add_offset_to_physical_sort_exprs(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    offset: isize,
+) -> Result<Vec<PhysicalSortExpr>> {
+    sort_exprs
+        .into_iter()
+        .map(|mut sort_expr| {
+            sort_expr.expr = add_offset_to_expr(sort_expr.expr, offset)?;
+            Ok(sort_expr)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::expressions::{Column, Literal};
+    use crate::expressions::{BinaryExpr, Column, Literal};
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
+    use datafusion_physical_expr_common::physical_expr::is_volatile;
 
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::ColumnarValue;
+    use datafusion_expr::Operator;
+    use std::any::Any;
+    use std::fmt;
 
     #[test]
     fn test_physical_exprs_contains() {
@@ -301,5 +357,121 @@ mod tests {
         assert!(!physical_exprs_equal(list4.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list3.as_slice(), list3.as_slice()));
         assert!(physical_exprs_bag_equal(list4.as_slice(), list4.as_slice()));
+    }
+
+    #[test]
+    fn test_is_volatile_default_behavior() {
+        // Test that default PhysicalExpr implementations are not volatile
+        let literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        let column = Arc::new(Column::new("test", 0)) as Arc<dyn PhysicalExpr>;
+
+        // Test is_volatile_node() - should return false by default
+        assert!(!literal.is_volatile_node());
+        assert!(!column.is_volatile_node());
+
+        // Test is_volatile() - should return false for non-volatile expressions
+        assert!(!is_volatile(&literal));
+        assert!(!is_volatile(&column));
+    }
+
+    /// Mock volatile PhysicalExpr for testing purposes
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct MockVolatileExpr {
+        volatile: bool,
+    }
+
+    impl MockVolatileExpr {
+        fn new(volatile: bool) -> Self {
+            Self { volatile }
+        }
+    }
+
+    impl fmt::Display for MockVolatileExpr {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "MockVolatile({})", self.volatile)
+        }
+    }
+
+    impl PhysicalExpr for MockVolatileExpr {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+            Ok(DataType::Boolean)
+        }
+
+        fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+            Ok(false)
+        }
+
+        fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                self.volatile,
+            ))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn is_volatile_node(&self) -> bool {
+            self.volatile
+        }
+
+        fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "mock_volatile({})", self.volatile)
+        }
+    }
+
+    #[test]
+    fn test_nested_expression_volatility() {
+        // Test that is_volatile() recursively detects volatility in expression trees
+
+        // Create a volatile mock expression
+        let volatile_expr =
+            Arc::new(MockVolatileExpr::new(true)) as Arc<dyn PhysicalExpr>;
+        assert!(volatile_expr.is_volatile_node());
+        assert!(is_volatile(&volatile_expr));
+
+        // Create a non-volatile mock expression
+        let stable_expr = Arc::new(MockVolatileExpr::new(false)) as Arc<dyn PhysicalExpr>;
+        assert!(!stable_expr.is_volatile_node());
+        assert!(!is_volatile(&stable_expr));
+
+        // Create a literal (non-volatile)
+        let literal =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(42)))) as Arc<dyn PhysicalExpr>;
+        assert!(!literal.is_volatile_node());
+        assert!(!is_volatile(&literal));
+
+        // Test composite expression: volatile_expr AND literal
+        // The BinaryExpr itself is not volatile, but contains a volatile child
+        let composite_expr = Arc::new(BinaryExpr::new(
+            Arc::clone(&volatile_expr),
+            Operator::And,
+            Arc::clone(&literal),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert!(!composite_expr.is_volatile_node()); // BinaryExpr itself is not volatile
+        assert!(is_volatile(&composite_expr)); // But it contains a volatile child
+
+        // Test composite expression with all non-volatile children
+        let stable_composite = Arc::new(BinaryExpr::new(
+            Arc::clone(&stable_expr),
+            Operator::And,
+            Arc::clone(&literal),
+        )) as Arc<dyn PhysicalExpr>;
+
+        assert!(!stable_composite.is_volatile_node());
+        assert!(!is_volatile(&stable_composite)); // No volatile children
     }
 }

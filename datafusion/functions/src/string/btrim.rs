@@ -20,7 +20,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -40,7 +40,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         args.to_owned()
     };
-    general_trim::<T>(&args, TrimType::Both, use_string_view)
+    general_trim::<T, TrimBoth>(&args, use_string_view)
 }
 
 #[user_doc(
@@ -65,7 +65,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     related_udf(name = "ltrim"),
     related_udf(name = "rtrim")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct BTrimFunc {
     signature: Signature,
     aliases: Vec<String>,

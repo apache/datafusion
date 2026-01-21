@@ -16,13 +16,15 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{make_comparator, ArrayRef, Datum};
+use arrow::array::{ArrayRef, Datum, make_comparator};
 use arrow::buffer::NullBuffer;
-use arrow::compute::SortOptions;
+use arrow::compute::kernels::cmp::{
+    distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
+};
+use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
-use datafusion_common::{arrow_datafusion_err, internal_err};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::operator::Operator;
 use std::sync::Arc;
@@ -53,39 +55,67 @@ pub fn apply(
     }
 }
 
-/// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs`
+/// Applies a binary [`Datum`] comparison operator `op` to `lhs` and `rhs`
 pub fn apply_cmp(
+    op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
-    f: impl Fn(&dyn Datum, &dyn Datum) -> Result<BooleanArray, ArrowError>,
 ) -> Result<ColumnarValue> {
-    apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    if lhs.data_type().is_nested() {
+        apply_cmp_for_nested(op, lhs, rhs)
+    } else {
+        let f = match op {
+            Operator::Eq => eq,
+            Operator::NotEq => neq,
+            Operator::Lt => lt,
+            Operator::LtEq => lt_eq,
+            Operator::Gt => gt,
+            Operator::GtEq => gt_eq,
+            Operator::IsDistinctFrom => distinct,
+            Operator::IsNotDistinctFrom => not_distinct,
+
+            Operator::LikeMatch => like,
+            Operator::ILikeMatch => ilike,
+            Operator::NotLikeMatch => nlike,
+            Operator::NotILikeMatch => nilike,
+
+            _ => {
+                return internal_err!("Invalid compare operator: {}", op);
+            }
+        };
+
+        apply(lhs, rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    }
 }
 
-/// Applies a binary [`Datum`] comparison kernel `f` to `lhs` and `rhs` for nested type like
+/// Applies a binary [`Datum`] comparison operator `op` to `lhs` and `rhs` for nested type like
 /// List, FixedSizeList, LargeList, Struct, Union, Map, or a dictionary of a nested type
 pub fn apply_cmp_for_nested(
     op: Operator,
     lhs: &ColumnarValue,
     rhs: &ColumnarValue,
 ) -> Result<ColumnarValue> {
-    if matches!(
-        op,
-        Operator::Eq
-            | Operator::NotEq
-            | Operator::Lt
-            | Operator::Gt
-            | Operator::LtEq
-            | Operator::GtEq
-            | Operator::IsDistinctFrom
-            | Operator::IsNotDistinctFrom
-    ) {
-        apply(lhs, rhs, |l, r| {
-            Ok(Arc::new(compare_op_for_nested(op, l, r)?))
-        })
-    } else {
-        internal_err!("invalid operator for nested")
-    }
+    let left_data_type = lhs.data_type();
+    let right_data_type = rhs.data_type();
+
+    assert_or_internal_err!(
+        matches!(
+            op,
+            Operator::Eq
+                | Operator::NotEq
+                | Operator::Lt
+                | Operator::Gt
+                | Operator::LtEq
+                | Operator::GtEq
+                | Operator::IsDistinctFrom
+                | Operator::IsNotDistinctFrom
+        ) && left_data_type.equals_datatype(&right_data_type),
+        "invalid operator or data type mismatch for nested data, op {op} left {left_data_type}, right {right_data_type}",
+    );
+
+    apply(lhs, rhs, |l, r| {
+        Ok(Arc::new(compare_op_for_nested(op, l, r)?))
+    })
 }
 
 /// Compare with eq with either nested or non-nested
@@ -97,7 +127,7 @@ pub fn compare_with_eq(
     if is_nested {
         compare_op_for_nested(Operator::Eq, lhs, rhs)
     } else {
-        arrow::compute::kernels::cmp::eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
+        eq(lhs, rhs).map_err(|e| arrow_datafusion_err!(e))
     }
 }
 
@@ -112,9 +142,7 @@ pub fn compare_op_for_nested(
     let l_len = l.len();
     let r_len = r.len();
 
-    if l_len != r_len && !is_l_scalar && !is_r_scalar {
-        return internal_err!("len mismatch");
-    }
+    assert_or_internal_err!(l_len == r_len || is_l_scalar || is_r_scalar, "len mismatch");
 
     let len = match is_l_scalar {
         true => r_len,
@@ -154,9 +182,26 @@ pub fn compare_op_for_nested(
     if matches!(op, Operator::IsDistinctFrom | Operator::IsNotDistinctFrom) {
         Ok(BooleanArray::new(values, None))
     } else {
-        // If one of the side is NULL, we returns NULL
+        // If one of the side is NULL, we return NULL
         // i.e. NULL eq NULL -> NULL
-        let nulls = NullBuffer::union(l.nulls(), r.nulls());
+        // For nested comparisons, we need to ensure the null buffer matches the result length
+        let nulls = match (is_l_scalar, is_r_scalar) {
+            (false, false) | (true, true) => NullBuffer::union(l.nulls(), r.nulls()),
+            (true, false) => {
+                // When left is null-scalar and right is array, expand left nulls to match result length
+                match l.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                    Some(_) => Some(NullBuffer::new_null(len)), // Left scalar is null
+                    None => r.nulls().cloned(),                 // Left scalar is non-null
+                }
+            }
+            (false, true) => {
+                // When right is null-scalar and left is array, expand right nulls to match result length
+                match r.nulls().filter(|nulls| !nulls.is_valid(0)) {
+                    Some(_) => Some(NullBuffer::new_null(len)), // Right scalar is null
+                    None => l.nulls().cloned(), // Right scalar is non-null
+                }
+            }
+        };
         Ok(BooleanArray::new(values, nulls))
     }
 }

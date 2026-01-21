@@ -25,3 +25,4 @@ DataFusion CLI
    installation
    usage
    datasources
+   functions

@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, TableReference};
+use datafusion_execution::cache::TableScopedPath;
+use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -26,8 +28,8 @@ use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
 use itertools::Itertools;
 use log::debug;
-use object_store::path::Path;
 use object_store::path::DELIMITER;
+use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use url::Url;
 
@@ -41,6 +43,8 @@ pub struct ListingTableUrl {
     prefix: Path,
     /// An optional glob expression used to filter files
     glob: Option<Pattern>,
+    /// Optional table reference for the table this url belongs to
+    table_ref: Option<TableReference>,
 }
 
 impl ListingTableUrl {
@@ -145,7 +149,12 @@ impl ListingTableUrl {
     /// to create a [`ListingTableUrl`].
     pub fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
         let prefix = Path::from_url_path(url.path())?;
-        Ok(Self { url, prefix, glob })
+        Ok(Self {
+            url,
+            prefix,
+            glob,
+            table_ref: None,
+        })
     }
 
     /// Returns the URL scheme
@@ -209,12 +218,12 @@ impl ListingTableUrl {
     /// assert_eq!(url.file_extension(), None);
     /// ```
     pub fn file_extension(&self) -> Option<&str> {
-        if let Some(mut segments) = self.url.path_segments() {
-            if let Some(last_segment) = segments.next_back() {
-                if last_segment.contains(".") && !last_segment.ends_with(".") {
-                    return last_segment.split('.').next_back();
-                }
-            }
+        if let Some(mut segments) = self.url.path_segments()
+            && let Some(last_segment) = segments.next_back()
+            && last_segment.contains(".")
+            && !last_segment.ends_with(".")
+        {
+            return last_segment.split('.').next_back();
         }
 
         None
@@ -233,34 +242,57 @@ impl ListingTableUrl {
         Some(stripped.split_terminator(DELIMITER))
     }
 
-    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
-    pub async fn list_all_files<'a>(
+    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`,
+    /// optionally filtering by a path prefix
+    pub async fn list_prefixed_files<'a>(
         &'a self,
         ctx: &'a dyn Session,
         store: &'a dyn ObjectStore,
+        prefix: Option<Path>,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
         let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
-        // If the prefix is a file, use a head request, otherwise list
-        let list = match self.is_collection() {
-            true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
-                None => store.list(Some(&self.prefix)),
-                Some(cache) => {
-                    if let Some(res) = cache.get(&self.prefix) {
-                        debug!("Hit list all files cache");
-                        futures::stream::iter(res.as_ref().clone().into_iter().map(Ok))
-                            .boxed()
-                    } else {
-                        let list_res = store.list(Some(&self.prefix));
-                        let vec = list_res.try_collect::<Vec<ObjectMeta>>().await?;
-                        cache.put(&self.prefix, Arc::new(vec.clone()));
-                        futures::stream::iter(vec.into_iter().map(Ok)).boxed()
-                    }
-                }
-            },
-            false => futures::stream::once(store.head(&self.prefix)).boxed(),
+
+        // Build full_prefix for non-cached path and head() calls
+        let full_prefix = if let Some(ref p) = prefix {
+            let mut parts = self.prefix.parts().collect::<Vec<_>>();
+            parts.extend(p.parts());
+            Path::from_iter(parts.into_iter())
+        } else {
+            self.prefix.clone()
         };
+
+        let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
+            list_with_cache(
+                ctx,
+                store,
+                self.table_ref.as_ref(),
+                &self.prefix,
+                prefix.as_ref(),
+            )
+            .await?
+        } else {
+            match store.head(&full_prefix).await {
+                Ok(meta) => futures::stream::once(async { Ok(meta) })
+                    .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                    .boxed(),
+                // If the head command fails, it is likely that object doesn't exist.
+                // Retry as though it were a prefix (aka a collection)
+                Err(object_store::Error::NotFound { .. }) => {
+                    list_with_cache(
+                        ctx,
+                        store,
+                        self.table_ref.as_ref(),
+                        &self.prefix,
+                        prefix.as_ref(),
+                    )
+                    .await?
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
+
         Ok(list
             .try_filter(move |meta| {
                 let path = &meta.location;
@@ -268,8 +300,18 @@ impl ListingTableUrl {
                 let glob_match = self.contains(path, ignore_subdirectory);
                 futures::future::ready(extension_match && glob_match)
             })
-            .map_err(DataFusionError::ObjectStore)
             .boxed())
+    }
+
+    /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
+    pub async fn list_all_files<'a>(
+        &'a self,
+        ctx: &'a dyn Session,
+        store: &'a dyn ObjectStore,
+        file_extension: &'a str,
+    ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
+        self.list_prefixed_files(ctx, store, None, file_extension)
+            .await
     }
 
     /// Returns this [`ListingTableUrl`] as a string
@@ -281,6 +323,112 @@ impl ListingTableUrl {
     pub fn object_store(&self) -> ObjectStoreUrl {
         let url = &self.url[url::Position::BeforeScheme..url::Position::BeforePath];
         ObjectStoreUrl::parse(url).unwrap()
+    }
+
+    /// Returns true if the [`ListingTableUrl`] points to the folder
+    pub fn is_folder(&self) -> bool {
+        self.url.scheme() == "file" && self.is_collection()
+    }
+
+    /// Return the `url` for [`ListingTableUrl`]
+    pub fn get_url(&self) -> &Url {
+        &self.url
+    }
+
+    /// Return the `glob` for [`ListingTableUrl`]
+    pub fn get_glob(&self) -> &Option<Pattern> {
+        &self.glob
+    }
+
+    /// Returns a copy of current [`ListingTableUrl`] with a specified `glob`
+    pub fn with_glob(mut self, glob: &str) -> Result<Self> {
+        self.glob =
+            Some(Pattern::new(glob).map_err(|e| DataFusionError::External(Box::new(e)))?);
+        Ok(self)
+    }
+
+    /// Set the table reference for this [`ListingTableUrl`]
+    pub fn with_table_ref(mut self, table_ref: TableReference) -> Self {
+        self.table_ref = Some(table_ref);
+        self
+    }
+
+    /// Return the table reference for this [`ListingTableUrl`]
+    pub fn get_table_ref(&self) -> &Option<TableReference> {
+        &self.table_ref
+    }
+}
+
+/// Lists files with cache support, using prefix-aware lookups.
+///
+/// # Arguments
+/// * `ctx` - The session context
+/// * `store` - The object store to list from
+/// * `table_base_path` - The table's base path (the stable cache key)
+/// * `prefix` - Optional prefix relative to table base for filtering results
+///
+/// # Cache Behavior:
+/// The cache key is always `table_base_path`. When a prefix-filtered listing
+/// is requested via `prefix`, the cache:
+/// - Looks up `table_base_path` in the cache
+/// - Filters results to match `table_base_path/prefix`
+/// - Returns filtered results without a storage call
+///
+/// On cache miss, the full table is always listed and cached, ensuring
+/// subsequent prefix queries can be served from cache.
+async fn list_with_cache<'b>(
+    ctx: &'b dyn Session,
+    store: &'b dyn ObjectStore,
+    table_ref: Option<&TableReference>,
+    table_base_path: &Path,
+    prefix: Option<&Path>,
+) -> Result<BoxStream<'b, Result<ObjectMeta>>> {
+    // Build the full listing path (table_base + prefix)
+    let full_prefix = match prefix {
+        Some(p) => {
+            let mut parts: Vec<_> = table_base_path.parts().collect();
+            parts.extend(p.parts());
+            Path::from_iter(parts)
+        }
+        None => table_base_path.clone(),
+    };
+
+    match ctx.runtime_env().cache_manager.get_list_files_cache() {
+        None => Ok(store
+            .list(Some(&full_prefix))
+            .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
+            .boxed()),
+        Some(cache) => {
+            // Build the filter prefix (only Some if prefix was requested)
+            let filter_prefix = prefix.is_some().then(|| full_prefix.clone());
+
+            let table_scoped_base_path = TableScopedPath {
+                table: table_ref.cloned(),
+                path: table_base_path.clone(),
+            };
+
+            // Try cache lookup - get returns CachedFileList
+            let vec = if let Some(cached) = cache.get(&table_scoped_base_path) {
+                debug!("Hit list files cache");
+                cached.files_matching_prefix(&filter_prefix)
+            } else {
+                // Cache miss - always list and cache the full table
+                // This ensures we have complete data for future prefix queries
+                let mut vec = store
+                    .list(Some(table_base_path))
+                    .try_collect::<Vec<ObjectMeta>>()
+                    .await?;
+                vec.shrink_to_fit(); // Right-size before caching
+                let cached: CachedFileList = vec.into();
+                let result = cached.files_matching_prefix(&filter_prefix);
+                cache.put(&table_scoped_base_path, cached);
+                result
+            };
+            Ok(
+                futures::stream::iter(Arc::unwrap_or_clone(vec).into_iter().map(Ok))
+                    .boxed(),
+            )
+        }
     }
 }
 
@@ -339,7 +487,6 @@ const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
 ///
 /// Path delimiters are determined using [`std::path::is_separator`] which
 /// permits `/` as a path delimiter even on Windows platforms.
-///
 #[cfg(not(target_arch = "wasm32"))]
 fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
     let mut last_separator = 0;
@@ -362,6 +509,25 @@ fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use datafusion_common::DFSchema;
+    use datafusion_common::config::TableOptions;
+    use datafusion_execution::TaskContext;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::ExecutionPlan;
+    use object_store::{
+        GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOptions,
+        PutPayload,
+    };
+    use std::any::Any;
+    use std::collections::HashMap;
+    use std::ops::Range;
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[test]
@@ -574,5 +740,508 @@ mod tests {
             Some("ext"),
             "file path ends with .ext - extension is ext",
         );
+    }
+
+    #[tokio::test]
+    async fn test_list_files() -> Result<()> {
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec!["forbidden/e.parquet".into()],
+        };
+
+        // Create some files:
+        create_file(&store, "a.parquet").await;
+        create_file(&store, "/t/b.parquet").await;
+        create_file(&store, "/t/c.csv").await;
+        create_file(&store, "/t/d.csv").await;
+
+        // This file returns a permission error.
+        create_file(&store, "/forbidden/e.parquet").await;
+
+        assert_eq!(
+            list_all_files("/", &store, "parquet").await?,
+            vec!["a.parquet"],
+        );
+
+        // test with and without trailing slash
+        assert_eq!(
+            list_all_files("/t/", &store, "parquet").await?,
+            vec!["t/b.parquet"],
+        );
+        assert_eq!(
+            list_all_files("/t", &store, "parquet").await?,
+            vec!["t/b.parquet"],
+        );
+
+        // test with and without trailing slash
+        assert_eq!(
+            list_all_files("/t", &store, "csv").await?,
+            vec!["t/c.csv", "t/d.csv"],
+        );
+        assert_eq!(
+            list_all_files("/t/", &store, "csv").await?,
+            vec!["t/c.csv", "t/d.csv"],
+        );
+
+        // Test a non existing prefix
+        assert_eq!(
+            list_all_files("/NonExisting", &store, "csv").await?,
+            vec![] as Vec<String>
+        );
+        assert_eq!(
+            list_all_files("/NonExisting/", &store, "csv").await?,
+            vec![] as Vec<String>
+        );
+
+        // Including forbidden.parquet generates an error.
+        let Err(DataFusionError::ObjectStore(err)) =
+            list_all_files("/forbidden/e.parquet", &store, "parquet").await
+        else {
+            panic!("Expected ObjectStore error");
+        };
+
+        let object_store::Error::PermissionDenied { .. } = &*err else {
+            panic!("Expected PermissionDenied error");
+        };
+
+        // Test prefix filtering with partition-style paths
+        create_file(&store, "/data/a=1/file1.parquet").await;
+        create_file(&store, "/data/a=1/b=100/file2.parquet").await;
+        create_file(&store, "/data/a=2/b=200/file3.parquet").await;
+        create_file(&store, "/data/a=2/b=200/file4.csv").await;
+
+        assert_eq!(
+            list_prefixed_files("/data/", &store, Some(Path::from("a=1")), "parquet")
+                .await?,
+            vec!["data/a=1/b=100/file2.parquet", "data/a=1/file1.parquet"],
+        );
+
+        assert_eq!(
+            list_prefixed_files(
+                "/data/",
+                &store,
+                Some(Path::from("a=1/b=100")),
+                "parquet"
+            )
+            .await?,
+            vec!["data/a=1/b=100/file2.parquet"],
+        );
+
+        assert_eq!(
+            list_prefixed_files("/data/", &store, Some(Path::from("a=2")), "parquet")
+                .await?,
+            vec!["data/a=2/b=200/file3.parquet"],
+        );
+
+        Ok(())
+    }
+
+    /// Tests that the cached code path produces identical results to the non-cached path.
+    ///
+    /// This is critical: the cache is a transparent optimization, so both paths
+    /// MUST return the same files. Note: order is not guaranteed by ObjectStore::list,
+    /// so we sort results before comparison.
+    #[tokio::test]
+    async fn test_cache_path_equivalence() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec![],
+        };
+
+        // Create test files with partition-style paths
+        create_file(&store, "/table/year=2023/data1.parquet").await;
+        create_file(&store, "/table/year=2023/month=01/data2.parquet").await;
+        create_file(&store, "/table/year=2024/data3.parquet").await;
+        create_file(&store, "/table/year=2024/month=06/data4.parquet").await;
+        create_file(&store, "/table/year=2024/month=12/data5.parquet").await;
+
+        // Session WITHOUT cache
+        let session_no_cache = MockSession::new();
+
+        // Session WITH cache - use RuntimeEnvBuilder with cache limit (no TTL needed for this test)
+        let runtime_with_cache = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024) // 1MB limit
+            .build_arc()?;
+        let session_with_cache = MockSession::with_runtime_env(runtime_with_cache);
+
+        // Test cases: (url, prefix, description)
+        let test_cases = vec![
+            ("/table/", None, "full table listing"),
+            (
+                "/table/",
+                Some(Path::from("year=2023")),
+                "single partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2024")),
+                "different partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2024/month=06")),
+                "nested partition filter",
+            ),
+            (
+                "/table/",
+                Some(Path::from("year=2025")),
+                "non-existent partition",
+            ),
+        ];
+
+        for (url_str, prefix, description) in test_cases {
+            let url = ListingTableUrl::parse(url_str)?;
+
+            // Get results WITHOUT cache (sorted for comparison)
+            let mut results_no_cache: Vec<String> = url
+                .list_prefixed_files(&session_no_cache, &store, prefix.clone(), "parquet")
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+            results_no_cache.sort();
+
+            // Get results WITH cache (first call - cache miss, sorted for comparison)
+            let mut results_with_cache_miss: Vec<String> = url
+                .list_prefixed_files(
+                    &session_with_cache,
+                    &store,
+                    prefix.clone(),
+                    "parquet",
+                )
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+            results_with_cache_miss.sort();
+
+            // Get results WITH cache (second call - cache hit, sorted for comparison)
+            let mut results_with_cache_hit: Vec<String> = url
+                .list_prefixed_files(&session_with_cache, &store, prefix, "parquet")
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?
+                .into_iter()
+                .map(|m| m.location.to_string())
+                .collect();
+            results_with_cache_hit.sort();
+
+            // All three should contain the same files
+            assert_eq!(
+                results_no_cache, results_with_cache_miss,
+                "Cache miss path should match non-cached path for: {description}"
+            );
+            assert_eq!(
+                results_no_cache, results_with_cache_hit,
+                "Cache hit path should match non-cached path for: {description}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Tests that prefix queries can be served from a cached full-table listing
+    #[tokio::test]
+    async fn test_cache_serves_partition_from_full_listing() -> Result<()> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let store = MockObjectStore {
+            in_mem: object_store::memory::InMemory::new(),
+            forbidden_paths: vec![],
+        };
+
+        // Create test files
+        create_file(&store, "/sales/region=US/q1.parquet").await;
+        create_file(&store, "/sales/region=US/q2.parquet").await;
+        create_file(&store, "/sales/region=EU/q1.parquet").await;
+
+        // Create session with cache (no TTL needed for this test)
+        let runtime = RuntimeEnvBuilder::new()
+            .with_object_list_cache_limit(1024 * 1024) // 1MB limit
+            .build_arc()?;
+        let session = MockSession::with_runtime_env(runtime);
+
+        let url = ListingTableUrl::parse("/sales/")?;
+
+        // First: query full table (populates cache)
+        let full_results: Vec<String> = url
+            .list_prefixed_files(&session, &store, None, "parquet")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        assert_eq!(full_results.len(), 3);
+
+        // Second: query with prefix (should be served from cache)
+        let mut us_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=US")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        us_results.sort();
+
+        assert_eq!(
+            us_results,
+            vec!["sales/region=US/q1.parquet", "sales/region=US/q2.parquet"]
+        );
+
+        // Third: different prefix (also from cache)
+        let eu_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=EU")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+
+        assert_eq!(eu_results, vec!["sales/region=EU/q1.parquet"]);
+
+        Ok(())
+    }
+
+    /// Creates a file with "hello world" content at the specified path
+    async fn create_file(object_store: &dyn ObjectStore, path: &str) {
+        object_store
+            .put(&Path::from(path), PutPayload::from_static(b"hello world"))
+            .await
+            .expect("failed to create test file");
+    }
+
+    /// Runs "list_prefixed_files"  with no prefix to list all files and returns their paths
+    ///
+    /// Panic's on error
+    async fn list_all_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        try_list_prefixed_files(url, store, None, file_extension).await
+    }
+
+    /// Runs "list_prefixed_files" and returns their paths
+    ///
+    /// Panic's on error
+    async fn list_prefixed_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        prefix: Option<Path>,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        try_list_prefixed_files(url, store, prefix, file_extension).await
+    }
+
+    /// Runs "list_prefixed_files" and returns their paths
+    async fn try_list_prefixed_files(
+        url: &str,
+        store: &dyn ObjectStore,
+        prefix: Option<Path>,
+        file_extension: &str,
+    ) -> Result<Vec<String>> {
+        let session = MockSession::new();
+        let url = ListingTableUrl::parse(url)?;
+        let files = url
+            .list_prefixed_files(&session, store, prefix, file_extension)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|meta| meta.location.as_ref().to_string())
+            .collect();
+        Ok(files)
+    }
+
+    #[derive(Debug)]
+    struct MockObjectStore {
+        in_mem: object_store::memory::InMemory,
+        forbidden_paths: Vec<Path>,
+    }
+
+    impl std::fmt::Display for MockObjectStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.in_mem.fmt(f)
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockObjectStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: object_store::PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            self.in_mem.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            self.in_mem.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            self.in_mem.get_opts(location, options).await
+        }
+
+        async fn get_ranges(
+            &self,
+            location: &Path,
+            ranges: &[Range<u64>],
+        ) -> object_store::Result<Vec<Bytes>> {
+            self.in_mem.get_ranges(location, ranges).await
+        }
+
+        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+            if self.forbidden_paths.contains(location) {
+                Err(object_store::Error::PermissionDenied {
+                    path: location.to_string(),
+                    source: "forbidden".into(),
+                })
+            } else {
+                self.in_mem.head(location).await
+            }
+        }
+
+        async fn delete(&self, location: &Path) -> object_store::Result<()> {
+            self.in_mem.delete(location).await
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+            self.in_mem.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            self.in_mem.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+            self.in_mem.copy(from, to).await
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            from: &Path,
+            to: &Path,
+        ) -> object_store::Result<()> {
+            self.in_mem.copy_if_not_exists(from, to).await
+        }
+    }
+
+    struct MockSession {
+        config: SessionConfig,
+        runtime_env: Arc<RuntimeEnv>,
+    }
+
+    impl MockSession {
+        fn new() -> Self {
+            Self {
+                config: SessionConfig::new(),
+                runtime_env: Arc::new(RuntimeEnv::default()),
+            }
+        }
+
+        /// Create a MockSession with a custom RuntimeEnv (for cache testing)
+        fn with_runtime_env(runtime_env: Arc<RuntimeEnv>) -> Self {
+            Self {
+                config: SessionConfig::new(),
+                runtime_env,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn config(&self) -> &SessionConfig {
+            &self.config
+        }
+
+        async fn create_physical_plan(
+            &self,
+            _logical_plan: &LogicalPlan,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _df_schema: &DFSchema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unimplemented!()
+        }
+
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            &self.runtime_env
+        }
+
+        fn execution_props(&self) -> &ExecutionProps {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            unimplemented!()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            unimplemented!()
+        }
+
+        fn task_ctx(&self) -> Arc<TaskContext> {
+            unimplemented!()
+        }
     }
 }

@@ -28,14 +28,14 @@ use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    internal_datafusion_err, plan_err, Column, DFSchemaRef, Result, ScalarValue,
+    Column, DFSchema, Result, ScalarValue, internal_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
-    bitwise_and, bitwise_or, bitwise_shift_left, bitwise_shift_right, cast, Aggregate,
-    Expr, Projection,
+    Aggregate, Expr, Projection, bitwise_and, bitwise_or, bitwise_shift_left,
+    bitwise_shift_right, cast,
 };
 use itertools::Itertools;
 
@@ -74,7 +74,7 @@ fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usiz
 
 fn replace_grouping_exprs(
     input: Arc<LogicalPlan>,
-    schema: DFSchemaRef,
+    schema: &DFSchema,
     group_expr: Vec<Expr>,
     aggr_expr: Vec<Expr>,
 ) -> Result<LogicalPlan> {
@@ -139,7 +139,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             schema,
             ..
         }) if contains_grouping_function(&aggr_expr) => Ok(Transformed::yes(
-            replace_grouping_exprs(input, schema, group_expr, aggr_expr)?,
+            replace_grouping_exprs(input, schema.as_ref(), group_expr, aggr_expr)?,
         )),
         _ => Ok(Transformed::no(plan)),
     })?;
@@ -150,7 +150,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 fn is_grouping_function(expr: &Expr) -> bool {
     // TODO: Do something better than name here should grouping be a built
     // in expression?
-    matches!(expr, Expr::AggregateFunction(AggregateFunction { ref func, .. }) if func.name() == "grouping")
+    matches!(expr, Expr::AggregateFunction(AggregateFunction { func, .. }) if func.name() == "grouping")
 }
 
 fn contains_grouping_function(exprs: &[Expr]) -> bool {
@@ -189,19 +189,19 @@ fn grouping_function_on_id(
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
     if !is_grouping_set {
-        return Ok(Expr::Literal(ScalarValue::from(0i32)));
+        return Ok(Expr::Literal(ScalarValue::from(0i32), None));
     }
 
     let group_by_expr_count = group_by_expr.len();
     let literal = |value: usize| {
         if group_by_expr_count < 8 {
-            Expr::Literal(ScalarValue::from(value as u8))
+            Expr::Literal(ScalarValue::from(value as u8), None)
         } else if group_by_expr_count < 16 {
-            Expr::Literal(ScalarValue::from(value as u16))
+            Expr::Literal(ScalarValue::from(value as u16), None)
         } else if group_by_expr_count < 32 {
-            Expr::Literal(ScalarValue::from(value as u32))
+            Expr::Literal(ScalarValue::from(value as u32), None)
         } else {
-            Expr::Literal(ScalarValue::from(value as u64))
+            Expr::Literal(ScalarValue::from(value as u64), None)
         }
     };
 

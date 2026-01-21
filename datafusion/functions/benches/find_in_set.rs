@@ -22,12 +22,14 @@ use arrow::datatypes::{DataType, Field};
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
-use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{Criterion, SamplingMode, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -51,7 +53,7 @@ fn gen_args_array(
     let mut output_set_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     let mut output_element_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.random::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_element_vec.push(None);
             output_set_vec.push(None);
@@ -60,7 +62,7 @@ fn gen_args_array(
             let mut generated_string = String::with_capacity(str_len_chars);
             for i in 0..num_elements {
                 for _ in 0..str_len_chars {
-                    let idx = rng_ref.gen_range(0..corpus_char_count);
+                    let idx = rng_ref.random_range(0..corpus_char_count);
                     let char = utf8.chars().nth(idx).unwrap();
                     generated_string.push(char);
                 }
@@ -112,7 +114,7 @@ fn random_element_in_set(string: &str) -> String {
     }
 
     let mut rng = StdRng::seed_from_u64(44);
-    let random_index = rng.gen_range(0..elements.len());
+    let random_index = rng.random_range(0..elements.len());
 
     elements[random_index].to_string()
 }
@@ -153,35 +155,37 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.measurement_time(Duration::from_secs(10));
 
         let args = gen_args_array(n_rows, str_len, 0.1, 0.5, false);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_len_{}", str_len), |b| {
+        let return_field = Field::new("f", DataType::Int32, true).into();
+        group.bench_function(format!("string_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
-                    return_field: &Field::new("f", DataType::Int32, true),
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
 
         let args = gen_args_array(n_rows, str_len, 0.1, 0.5, true);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_view_len_{}", str_len), |b| {
+        let return_field = Arc::new(Field::new("f", DataType::Int32, true));
+        group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
-                    return_field: &Field::new("f", DataType::Int32, true),
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -191,35 +195,39 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("find_in_set_scalar");
 
         let args = gen_args_scalar(n_rows, str_len, 0.1, false);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_len_{}", str_len), |b| {
+        let return_field = Arc::new(Field::new("f", DataType::Int32, true));
+        group.bench_function(format!("string_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
-                    return_field: &Field::new("f", DataType::Int32, true),
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
 
         let args = gen_args_scalar(n_rows, str_len, 0.1, true);
-        let arg_fields_owned = args
+        let arg_fields = args
             .iter()
-            .map(|arg| Field::new("a", arg.data_type().clone(), true))
+            .map(|arg| Field::new("a", arg.data_type().clone(), true).into())
             .collect::<Vec<_>>();
-        let arg_fields = arg_fields_owned.iter().collect::<Vec<_>>();
-        group.bench_function(format!("string_view_len_{}", str_len), |b| {
+        let return_field = Arc::new(Field::new("f", DataType::Int32, true));
+        let config_options = Arc::new(ConfigOptions::default());
+
+        group.bench_function(format!("string_view_len_{str_len}"), |b| {
             b.iter(|| {
                 black_box(find_in_set.invoke_with_args(ScalarFunctionArgs {
                     args: args.clone(),
                     arg_fields: arg_fields.clone(),
                     number_rows: n_rows,
-                    return_field: &Field::new("f", DataType::Int32, true),
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::clone(&config_options),
                 }))
             })
         });

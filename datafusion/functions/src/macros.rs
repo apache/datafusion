@@ -40,13 +40,52 @@
 /// Exported functions accept:
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
+/// - Functions that require config (marked with `@config` prefix)
+///
+/// Note on configuration construction paths:
+/// - The convenience wrappers generated for `@config` functions call the inner
+///   constructor with `ConfigOptions::default()`. These wrappers are intended
+///   primarily for programmatic `Expr` construction and convenience usage.
+/// - When functions are registered in a session, DataFusion will call
+///   `with_updated_config()` to create a `ScalarUDF` instance using the session's
+///   actual `ConfigOptions`. This also happens when configuration changes at runtime
+///   (e.g., via `SET` statements). In short: the macro uses the default config for
+///   convenience constructors; the session config is applied when functions are
+///   registered or when configuration is updated.
 #[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         $(
             // switch to single-function cases below
-            export_functions!(single $FUNC, $DOC, $($arg)*);
+            $crate::export_functions!(single $FUNC, $DOC, $($arg)*);
         )*
+    };
+
+    // function that requires config (marked with @config)
+    (single $FUNC:ident, $DOC:expr, @config) => {
+        #[doc = $DOC]
+        pub fn $FUNC() -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![])
+        }
+    };
+
+    // function that requires config and takes a vector argument
+    (single $FUNC:ident, $DOC:expr, @config $arg:ident,) => {
+        #[doc = $DOC]
+        pub fn $FUNC($arg: Vec<datafusion_expr::Expr>) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call($arg)
+        }
+    };
+
+    // function that requires config and variadic arguments
+    (single $FUNC:ident, $DOC:expr, @config $($arg:ident)*) => {
+        #[doc = $DOC]
+        pub fn $FUNC($($arg: datafusion_expr::Expr),*) -> datafusion_expr::Expr {
+            use datafusion_common::config::ConfigOptions;
+            super::$FUNC(&ConfigOptions::default()).call(vec![$($arg),*])
+        }
     };
 
     // single vector argument (a single argument followed by a comma)
@@ -67,12 +106,13 @@ macro_rules! export_functions {
 }
 
 /// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
-/// named `$NAME` which returns that singleton.
+/// named `$NAME` which returns that singleton. Optionally use a custom constructor
+/// `$CTOR` which defaults to `$UDF::new()` if not specified.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
 #[macro_export]
 macro_rules! make_udf_function {
-    ($UDF:ty, $NAME:ident) => {
+    ($UDF:ty, $NAME:ident, $CTOR:expr) => {
         #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
         pub fn $NAME() -> std::sync::Arc<datafusion_expr::ScalarUDF> {
             // Singleton instance of the function
@@ -80,10 +120,28 @@ macro_rules! make_udf_function {
                 std::sync::Arc<datafusion_expr::ScalarUDF>,
             > = std::sync::LazyLock::new(|| {
                 std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
-                    <$UDF>::new(),
+                    ($CTOR)(),
                 ))
             });
             std::sync::Arc::clone(&INSTANCE)
+        }
+    };
+    ($UDF:ty, $NAME:ident) => {
+        make_udf_function!($UDF, $NAME, <$UDF>::new);
+    };
+}
+
+/// Creates a singleton `ScalarUDF` of the `$UDF` function and a function
+/// named `$NAME` which returns that singleton. The function takes a
+/// configuration argument of type `$CONFIG_TYPE` to create the UDF.
+#[macro_export]
+macro_rules! make_udf_function_with_config {
+    ($UDF:ty, $NAME:ident) => {
+        #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]
+        pub fn $NAME(config: &datafusion_common::config::ConfigOptions) -> std::sync::Arc<datafusion_expr::ScalarUDF> {
+            std::sync::Arc::new(datafusion_expr::ScalarUDF::new_from_impl(
+                <$UDF>::new_with_config(&config),
+            ))
         }
     };
 }
@@ -121,7 +179,7 @@ macro_rules! make_stub_package {
 macro_rules! downcast_named_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
-            internal_datafusion_err!(
+            datafusion_common::internal_datafusion_err!(
                 "could not cast {} to {}",
                 $NAME,
                 std::any::type_name::<$ARRAY_TYPE>()
@@ -137,9 +195,7 @@ macro_rules! downcast_named_arg {
 /// $ARRAY_TYPE: the type of array to cast the argument to
 #[macro_export]
 macro_rules! downcast_arg {
-    ($ARG:expr, $ARRAY_TYPE:ident) => {{
-        downcast_named_arg!($ARG, "", $ARRAY_TYPE)
-    }};
+    ($ARG:expr, $ARRAY_TYPE:ident) => {{ $crate::downcast_named_arg!($ARG, "", $ARRAY_TYPE) }};
 }
 
 /// Macro to create a unary math UDF.
@@ -154,7 +210,7 @@ macro_rules! downcast_arg {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
     ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
@@ -162,7 +218,7 @@ macro_rules! make_math_unary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use datafusion_common::{exec_err, Result};
+            use datafusion_common::{Result, exec_err};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
@@ -170,7 +226,7 @@ macro_rules! make_math_unary_udf {
                 Signature, Volatility,
             };
 
-            #[derive(Debug)]
+            #[derive(Debug, PartialEq, Eq, Hash)]
             pub struct $UDF {
                 signature: Signature,
             }
@@ -241,7 +297,7 @@ macro_rules! make_math_unary_udf {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
                                 self.name()
-                            )
+                            );
                         }
                     };
 
@@ -268,7 +324,7 @@ macro_rules! make_math_unary_udf {
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_binary_udf {
     ($UDF:ident, $NAME:ident, $BINARY_FUNC:ident, $OUTPUT_ORDERING:expr, $GET_DOC:expr) => {
-        make_udf_function!($NAME::$UDF, $NAME);
+        $crate::make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
             use std::any::Any;
@@ -276,15 +332,15 @@ macro_rules! make_math_binary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
-            use datafusion_common::{exec_err, Result};
-            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+            use datafusion_common::{Result, exec_err};
             use datafusion_expr::TypeSignature;
+            use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
                 Signature, Volatility,
             };
 
-            #[derive(Debug)]
+            #[derive(Debug, PartialEq, Eq, Hash)]
             pub struct $UDF {
                 signature: Signature,
             }
@@ -363,7 +419,7 @@ macro_rules! make_math_binary_udf {
                             return exec_err!(
                                 "Unsupported data type {other:?} for function {}",
                                 self.name()
-                            )
+                            );
                         }
                     };
 

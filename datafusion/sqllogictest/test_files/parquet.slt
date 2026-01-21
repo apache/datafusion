@@ -21,6 +21,10 @@
 statement ok
 set datafusion.execution.target_partitions = 2;
 
+# disable the listing cache so DataFusion picks up changes from COPY statements
+statement ok
+set datafusion.runtime.list_files_cache_limit = "0K";
+
 # Create a table as a data source
 statement ok
 CREATE TABLE src_table (
@@ -130,8 +134,7 @@ STORED AS PARQUET;
 ----
 3
 
-# Check output plan again, expect no "output_ordering" clause in the physical_plan -> ParquetExec,
-# due to there being more files than partitions:
+# Check output plan again
 query TT
 EXPLAIN SELECT int_col, string_col
 FROM test_table
@@ -142,8 +145,7 @@ logical_plan
 02)--TableScan: test_table projection=[int_col, string_col]
 physical_plan
 01)SortPreservingMergeExec: [string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST]
-02)--SortExec: expr=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], file_type=parquet
+02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_table/2.parquet]]}, projection=[int_col, string_col], output_ordering=[string_col@1 ASC NULLS LAST, int_col@0 ASC NULLS LAST], file_type=parquet
 
 
 # Perform queries using MIN and MAX
@@ -270,7 +272,7 @@ FROM (
 ) t
 GROUP BY 1
 ----
-Timestamp(Millisecond, Some("UTC")) 2014-08-27T14:00:00Z 131072
+Timestamp(ms, "UTC") 2014-08-27T14:00:00Z 131072
 
 # Test config listing_table_ignore_subdirectory:
 
@@ -301,6 +303,54 @@ set datafusion.execution.listing_table_ignore_subdirectory = false;
 # scan file: 0.parquet 1.parquet 2.parquet 3.parquet
 query I
 select count(*) from listing_table;
+----
+12
+
+# Test table pointing to the folder with parquet files(ends with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_0
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table/';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_0;
+----
+12
+
+# Test table pointing to the folder with parquet files(doesn't end with /)
+statement ok
+CREATE EXTERNAL TABLE listing_table_folder_1
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_table';
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = true;
+
+# scan file: 0.parquet 1.parquet 2.parquet
+query I
+select count(*) from listing_table_folder_1;
+----
+9
+
+statement ok
+set datafusion.execution.listing_table_ignore_subdirectory = false;
+
+# scan file: 0.parquet 1.parquet 2.parquet 3.parquet
+query I
+select count(*) from listing_table_folder_1;
 ----
 12
 
@@ -408,10 +458,9 @@ logical_plan
 01)Filter: CAST(binary_as_string_default.binary_col AS Utf8View) LIKE Utf8View("%a%") AND CAST(binary_as_string_default.largebinary_col AS Utf8View) LIKE Utf8View("%a%") AND CAST(binary_as_string_default.binaryview_col AS Utf8View) LIKE Utf8View("%a%")
 02)--TableScan: binary_as_string_default projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[CAST(binary_as_string_default.binary_col AS Utf8View) LIKE Utf8View("%a%"), CAST(binary_as_string_default.largebinary_col AS Utf8View) LIKE Utf8View("%a%"), CAST(binary_as_string_default.binaryview_col AS Utf8View) LIKE Utf8View("%a%")]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
+01)FilterExec: CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=CAST(binary_col@0 AS Utf8View) LIKE %a% AND CAST(largebinary_col@1 AS Utf8View) LIKE %a% AND CAST(binaryview_col@2 AS Utf8View) LIKE %a%
 
 
 statement ok
@@ -456,10 +505,9 @@ logical_plan
 01)Filter: binary_as_string_option.binary_col LIKE Utf8View("%a%") AND binary_as_string_option.largebinary_col LIKE Utf8View("%a%") AND binary_as_string_option.binaryview_col LIKE Utf8View("%a%")
 02)--TableScan: binary_as_string_option projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_option.binary_col LIKE Utf8View("%a%"), binary_as_string_option.largebinary_col LIKE Utf8View("%a%"), binary_as_string_option.binaryview_col LIKE Utf8View("%a%")]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+01)FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 
 
 statement ok
@@ -507,10 +555,9 @@ logical_plan
 01)Filter: binary_as_string_both.binary_col LIKE Utf8View("%a%") AND binary_as_string_both.largebinary_col LIKE Utf8View("%a%") AND binary_as_string_both.binaryview_col LIKE Utf8View("%a%")
 02)--TableScan: binary_as_string_both projection=[binary_col, largebinary_col, binaryview_col], partial_filters=[binary_as_string_both.binary_col LIKE Utf8View("%a%"), binary_as_string_both.largebinary_col LIKE Utf8View("%a%"), binary_as_string_both.binaryview_col LIKE Utf8View("%a%")]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+01)FilterExec: binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/binary_as_string.parquet]]}, projection=[binary_col, largebinary_col, binaryview_col], file_type=parquet, predicate=binary_col@0 LIKE %a% AND largebinary_col@1 LIKE %a% AND binaryview_col@2 LIKE %a%
 
 
 statement ok
@@ -622,10 +669,9 @@ logical_plan
 01)Filter: foo.column1 LIKE Utf8View("f%")
 02)--TableScan: foo projection=[column1], partial_filters=[foo.column1 LIKE Utf8View("f%")]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column1@0 LIKE f%
-03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
+01)FilterExec: column1@0 LIKE f%
+02)--RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
 
 statement ok
 drop table foo
@@ -643,7 +689,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark
 ----
-a Timestamp(Nanosecond, None) YES
+a Timestamp(ns) YES
 
 # Note that the values are read as nanosecond precision
 query P
@@ -672,7 +718,7 @@ LOCATION '../../parquet-testing/data/int96_from_spark.parquet';
 query TTT
 describe int96_from_spark;
 ----
-a Timestamp(Millisecond, None) YES
+a Timestamp(ms) YES
 
 # Per https://github.com/apache/parquet-testing/blob/6e851ddd768d6af741c7b15dc594874399fc3cff/data/int96_from_spark.md?plain=1#L37
 # these values should be
@@ -696,7 +742,7 @@ select * from int96_from_spark
 9999-12-31T03:00:00
 2024-12-30T23:00:00
 NULL
-ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(Millisecond, None)
+ERROR: Cast error: Failed to convert -9357363680509551 to datetime for Timestamp(ms)
 
 # Cleanup / reset default setting
 statement ok
@@ -704,3 +750,142 @@ drop table int96_from_spark;
 
 statement ok
 set datafusion.execution.parquet.coerce_int96 = ns;
+
+
+### Tests for metadata caching
+
+# Create temporary data
+query I
+COPY (
+  SELECT 'k-' || i as k, i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/cache_metadata.parquet';
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 1000
+k-9999 9999
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-1
+2 k-2
+9999 k-9999
+10000 k-10000
+
+# Updating the file should invalidate the cache. Otherwise, the following queries would fail
+# (e.g., with "Arrow: Parquet argument error: External: incomplete frame").
+query I
+COPY (
+  SELECT 'k-' || i as k, 20000 - i as v
+  FROM generate_series(1, 20000) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata.parquet'
+OPTIONS (MAX_ROW_GROUP_SIZE 4096, DATA_PAGE_ROW_COUNT_LIMIT 2048);
+----
+20000
+
+query TI
+select * from t where k = 'k-1000' or k = 'k-9999' order by k
+----
+k-1000 19000
+k-9999 10001
+
+query IT
+select v, k from t where (v between 1 and 2) or (v between 9999 and 10000) order by v
+----
+1 k-19999
+2 k-19998
+9999 k-10001
+10000 k-10000
+
+statement ok
+DROP TABLE t;
+
+# Partitioned files should be independently cached. Otherwise, the following queries might fail.
+statement ok
+COPY (
+  SELECT i % 10 as part, 'k-' || i as k, i as v 
+  FROM generate_series(0, 9) t(i)
+  ORDER BY k
+)
+TO 'test_files/scratch/parquet/cache_metadata_partitioned.parquet'
+PARTITIONED BY (part);
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+PARTITIONED BY (part)
+LOCATION 'test_files/scratch/parquet/cache_metadata_partitioned.parquet';
+
+query TTI
+select part, k, v from t where k = 'k-0'
+----
+0 k-0 0
+
+query TTI
+select part, k, v from t where k = 'k-5'
+----
+5 k-5 5
+
+query TTI
+select part, k, v from t where k = 'k-9'
+----
+9 k-9 9
+
+query TTI
+select part, k, v from t order by k
+----
+0 k-0 0
+1 k-1 1
+2 k-2 2
+3 k-3 3
+4 k-4 4
+5 k-5 5
+6 k-6 6
+7 k-7 7
+8 k-8 8
+9 k-9 9
+
+statement ok
+DROP TABLE t;
+
+# Regression test for files with stats on some columns and not others
+# See https://github.com/apache/datafusion/pull/18276
+
+query I
+COPY (SELECT 1::int AS a, 2::int as b)
+TO 'test_files/scratch/parquet/mixed_stats.parquet'
+STORED AS PARQUET OPTIONS (
+  'STATISTICS_ENABLED::b' 'none'
+);
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/mixed_stats.parquet';
+
+query I
+SELECT b
+FROM t
+WHERE b = 2;
+----
+2
+
+statement ok
+DROP TABLE t;

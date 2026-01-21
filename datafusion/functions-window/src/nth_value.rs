@@ -19,64 +19,56 @@
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 
-use std::any::Any;
-use std::cmp::Ordering;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::LazyLock;
-
+use arrow::buffer::NullBuffer;
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::{DataType, Field};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::window_state::WindowAggState;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use field::WindowUDFFieldArgs;
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
-get_or_init_udwf!(
+define_udwf_and_expr!(
     First,
     first_value,
-    "returns the first value in the window frame",
+    [arg],
+    "Returns the first value in the window frame",
     NthValue::first
 );
-get_or_init_udwf!(
+define_udwf_and_expr!(
     Last,
     last_value,
-    "returns the last value in the window frame",
+    [arg],
+    "Returns the last value in the window frame",
     NthValue::last
 );
 get_or_init_udwf!(
     NthValue,
     nth_value,
-    "returns the nth value in the window frame",
+    "Returns the nth value in the window frame",
     NthValue::nth
 );
 
-/// Create an expression to represent the `first_value` window function
-///
-pub fn first_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
-    first_value_udwf().call(vec![arg])
-}
-
-/// Create an expression to represent the `last_value` window function
-///
-pub fn last_value(arg: datafusion_expr::Expr) -> datafusion_expr::Expr {
-    last_value_udwf().call(vec![arg])
-}
-
 /// Create an expression to represent the `nth_value` window function
-///
 pub fn nth_value(arg: datafusion_expr::Expr, n: i64) -> datafusion_expr::Expr {
     nth_value_udwf().call(vec![arg, n.lit()])
 }
 
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum NthValueKind {
     First,
     Last,
@@ -93,7 +85,7 @@ impl NthValueKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NthValue {
     signature: Signature,
     kind: NthValueKind,
@@ -125,6 +117,10 @@ impl NthValue {
     pub fn nth() -> Self {
         Self::new(NthValueKind::Nth)
     }
+
+    pub fn kind(&self) -> &NthValueKind {
+        &self.kind
+    }
 }
 
 static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
@@ -135,6 +131,28 @@ static FIRST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "first_value(expression)",
     )
     .with_argument("expression", "Expression to operate on")
+    .with_sql_example(
+        r#"
+```sql
+-- Example usage of the first_value window function:
+SELECT department,
+  employee_id,
+  salary,
+  first_value(salary) OVER (PARTITION BY department ORDER BY salary DESC) AS top_salary
+FROM employees;
+
++-------------+-------------+--------+------------+
+| department  | employee_id | salary | top_salary |
++-------------+-------------+--------+------------+
+| Sales       | 1           | 70000  | 70000      |
+| Sales       | 2           | 50000  | 70000      |
+| Sales       | 3           | 30000  | 70000      |
+| Engineering | 4           | 90000  | 90000      |
+| Engineering | 5           | 80000  | 90000      |
++-------------+-------------+--------+------------+
+```
+"#,
+    )
     .build()
 });
 
@@ -150,6 +168,25 @@ static LAST_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "last_value(expression)",
     )
     .with_argument("expression", "Expression to operate on")
+        .with_sql_example(r#"```sql
+-- SQL example of last_value:
+SELECT department,
+       employee_id,
+       salary,
+       last_value(salary) OVER (PARTITION BY department ORDER BY salary) AS running_last_salary
+FROM employees;
+
++-------------+-------------+--------+---------------------+
+| department  | employee_id | salary | running_last_salary |
++-------------+-------------+--------+---------------------+
+| Sales       | 1           | 30000  | 30000               |
+| Sales       | 2           | 50000  | 50000               |
+| Sales       | 3           | 70000  | 70000               |
+| Engineering | 4           | 40000  | 40000               |
+| Engineering | 5           | 60000  | 60000               |
++-------------+-------------+--------+---------------------+
+```
+"#)
     .build()
 });
 
@@ -173,7 +210,8 @@ static NTH_VALUE_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         "Integer. Specifies the row number (starting from 1) in the window frame.",
     )
     .with_sql_example(
-        r#"```sql
+        r#"
+```sql
 -- Sample employees table:
 CREATE TABLE employees (id INT, salary INT);
 INSERT INTO employees (id, salary) VALUES
@@ -189,9 +227,7 @@ SELECT nth_value(salary, 2) OVER (
   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
 ) AS nth_value
 FROM employees;
-```
 
-```text
 +-----------+
 | nth_value |
 +-----------+
@@ -201,7 +237,8 @@ FROM employees;
 | 40000     |
 | 40000     |
 +-----------+
-```"#,
+```
+"#,
     )
     .build()
 });
@@ -240,27 +277,30 @@ impl WindowUDFImpl for NthValue {
             }));
         }
 
-        let n =
-            match get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)
-                .map_err(|_e| {
-                    exec_datafusion_err!(
-                "Expected a signed integer literal for the second argument of nth_value")
-                })?
-                .map(get_signed_integer)
-            {
-                Some(Ok(n)) => {
-                    if partition_evaluator_args.is_reversed() {
-                        -n
-                    } else {
-                        n
-                    }
-                }
-                _ => {
-                    return exec_err!(
+        let n = match get_scalar_value_from_args(
+            partition_evaluator_args.input_exprs(),
+            1,
+        )
+        .map_err(|_e| {
+            exec_datafusion_err!(
                 "Expected a signed integer literal for the second argument of nth_value"
             )
+        })?
+        .map(|v| get_signed_integer(&v))
+        {
+            Some(Ok(n)) => {
+                if partition_evaluator_args.is_reversed() {
+                    -n
+                } else {
+                    n
                 }
-            };
+            }
+            _ => {
+                return exec_err!(
+                    "Expected a signed integer literal for the second argument of nth_value"
+                );
+            }
+        };
 
         Ok(Box::new(NthValueEvaluator {
             state,
@@ -269,11 +309,15 @@ impl WindowUDFImpl for NthValue {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let nullable = true;
-        let return_type = field_args.input_types().first().unwrap_or(&DataType::Null);
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        let return_type = field_args
+            .input_fields()
+            .first()
+            .map(|f| f.data_type())
+            .cloned()
+            .unwrap_or(DataType::Null);
 
-        Ok(Field::new(field_args.name(), return_type.clone(), nullable))
+        Ok(Field::new(field_args.name(), return_type, true).into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -290,6 +334,10 @@ impl WindowUDFImpl for NthValue {
             NthValueKind::Last => Some(get_last_value_doc()),
             NthValueKind::Nth => Some(get_nth_value_doc()),
         }
+    }
+
+    fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        LimitEffect::None // NthValue is causal
     }
 }
 
@@ -323,6 +371,33 @@ impl PartitionEvaluator for NthValueEvaluator {
     fn memoize(&mut self, state: &mut WindowAggState) -> Result<()> {
         let out = &state.out_col;
         let size = out.len();
+        if self.ignore_nulls {
+            match self.state.kind {
+                // Prune on first non-null output in case of FIRST_VALUE
+                NthValueKind::First => {
+                    if let Some(nulls) = out.nulls() {
+                        if self.state.finalized_result.is_none() {
+                            if let Some(valid_index) = nulls.valid_indices().next() {
+                                let result =
+                                    ScalarValue::try_from_array(out, valid_index)?;
+                                self.state.finalized_result = Some(result);
+                            } else {
+                                // The output is empty or all nulls, ignore
+                            }
+                        }
+                        if state.window_frame_range.start < state.window_frame_range.end {
+                            state.window_frame_range.start =
+                                state.window_frame_range.end - 1;
+                        }
+                        return Ok(());
+                    } else {
+                        // Fall through to the main case because there are no nulls
+                    }
+                }
+                // Do not memoize for other kinds when nulls are ignored
+                NthValueKind::Last | NthValueKind::Nth => return Ok(()),
+            }
+        }
         let mut buffer_size = 1;
         // Decide if we arrived at a final result yet:
         let (is_prunable, is_reverse_direction) = match self.state.kind {
@@ -350,8 +425,7 @@ impl PartitionEvaluator for NthValueEvaluator {
                 }
             }
         };
-        // Do not memoize results when nulls are ignored.
-        if is_prunable && !self.ignore_nulls {
+        if is_prunable {
             if self.state.finalized_result.is_none() && !is_reverse_direction {
                 let result = ScalarValue::try_from_array(out, size - 1)?;
                 self.state.finalized_result = Some(result);
@@ -377,88 +451,9 @@ impl PartitionEvaluator for NthValueEvaluator {
                 // We produce None if the window is empty.
                 return ScalarValue::try_from(arr.data_type());
             }
-
-            // If null values exist and need to be ignored, extract the valid indices.
-            let valid_indices = if self.ignore_nulls {
-                // Calculate valid indices, inside the window frame boundaries.
-                let slice = arr.slice(range.start, n_range);
-                match slice.nulls() {
-                    Some(nulls) => {
-                        let valid_indices = nulls
-                            .valid_indices()
-                            .map(|idx| {
-                                // Add offset `range.start` to valid indices, to point correct index in the original arr.
-                                idx + range.start
-                            })
-                            .collect::<Vec<_>>();
-                        if valid_indices.is_empty() {
-                            // If all values are null, return directly.
-                            return ScalarValue::try_from(arr.data_type());
-                        }
-                        Some(valid_indices)
-                    }
-                    None => None,
-                }
-            } else {
-                None
-            };
-            match self.state.kind {
-                NthValueKind::First => {
-                    if let Some(valid_indices) = &valid_indices {
-                        ScalarValue::try_from_array(arr, valid_indices[0])
-                    } else {
-                        ScalarValue::try_from_array(arr, range.start)
-                    }
-                }
-                NthValueKind::Last => {
-                    if let Some(valid_indices) = &valid_indices {
-                        ScalarValue::try_from_array(
-                            arr,
-                            valid_indices[valid_indices.len() - 1],
-                        )
-                    } else {
-                        ScalarValue::try_from_array(arr, range.end - 1)
-                    }
-                }
-                NthValueKind::Nth => {
-                    match self.n.cmp(&0) {
-                        Ordering::Greater => {
-                            // SQL indices are not 0-based.
-                            let index = (self.n as usize) - 1;
-                            if index >= n_range {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
-                            } else if let Some(valid_indices) = valid_indices {
-                                if index >= valid_indices.len() {
-                                    return ScalarValue::try_from(arr.data_type());
-                                }
-                                ScalarValue::try_from_array(&arr, valid_indices[index])
-                            } else {
-                                ScalarValue::try_from_array(arr, range.start + index)
-                            }
-                        }
-                        Ordering::Less => {
-                            let reverse_index = (-self.n) as usize;
-                            if n_range < reverse_index {
-                                // Outside the range, return NULL:
-                                ScalarValue::try_from(arr.data_type())
-                            } else if let Some(valid_indices) = valid_indices {
-                                if reverse_index > valid_indices.len() {
-                                    return ScalarValue::try_from(arr.data_type());
-                                }
-                                let new_index =
-                                    valid_indices[valid_indices.len() - reverse_index];
-                                ScalarValue::try_from_array(&arr, new_index)
-                            } else {
-                                ScalarValue::try_from_array(
-                                    arr,
-                                    range.start + n_range - reverse_index,
-                                )
-                            }
-                        }
-                        Ordering::Equal => ScalarValue::try_from(arr.data_type()),
-                    }
-                }
+            match self.valid_index(arr, range) {
+                Some(index) => ScalarValue::try_from_array(arr, index),
+                None => ScalarValue::try_from(arr.data_type()),
             }
         }
     }
@@ -469,6 +464,76 @@ impl PartitionEvaluator for NthValueEvaluator {
 
     fn uses_window_frame(&self) -> bool {
         true
+    }
+}
+
+impl NthValueEvaluator {
+    fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
+        let n_range = range.end - range.start;
+        if self.ignore_nulls {
+            // Calculate valid indices, inside the window frame boundaries.
+            let slice = array.slice(range.start, n_range);
+            if let Some(nulls) = slice.nulls()
+                && nulls.null_count() > 0
+            {
+                return self.valid_index_with_nulls(nulls, range.start);
+            }
+        }
+        // Either no nulls, or nulls are regarded as valid rows
+        match self.state.kind {
+            NthValueKind::First => Some(range.start),
+            NthValueKind::Last => Some(range.end - 1),
+            NthValueKind::Nth => match self.n.cmp(&0) {
+                Ordering::Greater => {
+                    // SQL indices are not 0-based.
+                    let index = (self.n as usize) - 1;
+                    if index >= n_range {
+                        // Outside the range, return NULL:
+                        None
+                    } else {
+                        Some(range.start + index)
+                    }
+                }
+                Ordering::Less => {
+                    let reverse_index = (-self.n) as usize;
+                    if n_range < reverse_index {
+                        // Outside the range, return NULL:
+                        None
+                    } else {
+                        Some(range.end - reverse_index)
+                    }
+                }
+                Ordering::Equal => None,
+            },
+        }
+    }
+
+    fn valid_index_with_nulls(&self, nulls: &NullBuffer, offset: usize) -> Option<usize> {
+        match self.state.kind {
+            NthValueKind::First => nulls.valid_indices().next().map(|idx| idx + offset),
+            NthValueKind::Last => nulls.valid_indices().last().map(|idx| idx + offset),
+            NthValueKind::Nth => {
+                match self.n.cmp(&0) {
+                    Ordering::Greater => {
+                        // SQL indices are not 0-based.
+                        let index = (self.n as usize) - 1;
+                        nulls.valid_indices().nth(index).map(|idx| idx + offset)
+                    }
+                    Ordering::Less => {
+                        let reverse_index = (-self.n) as usize;
+                        let valid_indices_len = nulls.len() - nulls.null_count();
+                        if reverse_index > valid_indices_len {
+                            return None;
+                        }
+                        nulls
+                            .valid_indices()
+                            .nth(valid_indices_len - reverse_index)
+                            .map(|idx| idx + offset)
+                    }
+                    Ordering::Equal => None,
+                }
+            }
+        }
     }
 }
 
@@ -511,7 +576,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::first(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ),
             Int32Array::from(vec![1; 8]).iter().collect::<Int32Array>(),
         )
     }
@@ -521,7 +591,12 @@ mod tests {
         let expr = Arc::new(Column::new("c3", 0)) as Arc<dyn PhysicalExpr>;
         test_i32_result(
             NthValue::last(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ),
             Int32Array::from(vec![
                 Some(1),
                 Some(-2),
@@ -545,7 +620,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),
@@ -564,7 +639,7 @@ mod tests {
             NthValue::nth(),
             PartitionEvaluatorArgs::new(
                 &[expr, n_value],
-                &[DataType::Int32],
+                &[Field::new("f", DataType::Int32, true).into()],
                 false,
                 false,
             ),

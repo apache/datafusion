@@ -22,7 +22,7 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -38,9 +38,17 @@ use crate::utils::make_scalar_function;
 Negative numbers return `-1`.
 Zero and positive numbers return `1`."#,
     syntax_example = "signum(numeric_expression)",
-    standard_argument(name = "numeric_expression", prefix = "Numeric")
+    standard_argument(name = "numeric_expression", prefix = "Numeric"),
+    sql_example = r#"```sql
+> SELECT signum(-42);
++-------------+
+| signum(-42) |
++-------------+
+| -1          |
++-------------+
+```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SignumFunc {
     signature: Signature,
 }
@@ -99,18 +107,14 @@ impl ScalarUDFImpl for SignumFunc {
 }
 
 /// signum SQL function
-pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => Ok(Arc::new(
             args[0]
                 .as_primitive::<Float64Type>()
                 .unary::<_, Float64Type>(
                     |x: f64| {
-                        if x == 0_f64 {
-                            0_f64
-                        } else {
-                            x.signum()
-                        }
+                        if x == 0_f64 { 0_f64 } else { x.signum() }
                     },
                 ),
         ) as ArrayRef),
@@ -120,11 +124,7 @@ pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .as_primitive::<Float32Type>()
                 .unary::<_, Float32Type>(
                     |x: f32| {
-                        if x == 0_f32 {
-                            0_f32
-                        } else {
-                            x.signum()
-                        }
+                        if x == 0_f32 { 0_f32 } else { x.signum() }
                     },
                 ),
         ) as ArrayRef),
@@ -140,6 +140,7 @@ mod test {
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::math::signum::SignumFunc;
@@ -157,12 +158,13 @@ mod test {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ]));
-        let arg_fields = [Field::new("a", DataType::Float32, false)];
+        let arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: array.len(),
-            return_field: &Field::new("f", DataType::Float32, true),
+            return_field: Field::new("f", DataType::Float32, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -203,12 +205,13 @@ mod test {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ]));
-        let arg_fields = [Field::new("a", DataType::Float64, false)];
+        let arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
         let args = ScalarFunctionArgs {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: array.len(),
-            return_field: &Field::new("f", DataType::Float64, true),
+            return_field: Field::new("f", DataType::Float64, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

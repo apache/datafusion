@@ -17,12 +17,13 @@
 
 use std::any::Any;
 
+use arrow::array::timezone::Tz;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, TimeZone};
 
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
 };
@@ -31,13 +32,15 @@ use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "Time and Date Functions"),
     description = r#"
-Returns the current UTC date.
+Returns the current date in the session time zone.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 "#,
-    syntax_example = "current_date()"
+    syntax_example = r#"current_date()
+    (optional) SET datafusion.execution.time_zone = '+00:00';
+    SELECT current_date();"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CurrentDateFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -96,22 +99,42 @@ impl ScalarUDFImpl for CurrentDateFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info.execution_props().query_execution_start_time;
-        let days = Some(
-            now_ts.num_days_from_ce()
-                - NaiveDate::from_ymd_opt(1970, 1, 1)
-                    .unwrap()
-                    .num_days_from_ce(),
-        );
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        // Get timezone from config and convert to local time
+        let days = info
+            .config_options()
+            .execution
+            .time_zone
+            .as_ref()
+            .and_then(|tz| tz.parse::<Tz>().ok())
+            .map_or_else(
+                || datetime_to_days(&now_ts),
+                |tz| {
+                    let local_now = tz.from_utc_datetime(&now_ts.naive_utc());
+                    datetime_to_days(&local_now)
+                },
+            );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::Date32(days),
+            ScalarValue::Date32(Some(days)),
+            None,
         )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Converts a DateTime to the number of days since Unix epoch (1970-01-01)
+fn datetime_to_days<T: Datelike>(dt: &T) -> i32 {
+    dt.num_days_from_ce()
+        - NaiveDate::from_ymd_opt(1970, 1, 1)
+            .unwrap()
+            .num_days_from_ce()
 }

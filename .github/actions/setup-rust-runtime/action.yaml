@@ -20,10 +20,6 @@ description: 'Setup Rust Runtime Environment'
 runs:
   using: "composite"
   steps:
-    # https://github.com/apache/datafusion/issues/15535
-    # disabled because neither version nor git hash works with apache github policy
-    #- name: Run sccache-cache
-    #  uses: mozilla-actions/sccache-action@65101d47ea8028ed0c98a1cdea8dd9182e9b5133 # v0.0.8
     - name: Configure runtime env
       shell: bash
       # do not produce debug symbols to keep memory usage down
@@ -32,11 +28,6 @@ runs:
       # 
       # Set debuginfo=line-tables-only as debuginfo=0 causes immensely slow build
       # See for more details: https://github.com/rust-lang/rust/issues/119560
-      #
-      # readd the following to the run below once sccache-cache is re-enabled
-      # echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-      # echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
       run: |
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
         echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
-     

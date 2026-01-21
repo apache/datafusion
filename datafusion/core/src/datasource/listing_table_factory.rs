@@ -27,9 +27,9 @@ use crate::datasource::listing::{
 };
 use crate::execution::context::SessionState;
 
-use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSchema};
-use datafusion_common::{config_datafusion_err, Result};
+use arrow::datatypes::DataType;
+use datafusion_common::{Result, config_datafusion_err};
+use datafusion_common::{ToDFSchema, arrow_datafusion_err, plan_err};
 use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
@@ -63,16 +63,40 @@ impl TableProviderFactory for ListingTableFactory {
             ))?
             .create(session_state, &cmd.options)?;
 
-        let file_extension = get_extension(cmd.location.as_str());
+        let mut table_path =
+            ListingTableUrl::parse(&cmd.location)?.with_table_ref(cmd.name.clone());
+        let file_extension = match table_path.is_collection() {
+            // Setting the extension to be empty instead of allowing the default extension seems
+            // odd, but was done to ensure existing behavior isn't modified. It seems like this
+            // could be refactored to either use the default extension or set the fully expected
+            // extension when compression is included (e.g. ".csv.gz")
+            true => "",
+            false => &get_extension(cmd.location.as_str()),
+        };
+        let mut options = ListingOptions::new(file_format)
+            .with_session_config_options(session_state.config())
+            .with_file_extension(file_extension);
 
         let (provided_schema, table_partition_cols) = if cmd.schema.fields().is_empty() {
+            let infer_parts = session_state
+                .config_options()
+                .execution
+                .listing_table_factory_infer_partitions;
+            let part_cols = if cmd.table_partition_cols.is_empty() && infer_parts {
+                options
+                    .infer_partitions(session_state, &table_path)
+                    .await?
+                    .into_iter()
+            } else {
+                cmd.table_partition_cols.clone().into_iter()
+            };
+
             (
                 None,
-                cmd.table_partition_cols
-                    .iter()
-                    .map(|x| {
+                part_cols
+                    .map(|p| {
                         (
-                            x.clone(),
+                            p,
                             DataType::Dictionary(
                                 Box::new(DataType::UInt16),
                                 Box::new(DataType::Utf8),
@@ -82,7 +106,7 @@ impl TableProviderFactory for ListingTableFactory {
                     .collect::<Vec<_>>(),
             )
         } else {
-            let schema: SchemaRef = Arc::new(cmd.schema.as_ref().to_owned().into());
+            let schema = Arc::clone(cmd.schema.inner());
             let table_partition_cols = cmd
                 .table_partition_cols
                 .iter()
@@ -108,13 +132,7 @@ impl TableProviderFactory for ListingTableFactory {
             (Some(schema), table_partition_cols)
         };
 
-        let table_path = ListingTableUrl::parse(&cmd.location)?;
-
-        let options = ListingOptions::new(file_format)
-            .with_collect_stat(state.config().collect_statistics())
-            .with_file_extension(file_extension)
-            .with_target_partitions(state.config().target_partitions())
-            .with_table_partition_cols(table_partition_cols);
+        options = options.with_table_partition_cols(table_partition_cols);
 
         options
             .validate_partitions(session_state, &table_path)
@@ -126,6 +144,25 @@ impl TableProviderFactory for ListingTableFactory {
             // specifically for parquet file format.
             // See: https://github.com/apache/datafusion/issues/7317
             None => {
+                // if the folder then rewrite a file path as 'path/*.parquet'
+                // to only read the files the reader can understand
+                if table_path.is_folder() && table_path.get_glob().is_none() {
+                    // Since there are no files yet to infer an actual extension,
+                    // derive the pattern based on compression type.
+                    // So for gzipped CSV the pattern is `*.csv.gz`
+                    let glob = match options.format.compression_type() {
+                        Some(compression) => {
+                            match options.format.get_ext_with_compression(&compression) {
+                                // Use glob based on `FileFormat` extension
+                                Ok(ext) => format!("*.{ext}"),
+                                // Fallback to `file_type`, if not supported by `FileFormat`
+                                Err(_) => format!("*.{}", cmd.file_type.to_lowercase()),
+                            }
+                        }
+                        None => format!("*.{}", cmd.file_type.to_lowercase()),
+                    };
+                    table_path = table_path.with_glob(glob.as_ref())?;
+                }
                 let schema = options.infer_schema(session_state, &table_path).await?;
                 let df_schema = Arc::clone(&schema).to_dfschema()?;
                 let column_refs: HashSet<_> = cmd
@@ -154,6 +191,16 @@ impl TableProviderFactory for ListingTableFactory {
             .with_definition(cmd.definition.clone())
             .with_constraints(cmd.constraints.clone())
             .with_column_defaults(cmd.column_defaults.clone());
+
+        // Pre-warm statistics cache if collect_statistics is enabled
+        if session_state.config().collect_statistics() {
+            let filters = &[];
+            let limit = None;
+            if let Err(e) = table.list_files_for_scan(state, filters, limit).await {
+                log::warn!("Failed to pre-warm statistics cache: {e}");
+            }
+        }
+
         Ok(Arc::new(table))
     }
 }
@@ -169,14 +216,23 @@ fn get_extension(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::{
         datasource::file_format::csv::CsvFormat, execution::context::SessionContext,
+        test_util::parquet_test_data,
     };
+    use datafusion_execution::cache::CacheAccessor;
+    use datafusion_execution::cache::cache_manager::CacheManagerConfig;
+    use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use glob::Pattern;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
 
-    use datafusion_common::{Constraints, DFSchema, TableReference};
+    use datafusion_common::parsers::CompressionTypeVariant;
+    use datafusion_common::{DFSchema, TableReference};
 
     #[tokio::test]
     async fn test_create_using_non_std_file_ext() {
@@ -190,21 +246,14 @@ mod tests {
         let context = SessionContext::new();
         let state = context.state();
         let name = TableReference::bare("foo");
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options: HashMap::from([("format.has_header".into(), "true".into())]),
-            constraints: Constraints::empty(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(HashMap::from([("format.has_header".into(), "true".into())]))
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -230,21 +279,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
         options.insert("format.has_header".into(), "true".into());
-        let cmd = CreateExternalTable {
+        let cmd = CreateExternalTable::builder(
             name,
-            location: csv_file.path().to_str().unwrap().to_string(),
-            file_type: "csv".to_string(),
-            schema: Arc::new(DFSchema::empty()),
-            table_partition_cols: vec![],
-            if_not_exists: false,
-            temporary: false,
-            definition: None,
-            order_exprs: vec![],
-            unbounded: false,
-            options,
-            constraints: Constraints::empty(),
-            column_defaults: HashMap::new(),
-        };
+            csv_file.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
         let table_provider = factory.create(&state, &cmd).await.unwrap();
         let listing_table = table_provider
             .as_any()
@@ -257,5 +299,251 @@ mod tests {
         assert_eq!(csv_options.schema_infer_max_rec, Some(1000));
         let listing_options = listing_table.options();
         assert_eq!(".tbl", listing_options.file_extension);
+    }
+
+    /// Validates that CreateExternalTable with compression
+    /// searches for gzipped files in a directory location
+    #[tokio::test]
+    async fn test_create_using_folder_with_compression() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let mut options = HashMap::new();
+        options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
+        options.insert("format.has_header".into(), "true".into());
+        options.insert("format.compression".into(), "gzip".into());
+        let cmd = CreateExternalTable::builder(
+            name,
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        // Verify compression is used
+        let format = listing_table.options().format.clone();
+        let csv_format = format.as_any().downcast_ref::<CsvFormat>().unwrap();
+        let csv_options = csv_format.options().clone();
+        assert_eq!(csv_options.compression, CompressionTypeVariant::GZIP);
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
+        // Glob pattern is set to search for gzipped files
+        let table_path = listing_table.table_paths().first().unwrap();
+        assert_eq!(
+            table_path.get_glob().clone().unwrap(),
+            Pattern::new("*.csv.gz").unwrap()
+        );
+    }
+
+    /// Validates that CreateExternalTable without compression
+    /// searches for normal files in a directory location
+    #[tokio::test]
+    async fn test_create_using_folder_without_compression() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let mut options = HashMap::new();
+        options.insert("format.schema_infer_max_rec".to_owned(), "1000".to_owned());
+        options.insert("format.has_header".into(), "true".into());
+        let cmd = CreateExternalTable::builder(
+            name,
+            dir.path().to_str().unwrap().to_string(),
+            "csv",
+            Arc::new(DFSchema::empty()),
+        )
+        .with_options(options)
+        .build();
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
+        // Glob pattern is set to search for gzipped files
+        let table_path = listing_table.table_paths().first().unwrap();
+        assert_eq!(
+            table_path.get_glob().clone().unwrap(),
+            Pattern::new("*.csv").unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_odd_directory_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["odd.v1", "odd.v2"]);
+        fs::create_dir_all(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            String::from(path.to_str().unwrap()),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert_eq!("", listing_options.file_extension);
+    }
+
+    #[tokio::test]
+    async fn test_create_with_hive_partitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut path = PathBuf::from(dir.path());
+        path.extend(["key1=value1", "key2=value2"]);
+        fs::create_dir_all(&path).unwrap();
+        path.push("data.parquet");
+        fs::File::create_new(&path).unwrap();
+
+        let factory = ListingTableFactory::new();
+        let context = SessionContext::new();
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            dir.path().to_str().unwrap(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        let dtype =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        let expected_cols = vec![
+            (String::from("key1"), dtype.clone()),
+            (String::from("key2"), dtype.clone()),
+        ];
+        assert_eq!(expected_cols, listing_options.table_partition_cols);
+
+        // Ensure partition detection can be disabled via config
+        let factory = ListingTableFactory::new();
+        let mut cfg = SessionConfig::new();
+        cfg.options_mut()
+            .execution
+            .listing_table_factory_infer_partitions = false;
+        let context = SessionContext::new_with_config(cfg);
+        let state = context.state();
+        let name = TableReference::bare("foo");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            dir.path().to_str().unwrap().to_string(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+        let table_provider = factory.create(&state, &cmd).await.unwrap();
+        let listing_table = table_provider
+            .as_any()
+            .downcast_ref::<ListingTable>()
+            .unwrap();
+
+        let listing_options = listing_table.options();
+        assert!(listing_options.table_partition_cols.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_statistics_cache_prewarming() {
+        let factory = ListingTableFactory::new();
+
+        let location = PathBuf::from(parquet_test_data())
+            .join("alltypes_tiny_pages_plain.parquet")
+            .to_string_lossy()
+            .to_string();
+
+        // Test with collect_statistics enabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = true;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            location.clone(),
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert!(
+            file_statistics_cache.len() > 0,
+            "Statistics cache should be pre-warmed when collect_statistics is enabled"
+        );
+
+        // Test with collect_statistics disabled
+        let file_statistics_cache = Arc::new(DefaultFileStatisticsCache::default());
+        let cache_config = CacheManagerConfig::default()
+            .with_files_statistics_cache(Some(file_statistics_cache.clone()));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_cache_manager(cache_config)
+            .build_arc()
+            .unwrap();
+
+        let mut config = SessionConfig::new();
+        config.options_mut().execution.collect_statistics = false;
+        let context = SessionContext::new_with_config_rt(config, runtime);
+        let state = context.state();
+        let name = TableReference::bare("test");
+
+        let cmd = CreateExternalTable::builder(
+            name,
+            location,
+            "parquet",
+            Arc::new(DFSchema::empty()),
+        )
+        .build();
+
+        let _table_provider = factory.create(&state, &cmd).await.unwrap();
+
+        assert_eq!(
+            file_statistics_cache.len(),
+            0,
+            "Statistics cache should not be pre-warmed when collect_statistics is disabled"
+        );
     }
 }

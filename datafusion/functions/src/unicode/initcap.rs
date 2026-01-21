@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -50,7 +50,7 @@ use datafusion_macros::user_doc;
     related_udf(name = "lower"),
     related_udf(name = "upper")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct InitcapFunc {
     signature: Signature,
 }
@@ -99,6 +99,39 @@ impl ScalarUDFImpl for InitcapFunc {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let arg = &args.args[0];
+
+        // Scalar fast path - handle directly without array conversion
+        if let ColumnarValue::Scalar(scalar) = arg {
+            return match scalar {
+                ScalarValue::Utf8(None)
+                | ScalarValue::LargeUtf8(None)
+                | ScalarValue::Utf8View(None) => Ok(arg.clone()),
+                ScalarValue::Utf8(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))))
+                }
+                ScalarValue::LargeUtf8(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(result))))
+                }
+                ScalarValue::Utf8View(Some(s)) => {
+                    let mut result = String::new();
+                    initcap_string(s, &mut result);
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(result))))
+                }
+                other => {
+                    exec_err!(
+                        "Unsupported data type {:?} for function `initcap`",
+                        other.data_type()
+                    )
+                }
+            };
+        }
+
+        // Array path
         let args = &args.args;
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
@@ -131,10 +164,11 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         string_array.value_data().len(),
     );
 
+    let mut container = String::new();
     string_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(s);
-            builder.append_value(initcap_str);
+            initcap_string(s, &mut container);
+            builder.append_value(&container);
         }
         None => builder.append_null(),
     });
@@ -147,10 +181,11 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut builder = StringViewBuilder::with_capacity(string_view_array.len());
 
+    let mut container = String::new();
     string_view_array.iter().for_each(|str| match str {
         Some(s) => {
-            let initcap_str = initcap_string(s);
-            builder.append_value(initcap_str);
+            initcap_string(s, &mut container);
+            builder.append_value(&container);
         }
         None => builder.append_null(),
     });
@@ -158,31 +193,29 @@ fn initcap_utf8view(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
-fn initcap_string(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
+fn initcap_string(input: &str, container: &mut String) {
+    container.clear();
     let mut prev_is_alphanumeric = false;
 
     if input.is_ascii() {
         for c in input.chars() {
             if prev_is_alphanumeric {
-                result.push(c.to_ascii_lowercase());
+                container.push(c.to_ascii_lowercase());
             } else {
-                result.push(c.to_ascii_uppercase());
+                container.push(c.to_ascii_uppercase());
             };
             prev_is_alphanumeric = c.is_ascii_alphanumeric();
         }
     } else {
         for c in input.chars() {
             if prev_is_alphanumeric {
-                result.extend(c.to_lowercase());
+                container.extend(c.to_lowercase());
             } else {
-                result.extend(c.to_uppercase());
+                container.extend(c.to_uppercase());
             }
             prev_is_alphanumeric = c.is_alphanumeric();
         }
     }
-
-    result
 }
 
 #[cfg(test)]

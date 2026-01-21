@@ -45,7 +45,7 @@ use std::sync::Arc;
     related_udf(name = "bit_length"),
     related_udf(name = "octet_length")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct CharacterLengthFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -111,21 +111,21 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            character_length_general::<Int32Type, _>(string_array)
+            character_length_general::<Int32Type, _>(&string_array)
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            character_length_general::<Int64Type, _>(string_array)
+            character_length_general::<Int64Type, _>(&string_array)
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
-            character_length_general::<Int32Type, _>(string_array)
+            character_length_general::<Int32Type, _>(&string_array)
         }
         _ => unreachable!("CharacterLengthFunc"),
     }
 }
 
-fn character_length_general<'a, T, V>(array: V) -> Result<ArrayRef>
+fn character_length_general<'a, T, V>(array: &V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,
@@ -136,56 +136,37 @@ where
     // string is ASCII only is relatively cheap.
     // If strings are ASCII only, count bytes instead.
     let is_array_ascii_only = array.is_ascii();
-    let array = if array.null_count() == 0 {
+    let nulls = array.nulls().cloned();
+    let array = {
         if is_array_ascii_only {
             let values: Vec<_> = (0..array.len())
                 .map(|i| {
-                    let value = array.value(i);
+                    // Safety: we are iterating with array.len() so the index is always valid
+                    let value = unsafe { array.value_unchecked(i) };
                     T::Native::usize_as(value.len())
                 })
                 .collect();
-            PrimitiveArray::<T>::new(values.into(), None)
+            PrimitiveArray::<T>::new(values.into(), nulls)
         } else {
             let values: Vec<_> = (0..array.len())
                 .map(|i| {
-                    let value = array.value(i);
-                    if value.is_ascii() {
-                        T::Native::usize_as(value.len())
+                    // Safety: we are iterating with array.len() so the index is always valid
+                    if array.is_null(i) {
+                        T::default_value()
                     } else {
-                        T::Native::usize_as(value.chars().count())
+                        let value = unsafe { array.value_unchecked(i) };
+                        if value.is_empty() {
+                            T::default_value()
+                        } else if value.is_ascii() {
+                            T::Native::usize_as(value.len())
+                        } else {
+                            T::Native::usize_as(value.chars().count())
+                        }
                     }
                 })
                 .collect();
-            PrimitiveArray::<T>::new(values.into(), None)
+            PrimitiveArray::<T>::new(values.into(), nulls)
         }
-    } else if is_array_ascii_only {
-        let values: Vec<_> = (0..array.len())
-            .map(|i| {
-                if array.is_null(i) {
-                    T::default_value()
-                } else {
-                    let value = array.value(i);
-                    T::Native::usize_as(value.len())
-                }
-            })
-            .collect();
-        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
-    } else {
-        let values: Vec<_> = (0..array.len())
-            .map(|i| {
-                if array.is_null(i) {
-                    T::default_value()
-                } else {
-                    let value = array.value(i);
-                    if value.is_ascii() {
-                        T::Native::usize_as(value.len())
-                    } else {
-                        T::Native::usize_as(value.chars().count())
-                    }
-                }
-            })
-            .collect();
-        PrimitiveArray::<T>::new(values.into(), array.nulls().cloned())
     };
 
     Ok(Arc::new(array))
@@ -246,7 +227,9 @@ mod tests {
         #[cfg(not(feature = "unicode_expressions"))]
         test_function!(
             CharacterLengthFunc::new(),
-            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("josé"))))],
+            &[ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                String::from("josé")
+            )))],
             internal_err!(
                 "function character_length requires compilation with feature flag: unicode_expressions."
             ),

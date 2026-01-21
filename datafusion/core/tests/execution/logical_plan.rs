@@ -20,7 +20,7 @@
 
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::{provider_as_source, ViewTable};
+use datafusion::datasource::{ViewTable, provider_as_source};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
@@ -47,9 +47,9 @@ async fn count_only_nulls() -> Result<()> {
     let input = Arc::new(LogicalPlan::Values(Values {
         schema: input_schema,
         values: vec![
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
-            vec![Expr::Literal(ScalarValue::Null)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
+            vec![Expr::Literal(ScalarValue::Null, None)],
         ],
     }));
     let input_col_ref = Expr::Column(Column {
@@ -68,7 +68,7 @@ async fn count_only_nulls() -> Result<()> {
                 args: vec![input_col_ref],
                 distinct: false,
                 filter: None,
-                order_by: None,
+                order_by: vec![],
                 null_treatment: None,
             },
         })],
@@ -96,7 +96,7 @@ where
     T: Debug,
 {
     let [element] = elements else {
-        panic!("Expected exactly one element, got {:?}", elements);
+        panic!("Expected exactly one element, got {elements:?}");
     };
     element
 }
@@ -128,7 +128,7 @@ fn inline_scan_projection_test() -> Result<()> {
         @r"
     SubqueryAlias: ?table?
       Projection: a
-        EmptyRelation
+        EmptyRelation: rows=0
     "
     );
 

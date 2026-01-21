@@ -17,28 +17,40 @@
 
 // Constants defined for scalar construction.
 
-// PI ~ 3.1415927 in f32
-#[allow(clippy::approx_constant)]
-pub(super) const PI_UPPER_F32: f32 = 3.141593_f32;
+// Next F16 value above π (upper bound)
+pub(super) const PI_UPPER_F16: half::f16 = half::f16::from_bits(0x4249);
 
-// PI ~ 3.141592653589793 in f64
-pub(super) const PI_UPPER_F64: f64 = 3.141592653589794_f64;
+// Next f32 value above π (upper bound)
+pub(super) const PI_UPPER_F32: f32 = std::f32::consts::PI.next_up();
 
-// -PI ~ -3.1415927 in f32
-#[allow(clippy::approx_constant)]
-pub(super) const NEGATIVE_PI_LOWER_F32: f32 = -3.141593_f32;
+// Next f64 value above π (upper bound)
+pub(super) const PI_UPPER_F64: f64 = std::f64::consts::PI.next_up();
 
-// -PI ~ -3.141592653589793 in f64
-pub(super) const NEGATIVE_PI_LOWER_F64: f64 = -3.141592653589794_f64;
+// Next f16 value below -π (lower bound)
+pub(super) const NEGATIVE_PI_LOWER_F16: half::f16 = half::f16::from_bits(0xC249);
 
-// PI / 2 ~ 1.5707964 in f32
-pub(super) const FRAC_PI_2_UPPER_F32: f32 = 1.5707965_f32;
+// Next f32 value below -π (lower bound)
+pub(super) const NEGATIVE_PI_LOWER_F32: f32 = (-std::f32::consts::PI).next_down();
 
-// PI / 2 ~ 1.5707963267948966 in f64
-pub(super) const FRAC_PI_2_UPPER_F64: f64 = 1.5707963267948967_f64;
+// Next f64 value below -π (lower bound)
+pub(super) const NEGATIVE_PI_LOWER_F64: f64 = (-std::f64::consts::PI).next_down();
 
-// -PI / 2 ~ -1.5707964 in f32
-pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F32: f32 = -1.5707965_f32;
+// Next f16 value above π/2 (upper bound)
+pub(super) const FRAC_PI_2_UPPER_F16: half::f16 = half::f16::from_bits(0x3E49);
 
-// -PI / 2 ~ -1.5707963267948966 in f64
-pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F64: f64 = -1.5707963267948967_f64;
+// Next f32 value above π/2 (upper bound)
+pub(super) const FRAC_PI_2_UPPER_F32: f32 = std::f32::consts::FRAC_PI_2.next_up();
+
+// Next f64 value above π/2 (upper bound)
+pub(super) const FRAC_PI_2_UPPER_F64: f64 = std::f64::consts::FRAC_PI_2.next_up();
+
+// Next f32 value below -π/2 (lower bound)
+pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F16: half::f16 = half::f16::from_bits(0xBE49);
+
+// Next f32 value below -π/2 (lower bound)
+pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F32: f32 =
+    (-std::f32::consts::FRAC_PI_2).next_down();
+
+// Next f64 value below -π/2 (lower bound)
+pub(super) const NEGATIVE_FRAC_PI_2_LOWER_F64: f64 =
+    (-std::f64::consts::FRAC_PI_2).next_down();

@@ -18,17 +18,17 @@
 use std::{cmp::Ordering, sync::Arc, vec};
 
 use super::{
-    dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
-    rewrite::TableAliasRewriter, Unparser,
+    Unparser, dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
+    rewrite::TableAliasRewriter,
 };
 use datafusion_common::{
+    Column, DataFusionError, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err,
     tree_node::{Transformed, TransformedResult, TreeNode},
-    Column, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::{
-    expr, utils::grouping_set_to_exprlist, Aggregate, Expr, LogicalPlan,
-    LogicalPlanBuilder, Projection, SortExpr, Unnest, Window,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
+    Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use indexmap::IndexSet;
@@ -166,14 +166,12 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
                 // Check if the column is among the columns to run unnest on. 
                 // Currently, only List/Array columns (defined in `list_type_columns`) are supported for unnesting. 
                 if unnest.list_type_columns.iter().any(|e| e.1.output_column.name == col_ref.name) {
-                    if let Ok(idx) = unnest.schema.index_of_column(col_ref) {
-                        if let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref() {
-                            if let Some(unprojected_expr) = expr.get(idx) {
+                    if let Ok(idx) = unnest.schema.index_of_column(col_ref)
+                        && let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref()
+                            && let Some(unprojected_expr) = expr.get(idx) {
                                 let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
                                 return Ok(Transformed::yes(unnest_expr));
                             }
-                        }
-                    }
                     return internal_err!(
                         "Tried to unproject unnest expr for column '{}' that was not found in the provided Unnest!", &col_ref.name
                     );
@@ -203,7 +201,7 @@ pub(crate) fn unproject_agg_exprs(
                     windows.and_then(|w| find_window_expr(w, &c.name).cloned())
                 {
                     // Window function can contain an aggregation columns, e.g., 'avg(sum(ss_sales_price)) over ...' that needs to be unprojected
-                    return Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?));
+                    Ok(Transformed::yes(unproject_agg_exprs(unprojected_expr, agg, None)?))
                 } else {
                     internal_err!(
                         "Tried to unproject agg expr for column '{}' that was not found in the provided Aggregate!", &c.name
@@ -270,51 +268,56 @@ fn find_window_expr<'a>(
         .find(|expr| expr.schema_name().to_string() == column_name)
 }
 
-/// Transforms a Column expression into the actual expression from aggregation or projection if found.
+/// Transforms all Column expressions in a sort expression into the actual expression from aggregation or projection if found.
 /// This is required because if an ORDER BY expression is present in an Aggregate or Select, it is replaced
 /// with a Column expression (e.g., "sum(catalog_returns.cr_net_loss)"). We need to transform it back to
 /// the actual expression, such as sum("catalog_returns"."cr_net_loss").
 pub(crate) fn unproject_sort_expr(
-    sort_expr: &SortExpr,
+    mut sort_expr: SortExpr,
     agg: Option<&Aggregate>,
     input: &LogicalPlan,
 ) -> Result<SortExpr> {
-    let mut sort_expr = sort_expr.clone();
+    sort_expr.expr = sort_expr
+        .expr
+        .transform(|sub_expr| {
+            match sub_expr {
+                // Remove alias if present, because ORDER BY cannot use aliases
+                Expr::Alias(alias) => Ok(Transformed::yes(*alias.expr)),
+                Expr::Column(col) => {
+                    if col.relation.is_some() {
+                        return Ok(Transformed::no(Expr::Column(col)));
+                    }
 
-    // Remove alias if present, because ORDER BY cannot use aliases
-    if let Expr::Alias(alias) = &sort_expr.expr {
-        sort_expr.expr = *alias.expr.clone();
-    }
+                    // In case of aggregation there could be columns containing aggregation functions we need to unproject
+                    if let Some(agg) = agg
+                        && agg.schema.is_column_from_schema(&col)
+                    {
+                        return Ok(Transformed::yes(unproject_agg_exprs(
+                            Expr::Column(col),
+                            agg,
+                            None,
+                        )?));
+                    }
 
-    let Expr::Column(ref col_ref) = sort_expr.expr else {
-        return Ok(sort_expr);
-    };
+                    // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
+                    // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
+                    // to transform it back to the actual expression.
+                    if let LogicalPlan::Projection(Projection { expr, schema, .. }) =
+                        input
+                        && let Ok(idx) = schema.index_of_column(&col)
+                        && let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx)
+                    {
+                        return Ok(Transformed::yes(Expr::ScalarFunction(
+                            scalar_fn.clone(),
+                        )));
+                    }
 
-    if col_ref.relation.is_some() {
-        return Ok(sort_expr);
-    };
-
-    // In case of aggregation there could be columns containing aggregation functions we need to unproject
-    if let Some(agg) = agg {
-        if agg.schema.is_column_from_schema(col_ref) {
-            let new_expr = unproject_agg_exprs(sort_expr.expr, agg, None)?;
-            sort_expr.expr = new_expr;
-            return Ok(sort_expr);
-        }
-    }
-
-    // If SELECT and ORDER BY contain the same expression with a scalar function, the ORDER BY expression will
-    // be replaced by a Column expression (e.g., "substr(customer.c_last_name, Int64(0), Int64(5))"), and we need
-    // to transform it back to the actual expression.
-    if let LogicalPlan::Projection(Projection { expr, schema, .. }) = input {
-        if let Ok(idx) = schema.index_of_column(col_ref) {
-            if let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx) {
-                sort_expr.expr = Expr::ScalarFunction(scalar_fn.clone());
+                    Ok(Transformed::no(Expr::Column(col)))
+                }
+                _ => Ok(Transformed::no(sub_expr)),
             }
-        }
-        return Ok(sort_expr);
-    }
-
+        })
+        .map(|e| e.data)?;
     Ok(sort_expr)
 }
 
@@ -415,7 +418,7 @@ pub(crate) fn date_part_to_sql(
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql(&date_part_args[1])?;
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => ast::DateTimeField::Year,
                     "month" => ast::DateTimeField::Month,
@@ -436,7 +439,7 @@ pub(crate) fn date_part_to_sql(
         (DateFieldExtractStyle::Strftime, 2) => {
             let column = unparser.expr_to_sql(&date_part_args[1])?;
 
-            if let Expr::Literal(ScalarValue::Utf8(Some(field))) = &date_part_args[0] {
+            if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match field.to_lowercase().as_str() {
                     "year" => "%Y",
                     "month" => "%m",
@@ -513,18 +516,18 @@ pub(crate) fn sqlite_from_unixtime_to_sql(
     unparser: &Unparser,
     from_unixtime_args: &[Expr],
 ) -> Result<Option<ast::Expr>> {
-    if from_unixtime_args.len() != 1 {
-        return internal_err!(
-            "from_unixtime for SQLite expects 1 argument, found {}",
-            from_unixtime_args.len()
-        );
-    }
+    assert_eq_or_internal_err!(
+        from_unixtime_args.len(),
+        1,
+        "from_unixtime for SQLite expects 1 argument, found {}",
+        from_unixtime_args.len()
+    );
 
     Ok(Some(unparser.scalar_function_to_sql(
         "datetime",
         &[
             from_unixtime_args[0].clone(),
-            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string()))),
+            Expr::Literal(ScalarValue::Utf8(Some("unixepoch".to_string())), None),
         ],
     )?))
 }
@@ -540,14 +543,14 @@ pub(crate) fn sqlite_date_trunc_to_sql(
     unparser: &Unparser,
     date_trunc_args: &[Expr],
 ) -> Result<Option<ast::Expr>> {
-    if date_trunc_args.len() != 2 {
-        return internal_err!(
-            "date_trunc for SQLite expects 2 arguments, found {}",
-            date_trunc_args.len()
-        );
-    }
+    assert_eq_or_internal_err!(
+        date_trunc_args.len(),
+        2,
+        "date_trunc for SQLite expects 2 arguments, found {}",
+        date_trunc_args.len()
+    );
 
-    if let Expr::Literal(ScalarValue::Utf8(Some(unit))) = &date_trunc_args[0] {
+    if let Expr::Literal(ScalarValue::Utf8(Some(unit)), _) = &date_trunc_args[0] {
         let format = match unit.to_lowercase().as_str() {
             "year" => "%Y",
             "month" => "%Y-%m",
@@ -561,7 +564,7 @@ pub(crate) fn sqlite_date_trunc_to_sql(
         return Ok(Some(unparser.scalar_function_to_sql(
             "strftime",
             &[
-                Expr::Literal(ScalarValue::Utf8(Some(format.to_string()))),
+                Expr::Literal(ScalarValue::Utf8(Some(format.to_string())), None),
                 date_trunc_args[1].clone(),
             ],
         )?));

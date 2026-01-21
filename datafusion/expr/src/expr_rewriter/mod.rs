@@ -26,12 +26,17 @@ use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
 use crate::{Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder};
 
+use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::TableReference;
 use datafusion_common::{Column, DFSchema, Result};
 
+mod guarantees;
+pub use guarantees::GuaranteeRewriter;
+pub use guarantees::rewrite_with_guarantees;
+pub use guarantees::rewrite_with_guarantees_map;
 mod order_by;
+
 pub use order_by::rewrite_sort_cols_by_aggs;
 
 /// Trait for rewriting [`Expr`]s into function calls.
@@ -255,7 +260,11 @@ fn coerce_exprs_for_schema(
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
-                    _ => expr.cast_to(new_type, src_schema),
+                    _ => {
+                        // maintain the original name when casting
+                        let name = dst_schema.field(idx).name();
+                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    }
                 }
             } else {
                 Ok(expr)
@@ -354,10 +363,11 @@ mod test {
     use std::ops::Add;
 
     use super::*;
-    use crate::{col, lit, Cast};
+    use crate::literal::lit_with_metadata;
+    use crate::{Cast, col, lit};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
+    use datafusion_common::tree_node::TreeNodeRewriter;
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -383,13 +393,13 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(ScalarValue::Utf8(Some(utf8_val)), metadata) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {
                         utf8_val
                     };
-                    Ok(Transformed::yes(lit(utf8_val)))
+                    Ok(Transformed::yes(lit_with_metadata(utf8_val, metadata)))
                 }
                 // otherwise, return None
                 _ => Ok(Transformed::no(expr)),
@@ -433,7 +443,7 @@ mod test {
             vec![Some("tableC".into()), Some("tableC".into())],
             vec!["f", "ff"],
         );
-        let schemas = vec![schema_c, schema_f, schema_b, schema_a];
+        let schemas = [schema_c, schema_f, schema_b, schema_a];
         let schemas = schemas.iter().collect::<Vec<_>>();
 
         let normalized_expr =
@@ -476,7 +486,7 @@ mod test {
     ) -> DFSchema {
         let fields = fields
             .iter()
-            .map(|f| Arc::new(Field::new(f.to_string(), DataType::Int8, false)))
+            .map(|f| Arc::new(Field::new((*f).to_string(), DataType::Int8, false)))
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
         DFSchema::from_field_specific_qualified_schema(qualifiers, &schema).unwrap()

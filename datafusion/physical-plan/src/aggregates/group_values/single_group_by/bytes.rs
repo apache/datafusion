@@ -15,25 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::mem::size_of;
+
 use crate::aggregates::group_values::GroupValues;
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait, RecordBatch};
-use datafusion_common::internal_err;
+
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr_common::binary_map::{ArrowBytesMap, OutputType};
-use std::mem::size_of;
 
 /// A [`GroupValues`] storing single column of Utf8/LargeUtf8/Binary/LargeBinary values
 ///
 /// This specialization is significantly faster than using the more general
 /// purpose `Row`s format
-pub struct GroupValuesByes<O: OffsetSizeTrait> {
+pub struct GroupValuesBytes<O: OffsetSizeTrait> {
     /// Map string/binary values to group index
     map: ArrowBytesMap<O, usize>,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
 }
 
-impl<O: OffsetSizeTrait> GroupValuesByes<O> {
+impl<O: OffsetSizeTrait> GroupValuesBytes<O> {
     pub fn new(output_type: OutputType) -> Self {
         Self {
             map: ArrowBytesMap::new(output_type),
@@ -42,12 +44,8 @@ impl<O: OffsetSizeTrait> GroupValuesByes<O> {
     }
 }
 
-impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
-    fn intern(
-        &mut self,
-        cols: &[ArrayRef],
-        groups: &mut Vec<usize>,
-    ) -> datafusion_common::Result<()> {
+impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
+    fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
         assert_eq!(cols.len(), 1);
 
         // look up / add entries in the table
@@ -86,7 +84,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         self.num_groups
     }
 
-    fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+    fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
@@ -127,7 +125,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesByes<O> {
         Ok(vec![group_values])
     }
 
-    fn clear_shrink(&mut self, _batch: &RecordBatch) {
+    fn clear_shrink(&mut self, _num_rows: usize) {
         // in theory we could potentially avoid this reallocation and clear the
         // contents of the maps, but for now we just reset the map from the beginning
         self.map.take();

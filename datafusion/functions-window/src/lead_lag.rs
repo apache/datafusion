@@ -18,22 +18,25 @@
 //! `lead` and `lag` window function implementations
 
 use crate::utils::{get_scalar_value_from_args, get_signed_integer};
+use arrow::datatypes::FieldRef;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
-use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
+use datafusion_common::{DataFusionError, Result, ScalarValue, arrow_datafusion_err};
+use datafusion_doc::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
-    Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
-    Volatility, WindowUDFImpl,
+    Documentation, LimitEffect, Literal, PartitionEvaluator, ReversedUDWF, Signature,
+    TypeSignature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::cmp::min;
 use std::collections::VecDeque;
+use std::hash::Hash;
 use std::ops::{Neg, Range};
 use std::sync::{Arc, LazyLock};
 
@@ -92,8 +95,8 @@ pub fn lead(
     lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
 }
 
-#[derive(Debug)]
-enum WindowShiftKind {
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum WindowShiftKind {
     Lag,
     Lead,
 }
@@ -118,7 +121,7 @@ impl WindowShiftKind {
 }
 
 /// window shift expression
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct WindowShift {
     signature: Signature,
     kind: WindowShiftKind,
@@ -134,7 +137,13 @@ impl WindowShift {
                     TypeSignature::Any(3),
                 ],
                 Volatility::Immutable,
-            ),
+            )
+            .with_parameter_names(vec![
+                "expr".to_string(),
+                "offset".to_string(),
+                "default".to_string(),
+            ])
+            .expect("valid parameter names for lead/lag"),
             kind,
         }
     }
@@ -145,6 +154,10 @@ impl WindowShift {
 
     pub fn lead() -> Self {
         Self::new(WindowShiftKind::Lead)
+    }
+
+    pub fn kind(&self) -> &WindowShiftKind {
+        &self.kind
     }
 }
 
@@ -157,6 +170,24 @@ static LAG_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
+        .with_sql_example(r#"
+```sql
+-- Example usage of the lag window function:
+SELECT employee_id,
+    salary,
+    lag(salary, 1, 0) OVER (ORDER BY employee_id) AS prev_salary
+FROM employees;
+
++-------------+--------+-------------+
+| employee_id | salary | prev_salary |
++-------------+--------+-------------+
+| 1           | 30000  | 0           |
+| 2           | 50000  | 30000       |
+| 3           | 70000  | 50000       |
+| 4           | 60000  | 70000       |
++-------------+--------+-------------+
+```
+"#)
         .build()
 });
 
@@ -175,6 +206,27 @@ static LEAD_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
         forward the value of expression should be retrieved. Defaults to 1.")
         .with_argument("default", "The default value if the offset is \
         not within the partition. Must be of the same type as expression.")
+        .with_sql_example(r#"
+```sql
+-- Example usage of lead window function:
+SELECT
+    employee_id,
+    department,
+    salary,
+    lead(salary, 1, 0) OVER (PARTITION BY department ORDER BY salary) AS next_salary
+FROM employees;
+
++-------------+-------------+--------+--------------+
+| employee_id | department  | salary | next_salary  |
++-------------+-------------+--------+--------------+
+| 1           | Sales       | 30000  | 50000        |
+| 2           | Sales       | 50000  | 70000        |
+| 3           | Sales       | 70000  | 0            |
+| 4           | Engineering | 40000  | 60000        |
+| 5           | Engineering | 60000  | 0            |
++-------------+-------------+--------+--------------+
+```
+"#)
         .build()
 });
 
@@ -201,7 +253,7 @@ impl WindowUDFImpl for WindowShift {
     ///
     /// For more details see: <https://github.com/apache/datafusion/issues/12717>
     fn expressions(&self, expr_args: ExpressionArgs) -> Vec<Arc<dyn PhysicalExpr>> {
-        parse_expr(expr_args.input_exprs(), expr_args.input_types())
+        parse_expr(expr_args.input_exprs(), expr_args.input_fields())
             .into_iter()
             .collect::<Vec<_>>()
     }
@@ -212,7 +264,7 @@ impl WindowUDFImpl for WindowShift {
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let shift_offset =
             get_scalar_value_from_args(partition_evaluator_args.input_exprs(), 1)?
-                .map(get_signed_integer)
+                .map(|v| get_signed_integer(&v))
                 .map_or(Ok(None), |v| v.map(Some))
                 .map(|n| self.kind.shift_offset(n))
                 .map(|offset| {
@@ -224,7 +276,7 @@ impl WindowUDFImpl for WindowShift {
                 })?;
         let default_value = parse_default_value(
             partition_evaluator_args.input_exprs(),
-            partition_evaluator_args.input_types(),
+            partition_evaluator_args.input_fields(),
         )?;
 
         Ok(Box::new(WindowShiftEvaluator {
@@ -235,10 +287,14 @@ impl WindowUDFImpl for WindowShift {
         }))
     }
 
-    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
-        let return_type = parse_expr_type(field_args.input_types())?;
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+        let return_field = parse_expr_field(field_args.input_fields())?;
 
-        Ok(Field::new(field_args.name(), return_type, true))
+        Ok(return_field
+            .as_ref()
+            .clone()
+            .with_name(field_args.name())
+            .into())
     }
 
     fn reverse_expr(&self) -> ReversedUDWF {
@@ -252,6 +308,26 @@ impl WindowUDFImpl for WindowShift {
         match self.kind {
             WindowShiftKind::Lag => Some(get_lag_doc()),
             WindowShiftKind::Lead => Some(get_lead_doc()),
+        }
+    }
+
+    fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+        if self.kind == WindowShiftKind::Lag {
+            return LimitEffect::None;
+        }
+        match args {
+            [_, expr, ..] => {
+                let Some(lit) = expr.as_any().downcast_ref::<expressions::Literal>()
+                else {
+                    return LimitEffect::Unknown;
+                };
+                let ScalarValue::Int64(Some(amount)) = lit.value() else {
+                    return LimitEffect::Unknown; // we should only get int64 from the parser
+                };
+                LimitEffect::Relative((*amount).max(0) as usize)
+            }
+            [_] => LimitEffect::Relative(1), // default value
+            _ => LimitEffect::Unknown,       // invalid arguments
         }
     }
 }
@@ -270,58 +346,63 @@ impl WindowUDFImpl for WindowShift {
 /// For more details see: <https://github.com/apache/datafusion/issues/12717>
 fn parse_expr(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[DataType],
+    input_fields: &[FieldRef],
 ) -> Result<Arc<dyn PhysicalExpr>> {
     assert!(!input_exprs.is_empty());
-    assert!(!input_types.is_empty());
+    assert!(!input_fields.is_empty());
 
     let expr = Arc::clone(input_exprs.first().unwrap());
-    let expr_type = input_types.first().unwrap();
+    let expr_field = input_fields.first().unwrap();
 
     // Handles the most common case where NULL is unexpected
-    if !expr_type.is_null() {
+    if !expr_field.data_type().is_null() {
         return Ok(expr);
     }
 
     let default_value = get_scalar_value_from_args(input_exprs, 2)?;
     default_value.map_or(Ok(expr), |value| {
-        ScalarValue::try_from(&value.data_type()).map(|v| {
-            Arc::new(datafusion_physical_expr::expressions::Literal::new(v))
-                as Arc<dyn PhysicalExpr>
-        })
+        ScalarValue::try_from(&value.data_type())
+            .map(|v| Arc::new(expressions::Literal::new(v)) as Arc<dyn PhysicalExpr>)
     })
 }
 
-/// Returns the data type of the default value(if provided) when the
+static NULL_FIELD: LazyLock<FieldRef> =
+    LazyLock::new(|| Field::new("value", DataType::Null, true).into());
+
+/// Returns the field of the default value(if provided) when the
 /// expression is `NULL`.
 ///
-/// Otherwise, returns the expression type unchanged.
-fn parse_expr_type(input_types: &[DataType]) -> Result<DataType> {
-    assert!(!input_types.is_empty());
-    let expr_type = input_types.first().unwrap_or(&DataType::Null);
+/// Otherwise, returns the expression field unchanged.
+fn parse_expr_field(input_fields: &[FieldRef]) -> Result<FieldRef> {
+    assert!(!input_fields.is_empty());
+    let expr_field = input_fields.first().unwrap_or(&NULL_FIELD);
 
     // Handles the most common case where NULL is unexpected
-    if !expr_type.is_null() {
-        return Ok(expr_type.clone());
+    if !expr_field.data_type().is_null() {
+        return Ok(expr_field.as_ref().clone().with_nullable(true).into());
     }
 
-    let default_value_type = input_types.get(2).unwrap_or(&DataType::Null);
-    Ok(default_value_type.clone())
+    let default_value_field = input_fields.get(2).unwrap_or(&NULL_FIELD);
+    Ok(default_value_field
+        .as_ref()
+        .clone()
+        .with_nullable(true)
+        .into())
 }
 
 /// Handles type coercion and null value refinement for default value
 /// argument depending on the data type of the input expression.
 fn parse_default_value(
     input_exprs: &[Arc<dyn PhysicalExpr>],
-    input_types: &[DataType],
+    input_types: &[FieldRef],
 ) -> Result<ScalarValue> {
-    let expr_type = parse_expr_type(input_types)?;
+    let expr_field = parse_expr_field(input_types)?;
     let unparsed = get_scalar_value_from_args(input_exprs, 2)?;
 
     unparsed
         .filter(|v| !v.data_type().is_null())
-        .map(|v| v.cast_to(&expr_type))
-        .unwrap_or(ScalarValue::try_from(expr_type))
+        .map(|v| v.cast_to(expr_field.data_type()))
+        .unwrap_or_else(|| ScalarValue::try_from(expr_field.data_type()))
 }
 
 #[derive(Debug)]
@@ -559,7 +640,7 @@ impl PartitionEvaluator for WindowShiftEvaluator {
         // OR
         // - ignore nulls mode and current value is null and is within window bounds
         // .unwrap() is safe here as there is a none check in front
-        #[allow(clippy::unnecessary_unwrap)]
+        #[expect(clippy::unnecessary_unwrap)]
         if !(idx.is_none() || (self.ignore_nulls && array.is_null(idx.unwrap()))) {
             ScalarValue::try_from_array(array, idx.unwrap())
         } else {
@@ -666,7 +747,12 @@ mod tests {
 
         test_i32_result(
             WindowShift::lead(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ),
             [
                 Some(-2),
                 Some(3),
@@ -688,7 +774,12 @@ mod tests {
 
         test_i32_result(
             WindowShift::lag(),
-            PartitionEvaluatorArgs::new(&[expr], &[DataType::Int32], false, false),
+            PartitionEvaluatorArgs::new(
+                &[expr],
+                &[Field::new("f", DataType::Int32, true).into()],
+                false,
+                false,
+            ),
             [
                 None,
                 Some(1),
@@ -713,12 +804,15 @@ mod tests {
             as Arc<dyn PhysicalExpr>;
 
         let input_exprs = &[expr, shift_offset, default_value];
-        let input_types: &[DataType] =
-            &[DataType::Int32, DataType::Int32, DataType::Int32];
+        let input_fields = [DataType::Int32, DataType::Int32, DataType::Int32]
+            .into_iter()
+            .map(|d| Field::new("f", d, true))
+            .map(Arc::new)
+            .collect::<Vec<_>>();
 
         test_i32_result(
             WindowShift::lag(),
-            PartitionEvaluatorArgs::new(input_exprs, input_types, false, false),
+            PartitionEvaluatorArgs::new(input_exprs, &input_fields, false, false),
             [
                 Some(100),
                 Some(1),

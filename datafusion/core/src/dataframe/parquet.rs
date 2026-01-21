@@ -42,13 +42,15 @@ impl DataFrame {
     /// use datafusion::dataframe::DataFrameWriteOptions;
     /// let ctx = SessionContext::new();
     /// // Sort the data by column "b" and write it to a new location
-    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?
-    ///   .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
-    ///   .write_parquet(
-    ///     "output.parquet",
-    ///     DataFrameWriteOptions::new(),
-    ///     None, // can also specify parquet writing options here
-    /// ).await?;
+    /// ctx.read_csv("tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?
+    ///     .sort(vec![col("b").sort(true, true)])? // sort by b asc, nulls first
+    ///     .write_parquet(
+    ///         "output.parquet",
+    ///         DataFrameWriteOptions::new(),
+    ///         None, // can also specify parquet writing options here
+    ///     )
+    ///     .await?;
     /// # fs::remove_file("output.parquet")?;
     /// # Ok(())
     /// # }
@@ -116,6 +118,8 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_expr::{col, lit};
 
+    #[cfg(feature = "parquet_encryption")]
+    use datafusion_common::config::ConfigFileEncryptionProperties;
     use object_store::local::LocalFileSystem;
     use parquet::file::reader::FileReader;
     use tempfile::TempDir;
@@ -146,7 +150,7 @@ mod tests {
         let plan = df.explain(false, false)?.collect().await?;
         // Filters all the way to Parquet
         let formatted = pretty::pretty_format_batches(&plan)?.to_string();
-        assert!(formatted.contains("FilterExec: id@0 = 1"));
+        assert!(formatted.contains("FilterExec: id@0 = 1"), "{formatted}");
 
         Ok(())
     }
@@ -205,7 +209,7 @@ mod tests {
             &HashMap::from_iter(
                 [("datafusion.execution.batch_size", "10")]
                     .iter()
-                    .map(|(s1, s2)| (s1.to_string(), s2.to_string())),
+                    .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);
         register_aggregate_csv(&ctx, "aggregate_test_100").await?;
@@ -243,6 +247,80 @@ mod tests {
 
             assert_eq!(written_rows as usize, rg_size);
         }
+
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[cfg(feature = "parquet_encryption")]
+    #[tokio::test]
+    async fn roundtrip_parquet_with_encryption(
+        #[values(false, true)] allow_single_file_parallelism: bool,
+    ) -> Result<()> {
+        use parquet::encryption::decrypt::FileDecryptionProperties;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let test_df = test_util::test_table().await?;
+
+        let schema = test_df.schema();
+        let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+        let column_key = b"1234567890123450".to_vec(); // 128bit/16
+
+        let mut encrypt = FileEncryptionProperties::builder(footer_key.clone());
+        let mut decrypt = FileDecryptionProperties::builder(footer_key.clone());
+
+        for field in schema.fields().iter() {
+            encrypt = encrypt.with_column_key(field.name().as_str(), column_key.clone());
+            decrypt = decrypt.with_column_key(field.name().as_str(), column_key.clone());
+        }
+
+        let encrypt = encrypt.build()?;
+        let decrypt = decrypt.build()?;
+
+        let df = test_df.clone();
+        let tmp_dir = TempDir::new()?;
+        let tempfile = tmp_dir.path().join("roundtrip.parquet");
+        let tempfile_str = tempfile.into_os_string().into_string().unwrap();
+
+        // Write encrypted parquet using write_parquet
+        let mut options = TableParquetOptions::default();
+        options.crypto.file_encryption =
+            Some(ConfigFileEncryptionProperties::from(&encrypt));
+        options.global.allow_single_file_parallelism = allow_single_file_parallelism;
+
+        df.write_parquet(
+            tempfile_str.as_str(),
+            DataFrameWriteOptions::new().with_single_file_output(true),
+            Some(options),
+        )
+        .await?;
+        let num_rows_written = test_df.count().await?;
+
+        // Read encrypted parquet
+        let ctx: SessionContext = SessionContext::new();
+        let read_options =
+            ParquetReadOptions::default().file_decryption_properties((&decrypt).into());
+
+        ctx.register_parquet("roundtrip_parquet", &tempfile_str, read_options.clone())
+            .await?;
+
+        let df_enc = ctx.sql("SELECT * FROM roundtrip_parquet").await?;
+        let num_rows_read = df_enc.count().await?;
+
+        assert_eq!(num_rows_read, num_rows_written);
+
+        // Read encrypted parquet and subset rows + columns
+        let encrypted_parquet_df = ctx.read_parquet(tempfile_str, read_options).await?;
+
+        // Select three columns and filter the results
+        // Test that the filter works as expected
+        let selected = encrypted_parquet_df
+            .clone()
+            .select_columns(&["c1", "c2", "c3"])?
+            .filter(col("c2").gt(lit(4)))?;
+
+        let num_rows_selected = selected.count().await?;
+        assert_eq!(num_rows_selected, 14);
 
         Ok(())
     }

@@ -31,11 +31,17 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
 [features]
 force_hash_collisions = []
+test_utils = ["arrow/test_utils"]
+tokio_coop = []
+tokio_coop_fallback = []
 
 [lib]
 name = "datafusion_physical_plan"
@@ -46,11 +52,11 @@ arrow = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
-chrono = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-common-runtime = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-functions = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-expr = { workspace = true, default-features = true }
@@ -61,6 +67,7 @@ hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
+num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
@@ -73,7 +80,6 @@ insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"
-tempfile = "3.19.1"
 tokio = { workspace = true, features = [
     "rt-multi-thread",
     "fs",
@@ -87,3 +93,12 @@ name = "partial_ordering"
 [[bench]]
 harness = false
 name = "spill_io"
+
+[[bench]]
+harness = false
+name = "sort_preserving_merge"
+
+[[bench]]
+harness = false
+name = "aggregate_vectorized"
+required-features = ["test_utils"]

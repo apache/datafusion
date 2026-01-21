@@ -31,27 +31,35 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_physical_expr"
 
+[features]
+recursive_protection = ["dep:recursive"]
+
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
+datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
-half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
-log = { workspace = true }
-paste = "^1.0"
-petgraph = "0.7.1"
+parking_lot = { workspace = true }
+paste = { workspace = true }
+petgraph = "0.8.3"
+recursive = { workspace = true, optional = true }
+tokio = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -76,3 +84,6 @@ name = "is_null"
 [[bench]]
 harness = false
 name = "binary_op"
+
+[package.metadata.cargo-machete]
+ignored = ["half"]

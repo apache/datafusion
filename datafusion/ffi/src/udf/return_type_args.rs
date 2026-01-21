@@ -15,24 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use abi_stable::{
-    std_types::{ROption, RVec},
-    StableAbi,
-};
-use arrow::datatypes::Field;
-use datafusion::{
-    common::exec_datafusion_err, error::DataFusionError, logical_expr::ReturnFieldArgs,
-    scalar::ScalarValue,
-};
+use abi_stable::StableAbi;
+use abi_stable::std_types::{ROption, RVec};
+use arrow_schema::FieldRef;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{DataFusionError, ffi_datafusion_err};
+use datafusion_expr::ReturnFieldArgs;
+use prost::Message;
 
 use crate::arrow_wrappers::WrappedSchema;
-use crate::util::{rvec_wrapped_to_vec_field, vec_field_to_rvec_wrapped};
-use prost::Message;
+use crate::util::{rvec_wrapped_to_vec_fieldref, vec_fieldref_to_rvec_wrapped};
 
 /// A stable struct for sharing a [`ReturnFieldArgs`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_ReturnFieldArgs {
     arg_fields: RVec<WrappedSchema>,
     scalar_arguments: RVec<ROption<RVec<u8>>>,
@@ -42,7 +38,7 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
     type Error = DataFusionError;
 
     fn try_from(value: ReturnFieldArgs) -> Result<Self, Self::Error> {
-        let arg_fields = vec_field_to_rvec_wrapped(value.arg_fields)?;
+        let arg_fields = vec_fieldref_to_rvec_wrapped(value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()
@@ -70,12 +66,12 @@ impl TryFrom<ReturnFieldArgs<'_>> for FFI_ReturnFieldArgs {
 // appears a restriction based on the need to have a borrowed ScalarValue
 // in the arguments when converted to ReturnFieldArgs
 pub struct ForeignReturnFieldArgsOwned {
-    arg_fields: Vec<Field>,
+    arg_fields: Vec<FieldRef>,
     scalar_arguments: Vec<Option<ScalarValue>>,
 }
 
 pub struct ForeignReturnFieldArgs<'a> {
-    arg_fields: &'a [Field],
+    arg_fields: &'a [FieldRef],
     scalar_arguments: Vec<Option<&'a ScalarValue>>,
 }
 
@@ -83,7 +79,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
     type Error = DataFusionError;
 
     fn try_from(value: &FFI_ReturnFieldArgs) -> Result<Self, Self::Error> {
-        let arg_fields = rvec_wrapped_to_vec_field(&value.arg_fields)?;
+        let arg_fields = rvec_wrapped_to_vec_fieldref(&value.arg_fields)?;
         let scalar_arguments: Result<Vec<_>, Self::Error> = value
             .scalar_arguments
             .iter()
@@ -91,7 +87,7 @@ impl TryFrom<&FFI_ReturnFieldArgs> for ForeignReturnFieldArgsOwned {
                 let maybe_arg = maybe_arg.as_ref().map(|arg| {
                     let proto_value =
                         datafusion_proto::protobuf::ScalarValue::decode(arg.as_ref())
-                            .map_err(|err| exec_datafusion_err!("{}", err))?;
+                            .map_err(|err| ffi_datafusion_err!("{}", err))?;
                     let scalar_value: ScalarValue = (&proto_value).try_into()?;
                     Ok(scalar_value)
                 });

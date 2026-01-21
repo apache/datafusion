@@ -35,7 +35,7 @@ use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
 use datafusion_catalog::Session;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{internal_err, not_impl_err};
+use datafusion_common::{DataFusionError, internal_err, not_impl_err};
 use datafusion_expr::expr::{BinaryExpr, Cast};
 use datafusion_functions_aggregate::expr_fn::count;
 use datafusion_physical_expr::EquivalenceProperties;
@@ -134,9 +134,19 @@ impl ExecutionPlan for CustomPlan {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let schema_captured = self.schema().clone();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
-            futures::stream::iter(self.batches.clone().into_iter().map(Ok)),
+            futures::stream::iter(self.batches.clone().into_iter().map(move |batch| {
+                let projection: Vec<usize> = schema_captured
+                    .fields()
+                    .iter()
+                    .filter_map(|field| batch.schema().index_of(field.name()).ok())
+                    .collect();
+                batch
+                    .project(&projection)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+            })),
         )))
     }
 
@@ -179,12 +189,12 @@ impl TableProvider for CustomProvider {
         match &filters[0] {
             Expr::BinaryExpr(BinaryExpr { right, .. }) => {
                 let int_value = match &**right {
-                    Expr::Literal(ScalarValue::Int8(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int16(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int32(Some(i))) => *i as i64,
-                    Expr::Literal(ScalarValue::Int64(Some(i))) => *i,
+                    Expr::Literal(ScalarValue::Int8(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int16(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int32(Some(i)), _) => *i as i64,
+                    Expr::Literal(ScalarValue::Int64(Some(i)), _) => *i,
                     Expr::Cast(Cast { expr, data_type: _ }) => match expr.deref() {
-                        Expr::Literal(lit_value) => match lit_value {
+                        Expr::Literal(lit_value, _) => match lit_value {
                             ScalarValue::Int8(Some(v)) => *v as i64,
                             ScalarValue::Int16(Some(v)) => *v as i64,
                             ScalarValue::Int32(Some(v)) => *v as i64,

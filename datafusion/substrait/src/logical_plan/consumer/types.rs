@@ -15,28 +15,32 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::utils::{next_struct_field_name, DEFAULT_TIMEZONE};
 use super::SubstraitConsumer;
-#[allow(deprecated)]
+use super::utils::{DEFAULT_TIMEZONE, from_substrait_precision, next_struct_field_name};
+#[expect(deprecated)]
 use crate::variation_const::{
     DATE_32_TYPE_VARIATION_REF, DATE_64_TYPE_VARIATION_REF,
     DECIMAL_128_TYPE_VARIATION_REF, DECIMAL_256_TYPE_VARIATION_REF,
-    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DEFAULT_CONTAINER_TYPE_VARIATION_REF, DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF,
+    DEFAULT_MAP_TYPE_VARIATION_REF, DEFAULT_TYPE_VARIATION_REF,
+    DICTIONARY_MAP_TYPE_VARIATION_REF, DURATION_INTERVAL_DAY_TYPE_VARIATION_REF,
     INTERVAL_DAY_TIME_TYPE_REF, INTERVAL_MONTH_DAY_NANO_TYPE_NAME,
     INTERVAL_MONTH_DAY_NANO_TYPE_REF, INTERVAL_YEAR_MONTH_TYPE_REF,
-    LARGE_CONTAINER_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
+    LARGE_CONTAINER_TYPE_VARIATION_REF, TIME_32_TYPE_VARIATION_REF,
+    TIME_64_TYPE_VARIATION_REF, TIMESTAMP_MICRO_TYPE_VARIATION_REF,
     TIMESTAMP_MILLI_TYPE_VARIATION_REF, TIMESTAMP_NANO_TYPE_VARIATION_REF,
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
+use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
 use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
 };
 use datafusion::common::{
-    not_impl_err, substrait_datafusion_err, substrait_err, DFSchema,
+    DFSchema, not_impl_err, substrait_datafusion_err, substrait_err,
 };
 use std::sync::Arc;
-use substrait::proto::{r#type, NamedStruct, Type};
+use substrait::proto::{NamedStruct, Type, r#type};
 
 pub(crate) fn from_substrait_type_without_names(
     consumer: &impl SubstraitConsumer,
@@ -86,7 +90,7 @@ pub fn from_substrait_type(
             r#type::Kind::Fp64(_) => Ok(DataType::Float64),
             r#type::Kind::Timestamp(ts) => {
                 // Kept for backwards compatibility, new plans should use PrecisionTimestamp(Tz) instead
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 match ts.type_variation_reference {
                     TIMESTAMP_SECOND_TYPE_VARIATION_REF => {
                         Ok(DataType::Timestamp(TimeUnit::Second, None))
@@ -106,28 +110,23 @@ pub fn from_substrait_type(
                 }
             }
             r#type::Kind::PrecisionTimestamp(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestamp"
-                    ),
-                }?;
+                let unit = from_substrait_precision(pts.precision, "PrecisionTimestamp")?;
                 Ok(DataType::Timestamp(unit, None))
             }
             r#type::Kind::PrecisionTimestampTz(pts) => {
-                let unit = match pts.precision {
-                    0 => Ok(TimeUnit::Second),
-                    3 => Ok(TimeUnit::Millisecond),
-                    6 => Ok(TimeUnit::Microsecond),
-                    9 => Ok(TimeUnit::Nanosecond),
-                    p => not_impl_err!(
-                        "Unsupported Substrait precision {p} for PrecisionTimestampTz"
-                    ),
-                }?;
+                let unit =
+                    from_substrait_precision(pts.precision, "PrecisionTimestampTz")?;
                 Ok(DataType::Timestamp(unit, Some(DEFAULT_TIMEZONE.into())))
+            }
+            r#type::Kind::PrecisionTime(pt) => {
+                let time_unit = from_substrait_precision(pt.precision, "PrecisionTime")?;
+                match pt.type_variation_reference {
+                    TIME_32_TYPE_VARIATION_REF => Ok(DataType::Time32(time_unit)),
+                    TIME_64_TYPE_VARIATION_REF => Ok(DataType::Time64(time_unit)),
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Date(date) => match date.type_variation_reference {
                 DATE_32_TYPE_VARIATION_REF => Ok(DataType::Date32),
@@ -180,24 +179,32 @@ pub fn from_substrait_type(
                 let value_type = map.value.as_ref().ok_or_else(|| {
                     substrait_datafusion_err!("Map type must have value type")
                 })?;
-                let key_field = Arc::new(Field::new(
-                    "key",
-                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?,
-                    false,
-                ));
-                let value_field = Arc::new(Field::new(
-                    "value",
-                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?,
-                    true,
-                ));
-                Ok(DataType::Map(
-                    Arc::new(Field::new_struct(
-                        "entries",
-                        [key_field, value_field],
-                        false, // The inner map field is always non-nullable (Arrow #1697),
+                let key_type =
+                    from_substrait_type(consumer, key_type, dfs_names, name_idx)?;
+                let value_type =
+                    from_substrait_type(consumer, value_type, dfs_names, name_idx)?;
+
+                match map.type_variation_reference {
+                    DEFAULT_MAP_TYPE_VARIATION_REF => {
+                        let key_field = Arc::new(Field::new("key", key_type, false));
+                        let value_field = Arc::new(Field::new("value", value_type, true));
+                        Ok(DataType::Map(
+                            Arc::new(Field::new_struct(
+                                "entries",
+                                [key_field, value_field],
+                                false, // The inner map field is always non-nullable (Arrow #1697),
+                            )),
+                            false, // whether keys are sorted
+                        ))
+                    }
+                    DICTIONARY_MAP_TYPE_VARIATION_REF => Ok(DataType::Dictionary(
+                        Box::new(key_type),
+                        Box::new(value_type),
                     )),
-                    false, // whether keys are sorted
-                ))
+                    v => not_impl_err!(
+                        "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                    ),
+                }
             }
             r#type::Kind::Decimal(d) => match d.type_variation_reference {
                 DECIMAL_128_TYPE_VARIATION_REF => {
@@ -213,7 +220,23 @@ pub fn from_substrait_type(
             r#type::Kind::IntervalYear(_) => {
                 Ok(DataType::Interval(IntervalUnit::YearMonth))
             }
-            r#type::Kind::IntervalDay(_) => Ok(DataType::Interval(IntervalUnit::DayTime)),
+            r#type::Kind::IntervalDay(i) => match i.type_variation_reference {
+                DEFAULT_INTERVAL_DAY_TYPE_VARIATION_REF => {
+                    Ok(DataType::Interval(IntervalUnit::DayTime))
+                }
+                DURATION_INTERVAL_DAY_TYPE_VARIATION_REF => {
+                    let duration_unit = match i.precision {
+                        Some(p) => from_substrait_precision(p, "Duration"),
+                        None => {
+                            not_impl_err!("Missing Substrait precision for Duration")
+                        }
+                    }?;
+                    Ok(DataType::Duration(duration_unit))
+                }
+                v => not_impl_err!(
+                    "Unsupported Substrait type variation {v} of type {s_kind:?}"
+                ),
+            },
             r#type::Kind::IntervalCompound(_) => {
                 Ok(DataType::Interval(IntervalUnit::MonthDayNano))
             }
@@ -225,18 +248,22 @@ pub fn from_substrait_type(
                 // TODO: remove the code below once the producer has been updated
                 if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
                 {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match name.as_ref() {
                         // Kept for backwards compatibility, producers should use IntervalCompound instead
-                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
+                        INTERVAL_MONTH_DAY_NANO_TYPE_NAME => {
+                            Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                        }
+                        FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
+                        NULL_TYPE_NAME => Ok(DataType::Null),
                         _ => not_impl_err!(
-                                "Unsupported Substrait user defined type with ref {} and variation {}",
-                                u.type_reference,
-                                u.type_variation_reference
-                            ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 } else {
-                    #[allow(deprecated)]
+                    #[expect(deprecated)]
                     match u.type_reference {
                         // Kept for backwards compatibility, producers should use IntervalYear instead
                         INTERVAL_YEAR_MONTH_TYPE_REF => {
@@ -251,10 +278,10 @@ pub fn from_substrait_type(
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
                         _ => not_impl_err!(
-                        "Unsupported Substrait user defined type with ref {} and variation {}",
-                        u.type_reference,
-                        u.type_variation_reference
-                    ),
+                            "Unsupported Substrait user defined type with ref {} and variation {}",
+                            u.type_reference,
+                            u.type_variation_reference
+                        ),
                     }
                 }
             }
@@ -282,7 +309,7 @@ pub fn from_substrait_named_struct(
         })?,
         &base_schema.names,
         &mut name_idx,
-    );
+    )?;
     if name_idx != base_schema.names.len() {
         return substrait_err!(
             "Names list must match exactly to nested schema, but found {} uses for {} names",
@@ -290,7 +317,7 @@ pub fn from_substrait_named_struct(
             base_schema.names.len()
         );
     }
-    DFSchema::try_from(Schema::new(fields?))
+    DFSchema::try_from(Schema::new(fields))
 }
 
 fn from_substrait_struct_type(

@@ -20,8 +20,8 @@ use std::{collections::HashSet, sync::Arc};
 use arrow::datatypes::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
-    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
     Column, HashMap, Result, TableReference,
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
@@ -98,6 +98,71 @@ fn rewrite_sort_expr_for_union(exprs: Vec<SortExpr>) -> Result<Vec<SortExpr>> {
         .data()?;
 
     Ok(sort_exprs)
+}
+
+/// Rewrite Filter plans that have a Window as their input by inserting a SubqueryAlias.
+///
+/// When a Filter directly operates on a Window plan, it can cause issues during SQL unparsing
+/// because window functions in a WHERE clause are not valid SQL. The solution is to wrap
+/// the Window plan in a SubqueryAlias, effectively creating a derived table.
+///
+/// Example transformation:
+///
+/// Filter: condition
+///   Window: window_function
+///     TableScan: table
+///
+/// becomes:
+///
+/// Filter: condition
+///   SubqueryAlias: __qualify_subquery
+///     Projection: table.column1, table.column2
+///       Window: window_function
+///         TableScan: table
+pub(super) fn rewrite_qualify(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let transformed_plan = plan.transform_up(|plan| match plan {
+        // Check if the filter's input is a Window plan
+        LogicalPlan::Filter(mut filter) => {
+            if matches!(&*filter.input, LogicalPlan::Window(_)) {
+                // Create a SubqueryAlias around the Window plan
+                let qualifier = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .find_map(|(q, _)| q)
+                    .map(|q| q.to_string())
+                    .unwrap_or_else(|| "__qualify_subquery".to_string());
+
+                // for Postgres, name of column for 'rank() over (...)' is 'rank'
+                // but in Datafusion, it is 'rank() over (...)'
+                // without projection, it's still an invalid sql in Postgres
+
+                let project_exprs = filter
+                    .input
+                    .schema()
+                    .iter()
+                    .map(|(_, f)| datafusion_expr::col(f.name()).alias(f.name()))
+                    .collect::<Vec<_>>();
+
+                let input =
+                    datafusion_expr::LogicalPlanBuilder::from(Arc::clone(&filter.input))
+                        .project(project_exprs)?
+                        .build()?;
+
+                let subquery_alias =
+                    datafusion_expr::SubqueryAlias::try_new(Arc::new(input), qualifier)?;
+
+                filter.input = Arc::new(LogicalPlan::SubqueryAlias(subquery_alias));
+                Ok(Transformed::yes(LogicalPlan::Filter(filter)))
+            } else {
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+            }
+        }
+
+        _ => Ok(Transformed::no(plan)),
+    });
+
+    transformed_plan.data()
 }
 
 /// Rewrite logic plan for query that order by columns are not in projections
@@ -246,7 +311,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(ref outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
             return (plan, vec![]);
         };
 
@@ -295,15 +360,14 @@ pub(super) fn find_unnest_column_alias(
         if projection.expr.len() != 1 {
             return (plan, None);
         }
-        if let Some(Expr::Alias(alias)) = projection.expr.first() {
-            if alias
+        if let Some(Expr::Alias(alias)) = projection.expr.first()
+            && alias
                 .expr
                 .schema_name()
                 .to_string()
                 .starts_with(&format!("{UNNEST_COLUMN_PREFIX}("))
-            {
-                return (projection.input.as_ref(), Some(alias.name.clone()));
-            }
+        {
+            return (projection.input.as_ref(), Some(alias.name.clone()));
         }
     }
     (plan, None)

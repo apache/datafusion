@@ -22,11 +22,11 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, DataType::*, Field, Schema};
+use arrow::compute::{CastOptions, can_cast_types};
+use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -97,12 +97,15 @@ impl CastExpr {
     pub fn cast_options(&self) -> &CastOptions<'static> {
         &self.cast_options
     }
-    pub fn is_bigger_cast(&self, src: DataType) -> bool {
-        if src == self.cast_type {
+
+    /// Check if casting from the specified source type to the target type is a
+    /// widening cast (e.g. from `Int8` to `Int16`).
+    pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
+        if cast_type.eq(src) {
             return true;
         }
         matches!(
-            (src, &self.cast_type),
+            (src, cast_type),
             (Int8, Int16 | Int32 | Int64)
                 | (Int16, Int32 | Int64)
                 | (Int32, Int64)
@@ -116,6 +119,11 @@ impl CastExpr {
                 | (Int64 | UInt64, Float64)
                 | (Utf8, LargeUtf8)
         )
+    }
+
+    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        Self::check_bigger_cast(&self.cast_type, src)
     }
 }
 
@@ -144,11 +152,14 @@ impl PhysicalExpr for CastExpr {
         value.cast_to(&self.cast_type, Some(&self.cast_options))
     }
 
-    fn return_field(&self, input_schema: &Schema) -> Result<Field> {
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
         Ok(self
             .expr
             .return_field(input_schema)?
-            .with_data_type(self.cast_type.clone()))
+            .as_ref()
+            .clone()
+            .with_data_type(self.cast_type.clone())
+            .into())
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
@@ -180,7 +191,7 @@ impl PhysicalExpr for CastExpr {
         // Get child's datatype:
         let cast_type = child_interval.data_type();
         Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?
+            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
         ]))
     }
 
@@ -227,7 +238,7 @@ pub fn cast_with_options(
     } else if can_cast_types(&expr_type, &cast_type) {
         Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
-        not_impl_err!("Unsupported CAST from {expr_type:?} to {cast_type:?}")
+        not_impl_err!("Unsupported CAST from {expr_type} to {cast_type}")
     }
 }
 
@@ -251,14 +262,14 @@ mod tests {
 
     use arrow::{
         array::{
-            Array, Decimal128Array, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, StringArray, Time64NanosecondArray,
+            Array, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+            Int32Array, Int64Array, StringArray, Time64NanosecondArray,
             TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
-    use datafusion_common::assert_contains;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use insta::assert_snapshot;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -433,12 +444,9 @@ mod tests {
         )?;
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(6, 2), None)?;
-        let e = expression.evaluate(&batch).unwrap_err(); // panics on OK
-        assert_contains!(
-            e.to_string(),
-            "Arrow error: Invalid argument error: 12345679 is too large to store in a Decimal128 of precision 6. Max is 999999"
-        );
-
+        let e = expression.evaluate(&batch).unwrap_err().strip_backtrace(); // panics on OK
+        assert_snapshot!(e, @"Arrow error: Invalid argument error: 123456.79 is too large to store in a Decimal128 of precision 6. Max is 9999.99");
+        // safe cast should return null
         let expression_safe = cast_with_options(
             col("a", &schema)?,
             &schema,
@@ -738,6 +746,9 @@ mod tests {
         Ok(())
     }
 
+    // Tests for timestamp timezone casting have been moved to timestamps.slt
+    // See the "Casting between timestamp with and without timezone" section
+
     #[test]
     fn invalid_cast() {
         // Ensure a useful error happens at plan time if invalid casts are used
@@ -763,9 +774,10 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("Cannot cast string '9.1' to value of Int32 type"))
+                assert!(
+                    e.to_string()
+                        .contains("Cannot cast string '9.1' to value of Int32 type")
+                )
             }
         }
         Ok(())

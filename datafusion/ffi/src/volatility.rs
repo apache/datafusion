@@ -16,11 +16,10 @@
 // under the License.
 
 use abi_stable::StableAbi;
-use datafusion::logical_expr::Volatility;
+use datafusion_expr::Volatility;
 
 #[repr(C)]
-#[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
+#[derive(Debug, StableAbi, Clone)]
 pub enum FFI_Volatility {
     Immutable,
     Stable,

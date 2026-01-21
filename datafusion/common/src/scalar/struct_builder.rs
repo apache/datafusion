@@ -17,7 +17,6 @@
 
 //! [`ScalarStructBuilder`] for building [`ScalarValue::Struct`]
 
-use crate::error::_internal_err;
 use crate::{Result, ScalarValue};
 use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
@@ -48,13 +47,11 @@ impl ScalarStructBuilder {
     /// ```rust
     /// # use arrow::datatypes::{DataType, Field};
     /// # use datafusion_common::scalar::ScalarStructBuilder;
-    /// let fields = vec![
-    ///    Field::new("a", DataType::Int32, false),
-    /// ];
+    /// let fields = vec![Field::new("a", DataType::Int32, false)];
     /// let sv = ScalarStructBuilder::new_null(fields);
     /// // Note this is `NULL`, not `{a: NULL}`
     /// assert_eq!(format!("{sv}"), "NULL");
-    ///```
+    /// ```
     ///
     /// To create a struct where the *fields* are null, use `Self::new()` and
     /// pass null values for each field:
@@ -66,9 +63,9 @@ impl ScalarStructBuilder {
     /// let field = Field::new("a", DataType::Int32, true);
     /// // add a null value for the "a" field
     /// let sv = ScalarStructBuilder::new()
-    ///   .with_scalar(field, ScalarValue::Int32(None))
-    ///   .build()
-    ///   .unwrap();
+    ///     .with_scalar(field, ScalarValue::Int32(None))
+    ///     .build()
+    ///     .unwrap();
     /// // value is not null, but field is
     /// assert_eq!(format!("{sv}"), "{a:}");
     /// ```
@@ -86,6 +83,7 @@ impl ScalarStructBuilder {
     }
 
     /// Add the specified field and `ScalarValue` to the struct.
+    #[expect(clippy::needless_pass_by_value)] // Skip for public API's compatibility
     pub fn with_scalar(self, field: impl IntoFieldRef, value: ScalarValue) -> Self {
         // valid scalar value should not fail
         let array = value.to_array().unwrap();
@@ -109,17 +107,8 @@ impl ScalarStructBuilder {
     pub fn build(self) -> Result<ScalarValue> {
         let Self { fields, arrays } = self;
 
-        for array in &arrays {
-            if array.len() != 1 {
-                return _internal_err!(
-                    "Error building ScalarValue::Struct. \
-                Expected array with exactly one element, found array with {} elements",
-                    array.len()
-                );
-            }
-        }
-
-        let struct_array = StructArray::try_new(Fields::from(fields), arrays, None)?;
+        let struct_array =
+            StructArray::try_new_with_length(Fields::from(fields), arrays, None, 1)?;
         Ok(ScalarValue::Struct(Arc::new(struct_array)))
     }
 }
@@ -179,5 +168,17 @@ impl IntoFields for &Fields {
 impl IntoFields for Vec<Field> {
     fn into(self) -> Fields {
         Fields::from(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Other cases are tested by doc tests
+    #[test]
+    fn test_empty_struct() {
+        let sv = ScalarStructBuilder::new().build().unwrap();
+        assert_eq!(format!("{sv}"), "{}");
     }
 }

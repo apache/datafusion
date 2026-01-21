@@ -19,7 +19,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
@@ -28,18 +28,22 @@
 
 mod engines;
 
-pub use engines::convert_batches;
-pub use engines::convert_schema_to_types;
+pub use engines::CurrentlyExecutingSqlTracker;
 pub use engines::DFColumnType;
 pub use engines::DFOutput;
 pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
+pub use engines::DataFusionSubstraitRoundTrip;
+pub use engines::convert_batches;
+pub use engines::convert_schema_to_types;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
 
+mod filters;
 mod test_context;
 mod util;
 
+pub use filters::*;
 pub use test_context::TestContext;
 pub use util::*;

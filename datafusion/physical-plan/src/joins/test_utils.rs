@@ -25,15 +25,15 @@ use crate::joins::{
 };
 use crate::repartition::RepartitionExec;
 use crate::test::TestMemoryExec;
-use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
+use crate::{ExecutionPlan, ExecutionPlanProperties, Partitioning, common};
 
 use arrow::array::{
-    types::IntervalDayTime, ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray,
-    RecordBatch, TimestampMillisecondArray,
+    ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
+    TimestampMillisecondArray, types::IntervalDayTime,
 };
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{NullEquality, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_physical_expr::expressions::{binary, cast, col, lit};
@@ -74,7 +74,7 @@ pub async fn partitioned_sym_join_with_filter(
     on: JoinOn,
     filter: Option<JoinFilter>,
     join_type: &JoinType,
-    null_equals_null: bool,
+    null_equality: NullEquality,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
     let partition_count = 4;
@@ -101,11 +101,9 @@ pub async fn partitioned_sym_join_with_filter(
         on,
         filter,
         join_type,
-        null_equals_null,
-        left.output_ordering().map(|p| LexOrdering::new(p.to_vec())),
-        right
-            .output_ordering()
-            .map(|p| LexOrdering::new(p.to_vec())),
+        null_equality,
+        left.output_ordering().cloned(),
+        right.output_ordering().cloned(),
         StreamJoinPartitionMode::Partitioned,
     )?;
 
@@ -130,7 +128,7 @@ pub async fn partitioned_hash_join_with_filter(
     on: JoinOn,
     filter: Option<JoinFilter>,
     join_type: &JoinType,
-    null_equals_null: bool,
+    null_equality: NullEquality,
     context: Arc<TaskContext>,
 ) -> Result<Vec<RecordBatch>> {
     let partition_count = 4;
@@ -153,7 +151,8 @@ pub async fn partitioned_hash_join_with_filter(
         join_type,
         None,
         PartitionMode::Partitioned,
-        null_equals_null,
+        null_equality,
+        false, // null_aware
     )?);
 
     let mut batches = vec![];
@@ -195,7 +194,7 @@ struct AscendingRandomFloatIterator {
 impl AscendingRandomFloatIterator {
     fn new(min: f64, max: f64) -> Self {
         let mut rng = StdRng::seed_from_u64(42);
-        let initial = rng.gen_range(min..max);
+        let initial = rng.random_range(min..max);
         AscendingRandomFloatIterator {
             prev: initial,
             max,
@@ -208,7 +207,7 @@ impl Iterator for AscendingRandomFloatIterator {
     type Item = f64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let value = self.rng.gen_range(self.prev..self.max);
+        let value = self.rng.random_range(self.prev..self.max);
         self.prev = value;
         Some(value)
     }
@@ -419,12 +418,14 @@ pub fn build_sides_record_batches(
     key_cardinality: (i32, i32),
 ) -> Result<(RecordBatch, RecordBatch)> {
     let null_ratio: f64 = 0.4;
+    let duplicate_ratio = 0.4;
     let initial_range = 0..table_size;
     let index = (table_size as f64 * null_ratio).round() as i32;
     let rest_of = index..table_size;
     let ordered: ArrayRef = Arc::new(Int32Array::from_iter(
         initial_range.clone().collect::<Vec<i32>>(),
     ));
+    let random_ordered = generate_ordered_array(table_size, duplicate_ratio);
     let ordered_des = Arc::new(Int32Array::from_iter(
         initial_range.clone().rev().collect::<Vec<i32>>(),
     ));
@@ -503,6 +504,7 @@ pub fn build_sides_record_batches(
         ),
         ("li1", Arc::clone(&interval_time)),
         ("l_float", Arc::clone(&float_asc) as ArrayRef),
+        ("l_random_ordered", Arc::clone(&random_ordered) as ArrayRef),
     ])?;
     let right = RecordBatch::try_from_iter(vec![
         ("ra1", Arc::clone(&ordered)),
@@ -516,6 +518,7 @@ pub fn build_sides_record_batches(
         ("r_desc_null_first", ordered_desc_null_first),
         ("ri1", interval_time),
         ("r_float", float_asc),
+        ("r_random_ordered", random_ordered),
     ])?;
     Ok((left, right))
 }
@@ -532,9 +535,11 @@ pub fn create_memory_table(
     let right_schema = right_partition[0].schema();
     let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
+    let left = Arc::new(left);
+    let right = Arc::new(right);
     Ok((
-        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
-        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
+        Arc::new(TestMemoryExec::update_cache(&left)),
+        Arc::new(TestMemoryExec::update_cache(&right)),
     ))
 }
 
@@ -584,4 +589,25 @@ pub(crate) fn complicated_filter(
         filter_schema,
     )?;
     binary(left_expr, Operator::And, right_expr, filter_schema)
+}
+
+fn generate_ordered_array(size: i32, duplicate_ratio: f32) -> Arc<Int32Array> {
+    let mut rng = StdRng::seed_from_u64(42);
+    let unique_count = (size as f32 * (1.0 - duplicate_ratio)) as i32;
+
+    // Generate unique random values
+    let mut values: Vec<i32> = (0..unique_count)
+        .map(|_| rng.random_range(1..500)) // Modify as per your range
+        .collect();
+
+    // Duplicate the values according to the duplicate ratio
+    for _ in 0..(size - unique_count) {
+        let index = rng.random_range(0..unique_count);
+        values.push(values[index as usize]);
+    }
+
+    // Sort the values to ensure they are ordered
+    values.sort();
+
+    Arc::new(Int32Array::from_iter(values))
 }

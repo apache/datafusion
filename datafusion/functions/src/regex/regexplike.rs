@@ -23,15 +23,17 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, plan_err, DataFusionError, Result,
-    ScalarValue,
+    Result, ScalarValue, arrow_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility, binary_expr, cast,
 };
 use datafusion_macros::user_doc;
 
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr_common::operator::Operator;
+use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -53,7 +55,7 @@ SELECT regexp_like('aBc', '(b|d)', 'i');
 | true                                             |
 +--------------------------------------------------+
 ```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/regexp.rs)
 "#,
     standard_argument(name = "str", prefix = "String"),
     standard_argument(name = "regexp", prefix = "Regular"),
@@ -67,7 +69,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
   - **U**: swap the meaning of x* and x*?"#
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexpLikeFunc {
     signature: Signature,
 }
@@ -153,8 +155,73 @@ impl ScalarUDFImpl for RegexpLikeFunc {
         }
     }
 
+    fn simplify(
+        &self,
+        mut args: Vec<Expr>,
+        info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        // Try to simplify regexp_like usage to one of the builtin operators since those have
+        // optimized code paths for the case where the regular expression pattern is a scalar.
+        // Additionally, the expression simplification optimization pass will attempt to further
+        // simplify regular expression patterns used in operator expressions.
+        let Some(op) = derive_operator(&args) else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        let string_type = info.get_data_type(&args[0])?;
+        let regexp_type = info.get_data_type(&args[1])?;
+        let binary_type_coercer = BinaryTypeCoercer::new(&string_type, &op, &regexp_type);
+        let Ok((coerced_string_type, coerced_regexp_type)) =
+            binary_type_coercer.get_input_types()
+        else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
+
+        // regexp_like(str, regexp [, flags])
+        let regexp = args.swap_remove(1);
+        let string = args.swap_remove(0);
+
+        Ok(ExprSimplifyResult::Simplified(binary_expr(
+            if string_type != coerced_string_type {
+                cast(string, coerced_string_type)
+            } else {
+                string
+            },
+            op,
+            if regexp_type != coerced_regexp_type {
+                cast(regexp, coerced_regexp_type)
+            } else {
+                regexp
+            },
+        )))
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+}
+
+fn derive_operator(args: &[Expr]) -> Option<Operator> {
+    match args.len() {
+        // regexp_like(str, regexp, flags)
+        3 => {
+            match &args[2] {
+                Expr::Literal(ScalarValue::Utf8(Some(flags)), _) => {
+                    match flags.as_str() {
+                        "i" => Some(Operator::RegexIMatch),
+                        "" => Some(Operator::RegexMatch),
+                        // Any flags besides 'i' have no operator equivalent
+                        _ => None,
+                    }
+                }
+                // `flags` is not a literal, so we can't derive the correct operator statically
+                _ => None,
+            }
+        }
+        // regexp_like(str, regexp)
+        2 => Some(Operator::RegexMatch),
+        // Should never happen, but just in case
+        _ => None,
     }
 }
 
@@ -208,29 +275,31 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
                 Utf8 => args[2].as_string::<i32>(),
                 LargeUtf8 => {
                     let large_string_array = args[2].as_string::<i64>();
-                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len()).map(|i| {
-                        if large_string_array.is_null(i) {
-                            None
-                        } else {
-                            Some(large_string_array.value(i))
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<&str>> = (0..large_string_array.len())
+                        .map(|i| {
+                            if large_string_array.is_null(i) {
+                                None
+                            } else {
+                                Some(large_string_array.value(i))
+                            }
+                        })
+                        .collect();
 
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
                 _ => {
                     let string_view_array = args[2].as_string_view();
-                    let string_vec: Vec<Option<String>> = (0..string_view_array.len()).map(|i| {
-                        if string_view_array.is_null(i) {
-                            None
-                        } else {
-                            Some(string_view_array.value(i).to_string())
-                        }
-                    })
-                    .collect();
+                    let string_vec: Vec<Option<String>> = (0..string_view_array.len())
+                        .map(|i| {
+                            if string_view_array.is_null(i) {
+                                None
+                            } else {
+                                Some(string_view_array.value(i).to_string())
+                            }
+                        })
+                        .collect();
                     &GenericStringArray::<i32>::from(string_vec)
-                },
+                }
             };
 
             if flags.iter().any(|s| s == Some("g")) {
@@ -238,7 +307,7 @@ pub fn regexp_like(args: &[ArrayRef]) -> Result<ArrayRef> {
             }
 
             handle_regexp_like(&args[0], &args[1], Some(flags))
-        },
+        }
         other => exec_err!(
             "`regexp_like` was called with {other} arguments. It requires at least 2 and at most 3."
         ),
@@ -317,7 +386,7 @@ fn handle_regexp_like(
         other => {
             return internal_err!(
                 "Unsupported data type {other:?} for function `regexp_like`"
-            )
+            );
         }
     };
 

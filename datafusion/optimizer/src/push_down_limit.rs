@@ -23,20 +23,19 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
-use datafusion_common::Result;
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
-use datafusion_expr::{lit, FetchType, SkipType};
+use datafusion_expr::{FetchType, SkipType, lit};
 
 /// Optimization rule that tries to push down `LIMIT`.
-///
 //. It will push down through projection, limits (taking the smaller limit)
 #[derive(Default, Debug)]
 pub struct PushDownLimit {}
 
 impl PushDownLimit {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -51,8 +50,9 @@ impl OptimizerRule for PushDownLimit {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let _ = config.options();
         let LogicalPlan::Limit(mut limit) = plan else {
             return Ok(Transformed::no(plan));
         };
@@ -82,8 +82,7 @@ impl OptimizerRule for PushDownLimit {
             });
 
             // recursively reapply the rule on the new plan
-            #[allow(clippy::used_underscore_binding)]
-            return self.rewrite(plan, _config);
+            return self.rewrite(plan, config);
         }
 
         // no fetch to push, so return the original plan
@@ -279,10 +278,11 @@ mod test {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
 
+    use crate::OptimizerContext;
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
-        col, exists, logical_plan::builder::LogicalPlanBuilder, Expr, Extension,
-        UserDefinedLogicalNodeCore,
+        Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
+        logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::expr_fn::max;
 
@@ -291,9 +291,11 @@ mod test {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PushDownLimit::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownLimit::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -309,7 +311,10 @@ mod test {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 
@@ -362,7 +367,10 @@ mod test {
     // Manual implementation needed because of `schema` field. Comparison excludes this field.
     impl PartialOrd for NoLimitNoopPlan {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-            self.input.partial_cmp(&other.input)
+            self.input
+                .partial_cmp(&other.input)
+                // TODO (https://github.com/apache/datafusion/issues/17477) avoid recomparing all fields
+                .filter(|cmp| *cmp != Ordering::Equal || self == other)
         }
     }
 

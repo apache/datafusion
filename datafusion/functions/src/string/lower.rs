@@ -20,8 +20,8 @@ use std::any::Any;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
-use datafusion_common::types::logical_string;
 use datafusion_common::Result;
+use datafusion_common::types::logical_string;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
@@ -44,7 +44,7 @@ use datafusion_macros::user_doc;
     related_udf(name = "initcap"),
     related_udf(name = "upper")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct LowerFunc {
     signature: Signature,
 }
@@ -100,17 +100,19 @@ mod tests {
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
 
     fn to_lower(input: ArrayRef, expected: ArrayRef) -> Result<()> {
         let func = LowerFunc::new();
-        let arg_fields = [Field::new("a", input.data_type().clone(), true)];
+        let arg_fields = vec![Field::new("a", input.data_type().clone(), true).into()];
 
         let args = ScalarFunctionArgs {
             number_rows: input.len(),
             args: vec![ColumnarValue::Array(input)],
-            arg_fields: arg_fields.iter().collect(),
-            return_field: &Field::new("f", Utf8, true),
+            arg_fields,
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = match func.invoke_with_args(args)? {

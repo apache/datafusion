@@ -16,10 +16,10 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
-use datafusion_common::{not_impl_err, HashSet, Result};
+use datafusion_common::{HashSet, Result, not_impl_err};
 use datafusion_expr::{
-    aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
-    DocSection, Documentation, ScalarUDF, WindowUDF,
+    AggregateUDF, DocSection, Documentation, ScalarUDF, WindowUDF,
+    aggregate_doc_sections, scalar_doc_sections, window_doc_sections,
 };
 use itertools::Itertools;
 use std::env::args;
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         "scalar" => print_scalar_docs(),
         "window" => print_window_docs(),
         _ => {
-            panic!("Unknown function type: {}", function_type)
+            panic!("Unknown function type: {function_type}")
         }
     }?;
 
@@ -92,7 +92,7 @@ fn print_window_docs() -> Result<String> {
 fn save_doc_code_text(documentation: &Documentation, name: &str) {
     let attr_text = documentation.to_doc_attribute();
 
-    let file_path = format!("{}.txt", name);
+    let file_path = format!("{name}.txt");
     if std::path::Path::new(&file_path).exists() {
         std::fs::remove_file(&file_path).unwrap();
     }
@@ -108,6 +108,7 @@ fn save_doc_code_text(documentation: &Documentation, name: &str) {
     file.write_all(attr_text.as_bytes()).unwrap();
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn print_docs(
     providers: Vec<Box<dyn DocProvider>>,
     doc_sections: Vec<DocSection>,
@@ -215,16 +216,15 @@ fn print_docs(
                     r#"
 #### Example
 
-{}
-"#,
-                    example
+{example}
+"#
                 );
             }
 
             if let Some(alt_syntax) = &documentation.alternative_syntax {
                 let _ = writeln!(docs, "#### Alternative Syntax\n");
                 for syntax in alt_syntax {
-                    let _ = writeln!(docs, "```sql\n{}\n```", syntax);
+                    let _ = writeln!(docs, "```sql\n{syntax}\n```");
                 }
             }
 
@@ -255,13 +255,15 @@ fn print_docs(
         for f in &providers_with_no_docs {
             eprintln!("  - {f}");
         }
-        not_impl_err!("Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}")
+        not_impl_err!(
+            "Some functions do not have documentation. Please implement `documentation` for: {providers_with_no_docs:?}"
+        )
     } else {
         Ok(docs)
     }
 }
 
-/// Trait for accessing name / aliases / documentation for differnet functions
+/// Trait for accessing name / aliases / documentation for different functions
 trait DocProvider {
     fn get_name(&self) -> String;
     fn get_aliases(&self) -> Vec<String>;

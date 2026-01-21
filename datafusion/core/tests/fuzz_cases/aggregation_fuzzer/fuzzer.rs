@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_common_runtime::JoinSet;
-use rand::{thread_rng, Rng};
+use rand::{Rng, rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::query_builder::QueryBuilder;
 use crate::fuzz_cases::aggregation_fuzzer::{
@@ -163,7 +163,7 @@ impl AggregationFuzzer {
 
     async fn run_inner(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Loop to generate datasets and its query
         for _ in 0..self.data_gen_rounds {
@@ -171,13 +171,13 @@ impl AggregationFuzzer {
             let datasets = self
                 .dataset_generator
                 .generate()
-                .expect("should success to generate dataset");
+                .expect("should succeed to generate dataset");
 
             // Then for each of them, we random select a test sql for it
             let query_groups = datasets
                 .into_iter()
                 .map(|dataset| {
-                    let sql_idx = rng.gen_range(0..self.candidate_sqls.len());
+                    let sql_idx = rng.random_range(0..self.candidate_sqls.len());
                     let sql = self.candidate_sqls[sql_idx].clone();
 
                     QueryGroup { dataset, sql }
@@ -197,10 +197,7 @@ impl AggregationFuzzer {
         while let Some(join_handle) = join_set.join_next().await {
             // propagate errors
             join_handle.map_err(|e| {
-                DataFusionError::Internal(format!(
-                    "AggregationFuzzer task error: {:?}",
-                    e
-                ))
+                internal_datafusion_err!("AggregationFuzzer task error: {e:?}")
             })??;
         }
         Ok(())
@@ -219,16 +216,16 @@ impl AggregationFuzzer {
             // Generate the baseline context, and get the baseline result firstly
             let baseline_ctx_with_params = ctx_generator
                 .generate_baseline()
-                .expect("should success to generate baseline session context");
+                .expect("should succeed to generate baseline session context");
             let baseline_result = run_sql(&sql, &baseline_ctx_with_params.ctx)
                 .await
-                .expect("should success to run baseline sql");
+                .expect("should succeed to run baseline sql");
             let baseline_result = Arc::new(baseline_result);
             // Generate test tasks
             for _ in 0..CTX_GEN_ROUNDS {
                 let ctx_with_params = ctx_generator
                     .generate()
-                    .expect("should success to generate session context");
+                    .expect("should succeed to generate session context");
                 let task = AggregationFuzzTestTask {
                     dataset_ref: dataset_ref.clone(),
                     expected_result: baseline_result.clone(),
@@ -256,7 +253,6 @@ impl AggregationFuzzer {
 ///
 ///   - `dataset_ref`, the input dataset, store it for error reported when found
 ///     the inconsistency between the one for `ctx` and `expected results`.
-///
 struct AggregationFuzzTestTask {
     /// Generated session context in current test case
     ctx_with_params: SessionContextWithParams,
@@ -311,7 +307,7 @@ impl AggregationFuzzTestTask {
                 format_batches_with_limit(expected_result),
                 format_batches_with_limit(&self.dataset_ref.batches),
             );
-            DataFusionError::Internal(message)
+            internal_datafusion_err!("{message}")
         })
     }
 

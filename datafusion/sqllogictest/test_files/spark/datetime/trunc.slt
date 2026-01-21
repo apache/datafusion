@@ -1,0 +1,93 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# YEAR - truncate to first date of year
+query D
+SELECT trunc('2009-02-12'::date, 'YEAR'::string);
+----
+2009-01-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'YYYY'::string);
+----
+2009-01-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'YY'::string);
+----
+2009-01-01
+
+# QUARTER - truncate to first date of quarter
+query D
+SELECT trunc('2009-02-12'::date, 'QUARTER'::string);
+----
+2009-01-01
+
+# MONTH - truncate to first date of month
+query D
+SELECT trunc('2009-02-12'::date, 'MONTH'::string);
+----
+2009-02-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'MM'::string);
+----
+2009-02-01
+
+query D
+SELECT trunc('2009-02-12'::date, 'MON'::string);
+----
+2009-02-01
+
+# WEEK - truncate to Monday of the week
+query D
+SELECT trunc('2009-02-12'::date, 'WEEK'::string);
+----
+2009-02-09
+
+# string input
+query D
+SELECT trunc('2009-02-12'::string, 'YEAR'::string);
+----
+2009-01-01
+
+query D
+SELECT trunc(column1, 'YEAR'::string)
+FROM VALUES
+('2009-02-12'::date),
+('2000-02-12'::date),
+('2042-02-12'::date),
+(NULL::date);
+----
+2009-01-01
+2000-01-01
+2042-01-01
+NULL
+
+# Null handling
+query D
+SELECT trunc(NULL::date, 'YEAR'::string);
+----
+NULL
+
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: Second argument of `TRUNC` must be non-null scalar Utf8
+SELECT trunc('2009-02-12'::date, NULL::string);
+
+# incorrect format
+query error DataFusion error: Optimizer rule 'simplify_expressions' failed\ncaused by\nError during planning: The format argument of `TRUNC` must be one of: year, yy, yyyy, month, mm, mon, day, week, quarter.
+SELECT trunc('2009-02-12'::date, 'test'::string);
+

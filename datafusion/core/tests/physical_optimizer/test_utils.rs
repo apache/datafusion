@@ -18,8 +18,8 @@
 //! Test utilities for physical optimizer tests
 
 use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
+use std::fmt::{Display, Formatter};
+use std::sync::{Arc, LazyLock};
 
 use arrow::array::Int32Array;
 use arrow::compute::SortOptions;
@@ -30,49 +30,53 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{JoinType, Result};
+use datafusion_common::{
+    ColumnStatistics, JoinType, NullEquality, Result, Statistics, internal_err,
+};
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
-use datafusion_physical_expr::expressions::col;
-use datafusion_physical_expr::{expressions, PhysicalExpr};
+use datafusion_physical_expr::expressions::{self, col};
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, PhysicalSortExpr,
+    LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
-use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
-use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
+use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_window_expr};
 use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode,
-    Partitioning, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode, Partitioning,
+    PlanProperties, SortOrderPushdownResult, displayable,
 };
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+pub fn parquet_exec(schema: SchemaRef) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .build();
@@ -82,12 +86,12 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
+    schema: SchemaRef,
     output_ordering: Vec<LexOrdering>,
 ) -> Arc<DataSourceExec> {
     let config = FileScanConfigBuilder::new(
         ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(ParquetSource::default()),
+        Arc::new(ParquetSource::new(schema)),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
@@ -96,38 +100,89 @@ pub(crate) fn parquet_exec_with_sort(
     DataSourceExec::from_data_source(config)
 }
 
+fn int64_stats() -> ColumnStatistics {
+    ColumnStatistics {
+        null_count: Precision::Absent,
+        sum_value: Precision::Absent,
+        max_value: Precision::Exact(1_000_000.into()),
+        min_value: Precision::Exact(0.into()),
+        distinct_count: Precision::Absent,
+        byte_size: Precision::Absent,
+    }
+}
+
+fn column_stats() -> Vec<ColumnStatistics> {
+    vec![
+        int64_stats(), // a
+        int64_stats(), // b
+        int64_stats(), // c
+        ColumnStatistics::default(),
+        ColumnStatistics::default(),
+    ]
+}
+
+/// Create parquet datasource exec using schema from [`schema`].
+pub(crate) fn parquet_exec_with_stats(file_size: u64) -> Arc<DataSourceExec> {
+    let mut statistics = Statistics::new_unknown(&schema());
+    statistics.num_rows = Precision::Inexact(10000);
+    statistics.column_statistics = column_stats();
+
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(schema())),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), file_size))
+    .with_statistics(statistics)
+    .build();
+
+    assert_eq!(config.statistics().num_rows, Precision::Inexact(10000));
+    DataSourceExec::from_data_source(config)
+}
+
 pub fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int64, true),
-        Field::new("b", DataType::Int64, true),
-        Field::new("c", DataType::Int64, true),
-        Field::new("d", DataType::Int32, true),
-        Field::new("e", DataType::Boolean, true),
-    ]))
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+            Field::new("c", DataType::Int64, true),
+            Field::new("d", DataType::Int32, true),
+            Field::new("e", DataType::Boolean, true),
+        ]))
+    });
+    Arc::clone(&SCHEMA)
 }
 
 pub fn create_test_schema() -> Result<SchemaRef> {
-    let nullable_column = Field::new("nullable_col", DataType::Int32, true);
-    let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![nullable_column, non_nullable_column]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let nullable_column = Field::new("nullable_col", DataType::Int32, true);
+        let non_nullable_column = Field::new("non_nullable_col", DataType::Int32, false);
+        Arc::new(Schema::new(vec![nullable_column, non_nullable_column]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 pub fn create_test_schema2() -> Result<SchemaRef> {
-    let col_a = Field::new("col_a", DataType::Int32, true);
-    let col_b = Field::new("col_b", DataType::Int32, true);
-    let schema = Arc::new(Schema::new(vec![col_a, col_b]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let col_a = Field::new("col_a", DataType::Int32, true);
+        let col_b = Field::new("col_b", DataType::Int32, true);
+        Arc::new(Schema::new(vec![col_a, col_b]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
 // Generate a schema which consists of 5 columns (a, b, c, d, e)
 pub fn create_test_schema3() -> Result<SchemaRef> {
-    let a = Field::new("a", DataType::Int32, true);
-    let b = Field::new("b", DataType::Int32, false);
-    let c = Field::new("c", DataType::Int32, true);
-    let d = Field::new("d", DataType::Int32, false);
-    let e = Field::new("e", DataType::Int32, false);
-    let schema = Arc::new(Schema::new(vec![a, b, c, d, e]));
+    static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, false);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, false);
+        let e = Field::new("e", DataType::Int32, false);
+        Arc::new(Schema::new(vec![a, b, c, d, e]))
+    });
+    let schema = Arc::clone(&SCHEMA);
     Ok(schema)
 }
 
@@ -145,7 +200,7 @@ pub fn sort_merge_join_exec(
             None,
             *join_type,
             vec![SortOptions::default(); join_on.len()],
-            false,
+            NullEquality::NullEqualsNothing,
         )
         .unwrap(),
     )
@@ -191,7 +246,8 @@ pub fn hash_join_exec(
         join_type,
         None,
         PartitionMode::Partitioned,
-        true,
+        NullEquality::NullEqualsNothing,
+        false,
     )?))
 }
 
@@ -200,17 +256,28 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
+    bounded_window_exec_with_partition(col_name, sort_exprs, &[], input)
+}
+
+pub fn bounded_window_exec_with_partition(
+    col_name: &str,
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect::<Vec<_>>();
     let schema = input.schema();
     let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
-        &[],
-        sort_exprs.as_ref(),
+        partition_by,
+        &sort_exprs,
         Arc::new(WindowFrame::new(Some(false))),
-        schema.as_ref(),
+        schema,
         false,
+        false,
+        None,
     )
     .unwrap();
 
@@ -233,36 +300,37 @@ pub fn filter_exec(
 }
 
 pub fn sort_preserving_merge_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+    Arc::new(SortPreservingMergeExec::new(ordering, input))
 }
 
 pub fn sort_preserving_merge_exec_with_fetch(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
     fetch: usize,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
+    Arc::new(SortPreservingMergeExec::new(ordering, input).with_fetch(Some(fetch)))
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(UnionExec::new(input))
+    UnionExec::try_new(input).unwrap()
 }
 
-pub fn limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    global_limit_exec(local_limit_exec(input))
+pub fn local_limit_exec(
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(LocalLimitExec::new(input, fetch))
 }
 
-pub fn local_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(LocalLimitExec::new(input, 100))
-}
-
-pub fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(GlobalLimitExec::new(input, 0, Some(100)))
+pub fn global_limit_exec(
+    input: Arc<dyn ExecutionPlan>,
+    skip: usize,
+    fetch: Option<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(GlobalLimitExec::new(input, skip, fetch))
 }
 
 pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -292,30 +360,43 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
 }
 
-pub fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(CoalesceBatchesExec::new(input, 128))
-}
-
 pub fn sort_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    sort_exec_with_fetch(sort_exprs, None, input)
+    sort_exec_with_fetch(ordering, None, input)
+}
+
+pub fn sort_exec_with_preserve_partitioning(
+    ordering: LexOrdering,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(SortExec::new(ordering, input).with_preserve_partitioning(true))
 }
 
 pub fn sort_exec_with_fetch(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
     fetch: Option<usize>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input).with_fetch(fetch))
+    Arc::new(SortExec::new(ordering, input).with_fetch(fetch))
+}
+
+pub fn projection_exec(
+    expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let proj_exprs: Vec<ProjectionExpr> = expr
+        .into_iter()
+        .map(|(expr, alias)| ProjectionExpr { expr, alias })
+        .collect();
+    Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
 #[derive(Debug)]
 pub struct RequirementsTestExec {
-    required_input_ordering: LexOrdering,
+    required_input_ordering: Option<LexOrdering>,
     maintains_input_order: bool,
     input: Arc<dyn ExecutionPlan>,
 }
@@ -323,7 +404,7 @@ pub struct RequirementsTestExec {
 impl RequirementsTestExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
-            required_input_ordering: LexOrdering::default(),
+            required_input_ordering: None,
             maintains_input_order: true,
             input,
         }
@@ -332,7 +413,7 @@ impl RequirementsTestExec {
     /// sets the required input ordering
     pub fn with_required_input_ordering(
         mut self,
-        required_input_ordering: LexOrdering,
+        required_input_ordering: Option<LexOrdering>,
     ) -> Self {
         self.required_input_ordering = required_input_ordering;
         self
@@ -377,9 +458,12 @@ impl ExecutionPlan for RequirementsTestExec {
         self.input.properties()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        let requirement = LexRequirement::from(self.required_input_ordering.clone());
-        vec![Some(requirement)]
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![
+            self.required_input_ordering
+                .as_ref()
+                .map(|ordering| OrderingRequirements::from(ordering.clone())),
+        ]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -436,13 +520,6 @@ pub fn check_integrity<T: Clone>(context: PlanContext<T>) -> Result<PlanContext<
         .data()
 }
 
-pub fn trim_plan_display(plan: &str) -> Vec<&str> {
-    plan.split('\n')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 // construct a stream partition for test purposes
 #[derive(Debug)]
 pub struct TestStreamPartition {
@@ -458,13 +535,8 @@ impl PartitionStream for TestStreamPartition {
     }
 }
 
-/// Create an unbounded stream exec
-pub fn stream_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
+/// Create an unbounded stream table without data ordering.
+pub fn stream_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     Arc::new(
         StreamingTableExec::try_new(
             Arc::clone(schema),
@@ -472,7 +544,7 @@ pub fn stream_exec_ordered(
                 schema: Arc::clone(schema),
             }) as _],
             None,
-            vec![sort_exprs],
+            vec![],
             true,
             None,
         )
@@ -480,12 +552,31 @@ pub fn stream_exec_ordered(
     )
 }
 
-// Creates a stream exec source for the test purposes
+/// Create an unbounded stream table with data ordering.
+pub fn stream_exec_ordered(
+    schema: &SchemaRef,
+    ordering: LexOrdering,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(
+        StreamingTableExec::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(TestStreamPartition {
+                schema: Arc::clone(schema),
+            }) as _],
+            None,
+            vec![ordering],
+            true,
+            None,
+        )
+        .unwrap(),
+    )
+}
+
+/// Create an unbounded stream table with data ordering and built-in projection.
 pub fn stream_exec_ordered_with_projection(
     schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    ordering: LexOrdering,
 ) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
     let projection: Vec<usize> = vec![0, 2, 3];
 
     Arc::new(
@@ -495,7 +586,7 @@ pub fn stream_exec_ordered_with_projection(
                 schema: Arc::clone(schema),
             }) as _],
             Some(&projection),
-            vec![sort_exprs],
+            vec![ordering],
             true,
             None,
         )
@@ -542,26 +633,15 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
     PhysicalGroupBy::new_single(group_by_expr.clone())
 }
 
-pub fn assert_plan_matches_expected(
-    plan: &Arc<dyn ExecutionPlan>,
-    expected: &[&str],
-) -> Result<()> {
-    let expected_lines: Vec<&str> = expected.to_vec();
+pub fn get_optimized_plan(plan: &Arc<dyn ExecutionPlan>) -> Result<String> {
     let config = ConfigOptions::new();
 
     let optimized =
         LimitedDistinctAggregation::new().optimize(Arc::clone(plan), &config)?;
 
     let optimized_result = displayable(optimized.as_ref()).indent(true).to_string();
-    let actual_lines = trim_plan_display(&optimized_result);
 
-    assert_eq!(
-        &expected_lines, &actual_lines,
-        "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
-        expected_lines, actual_lines
-    );
-
-    Ok(())
+    Ok(optimized_result)
 }
 
 /// Describe the type of aggregate being tested
@@ -616,4 +696,279 @@ impl TestAggregate {
             TestAggregate::ColumnA(_) => 2,
         }
     }
+}
+
+/// A harness for testing physical optimizers.
+#[derive(Debug)]
+pub struct OptimizationTest {
+    input: Vec<String>,
+    output: Result<Vec<String>, String>,
+}
+
+impl OptimizationTest {
+    pub fn new<O>(
+        input_plan: Arc<dyn ExecutionPlan>,
+        opt: O,
+        enable_sort_pushdown: bool,
+    ) -> Self
+    where
+        O: PhysicalOptimizerRule,
+    {
+        let input = format_execution_plan(&input_plan);
+        let input_schema = input_plan.schema();
+
+        let mut config = ConfigOptions::new();
+        config.optimizer.enable_sort_pushdown = enable_sort_pushdown;
+        let output_result = opt.optimize(input_plan, &config);
+        let output = output_result
+            .and_then(|plan| {
+                if opt.schema_check() && (plan.schema() != input_schema) {
+                    internal_err!(
+                        "Schema mismatch:\n\nBefore:\n{:?}\n\nAfter:\n{:?}",
+                        input_schema,
+                        plan.schema()
+                    )
+                } else {
+                    Ok(plan)
+                }
+            })
+            .map(|plan| format_execution_plan(&plan))
+            .map_err(|e| e.to_string());
+
+        Self { input, output }
+    }
+}
+
+impl Display for OptimizationTest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "OptimizationTest:")?;
+        writeln!(f, "  input:")?;
+        for line in &self.input {
+            writeln!(f, "    - {line}")?;
+        }
+        writeln!(f, "  output:")?;
+        match &self.output {
+            Ok(output) => {
+                writeln!(f, "    Ok:")?;
+                for line in output {
+                    writeln!(f, "      - {line}")?;
+                }
+            }
+            Err(err) => {
+                writeln!(f, "    Err: {err}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn format_execution_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+    format_lines(&displayable(plan.as_ref()).indent(false).to_string())
+}
+
+fn format_lines(s: &str) -> Vec<String> {
+    s.trim().split('\n').map(|s| s.to_string()).collect()
+}
+
+/// Create a simple ProjectionExec with column indices (simplified version)
+pub fn simple_projection_exec(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<usize>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&i| {
+            let field = schema.field(i);
+            (
+                Arc::new(expressions::Column::new(field.name(), i))
+                    as Arc<dyn PhysicalExpr>,
+                field.name().to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a ProjectionExec with column aliases
+pub fn projection_exec_with_alias(
+    input: Arc<dyn ExecutionPlan>,
+    columns: Vec<(usize, &str)>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = input.schema();
+    let exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = columns
+        .iter()
+        .map(|&(i, alias)| {
+            (
+                Arc::new(expressions::Column::new(schema.field(i).name(), i))
+                    as Arc<dyn PhysicalExpr>,
+                alias.to_string(),
+            )
+        })
+        .collect();
+
+    projection_exec(exprs, input).unwrap()
+}
+
+/// Create a sort expression with custom name and index
+pub fn sort_expr_named(name: &str, index: usize) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: Arc::new(expressions::Column::new(name, index)),
+        options: SortOptions::default(),
+    }
+}
+
+/// A test data source that can display any requested ordering
+/// This is useful for testing sort pushdown behavior
+#[derive(Debug, Clone)]
+pub struct TestScan {
+    schema: SchemaRef,
+    output_ordering: Vec<LexOrdering>,
+    plan_properties: PlanProperties,
+    // Store the requested ordering for display
+    requested_ordering: Option<LexOrdering>,
+}
+
+impl TestScan {
+    /// Create a new TestScan with the given schema and output ordering
+    pub fn new(schema: SchemaRef, output_ordering: Vec<LexOrdering>) -> Self {
+        let eq_properties = if !output_ordering.is_empty() {
+            // Convert Vec<LexOrdering> to the format expected by new_with_orderings
+            // We need to extract the inner Vec<PhysicalSortExpr> from each LexOrdering
+            let orderings: Vec<Vec<PhysicalSortExpr>> = output_ordering
+                .iter()
+                .map(|lex_ordering| {
+                    // LexOrdering implements IntoIterator, so we can collect it
+                    lex_ordering.iter().cloned().collect()
+                })
+                .collect();
+
+            EquivalenceProperties::new_with_orderings(Arc::clone(&schema), orderings)
+        } else {
+            EquivalenceProperties::new(Arc::clone(&schema))
+        };
+
+        let plan_properties = PlanProperties::new(
+            eq_properties,
+            Partitioning::UnknownPartitioning(1),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        );
+
+        Self {
+            schema,
+            output_ordering,
+            plan_properties,
+            requested_ordering: None,
+        }
+    }
+
+    /// Create a TestScan with a single output ordering
+    pub fn with_ordering(schema: SchemaRef, ordering: LexOrdering) -> Self {
+        Self::new(schema, vec![ordering])
+    }
+}
+
+impl DisplayAs for TestScan {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "TestScan")?;
+                if !self.output_ordering.is_empty() {
+                    write!(f, ": output_ordering=[")?;
+                    // Format the ordering in a readable way
+                    for (i, sort_expr) in self.output_ordering[0].iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{sort_expr}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                // This is the key part - show what ordering was requested
+                if let Some(ref req) = self.requested_ordering {
+                    write!(f, ", requested_ordering=[")?;
+                    for (i, sort_expr) in req.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{sort_expr}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "TestScan")
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for TestScan {
+    fn name(&self) -> &str {
+        "TestScan"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.plan_properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("TestScan should have no children")
+        }
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        internal_err!("TestScan is for testing optimizer only, not for execution")
+    }
+
+    fn partition_statistics(&self, _partition: Option<usize>) -> Result<Statistics> {
+        Ok(Statistics::new_unknown(&self.schema))
+    }
+
+    // This is the key method - implement sort pushdown
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // For testing purposes, accept ANY ordering request
+        // and create a new TestScan that shows what was requested
+        let requested_ordering = LexOrdering::new(order.to_vec());
+
+        let mut new_scan = self.clone();
+        new_scan.requested_ordering = requested_ordering;
+
+        // Always return Inexact to keep the Sort node (like Phase 1 behavior)
+        Ok(SortOrderPushdownResult::Inexact {
+            inner: Arc::new(new_scan),
+        })
+    }
+}
+
+/// Helper function to create a TestScan with ordering
+pub fn test_scan_with_ordering(
+    schema: SchemaRef,
+    ordering: LexOrdering,
+) -> Arc<dyn ExecutionPlan> {
+    Arc::new(TestScan::with_ordering(schema, ordering))
 }

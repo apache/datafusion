@@ -19,24 +19,25 @@
 
 use apache_avro::schema::RecordSchema;
 use apache_avro::{
+    Error as AvroError, Reader as AvroReader,
+    error::Details as AvroErrorDetails,
     schema::{Schema as AvroSchema, SchemaKind},
     types::Value,
-    AvroResult, Error as AvroError, Reader as AvroReader,
 };
 use arrow::array::{
-    make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
-    BooleanBuilder, LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait,
-    PrimitiveArray, StringArray, StringBuilder, StringDictionaryBuilder,
+    Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef, BooleanBuilder,
+    LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StringArray, StringBuilder, StringDictionaryBuilder, make_array,
 };
 use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
-    Date64Type, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Date64Type, Field, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::datatypes::{Fields, SchemaRef};
 use arrow::error::ArrowError;
@@ -45,7 +46,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::arrow_err;
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::error::Result;
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -102,22 +103,22 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     )
                     .is_some();
                 let sub_schemas = us.variants();
-                if has_nullable && sub_schemas.len() == 2 {
-                    if let Some(sub_schema) =
+                if has_nullable
+                    && sub_schemas.len() == 2
+                    && let Some(sub_schema) =
                         sub_schemas.iter().find(|&s| !matches!(s, AvroSchema::Null))
-                    {
-                        Self::child_schema_lookup(
-                            parent_field_name,
-                            sub_schema,
-                            schema_lookup,
-                        )?;
-                    }
+                {
+                    Self::child_schema_lookup(
+                        parent_field_name,
+                        sub_schema,
+                        schema_lookup,
+                    )?;
                 }
             }
             AvroSchema::Record(RecordSchema { fields, lookup, .. }) => {
                 lookup.iter().for_each(|(field_name, pos)| {
                     schema_lookup
-                        .insert(format!("{}.{}", parent_field_name, field_name), *pos);
+                        .insert(format!("{parent_field_name}.{field_name}"), *pos);
                 });
 
                 for field in fields {
@@ -131,9 +132,8 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 }
             }
             AvroSchema::Array(schema) => {
-                let sub_parent_field_name = format!("{}.element", parent_field_name);
                 Self::child_schema_lookup(
-                    &sub_parent_field_name,
+                    parent_field_name,
                     &schema.items,
                     schema_lookup,
                 )?;
@@ -152,7 +152,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             .map(|value| match value {
                 Ok(Value::Record(v)) => Ok(v),
                 Err(e) => Err(ArrowError::ParseError(format!(
-                    "Failed to parse avro value: {e:?}"
+                    "Failed to parse avro value: {e}"
                 ))),
                 other => Err(ArrowError::ParseError(format!(
                     "Row needs to be of type object, got: {other:?}"
@@ -280,7 +280,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                 self.list_array_string_array_builder::<UInt64Type>(&dtype, col_name, rows)
             }
             ref e => Err(SchemaError(format!(
-                "Data type is currently not supported for dictionaries in list : {e:?}"
+                "Data type is currently not supported for dictionaries in list : {e}"
             ))),
         }
     }
@@ -307,8 +307,8 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             e => {
                 return Err(SchemaError(format!(
-                    "Nested list data builder type is not supported: {e:?}"
-                )))
+                    "Nested list data builder type is not supported: {e}"
+                )));
             }
         };
 
@@ -372,8 +372,8 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     e => {
                         return Err(SchemaError(format!(
-                            "Nested list data builder type is not supported: {e:?}"
-                        )))
+                            "Nested list data builder type is not supported: {e}"
+                        )));
                     }
                 }
             }
@@ -517,7 +517,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             DataType::UInt32 => self.read_primitive_list_values::<UInt32Type>(rows),
             DataType::UInt64 => self.read_primitive_list_values::<UInt64Type>(rows),
             DataType::Float16 => {
-                return Err(SchemaError("Float16 not supported".to_string()))
+                return Err(SchemaError("Float16 not supported".to_string()));
             }
             DataType::Float32 => self.read_primitive_list_values::<Float32Type>(rows),
             DataType::Float64 => self.read_primitive_list_values::<Float64Type>(rows),
@@ -528,7 +528,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             | DataType::Time64(_) => {
                 return Err(SchemaError(
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
-                ))
+                ));
             }
             DataType::Utf8 => flatten_string_values(rows)
                 .into_iter()
@@ -595,10 +595,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     })
                     .collect();
 
-                let sub_parent_field_name =
-                    format!("{}.{}", parent_field_name, list_field.name());
-                let arrays =
-                    self.build_struct_array(&rows, &sub_parent_field_name, fields)?;
+                let arrays = self.build_struct_array(&rows, parent_field_name, fields)?;
                 let data_type = DataType::Struct(fields.clone());
                 ArrayDataBuilder::new(data_type)
                     .len(rows.len())
@@ -609,7 +606,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             datatype => {
                 return Err(SchemaError(format!(
-                    "Nested list of {datatype:?} not supported"
+                    "Nested list of {datatype} not supported"
                 )));
             }
         };
@@ -718,7 +715,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         t => {
                             return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time64"
-                            )))
+                            )));
                         }
                     },
                     DataType::Time32(unit) => match unit {
@@ -732,7 +729,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                         t => {
                             return Err(SchemaError(format!(
                                 "TimeUnit {t:?} not supported with Time32"
-                            )))
+                            )));
                         }
                     },
                     DataType::Utf8 | DataType::LargeUtf8 => Arc::new(
@@ -756,7 +753,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             .collect::<BinaryArray>(),
                     )
                         as ArrayRef,
-                    DataType::FixedSizeBinary(ref size) => {
+                    DataType::FixedSizeBinary(size) => {
                         Arc::new(FixedSizeBinaryArray::try_from_sparse_iter_with_size(
                             rows.iter().map(|row| {
                                 let maybe_value = self.field_lookup(&field_path, row);
@@ -765,9 +762,9 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             *size,
                         )?) as ArrayRef
                     }
-                    DataType::List(ref list_field) => {
+                    DataType::List(list_field) => {
                         match list_field.data_type() {
-                            DataType::Dictionary(ref key_ty, _) => {
+                            DataType::Dictionary(key_ty, _) => {
                                 self.build_wrapped_list_array(rows, &field_path, key_ty)?
                             }
                             _ => {
@@ -787,7 +784,7 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                             }
                         }
                     }
-                    DataType::Dictionary(ref key_ty, ref val_ty) => self
+                    DataType::Dictionary(key_ty, val_ty) => self
                         .build_string_dictionary_array(
                             rows,
                             &field_path,
@@ -830,9 +827,9 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
                     }
                     _ => {
                         return Err(SchemaError(format!(
-                            "type {:?} not supported",
+                            "type {} not supported",
                             field.data_type()
-                        )))
+                        )));
                     }
                 };
                 Ok(arr)
@@ -929,49 +926,40 @@ fn resolve_string(v: &Value) -> ArrowResult<Option<String>> {
     match v {
         Value::String(s) => Ok(Some(s.clone())),
         Value::Bytes(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(AvroError::ConvertToUtf8)
+            .map_err(|e| AvroError::new(AvroErrorDetails::ConvertToUtf8(e)))
             .map(Some),
         Value::Enum(_, s) => Ok(Some(s.clone())),
         Value::Null => Ok(None),
-        other => Err(AvroError::GetString(other.into())),
+        other => Err(AvroError::new(AvroErrorDetails::GetString(other.clone()))),
     }
-    .map_err(|e| SchemaError(format!("expected resolvable string : {e:?}")))
+    .map_err(|e| SchemaError(format!("expected resolvable string : {e}")))
 }
 
-fn resolve_u8(v: &Value) -> AvroResult<u8> {
-    let int = match v {
-        Value::Int(n) => Ok(Value::Int(*n)),
-        Value::Long(n) => Ok(Value::Int(*n as i32)),
-        other => Err(AvroError::GetU8(other.into())),
-    }?;
-    if let Value::Int(n) = int {
-        if n >= 0 && n <= From::from(u8::MAX) {
-            return Ok(n as u8);
-        }
-    }
+fn resolve_u8(v: &Value) -> Option<u8> {
+    let v = match v {
+        Value::Union(_, inner) => inner.as_ref(),
+        _ => v,
+    };
 
-    Err(AvroError::GetU8(int.into()))
+    match v {
+        Value::Int(n) => u8::try_from(*n).ok(),
+        Value::Long(n) => u8::try_from(*n).ok(),
+        _ => None,
+    }
 }
 
 fn resolve_bytes(v: &Value) -> Option<Vec<u8>> {
-    let v = if let Value::Union(_, b) = v { b } else { v };
+    let v = match v {
+        Value::Union(_, inner) => inner.as_ref(),
+        _ => v,
+    };
+
     match v {
-        Value::Bytes(_) => Ok(v.clone()),
-        Value::String(s) => Ok(Value::Bytes(s.clone().into_bytes())),
-        Value::Array(items) => Ok(Value::Bytes(
-            items
-                .iter()
-                .map(resolve_u8)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?,
-        )),
-        other => Err(AvroError::GetBytes(other.into())),
-    }
-    .ok()
-    .and_then(|v| match v {
-        Value::Bytes(s) => Some(s),
+        Value::Bytes(bytes) => Some(bytes.clone()),
+        Value::String(s) => Some(s.as_bytes().to_vec()),
+        Value::Array(items) => items.iter().map(resolve_u8).collect::<Option<Vec<u8>>>(),
         _ => None,
-    })
+    }
 }
 
 fn resolve_fixed(v: &Value, size: usize) -> Option<Vec<u8>> {
@@ -1046,7 +1034,7 @@ where
 mod test {
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
     use arrow::array::Array;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Fields};
     use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::cast::{
@@ -1055,7 +1043,7 @@ mod test {
     use std::fs::File;
     use std::sync::Arc;
 
-    fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
+    fn build_reader(name: &'_ str, batch_size: usize) -> Reader<'_, File> {
         let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()
@@ -1727,5 +1715,93 @@ mod test {
         assert_eq!(8, sum_num_rows);
         assert_eq!(2, num_batches);
         assert_eq!(28, sum_id);
+    }
+
+    #[test]
+    fn test_list_of_structs_with_custom_field_name() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+        {
+          "type": "record",
+          "name": "root",
+          "fields": [
+            {
+              "name": "items",
+              "type": {
+                "type": "array",
+                "items": {
+                  "type": "record",
+                  "name": "item_record",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "type": "long"
+                    },
+                    {
+                      "name": "name",
+                      "type": "string"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }"#,
+        )
+        .unwrap();
+
+        let r1 = apache_avro::to_value(serde_json::json!({
+            "items": [
+                {
+                    "id": 1,
+                    "name": "first"
+                },
+                {
+                    "id": 2,
+                    "name": "second"
+                }
+            ]
+        }))
+        .unwrap()
+        .resolve(&schema)
+        .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        w.append(r1).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        // Create an Arrow schema where the list field is NOT named "element"
+        let arrow_schema = Arc::new(arrow::datatypes::Schema::new(vec![Field::new(
+            "items",
+            DataType::List(Arc::new(Field::new(
+                "item", // This is NOT "element"
+                DataType::Struct(Fields::from(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new("name", DataType::Utf8, false),
+                ])),
+                false,
+            ))),
+            false,
+        )]));
+
+        let mut reader = ReaderBuilder::new()
+            .with_schema(arrow_schema)
+            .with_batch_size(10)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+
+        // This used to fail because schema_lookup would have "items.element.id" and "items.element.name"
+        // but build_struct_array will try to look up "items.item.id" and "items.item.name",
+        // Now it it is simply "items.id" and "items.name"
+        let batch = reader.next().unwrap().unwrap();
+
+        let expected = [
+            "+-----------------------------------------------+",
+            "| items                                         |",
+            "+-----------------------------------------------+",
+            "| [{id: 1, name: first}, {id: 2, name: second}] |",
+            "+-----------------------------------------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
     }
 }

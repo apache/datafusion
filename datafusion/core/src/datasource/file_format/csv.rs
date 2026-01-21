@@ -32,11 +32,12 @@ mod tests {
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use datafusion_catalog::Session;
+    use datafusion_common::Result;
     use datafusion_common::cast::as_string_array;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::{arrow_test_data, batches_to_string};
-    use datafusion_common::Result;
     use datafusion_datasource::decoder::{
         BatchDeserializer, DecoderDeserializer, DeserializerOutput,
     };
@@ -44,10 +45,10 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::write::BatchSerializer;
     use datafusion_expr::{col, lit};
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
     use arrow::array::{
-        BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
+        Array, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use arrow::compute::concat_batches;
     use arrow::csv::ReaderBuilder;
@@ -55,14 +56,16 @@ mod tests {
     use async_trait::async_trait;
     use bytes::Bytes;
     use chrono::DateTime;
-    use futures::stream::BoxStream;
+    use datafusion_common::parsers::CompressionTypeVariant;
     use futures::StreamExt;
+    use futures::stream::BoxStream;
     use insta::assert_snapshot;
+    use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{
         Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-        ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     };
     use regex::Regex;
     use rstest::*;
@@ -96,12 +99,20 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             unimplemented!()
         }
 
         async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
+            self.get_opts(location, GetOptions::default()).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            _opts: GetOptions,
+        ) -> object_store::Result<GetResult> {
             let bytes = self.bytes_to_repeat.clone();
             let len = bytes.len() as u64;
             let range = 0..len * self.max_iterations;
@@ -126,14 +137,6 @@ mod tests {
                 range: Default::default(),
                 attributes: Attributes::default(),
             })
-        }
-
-        async fn get_opts(
-            &self,
-            _location: &Path,
-            _opts: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            unimplemented!()
         }
 
         async fn get_ranges(
@@ -468,6 +471,59 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_infer_schema_stream_null_chunks() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // a stream where each line is read as a separate chunk,
+        // data type for each chunk is inferred separately.
+        // +----+-----+----+
+        // | c1 | c2  | c3 |
+        // +----+-----+----+
+        // | 1  | 1.0 |    |  type: Int64, Float64, Null
+        // |    |     |    |  type: Null, Null, Null
+        // +----+-----+----+
+        let chunked_object_store = Arc::new(ChunkedStore::new(
+            Arc::new(VariableStream::new(
+                Bytes::from(
+                    r#"c1,c2,c3
+1,1.0,
+,,
+"#,
+                ),
+                1,
+            )),
+            1,
+        ));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        let csv_format = CsvFormat::default().with_has_header(true);
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(chunked_object_store as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        let actual_fields: Vec<_> = inferred_schema
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .collect();
+
+        // ensure null chunks don't skew type inference
+        assert_eq!(vec!["c1: Int64", "c2: Float64", "c3: Null"], actual_fields);
+        Ok(())
+    }
+
     #[rstest(
         file_compression_type,
         case(FileCompressionType::UNCOMPRESSED),
@@ -565,15 +621,15 @@ mod tests {
             .collect()
             .await?;
 
-        assert_snapshot!(batches_to_string(&record_batch), @r###"
-            +----+------+
-            | c2 | c3   |
-            +----+------+
-            | 5  | 36   |
-            | 5  | -31  |
-            | 5  | -101 |
-            +----+------+
-        "###);
+        assert_snapshot!(batches_to_string(&record_batch), @r"
+        +----+------+
+        | c2 | c3   |
+        +----+------+
+        | 5  | 36   |
+        | 5  | -31  |
+        | 5  | -101 |
+        +----+------+
+        ");
 
         Ok(())
     }
@@ -650,11 +706,11 @@ mod tests {
 
         let re = Regex::new(r"DataSourceExec: file_groups=\{(\d+) group").unwrap();
 
-        if let Some(captures) = re.captures(&plan) {
-            if let Some(match_) = captures.get(1) {
-                let n_partitions = match_.as_str().parse::<usize>().unwrap();
-                return Ok(n_partitions);
-            }
+        if let Some(captures) = re.captures(&plan)
+            && let Some(match_) = captures.get(1)
+        {
+            let n_partitions = match_.as_str().parse::<usize>().unwrap();
+            return Ok(n_partitions);
         }
 
         internal_err!("query contains no DataSourceExec")
@@ -680,13 +736,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c2) |
         +--------------+
         | 285          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(n_partitions, actual_partitions);
@@ -719,13 +775,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // Compressed csv won't be scanned in parallel
@@ -756,13 +812,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +--------------+
         | sum(aggr.c3) |
         +--------------+
         | 781          |
         +--------------+
-        "###);
+        ");
         }
 
         assert_eq!(1, actual_partitions); // csv won't be scanned in parallel when newlines_in_values is set
@@ -787,10 +843,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -812,10 +868,136 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
+
+        Ok(())
+    }
+
+    /// Read multiple csv files (some are empty) with header
+    ///
+    /// some_empty_with_header
+    /// ├── a_empty.csv
+    /// ├── b.csv
+    /// └── c_nulls_column.csv
+    ///
+    /// a_empty.csv:
+    /// c1,c2,c3
+    ///
+    /// b.csv:
+    /// c1,c2,c3
+    /// 1,1,1
+    /// 2,2,2
+    ///
+    /// c_nulls_column.csv:
+    /// c1,c2,c3
+    /// 3,3,
+    #[tokio::test]
+    async fn test_csv_some_empty_with_header() -> Result<()> {
+        let ctx = SessionContext::new();
+        ctx.register_csv(
+            "some_empty_with_header",
+            "tests/data/empty_files/some_empty_with_header",
+            CsvReadOptions::new().has_header(true),
+        )
+        .await?;
+
+        let query = "select sum(c3) from some_empty_with_header;";
+        let query_result = ctx.sql(query).await?.collect().await?;
+
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        +--------------------------------+
+        | sum(some_empty_with_header.c3) |
+        +--------------------------------+
+        | 3                              |
+        +--------------------------------+
+        ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_compressed() -> Result<()> {
+        // Write compressed CSV files
+        // Expect: under the directory, a file is created with ".csv.gz" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default()
+            .with_has_header(true)
+            .with_compression(CompressionTypeVariant::GZIP);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(
+            files
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with(".csv.gz")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_csv_extension_uncompressed() -> Result<()> {
+        // Write plain uncompressed CSV files
+        // Expect: under the directory, a file is created with ".csv" extension
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_csv(
+                &format!("{}/csv/aggregate_test_100.csv", arrow_test_data()),
+                CsvReadOptions::default().has_header(true),
+            )
+            .await?;
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}", tmp_dir.path().to_string_lossy());
+
+        let cfg1 = crate::dataframe::DataFrameWriteOptions::new();
+        let cfg2 = CsvOptions::default().with_has_header(true);
+
+        df.write_csv(&path, cfg1, Some(cfg2)).await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let files: Vec<_> = std::fs::read_dir(&path).unwrap().collect();
+        assert_eq!(files.len(), 1);
+        assert!(
+            files
+                .last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with(".csv")
+        );
 
         Ok(())
     }
@@ -854,10 +1036,10 @@ mod tests {
         let query = "select * from empty where random() > 0.5;";
         let query_result = ctx.sql(query).await?.collect().await?;
 
-        assert_snapshot!(batches_to_string(&query_result),@r###"
-            ++
-            ++
-        "###);
+        assert_snapshot!(batches_to_string(&query_result),@r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -906,13 +1088,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------------+
-            | sum(empty.column_1) |
-            +---------------------+
-            | 10                  |
-            +---------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------------+
+        | sum(empty.column_1) |
+        +---------------------+
+        | 10                  |
+        +---------------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions); // Won't get partitioned if all files are empty
 
@@ -954,13 +1136,13 @@ mod tests {
             file_size
         };
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
         +-----------------------+
         | sum(one_col.column_1) |
         +-----------------------+
         | 50                    |
         +-----------------------+
-        "###);
+        ");
         }
 
         assert_eq!(expected_partitions, actual_partitions);
@@ -993,13 +1175,13 @@ mod tests {
         let query_result = ctx.sql(query).await?.collect().await?;
         let actual_partitions = count_query_csv_partitions(&ctx, query).await?;
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r###"
-            +---------------+
-            | sum_of_5_cols |
-            +---------------+
-            | 15            |
-            +---------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&query_result),@r"
+        +---------------+
+        | sum_of_5_cols |
+        +---------------+
+        | 15            |
+        +---------------+
+        ");}
 
         assert_eq!(n_partitions, actual_partitions);
 
@@ -1013,7 +1195,9 @@ mod tests {
     ) -> Result<()> {
         let schema = csv_schema();
         let generator = CsvBatchGenerator::new(batch_size, line_count);
-        let mut deserializer = csv_deserializer(batch_size, &schema);
+
+        let schema_clone = Arc::clone(&schema);
+        let mut deserializer = csv_deserializer(batch_size, &schema_clone);
 
         for data in generator {
             deserializer.digest(data);
@@ -1026,7 +1210,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1052,7 +1236,8 @@ mod tests {
     ) -> Result<()> {
         let schema = csv_schema();
         let generator = CsvBatchGenerator::new(batch_size, line_count);
-        let mut deserializer = csv_deserializer(batch_size, &schema);
+        let schema_clone = Arc::clone(&schema);
+        let mut deserializer = csv_deserializer(batch_size, &schema_clone);
 
         for data in generator {
             deserializer.digest(data);
@@ -1064,7 +1249,7 @@ mod tests {
         for _ in 0..batch_count {
             let output = deserializer.next()?;
             let DeserializerOutput::RecordBatch(batch) = output else {
-                panic!("Expected RecordBatch, got {:?}", output);
+                panic!("Expected RecordBatch, got {output:?}");
             };
             all_batches = concat_batches(&schema, &[all_batches, batch])?;
         }
@@ -1145,18 +1330,14 @@ mod tests {
 
     fn csv_line(line_number: usize) -> Bytes {
         let (int_value, float_value, bool_value, char_value) = csv_values(line_number);
-        format!(
-            "{},{},{},{}\n",
-            int_value, float_value, bool_value, char_value
-        )
-        .into()
+        format!("{int_value},{float_value},{bool_value},{char_value}\n").into()
     }
 
     fn csv_values(line_number: usize) -> (i32, f64, bool, String) {
         let int_value = line_number as i32;
         let float_value = line_number as f64;
-        let bool_value = line_number % 2 == 0;
-        let char_value = format!("{}-string", line_number);
+        let bool_value = line_number.is_multiple_of(2);
+        let char_value = format!("{line_number}-string");
         (int_value, float_value, bool_value, char_value)
     }
 
@@ -1177,5 +1358,272 @@ mod tests {
             .with_batch_size(batch_size)
             .build_decoder();
         DecoderDeserializer::new(CsvDecoder::new(decoder))
+    }
+
+    fn csv_deserializer_with_truncated(
+        batch_size: usize,
+        schema: &Arc<Schema>,
+    ) -> impl BatchDeserializer<Bytes> {
+        // using Arrow's ReaderBuilder and enabling truncated_rows
+        let decoder = ReaderBuilder::new(schema.clone())
+            .with_batch_size(batch_size)
+            .with_truncated_rows(true) // <- enable runtime truncated_rows
+            .build_decoder();
+        DecoderDeserializer::new(CsvDecoder::new(decoder))
+    }
+
+    #[tokio::test]
+    async fn infer_schema_with_truncated_rows_true() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // CSV: header has 3 columns, but first data row has only 2 columns, second row has 3
+        let csv_data = Bytes::from("a,b,c\n1,2\n3,4,5\n");
+        let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        // Construct CsvFormat and enable truncated_rows via CsvOptions
+        let csv_options = CsvOptions::default().with_truncated_rows(true);
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_options(csv_options)
+            .with_schema_infer_max_rec(10);
+
+        let inferred_schema = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await?;
+
+        // header has 3 columns; inferred schema should also have 3
+        assert_eq!(inferred_schema.fields().len(), 3);
+
+        // inferred columns should be nullable
+        for f in inferred_schema.fields() {
+            assert!(f.is_nullable());
+        }
+
+        Ok(())
+    }
+    #[test]
+    fn test_decoder_truncated_rows_runtime() -> Result<()> {
+        // Synchronous test: Decoder API used here is synchronous
+        let schema = csv_schema(); // helper already defined in file
+
+        // Construct a decoder that enables truncated_rows at runtime
+        let mut deserializer = csv_deserializer_with_truncated(10, &schema);
+
+        // Provide two rows: first row complete, second row missing last column
+        let input = Bytes::from("0,0.0,true,0-string\n1,1.0,true\n");
+        deserializer.digest(input);
+
+        // Finish and collect output
+        deserializer.finish();
+
+        let output = deserializer.next()?;
+        match output {
+            DeserializerOutput::RecordBatch(batch) => {
+                // ensure at least two rows present
+                assert!(batch.num_rows() >= 2);
+                // column 4 (index 3) should be a StringArray where second row is NULL
+                let col4 = batch
+                    .column(3)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .expect("column 4 should be StringArray");
+
+                // first row present, second row should be null
+                assert!(!col4.is_null(0));
+                assert!(col4.is_null(1));
+            }
+            other => panic!("expected RecordBatch but got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn infer_schema_truncated_rows_false_error() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        // CSV: header has 4 cols, first data row has 3 cols -> truncated at end
+        let csv_data = Bytes::from("id,a,b,c\n1,foo,bar\n2,foo,bar,baz\n");
+        let variable_object_store = Arc::new(VariableStream::new(csv_data, 1));
+        let object_meta = ObjectMeta {
+            location: Path::parse("/")?,
+            last_modified: DateTime::default(),
+            size: u64::MAX,
+            e_tag: None,
+            version: None,
+        };
+
+        // CsvFormat without enabling truncated_rows (default behavior = false)
+        let csv_format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(10);
+
+        let res = csv_format
+            .infer_schema(
+                &state,
+                &(variable_object_store.clone() as Arc<dyn ObjectStore>),
+                &[object_meta],
+            )
+            .await;
+
+        // Expect an error due to unequal lengths / incorrect number of fields
+        assert!(
+            res.is_err(),
+            "expected infer_schema to error on truncated rows when disabled"
+        );
+
+        // Optional: check message contains indicative text (two known possibilities)
+        if let Err(err) = res {
+            let msg = format!("{err}");
+            assert!(
+                msg.contains("Encountered unequal lengths")
+                    || msg.contains("incorrect number of fields"),
+                "unexpected error message: {msg}",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_read_csv_truncated_rows_via_tempfile() -> Result<()> {
+        use std::io::Write;
+
+        // create a SessionContext
+        let ctx = SessionContext::new();
+
+        // Create a temp file with a .csv suffix so the reader accepts it
+        let mut tmp = tempfile::Builder::new().suffix(".csv").tempfile()?; // ensures path ends with .csv
+        // CSV has header "a,b,c". First data row is truncated (only "1,2"), second row is complete.
+        write!(tmp, "a,b,c\n1,2\n3,4,5\n")?;
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        // Build CsvReadOptions: header present, enable truncated_rows.
+        // (Use the exact builder method your crate exposes: `truncated_rows(true)` here,
+        //  if the method name differs in your codebase use the appropriate one.)
+        let options = CsvReadOptions::default().truncated_rows(true);
+
+        println!("options: {}, path: {path}", options.truncated_rows);
+
+        // Call the API under test
+        let df = ctx.read_csv(&path, options).await?;
+
+        // Collect the results and combine batches so we can inspect columns
+        let batches = df.collect().await?;
+        let combined = concat_batches(&batches[0].schema(), &batches)?;
+
+        // Column 'c' is the 3rd column (index 2). The first data row was truncated -> should be NULL.
+        let col_c = combined.column(2);
+        assert!(
+            col_c.is_null(0),
+            "expected first row column 'c' to be NULL due to truncated row"
+        );
+
+        // Also ensure we read at least one row
+        assert!(combined.num_rows() >= 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.csv", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS BIGINT) AS id LIMIT 0").await?;
+        df.write_csv(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_csv_from_record_batch() -> Result<()> {
+        let ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let empty_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int64Array::from(Vec::<i64>::new())),
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new())),
+            ],
+        )?;
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_batch.csv", tmp_dir.path().to_string_lossy());
+
+        // Write empty RecordBatch
+        let df = ctx.read_batch(empty_batch.clone())?;
+        df.write_csv(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist
+        assert!(std::path::Path::new(&path).exists());
+
+        let read_df = ctx
+            .read_csv(&path, CsvReadOptions::default().has_header(true))
+            .await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 2);
+        assert_eq!(stream.schema().field(0).name(), "id");
+        assert_eq!(stream.schema().field(1).name(), "name");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_infer_schema_with_zero_max_records() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let state = session_ctx.state();
+
+        let root = format!("{}/csv", arrow_test_data());
+        let format = CsvFormat::default()
+            .with_has_header(true)
+            .with_schema_infer_max_rec(0); // Set to 0 to disable inference
+        let exec = scan_format(
+            &state,
+            &format,
+            None,
+            &root,
+            "aggregate_test_100.csv",
+            None,
+            None,
+        )
+        .await?;
+
+        // related to https://github.com/apache/datafusion/issues/19417
+        for f in exec.schema().fields() {
+            assert_eq!(*f.data_type(), DataType::Utf8);
+        }
+
+        Ok(())
     }
 }

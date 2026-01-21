@@ -56,23 +56,21 @@
 //!
 //! The same answer can be produced by simply keeping track of the top
 //! N elements, reducing the total amount of required buffer memory.
-//!
 
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
+use arrow::array::{Array, ArrayRef, StringViewArray};
 use arrow::{
-    array::{Int64Array, StringArray},
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
+    array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
-    common::cast::{as_int64_array, as_string_array},
-    common::{arrow_datafusion_err, internal_err, DFSchemaRef},
+    common::cast::as_int64_array,
+    common::{DFSchemaRef, arrow_datafusion_err},
     error::{DataFusionError, Result},
     execution::{
         context::{QueryPlanner, SessionState, TaskContext},
@@ -93,13 +91,14 @@ use datafusion::{
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::ScalarValue;
+use datafusion_common::{ScalarValue, assert_eq_or_internal_err, assert_or_internal_err};
 use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
-use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
+use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
+use datafusion_common::cast::as_string_view_array;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -162,7 +161,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
         insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +-------------+---------+
             | customer_id | revenue |
             +-------------+---------+
@@ -170,7 +169,7 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
             | jorge       | 200     |
             | andy        | 150     |
             +-------------+---------+
-        "###);
+            ");
         });
     }
 
@@ -189,13 +188,13 @@ async fn run_and_compare_query_with_analyzer_rule(
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(actual, @r###"
+        insta::assert_snapshot!(actual, @r"
         +------------+--------------------------+
         | UInt64(42) | arrow_typeof(UInt64(42)) |
         +------------+--------------------------+
         | 42         | UInt64                   |
         +------------+--------------------------+
-        "###);
+        ");
     });
 
     Ok(())
@@ -213,7 +212,7 @@ async fn run_and_compare_query_with_auto_schemas(
     insta::with_settings!({
             description => description,
         }, {
-            insta::assert_snapshot!(actual, @r###"
+            insta::assert_snapshot!(actual, @r"
             +----------+----------+
             | column_1 | column_2 |
             +----------+----------+
@@ -221,7 +220,7 @@ async fn run_and_compare_query_with_auto_schemas(
             | jorge    | 200      |
             | andy     | 150      |
             +----------+----------+
-        "###);
+            ");
     });
 
     Ok(())
@@ -434,21 +433,21 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        if let LogicalPlan::Extension(Extension { node }) = &plan {
-            if let Some(prev) = node.as_any().downcast_ref::<TopKPlanNode>() {
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: prev.k,
-                        input: prev.input.clone(),
-                        expr: prev.expr.clone(),
-                        // In a real use case, this rewriter could have change the number of inputs, etc
-                        invariant_mock: Some(InvariantMock {
-                            should_fail_invariant: true,
-                            kind: InvariantLevel::Always,
-                        }),
+        if let LogicalPlan::Extension(Extension { node }) = &plan
+            && let Some(prev) = node.as_any().downcast_ref::<TopKPlanNode>()
+        {
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: prev.k,
+                    input: prev.input.clone(),
+                    expr: prev.expr.clone(),
+                    // In a real use case, this rewriter could have change the number of inputs, etc
+                    invariant_mock: Some(InvariantMock {
+                        should_fail_invariant: true,
+                        kind: InvariantLevel::Always,
                     }),
-                })));
-            }
+                }),
+            })));
         };
 
         Ok(Transformed::no(plan))
@@ -516,23 +515,18 @@ impl OptimizerRule for TopKOptimizerRule {
             return Ok(Transformed::no(plan));
         };
 
-        if let LogicalPlan::Sort(Sort {
-            ref expr,
-            ref input,
-            ..
-        }) = limit.input.as_ref()
+        if let LogicalPlan::Sort(Sort { expr, input, .. }) = limit.input.as_ref()
+            && expr.len() == 1
         {
-            if expr.len() == 1 {
-                // we found a sort with a single sort expr, replace with a a TopK
-                return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(TopKPlanNode {
-                        k: fetch,
-                        input: input.as_ref().clone(),
-                        expr: expr[0].clone(),
-                        invariant_mock: self.invariant_mock.clone(),
-                    }),
-                })));
-            }
+            // we found a sort with a single sort expr, replace with a a TopK
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: fetch,
+                    input: input.as_ref().clone(),
+                    expr: expr[0].clone(),
+                    invariant_mock: self.invariant_mock.clone(),
+                }),
+            })));
         }
 
         Ok(Transformed::no(plan))
@@ -580,15 +574,16 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         self.input.schema()
     }
 
-    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
         if let Some(InvariantMock {
             should_fail_invariant,
             kind,
         }) = self.invariant_mock.clone()
         {
-            if should_fail_invariant && check == kind {
-                return internal_err!("node fails check, such as improper inputs");
-            }
+            assert_or_internal_err!(
+                !(should_fail_invariant && check == kind),
+                "node fails check, such as improper inputs"
+            );
         }
         Ok(())
     }
@@ -734,9 +729,11 @@ impl ExecutionPlan for TopKExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if 0 != partition {
-            return internal_err!("TopKExec invalid partition {partition}");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "TopKExec invalid partition {partition}"
+        );
 
         Ok(Box::pin(TopKReader {
             input: self.input.execute(partition, context)?,
@@ -796,22 +793,26 @@ fn accumulate_batch(
     k: &usize,
 ) -> BTreeMap<i64, String> {
     let num_rows = input_batch.num_rows();
-    // Assuming the input columns are
-    // column[0]: customer_id / UTF8
-    // column[1]: revenue: Int64
-    let customer_id =
-        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
+    // Assuming the input columns are
+    // column[0]: customer_id UTF8View
+    // column[1]: revenue: Int64
+
+    let customer_id_column = input_batch.column(0);
     let revenue = as_int64_array(input_batch.column(1)).unwrap();
 
     for row in 0..num_rows {
-        add_row(
-            &mut top_values,
-            customer_id.value(row),
-            revenue.value(row),
-            k,
-        );
+        let customer_id = match customer_id_column.data_type() {
+            arrow::datatypes::DataType::Utf8View => {
+                let array = as_string_view_array(customer_id_column).unwrap();
+                array.value(row)
+            }
+            _ => panic!("Unsupported customer_id type"),
+        };
+
+        add_row(&mut top_values, customer_id, revenue.value(row), k);
     }
+
     top_values
 }
 
@@ -843,11 +844,19 @@ impl Stream for TopKReader {
                     self.state.iter().rev().unzip();
 
                 let customer: Vec<&str> = customer.iter().map(|&s| &**s).collect();
+
+                let customer_array: ArrayRef = match schema.field(0).data_type() {
+                    arrow::datatypes::DataType::Utf8View => {
+                        Arc::new(StringViewArray::from(customer))
+                    }
+                    other => panic!("Unsupported customer_id output type: {other:?}"),
+                };
+
                 Poll::Ready(Some(
                     RecordBatch::try_new(
                         schema,
                         vec![
-                            Arc::new(StringArray::from(customer)),
+                            Arc::new(customer_array),
                             Arc::new(Int64Array::from(revenue)),
                         ],
                     )
@@ -900,11 +909,12 @@ impl MyAnalyzerRule {
             .map(|e| {
                 e.transform(|e| {
                     Ok(match e {
-                        Expr::Literal(ScalarValue::Int64(i)) => {
+                        Expr::Literal(ScalarValue::Int64(i), _) => {
                             // transform to UInt64
-                            Transformed::yes(Expr::Literal(ScalarValue::UInt64(
-                                i.map(|i| i as u64),
-                            )))
+                            Transformed::yes(Expr::Literal(
+                                ScalarValue::UInt64(i.map(|i| i as u64)),
+                                None,
+                            ))
                         }
                         _ => Transformed::no(e),
                     })

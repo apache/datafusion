@@ -19,7 +19,6 @@
 //!
 //! [`FileSource`]: datafusion_datasource::file::FileSource
 
-#[allow(deprecated)]
 pub use datafusion_datasource_json::source::*;
 
 #[cfg(test)]
@@ -35,9 +34,9 @@ mod tests {
     use crate::execution::SessionState;
     use crate::prelude::{CsvReadOptions, NdJsonReadOptions, SessionContext};
     use crate::test::partitioned_file_groups;
+    use datafusion_common::Result;
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::Result;
     use datafusion_datasource::file_compression_type::FileCompressionType;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource_json::JsonFormat;
@@ -52,9 +51,9 @@ mod tests {
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
     use datafusion_datasource::source::DataSourceExec;
     use insta::assert_snapshot;
+    use object_store::ObjectStore;
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
-    use object_store::ObjectStore;
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
@@ -70,11 +69,13 @@ mod tests {
         let store = state.runtime_env().object_store(&store_url).unwrap();
 
         let filename = "1.json";
+        let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
+
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
-            Arc::new(JsonFormat::default()),
+            &json_format,
             file_compression_type.to_owned(),
             work_dir,
         )
@@ -105,11 +106,13 @@ mod tests {
         ctx.register_object_store(&url, store.clone());
         let filename = "1.json";
         let tmp_dir = TempDir::new()?;
+        let json_format: Arc<dyn FileFormat> = Arc::new(JsonFormat::default());
+
         let file_groups = partitioned_file_groups(
             TEST_DATA_BASE,
             filename,
             1,
-            Arc::new(JsonFormat::default()),
+            &json_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
@@ -139,16 +142,16 @@ mod tests {
         let frame = ctx.read_json(path, read_options).await.unwrap();
         let results = frame.collect().await.unwrap();
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r###"
-            +-----+------------------+---------------+------+
-            | a   | b                | c             | d    |
-            +-----+------------------+---------------+------+
-            | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
-            | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
-            | 2   | [2.0, , -6.1]    | [false, ]     | text |
-            |     |                  |               |      |
-            +-----+------------------+---------------+------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&results), @r"
+        +-----+------------------+---------------+------+
+        | a   | b                | c             | d    |
+        +-----+------------------+---------------+------+
+        | 1   | [2.0, 1.3, -6.1] | [false, true] | 4    |
+        | -10 | [2.0, 1.3, -6.1] | [true, true]  | 4    |
+        | 2   | [2.0, , -6.1]    | [false, ]     | text |
+        |     |                  |               |      |
+        +-----+------------------+---------------+------+
+        ");}
 
         Ok(())
     }
@@ -177,8 +180,8 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let source = Arc::new(JsonSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
@@ -252,8 +255,8 @@ mod tests {
         let file_schema = Arc::new(builder.finish());
         let missing_field_idx = file_schema.fields.len() - 1;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let source = Arc::new(JsonSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned())
@@ -295,10 +298,11 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let source = Arc::new(JsonSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
-            .with_projection(Some(vec![0, 2]))
+            .with_projection_indices(Some(vec![0, 2]))
+            .unwrap()
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);
@@ -343,10 +347,10 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let source = Arc::new(JsonSource::new());
-        let conf = FileScanConfigBuilder::new(object_store_url, file_schema, source)
+        let source = Arc::new(JsonSource::new(Arc::clone(&file_schema)));
+        let conf = FileScanConfigBuilder::new(object_store_url, source)
             .with_file_groups(file_groups)
-            .with_projection(Some(vec![3, 0, 2]))
+            .with_projection_indices(Some(vec![3, 0, 2]))?
             .with_file_compression_type(file_compression_type.to_owned())
             .build();
         let exec = DataSourceExec::from_data_source(conf);
@@ -495,7 +499,10 @@ mod tests {
             .write_json(out_dir_url, DataFrameWriteOptions::new(), None)
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'"
+        );
         Ok(())
     }
 

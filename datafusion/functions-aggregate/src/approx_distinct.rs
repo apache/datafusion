@@ -23,19 +23,24 @@ use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    ArrowPrimitiveType, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowPrimitiveType, Date32Type, Date64Type, FieldRef, Int8Type, Int16Type, Int32Type,
+    Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::ScalarValue;
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result,
+    DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
 };
+use datafusion_functions_aggregate_common::noop_accumulator::NoopAccumulator;
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
@@ -61,9 +66,7 @@ impl<T: Hash> TryFrom<&[u8]> for HyperLogLog<T> {
     type Error = DataFusionError;
     fn try_from(v: &[u8]) -> Result<HyperLogLog<T>> {
         let arr: [u8; 16384] = v.try_into().map_err(|_| {
-            DataFusionError::Internal(
-                "Impossibly got invalid binary array from states".into(),
-            )
+            internal_datafusion_err!("Impossibly got invalid binary array from states")
         })?;
         Ok(HyperLogLog::<T>::new_with_registers(arr))
     }
@@ -176,8 +179,8 @@ macro_rules! default_accumulator_impl {
             let binary_array = downcast_value!(states[0], BinaryArray);
             for v in binary_array.iter() {
                 let v = v.ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "Impossibly got empty binary array from states".into(),
+                    internal_datafusion_err!(
+                        "Impossibly got empty binary array from states"
                     )
                 })?;
                 let other = v.try_into()?;
@@ -293,6 +296,7 @@ impl Default for ApproxDistinct {
 ```"#,
     standard_argument(name = "expression",)
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct ApproxDistinct {
     signature: Signature,
 }
@@ -322,16 +326,30 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(DataType::UInt64)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "hll_registers"),
-            DataType::Binary,
-            false,
-        )])
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        if args.input_fields[0].data_type().is_null() {
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, self.name()),
+                    DataType::Null,
+                    true,
+                )
+                .into(),
+            ])
+        } else {
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "hll_registers"),
+                    DataType::Binary,
+                    false,
+                )
+                .into(),
+            ])
+        }
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
+        let data_type = acc_args.expr_fields[0].data_type();
 
         let accumulator: Box<dyn Accumulator> = match data_type {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
@@ -345,15 +363,44 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
             DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
+            DataType::Date32 => Box::new(NumericHLLAccumulator::<Date32Type>::new()),
+            DataType::Date64 => Box::new(NumericHLLAccumulator::<Date64Type>::new()),
+            DataType::Time32(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<Time32SecondType>::new())
+            }
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<Time32MillisecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<Time64MicrosecondType>::new())
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<Time64NanosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampSecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMillisecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampMicrosecondType>::new())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Box::new(NumericHLLAccumulator::<TimestampNanosecondType>::new())
+            }
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
             DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
+            DataType::Null => {
+                Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
+            }
             other => {
                 return not_impl_err!(
-                "Support for 'approx_distinct' for data type {other} is not implemented"
-            )
+                    "Support for 'approx_distinct' for data type {other} is not implemented"
+                );
             }
         };
         Ok(accumulator)

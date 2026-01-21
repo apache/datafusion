@@ -25,25 +25,27 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 
+use crate::ExecutionPlan;
 use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
-use crate::ExecutionPlan;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
-    config::ConfigOptions, internal_err, project_schema, Result, Statistics,
+    Result, Statistics, assert_or_internal_err, config::ConfigOptions, project_schema,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
-    EquivalenceProperties, LexOrdering, Partitioning,
+use datafusion_physical_expr::equivalence::{
+    OrderingEquivalenceClass, ProjectionMapping,
 };
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
 use futures::{Future, FutureExt};
 
@@ -87,9 +89,7 @@ impl DisplayAs for TestMemoryExec {
                 let output_ordering = self
                     .sort_information
                     .first()
-                    .map(|output_ordering| {
-                        format!(", output_ordering={}", output_ordering)
-                    })
+                    .map(|output_ordering| format!(", output_ordering={output_ordering}"))
                     .unwrap_or_default();
 
                 let eq_properties = self.eq_properties();
@@ -97,18 +97,18 @@ impl DisplayAs for TestMemoryExec {
                 let constraints = if constraints.is_empty() {
                     String::new()
                 } else {
-                    format!(", {}", constraints)
+                    format!(", {constraints}")
                 };
 
                 let limit = self
                     .fetch
-                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
+                    .map_or(String::new(), |limit| format!(", fetch={limit}"));
                 if self.show_sizes {
                     write!(
-                                f,
-                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
+                        f,
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 } else {
                     write!(
                         f,
@@ -131,7 +131,7 @@ impl ExecutionPlan for TestMemoryExec {
     }
 
     fn as_any(&self) -> &dyn Any {
-        unimplemented!()
+        self
     }
 
     fn properties(&self) -> &PlanProperties {
@@ -146,7 +146,7 @@ impl ExecutionPlan for TestMemoryExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        unimplemented!()
+        Ok(self)
     }
 
     fn repartitioned(
@@ -218,7 +218,7 @@ impl TestMemoryExec {
     fn eq_properties(&self) -> EquivalenceProperties {
         EquivalenceProperties::new_with_orderings(
             Arc::clone(&self.projected_schema),
-            self.sort_information.as_slice(),
+            self.sort_information.clone(),
         )
     }
 
@@ -242,7 +242,7 @@ impl TestMemoryExec {
             cache: PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
-                    vec![].as_slice(),
+                    Vec::<LexOrdering>::new(),
                 ),
                 Partitioning::UnknownPartitioning(partitions.len()),
                 EmissionType::Incremental,
@@ -270,10 +270,9 @@ impl TestMemoryExec {
     }
 
     // Equivalent of `DataSourceExec::new`
-    pub fn update_cache(source: Arc<TestMemoryExec>) -> TestMemoryExec {
+    pub fn update_cache(source: &Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
-        let source = &*source;
-        let mut source = source.clone();
+        let mut source = (**source).clone();
         source.cache = cache;
         source
     }
@@ -300,7 +299,7 @@ impl TestMemoryExec {
     }
 
     /// refer to `try_with_sort_information` at MemorySourceConfig for more information.
-    /// https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
+    /// <https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs>
     pub fn try_with_sort_information(
         mut self,
         mut sort_information: Vec<LexOrdering>,
@@ -317,36 +316,33 @@ impl TestMemoryExec {
                     .map(|field| field.name() != col.name())
                     .unwrap_or(true)
             });
-        if let Some(col) = ambiguous_column {
-            return internal_err!(
-                "Column {:?} is not found in the original schema of the TestMemoryExec",
-                col
-            );
-        }
+        assert_or_internal_err!(
+            ambiguous_column.is_none(),
+            "Column {:?} is not found in the original schema of the TestMemoryExec",
+            ambiguous_column.as_ref().unwrap()
+        );
 
         // If there is a projection on the source, we also need to project orderings
         if let Some(projection) = &self.projection {
-            let base_eqp = EquivalenceProperties::new_with_orderings(
-                self.original_schema(),
-                &sort_information,
-            );
-            let proj_exprs = projection
-                .iter()
-                .map(|idx| {
-                    let base_schema = self.original_schema();
-                    let name = base_schema.field(*idx).name();
-                    (Arc::new(Column::new(name, *idx)) as _, name.to_string())
-                })
-                .collect::<Vec<_>>();
+            let base_schema = self.original_schema();
+            let proj_exprs = projection.iter().map(|idx| {
+                let name = base_schema.field(*idx).name();
+                (Arc::new(Column::new(name, *idx)) as _, name.to_string())
+            });
             let projection_mapping =
-                ProjectionMapping::try_new(&proj_exprs, &self.original_schema())?;
-            sort_information = base_eqp
-                .project(&projection_mapping, Arc::clone(&self.projected_schema))
-                .into_oeq_class()
-                .into_inner();
+                ProjectionMapping::try_new(proj_exprs, &base_schema)?;
+            let base_eqp = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&base_schema),
+                sort_information,
+            );
+            let proj_eqp =
+                base_eqp.project(&projection_mapping, Arc::clone(&self.projected_schema));
+            let oeq_class: OrderingEquivalenceClass = proj_eqp.into();
+            sort_information = oeq_class.into();
         }
 
         self.sort_information = sort_information;
+        self.cache = self.compute_properties();
         Ok(self)
     }
 
@@ -458,7 +454,7 @@ pub fn make_partition_utf8(sz: i32) -> RecordBatch {
     let seq_start = 0;
     let seq_end = sz;
     let values = (seq_start..seq_end)
-        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{}", i))
+        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{i}"))
         .collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Utf8, true)]));
     let mut string_array = arrow::array::StringArray::from(values);
@@ -525,3 +521,33 @@ impl PartitionStream for TestPartitionStream {
         ))
     }
 }
+
+#[cfg(test)]
+macro_rules! assert_join_metrics {
+    ($metrics:expr, $expected_rows:expr) => {
+        assert_eq!($metrics.output_rows().unwrap(), $expected_rows);
+
+        let elapsed_compute = $metrics
+            .elapsed_compute()
+            .expect("did not find elapsed_compute metric");
+        let join_time = $metrics
+            .sum_by_name("join_time")
+            .expect("did not find join_time metric")
+            .as_usize();
+        let build_time = $metrics
+            .sum_by_name("build_time")
+            .expect("did not find build_time metric")
+            .as_usize();
+        // ensure join_time and build_time are considered in elapsed_compute
+        assert!(
+            join_time + build_time <= elapsed_compute,
+            "join_time ({}) + build_time ({}) = {} was <= elapsed_compute = {}",
+            join_time,
+            build_time,
+            join_time + build_time,
+            elapsed_compute
+        );
+    };
+}
+#[cfg(test)]
+pub(crate) use assert_join_metrics;

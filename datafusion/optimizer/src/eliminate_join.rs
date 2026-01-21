@@ -22,8 +22,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
 use datafusion_expr::{
-    logical_plan::{EmptyRelation, LogicalPlan},
     Expr,
+    logical_plan::{EmptyRelation, LogicalPlan},
 };
 
 /// Eliminates joins when join condition is false.
@@ -54,7 +54,7 @@ impl OptimizerRule for EliminateJoin {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
                 match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
+                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)), _)) => Ok(
                         Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema,
@@ -74,6 +74,7 @@ impl OptimizerRule for EliminateJoin {
 
 #[cfg(test)]
 mod tests {
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
     use datafusion_common::Result;
@@ -84,11 +85,13 @@ mod tests {
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
-            @$expected:literal $(,)?
+            @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(EliminateJoin::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(EliminateJoin::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -105,6 +108,6 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 }

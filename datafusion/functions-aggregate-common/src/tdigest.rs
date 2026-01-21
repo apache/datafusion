@@ -31,9 +31,8 @@
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::Float64Type;
-use datafusion_common::cast::as_primitive_array;
-use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_common::cast::as_primitive_array;
 use std::cmp::Ordering;
 use std::mem::{size_of, size_of_val};
 
@@ -45,7 +44,7 @@ macro_rules! cast_scalar_f64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::Float64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
@@ -56,65 +55,16 @@ macro_rules! cast_scalar_u64 {
     ($value:expr ) => {
         match &$value {
             ScalarValue::UInt64(Some(v)) => *v,
-            v => panic!("invalid type {:?}", v),
+            v => panic!("invalid type {}", v),
         }
     };
 }
-
-/// This trait is implemented for each type a [`TDigest`] can operate on,
-/// allowing it to support both numerical rust types (obtained from
-/// `PrimitiveArray` instances), and [`ScalarValue`] instances.
-pub trait TryIntoF64 {
-    /// A fallible conversion of a possibly null `self` into a [`f64`].
-    ///
-    /// If `self` is null, this method must return `Ok(None)`.
-    ///
-    /// If `self` cannot be coerced to the desired type, this method must return
-    /// an `Err` variant.
-    fn try_as_f64(&self) -> Result<Option<f64>>;
-}
-
-/// Generate an infallible conversion from `type` to an [`f64`].
-macro_rules! impl_try_ordered_f64 {
-    ($type:ty) => {
-        impl TryIntoF64 for $type {
-            fn try_as_f64(&self) -> Result<Option<f64>> {
-                Ok(Some(*self as f64))
-            }
-        }
-    };
-}
-
-impl_try_ordered_f64!(f64);
-impl_try_ordered_f64!(f32);
-impl_try_ordered_f64!(i64);
-impl_try_ordered_f64!(i32);
-impl_try_ordered_f64!(i16);
-impl_try_ordered_f64!(i8);
-impl_try_ordered_f64!(u64);
-impl_try_ordered_f64!(u32);
-impl_try_ordered_f64!(u16);
-impl_try_ordered_f64!(u8);
 
 /// Centroid implementation to the cluster mentioned in the paper.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Centroid {
     mean: f64,
     weight: f64,
-}
-
-impl PartialOrd for Centroid {
-    fn partial_cmp(&self, other: &Centroid) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for Centroid {}
-
-impl Ord for Centroid {
-    fn cmp(&self, other: &Centroid) -> Ordering {
-        self.mean.total_cmp(&other.mean)
-    }
 }
 
 impl Centroid {
@@ -138,6 +88,10 @@ impl Centroid {
         self.weight = new_weight;
         self.mean = new_sum / new_weight;
         new_sum
+    }
+
+    pub fn cmp_mean(&self, other: &Self) -> Ordering {
+        self.mean.total_cmp(&other.mean)
     }
 }
 
@@ -173,6 +127,7 @@ impl TDigest {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
         TDigest {
             centroids: vec![centroid.clone()],
@@ -238,7 +193,11 @@ impl TDigest {
         if lo.is_nan() || hi.is_nan() {
             return v;
         }
-        v.clamp(lo, hi)
+
+        // Handle the case where floating point precision causes min > max.
+        let (min, max) = if lo > hi { (hi, lo) } else { (lo, hi) };
+
+        v.clamp(min, max)
     }
 
     // public for testing in other modules
@@ -331,7 +290,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr);
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.centroids = compressed;
         result
@@ -349,7 +308,7 @@ impl TDigest {
         let mut j = middle;
 
         while i < middle && j < last {
-            match centroids[i].cmp(&centroids[j]) {
+            match centroids[i].cmp_mean(&centroids[j]) {
                 Ordering::Less => {
                     result.push(centroids[i].clone());
                     i += 1;
@@ -466,7 +425,7 @@ impl TDigest {
         result.sum += curr.add(sums_to_merge, weights_to_merge);
         compressed.push(curr.clone());
         compressed.shrink_to_fit();
-        compressed.sort();
+        compressed.sort_by(|a, b| a.cmp_mean(b));
 
         result.count = count;
         result.min = min;
@@ -585,7 +544,6 @@ impl TDigest {
     ///                          │└ ─ ─ ─ ┘│
     ///                          │         │
     ///                              ...
-    ///
     /// ```
     ///
     /// The [`TDigest::from_scalar_state()`] method reverses this processes,
@@ -789,5 +747,23 @@ mod tests {
         let t = t.merge_unsorted_f64(vec![0.0, 1.0]);
 
         assert_eq!(t.size(), 96);
+    }
+
+    #[test]
+    fn test_identical_values_floating_point_precision() {
+        // Regression test for https://github.com/apache/datafusion/issues/14855
+        // When all values are the same, floating-point arithmetic during centroid
+        // merging can cause slight precision differences between min and max,
+        // which previously caused a panic in clamp().
+
+        let t = TDigest::new(100);
+        let values: Vec<_> = (0..215).map(|_| 15.699999988079073_f64).collect();
+
+        let t = t.merge_unsorted_f64(values);
+
+        // This should not panic
+        let result = t.estimate_quantile(0.99);
+        // The result should be approximately equal to the input value
+        assert!((result - 15.699999988079073).abs() < 1e-10);
     }
 }

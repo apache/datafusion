@@ -27,7 +27,7 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
@@ -133,10 +133,17 @@ impl ExecutionPlan for ExplainExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        if 0 != partition {
-            return internal_err!("ExplainExec invalid partition {partition}");
-        }
+        trace!(
+            "Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "ExplainExec invalid partition {partition}"
+        );
         let mut type_builder =
             StringBuilder::with_capacity(self.stringified_plans.len(), 1024);
         let mut plan_builder =
@@ -172,7 +179,11 @@ impl ExecutionPlan for ExplainExec {
         )?;
 
         trace!(
-            "Before returning RecordBatchStream in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+            "Before returning RecordBatchStream in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),

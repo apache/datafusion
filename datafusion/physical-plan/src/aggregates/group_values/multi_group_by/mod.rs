@@ -17,30 +17,31 @@
 
 //! `GroupValues` implementations for multi group by cases
 
+mod boolean;
 mod bytes;
-mod bytes_view;
-mod primitive;
+pub mod bytes_view;
+pub mod primitive;
 
 use std::mem::{self, size_of};
 
-use crate::aggregates::group_values::multi_group_by::{
-    bytes::ByteGroupValueBuilder, bytes_view::ByteViewGroupValueBuilder,
-    primitive::PrimitiveGroupValueBuilder,
-};
 use crate::aggregates::group_values::GroupValues;
+use crate::aggregates::group_values::multi_group_by::{
+    boolean::BooleanGroupValueBuilder, bytes::ByteGroupValueBuilder,
+    bytes_view::ByteViewGroupValueBuilder, primitive::PrimitiveGroupValueBuilder,
+};
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::cast;
 use arrow::datatypes::{
     BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, Schema, SchemaRef,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, SchemaRef,
     StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::EmitTo;
 use datafusion_physical_expr::binary_map::OutputType;
@@ -65,7 +66,7 @@ pub trait GroupColumn: Send + Sync {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool;
 
     /// Appends the row at `row` in `array` to this builder
-    fn append_val(&mut self, array: &ArrayRef, row: usize);
+    fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()>;
 
     /// The vectorized version equal to
     ///
@@ -76,7 +77,6 @@ pub trait GroupColumn: Send + Sync {
     ///
     /// And if found nth result in `equal_to_results` is already
     /// `false`, the check for nth row will be skipped.
-    ///
     fn vectorized_equal_to(
         &self,
         lhs_rows: &[usize],
@@ -86,10 +86,15 @@ pub trait GroupColumn: Send + Sync {
     );
 
     /// The vectorized version `append_val`
-    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]);
+    fn vectorized_append(&mut self, array: &ArrayRef, rows: &[usize]) -> Result<()>;
 
     /// Returns the number of rows stored in this builder
     fn len(&self) -> usize;
+
+    /// true if len == 0
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Returns the number of bytes used by this [`GroupColumn`]
     fn size(&self) -> usize;
@@ -131,7 +136,6 @@ pub fn nulls_equal_to(lhs_null: bool, rhs_null: bool) -> Option<bool> {
 ///   +---------------------+---------------------------------------------+
 ///
 /// `inlined flag`: 1 represents `non-inlined`, and 0 represents `inlined`
-///
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct GroupIndexView(u64);
 
@@ -160,7 +164,6 @@ impl GroupIndexView {
 
 /// A [`GroupValues`] that stores multiple columns of group values,
 /// and supports vectorized operators for them
-///
 pub struct GroupValuesColumn<const STREAMING: bool> {
     /// The output schema
     schema: SchemaRef,
@@ -178,7 +181,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// instead we store the `group indices` pointing to values in `GroupValues`.
     /// And we use [`GroupIndexView`] to represent such `group indices` in table.
     ///
-    ///
     map: HashTable<(u64, GroupIndexView)>,
 
     /// The size of `map` in bytes
@@ -191,7 +193,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     ///
     /// The chained indices is like:
     ///   `latest group index -> older group index -> even older group index -> ...`
-    ///
     group_index_lists: Vec<Vec<usize>>,
 
     /// When emitting first n, we need to decrease/erase group indices in
@@ -270,7 +271,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             map_size: 0,
             group_values: vec![],
             hashes_buffer: Default::default(),
-            random_state: Default::default(),
+            random_state: crate::aggregates::AGGREGATION_HASH_SEED,
         })
     }
 
@@ -317,7 +318,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// `Group indices` order are against with their input order, and this will lead to error
     /// in `streaming aggregation`.
-    ///
     fn scalarized_intern(
         &mut self,
         cols: &[ArrayRef],
@@ -384,7 +384,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                     let mut checklen = 0;
                     let group_idx = self.group_values[0].len();
                     for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                        group_value.append_val(&cols[i], row);
+                        group_value.append_val(&cols[i], row)?;
                         let len = group_value.len();
                         if i == 0 {
                             checklen = len;
@@ -419,7 +419,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///
     /// The vectorized approach can offer higher performance for avoiding row by row
     /// downcast for `cols` and being able to implement even more optimizations(like simd).
-    ///
     fn vectorized_intern(
         &mut self,
         cols: &[ArrayRef],
@@ -460,14 +459,14 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         self.collect_vectorized_process_context(&batch_hashes, groups);
 
         // 2. Perform `vectorized_append`
-        self.vectorized_append(cols);
+        self.vectorized_append(cols)?;
 
         // 3. Perform `vectorized_equal_to`
         self.vectorized_equal_to(cols, groups);
 
         // 4. Perform scalarized inter for remaining rows
         // (about remaining rows, can see comments for `remaining_row_indices`)
-        self.scalarized_intern_remaining(cols, &batch_hashes, groups);
+        self.scalarized_intern_remaining(cols, &batch_hashes, groups)?;
 
         self.hashes_buffer = batch_hashes;
 
@@ -487,7 +486,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ///   - Check if the `group index view` is `inlined` or `non_inlined`:
     ///     If it is inlined, add to `vectorized_equal_to_group_indices` directly.
     ///     Otherwise get all group indices from `group_index_lists`, and add them.
-    ///
     fn collect_vectorized_process_context(
         &mut self,
         batch_hashes: &[u64],
@@ -542,14 +540,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                 // into `vectorized_equal_to_row_indices` and `vectorized_equal_to_group_indices`.
                 let list_offset = group_index_view.value() as usize;
                 let group_index_list = &self.group_index_lists[list_offset];
-                for &group_index in group_index_list {
-                    self.vectorized_operation_buffers
-                        .equal_to_row_indices
-                        .push(row);
-                    self.vectorized_operation_buffers
-                        .equal_to_group_indices
-                        .push(group_index);
-                }
+
+                self.vectorized_operation_buffers
+                    .equal_to_group_indices
+                    .extend_from_slice(group_index_list);
+                self.vectorized_operation_buffers
+                    .equal_to_row_indices
+                    .extend(std::iter::repeat_n(row, group_index_list.len()));
             } else {
                 let group_index = group_index_view.value() as usize;
                 self.vectorized_operation_buffers
@@ -563,13 +560,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     }
 
     /// Perform `vectorized_append`` for `rows` in `vectorized_append_row_indices`
-    fn vectorized_append(&mut self, cols: &[ArrayRef]) {
+    fn vectorized_append(&mut self, cols: &[ArrayRef]) -> Result<()> {
         if self
             .vectorized_operation_buffers
             .append_row_indices
             .is_empty()
         {
-            return;
+            return Ok(());
         }
 
         let iter = self.group_values.iter_mut().zip(cols.iter());
@@ -577,8 +574,10 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             group_column.vectorized_append(
                 col,
                 &self.vectorized_operation_buffers.append_row_indices,
-            );
+            )?;
         }
+
+        Ok(())
     }
 
     /// Perform `vectorized_equal_to`
@@ -713,19 +712,18 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// The hash collision may be not frequent, so the fallback will indeed hardly happen.
     /// In most situations, `scalarized_indices` will found to be empty after finishing to
     /// preform `vectorized_equal_to`.
-    ///
     fn scalarized_intern_remaining(
         &mut self,
         cols: &[ArrayRef],
         batch_hashes: &[u64],
         groups: &mut [usize],
-    ) {
+    ) -> Result<()> {
         if self
             .vectorized_operation_buffers
             .remaining_row_indices
             .is_empty()
         {
-            return;
+            return Ok(());
         }
 
         let mut map = mem::take(&mut self.map);
@@ -758,7 +756,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             let group_idx = self.group_values[0].len();
             let mut checklen = 0;
             for (i, group_value) in self.group_values.iter_mut().enumerate() {
-                group_value.append_val(&cols[i], row);
+                group_value.append_val(&cols[i], row)?;
                 let len = group_value.len();
                 if i == 0 {
                     checklen = len;
@@ -795,6 +793,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         }
 
         self.map = map;
+        Ok(())
     }
 
     fn scalarized_equal_to_remaining(
@@ -877,7 +876,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 /// `$v`: the vector to push the new builder into
 /// `$nullable`: whether the input can contains nulls
 /// `$t`: the primitive type of the builder
-///
 macro_rules! instantiate_primitive {
     ($v:expr, $nullable:expr, $t:ty, $data_type:ident) => {
         if $nullable {
@@ -1039,8 +1037,17 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                         let b = ByteViewGroupValueBuilder::<BinaryViewType>::new();
                         v.push(Box::new(b) as _)
                     }
+                    &DataType::Boolean => {
+                        if nullable {
+                            let b = BooleanGroupValueBuilder::<true>::new();
+                            v.push(Box::new(b) as _)
+                        } else {
+                            let b = BooleanGroupValueBuilder::<false>::new();
+                            v.push(Box::new(b) as _)
+                        }
+                    }
                     dt => {
-                        return not_impl_err!("{dt} not supported in GroupValuesColumn")
+                        return not_impl_err!("{dt} not supported in GroupValuesColumn");
                     }
                 }
             }
@@ -1167,9 +1174,9 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             if let DataType::Dictionary(_, v) = expected {
                 let actual = array.data_type();
                 if v.as_ref() != actual {
-                    return Err(DataFusionError::Internal(format!(
+                    return Err(internal_datafusion_err!(
                         "Converted group rows expected dictionary of {v} got {actual}"
-                    )));
+                    ));
                 }
                 *array = cast(array.as_ref(), expected)?;
             }
@@ -1178,14 +1185,13 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         Ok(output)
     }
 
-    fn clear_shrink(&mut self, batch: &RecordBatch) {
-        let count = batch.num_rows();
+    fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values.clear();
         self.map.clear();
-        self.map.shrink_to(count, |_| 0); // hasher does not matter since the map is cleared
+        self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
-        self.hashes_buffer.shrink_to(count);
+        self.hashes_buffer.shrink_to(num_rows);
 
         // Such structures are only used in `non-streaming` case
         if !STREAMING {
@@ -1233,7 +1239,18 @@ fn supported_type(data_type: &DataType) -> bool {
             | DataType::Timestamp(_, _)
             | DataType::Utf8View
             | DataType::BinaryView
+            | DataType::Boolean
     )
+}
+
+///Shows how many `null`s there are in an array
+enum Nulls {
+    /// All array items are `null`s
+    All,
+    /// There are both `null`s and non-`null`s in the array items
+    Some,
+    /// There are no `null`s in the array items
+    None,
 }
 
 #[cfg(test)]
@@ -1247,7 +1264,7 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use crate::aggregates::group_values::{
-        multi_group_by::GroupValuesColumn, GroupValues,
+        GroupValues, multi_group_by::GroupValuesColumn,
     };
 
     use super::GroupIndexView;
@@ -1444,7 +1461,6 @@ mod tests {
     ///   - Group not exist + bucket not found in `map`
     ///   - Group not exist + not equal to inlined group view(tested in hash collision)
     ///   - Group not exist + not equal to non-inlined group view(tested in hash collision)
-    ///
     struct VectorizedTestDataSet {
         test_batches: Vec<Vec<ArrayRef>>,
         expected_batch: RecordBatch,
@@ -1738,16 +1754,19 @@ mod tests {
     }
 
     fn check_result(actual_batch: &RecordBatch, expected_batch: &RecordBatch) {
-        let formatted_actual_batch = pretty_format_batches(&[actual_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_actual_batch =
+            pretty_format_batches(std::slice::from_ref(actual_batch))
+                .unwrap()
+                .to_string();
         let mut formatted_actual_batch_sorted: Vec<&str> =
             formatted_actual_batch.trim().lines().collect();
         formatted_actual_batch_sorted.sort_unstable();
 
-        let formatted_expected_batch = pretty_format_batches(&[expected_batch.clone()])
-            .unwrap()
-            .to_string();
+        let formatted_expected_batch =
+            pretty_format_batches(std::slice::from_ref(expected_batch))
+                .unwrap()
+                .to_string();
+
         let mut formatted_expected_batch_sorted: Vec<&str> =
             formatted_expected_batch.trim().lines().collect();
         formatted_expected_batch_sorted.sort_unstable();
@@ -1761,11 +1780,9 @@ mod tests {
                 (i, actual_line),
                 (i, expected_line),
                 "Inconsistent result\n\n\
-                 Actual batch:\n{}\n\
-                 Expected batch:\n{}\n\
+                 Actual batch:\n{formatted_actual_batch}\n\
+                 Expected batch:\n{formatted_expected_batch}\n\
                  ",
-                formatted_actual_batch,
-                formatted_expected_batch,
             );
         }
     }

@@ -19,7 +19,7 @@ use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
     runtime_env::RuntimeEnv,
 };
-use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
+use datafusion_common::{Result, internal_datafusion_err, plan_datafusion_err};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
@@ -168,9 +168,9 @@ impl FunctionRegistry for TaskContext {
         let result = self.window_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            DataFusionError::Internal(format!(
+            internal_datafusion_err!(
                 "There is no UDWF named \"{name}\" in the TaskContext"
-            ))
+            )
         })
     }
     fn register_udaf(
@@ -201,6 +201,19 @@ impl FunctionRegistry for TaskContext {
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
     }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.aggregate_functions.keys().cloned().collect()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.window_functions.keys().cloned().collect()
+    }
+}
+
+/// Produce the [`TaskContext`].
+pub trait TaskContextProvider {
+    fn task_ctx(&self) -> Arc<TaskContext>;
 }
 
 #[cfg(test)]

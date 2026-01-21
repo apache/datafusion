@@ -153,9 +153,9 @@ Filter: person.id > Int32(500) [id:Int32;N, name:Utf8;N]
 Logical plans can not be directly executed. They must be "compiled" into an
 [`ExecutionPlan`], which is often referred to as a "physical plan".
 
-Compared to `LogicalPlan`s `ExecutionPlans` have many more details such as
-specific algorithms and detailed optimizations compared to. Given a
-`LogicalPlan` the easiest way to create an `ExecutionPlan` is using
+Compared to `LogicalPlan`s, `ExecutionPlan`s have many more details such as
+specific algorithms and detailed optimizations. Given a
+`LogicalPlan`, the easiest way to create an `ExecutionPlan` is using
 [`SessionState::create_physical_plan`] as shown below
 
 ```rust
@@ -181,7 +181,7 @@ async fn main() -> Result<(), DataFusionError> {
     // TableProvider. For this example, we don't provide any data
     // but in production code, this would have `RecordBatch`es with
     // in memory data
-    let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![])?);
+    let table_provider = Arc::new(MemTable::try_new(Arc::new(schema), vec![vec![]])?);
     // Use the provider_as_source function to convert the TableProvider to a table source
     let table_source = provider_as_source(table_provider);
 
@@ -220,7 +220,7 @@ However, it is more common to use a [TableProvider]. To get a [TableSource] from
 [logicaltablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/logical_plan/builder/struct.LogicalTableSource.html
 [defaulttablesource]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
 [provider_as_source]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/fn.provider_as_source.html
-[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/provider/trait.TableProvider.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
 [tablesource]: https://docs.rs/datafusion-expr/latest/datafusion_expr/trait.TableSource.html
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`sessionstate::create_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.create_physical_plan

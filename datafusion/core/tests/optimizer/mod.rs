@@ -18,6 +18,7 @@
 //! Tests for the DataFusion SQL query planner that require functions from the
 //! datafusion-functions crate.
 
+use insta::assert_snapshot;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,17 +27,16 @@ use arrow::datatypes::{
     DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit,
 };
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{TransformedResult, TreeNode};
-use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::tree_node::TransformedResult;
+use datafusion_common::{DFSchema, Result, ScalarValue, TableReference, plan_err};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{
-    col, lit, AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator,
-    ScalarUDF, TableSource, WindowUDF,
+    AggregateUDF, BinaryExpr, Expr, ExprSchemable, LogicalPlan, Operator, ScalarUDF,
+    TableSource, WindowUDF, col, lit,
 };
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
-use datafusion_optimizer::simplify_expressions::GuaranteeRewriter;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
@@ -44,6 +44,7 @@ use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
 
 use chrono::DateTime;
+use datafusion_expr::expr_rewriter::rewrite_with_guarantees;
 use datafusion_functions::datetime;
 
 #[cfg(test)]
@@ -56,9 +57,14 @@ fn init() {
 #[test]
 fn select_arrow_cast() {
     let sql = "SELECT arrow_cast(1234, 'Float64') as f64, arrow_cast('foo', 'LargeUtf8') as large";
-    let expected = "Projection: Float64(1234) AS f64, LargeUtf8(\"foo\") AS large\
-        \n  EmptyRelation";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: Float64(1234) AS f64, LargeUtf8("foo") AS large
+      EmptyRelation: rows=1
+    "#
+    );
 }
 #[test]
 fn timestamp_nano_ts_none_predicates() -> Result<()> {
@@ -68,11 +74,15 @@ fn timestamp_nano_ts_none_predicates() -> Result<()> {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\
-         \n  Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_none]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: test.col_int32
+      Filter: test.col_ts_nano_none < TimestampNanosecond(1666612093000000000, None)
+        TableScan: test projection=[col_int32, col_ts_nano_none]
+    "
+    );
     Ok(())
 }
 
@@ -84,10 +94,15 @@ fn timestamp_nano_ts_utc_predicates() {
     // a scan should have the now()... predicate folded to a single
     // constant and compared to the column without a cast so it can be
     // pushed down / pruned
-    let expected =
-        "Projection: test.col_int32\n  Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some(\"+00:00\"))\
-         \n    TableScan: test projection=[col_int32, col_ts_nano_utc]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: test.col_int32
+      Filter: test.col_ts_nano_utc < TimestampNanosecond(1666612093000000000, Some("+00:00"))
+        TableScan: test projection=[col_int32, col_ts_nano_utc]
+    "#
+    );
 }
 
 #[test]
@@ -95,10 +110,14 @@ fn concat_literals() -> Result<()> {
     let sql = "SELECT concat(true, col_int32, false, null, 'hello', col_utf8, 12, 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat(Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"falsehello\"), test.col_utf8, Utf8(\"123.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    quick_test(sql, expected);
+    let plan = test_sql(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: concat(Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("falsehello"), test.col_utf8, Utf8("123.4")) AS col
+      TableScan: test projection=[col_int32, col_utf8]
+    "#
+    );
     Ok(())
 }
 
@@ -107,16 +126,15 @@ fn concat_ws_literals() -> Result<()> {
     let sql = "SELECT concat_ws('-', true, col_int32, false, null, 'hello', col_utf8, 12, '', 3.4) \
         AS col
         FROM test";
-    let expected =
-        "Projection: concat_ws(Utf8(\"-\"), Utf8(\"true\"), CAST(test.col_int32 AS Utf8), Utf8(\"false-hello\"), test.col_utf8, Utf8(\"12--3.4\")) AS col\
-        \n  TableScan: test projection=[col_int32, col_utf8]";
-    quick_test(sql, expected);
-    Ok(())
-}
-
-fn quick_test(sql: &str, expected_plan: &str) {
     let plan = test_sql(sql).unwrap();
-    assert_eq!(expected_plan, format!("{}", plan));
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: concat_ws(Utf8("-"), Utf8("true"), CAST(test.col_int32 AS Utf8), Utf8("false-hello"), test.col_utf8, Utf8("12--3.4")) AS col
+      TableScan: test projection=[col_int32, col_utf8]
+    "#
+    );
+    Ok(())
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
@@ -126,8 +144,9 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let statement = &ast[0];
 
     // create a logical query plan
+    let config = ConfigOptions::default();
     let context_provider = MyContextProvider::default()
-        .with_udf(datetime::now())
+        .with_udf(datetime::now(&config))
         .with_udf(datafusion_functions::core::arrow_cast())
         .with_udf(datafusion_functions::string::concat())
         .with_udf(datafusion_functions::string::concat_ws());
@@ -142,7 +161,7 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let analyzer = Analyzer::new();
     let optimizer = Optimizer::new();
     // analyze and optimize the logical plan
-    let plan = analyzer.execute_and_check(plan, config.options(), |_, _| {})?;
+    let plan = analyzer.execute_and_check(plan, &config.options(), |_, _| {})?;
     optimizer.optimize(plan, &config, |_, _| {})
 }
 
@@ -268,7 +287,7 @@ fn test_nested_schema_nullability() {
 
 #[test]
 fn test_inequalities_non_null_bounded() {
-    let guarantees = vec![
+    let guarantees = [
         // x ∈ [1, 3] (not null)
         (
             col("x"),
@@ -284,8 +303,6 @@ fn test_inequalities_non_null_bounded() {
             },
         ),
     ];
-
-    let mut rewriter = GuaranteeRewriter::new(guarantees.iter());
 
     // (original_expr, expected_simplification)
     let simplified_cases = &[
@@ -318,7 +335,7 @@ fn test_inequalities_non_null_bounded() {
         ),
     ];
 
-    validate_simplified_cases(&mut rewriter, simplified_cases);
+    validate_simplified_cases(&guarantees, simplified_cases);
 
     let unchanged_cases = &[
         col("x").gt(lit(2)),
@@ -329,31 +346,35 @@ fn test_inequalities_non_null_bounded() {
         col("x").not_between(lit(3), lit(10)),
     ];
 
-    validate_unchanged_cases(&mut rewriter, unchanged_cases);
+    validate_unchanged_cases(&guarantees, unchanged_cases);
 }
 
-fn validate_simplified_cases<T>(rewriter: &mut GuaranteeRewriter, cases: &[(Expr, T)])
-where
+fn validate_simplified_cases<T>(
+    guarantees: &[(Expr, NullableInterval)],
+    cases: &[(Expr, T)],
+) where
     ScalarValue: From<T>,
     T: Clone,
 {
     for (expr, expected_value) in cases {
-        let output = expr.clone().rewrite(rewriter).data().unwrap();
+        let output = rewrite_with_guarantees(expr.clone(), guarantees)
+            .data()
+            .unwrap();
         let expected = lit(ScalarValue::from(expected_value.clone()));
         assert_eq!(
             output, expected,
-            "{} simplified to {}, but expected {}",
-            expr, output, expected
+            "{expr} simplified to {output}, but expected {expected}"
         );
     }
 }
-fn validate_unchanged_cases(rewriter: &mut GuaranteeRewriter, cases: &[Expr]) {
+fn validate_unchanged_cases(guarantees: &[(Expr, NullableInterval)], cases: &[Expr]) {
     for expr in cases {
-        let output = expr.clone().rewrite(rewriter).data().unwrap();
+        let output = rewrite_with_guarantees(expr.clone(), guarantees)
+            .data()
+            .unwrap();
         assert_eq!(
             &output, expr,
-            "{} was simplified to {}, but expected it to be unchanged",
-            expr, output
+            "{expr} was simplified to {output}, but expected it to be unchanged"
         );
     }
 }

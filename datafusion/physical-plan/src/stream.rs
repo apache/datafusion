@@ -22,19 +22,25 @@ use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
-use super::metrics::BaselineMetrics;
+#[cfg(test)]
+use super::metrics::ExecutionPlanMetricsSet;
+use super::metrics::{BaselineMetrics, SplitMetrics};
 use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
+use crate::spill::get_record_batch_memory_size;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryReservation;
 
+use futures::ready;
 use futures::stream::BoxStream;
 use futures::{Future, Stream, StreamExt};
 use log::debug;
 use pin_project_lite::pin_project;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
@@ -81,6 +87,15 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.join_set.spawn(task);
     }
 
+    /// Same as [`Self::spawn`] but it spawns the task on the provided runtime
+    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_on(task, handle);
+    }
+
     /// Spawn a blocking task that will be aborted if this builder (or the stream
     /// built from it) are dropped.
     ///
@@ -92,6 +107,15 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: Send + 'static,
     {
         self.join_set.spawn_blocking(f);
+    }
+
+    /// Same as [`Self::spawn_blocking`] but it spawns the blocking task on the provided runtime
+    pub fn spawn_blocking_on<F>(&mut self, f: F, handle: &Handle)
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        self.join_set.spawn_blocking_on(f, handle);
     }
 
     /// Create a stream of all data written to `tx`
@@ -185,7 +209,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 /// let schema_1 = Arc::clone(&schema);
 /// builder.spawn(async move {
 ///     // Your task needs to send batches to the tx
-///     tx_1.send(Ok(RecordBatch::new_empty(schema_1))).await.unwrap();
+///     tx_1.send(Ok(RecordBatch::new_empty(schema_1)))
+///         .await
+///         .unwrap();
 ///
 ///     Ok(())
 /// });
@@ -195,7 +221,9 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
 /// let schema_2 = Arc::clone(&schema);
 /// builder.spawn(async move {
 ///     // Your task needs to send batches to the tx
-///     tx_2.send(Ok(RecordBatch::new_empty(schema_2))).await.unwrap();
+///     tx_2.send(Ok(RecordBatch::new_empty(schema_2)))
+///         .await
+///         .unwrap();
 ///
 ///     Ok(())
 /// });
@@ -245,6 +273,15 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
+    /// Same as [`Self::spawn`] but it spawns the task on the provided runtime.
+    pub fn spawn_on<F>(&mut self, task: F, handle: &Handle)
+    where
+        F: Future<Output = Result<()>>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_on(task, handle)
+    }
+
     /// Spawn a blocking task tied to the builder and stream.
     ///
     /// # Drop / Cancel Behavior
@@ -270,6 +307,15 @@ impl RecordBatchReceiverStreamBuilder {
         F: Send + 'static,
     {
         self.inner.spawn_blocking(f)
+    }
+
+    /// Same as [`Self::spawn_blocking`] but it spawns the blocking task on the provided runtime.
+    pub fn spawn_blocking_on<F>(&mut self, f: F, handle: &Handle)
+    where
+        F: FnOnce() -> Result<()>,
+        F: Send + 'static,
+    {
+        self.inner.spawn_blocking_on(f, handle)
     }
 
     /// Runs the `partition` of the `input` ExecutionPlan on the
@@ -377,9 +423,10 @@ impl<S> RecordBatchStreamAdapter<S> {
     /// # use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
     /// // Create stream of Result<RecordBatch>
     /// let batch = record_batch!(
-    ///   ("a", Int32, [1, 2, 3]),
-    ///   ("b", Float64, [Some(4.0), None, Some(5.0)])
-    /// ).expect("created batch");
+    ///     ("a", Int32, [1, 2, 3]),
+    ///     ("b", Float64, [Some(4.0), None, Some(5.0)])
+    /// )
+    /// .expect("created batch");
     /// let schema = batch.schema();
     /// let stream = futures::stream::iter(vec![Ok(batch)]);
     /// // Convert the stream to a SendableRecordBatchStream
@@ -522,11 +569,207 @@ impl Stream for ObservedStream {
     }
 }
 
+pin_project! {
+    /// Stream wrapper that splits large [`RecordBatch`]es into smaller batches.
+    ///
+    /// This ensures upstream operators receive batches no larger than
+    /// `batch_size`, which can improve parallelism when data sources
+    /// generate very large batches.
+    ///
+    /// # Fields
+    ///
+    /// - `current_batch`: The batch currently being split, if any
+    /// - `offset`: Index of the next row to split from `current_batch`.
+    ///   This tracks our position within the current batch being split.
+    ///
+    /// # Invariants
+    ///
+    /// - `offset` is always ≤ `current_batch.num_rows()` when `current_batch` is `Some`
+    /// - When `current_batch` is `None`, `offset` is always 0
+    /// - `batch_size` is always > 0
+pub struct BatchSplitStream {
+        #[pin]
+        input: SendableRecordBatchStream,
+        schema: SchemaRef,
+        batch_size: usize,
+        metrics: SplitMetrics,
+        current_batch: Option<RecordBatch>,
+        offset: usize,
+    }
+}
+
+impl BatchSplitStream {
+    /// Create a new [`BatchSplitStream`]
+    pub fn new(
+        input: SendableRecordBatchStream,
+        batch_size: usize,
+        metrics: SplitMetrics,
+    ) -> Self {
+        let schema = input.schema();
+        Self {
+            input,
+            schema,
+            batch_size,
+            metrics,
+            current_batch: None,
+            offset: 0,
+        }
+    }
+
+    /// Attempt to produce the next sliced batch from the current batch.
+    ///
+    /// Returns `Some(batch)` if a slice was produced, `None` if the current batch
+    /// is exhausted and we need to poll upstream for more data.
+    fn next_sliced_batch(&mut self) -> Option<Result<RecordBatch>> {
+        let batch = self.current_batch.take()?;
+
+        // Assert slice boundary safety - offset should never exceed batch size
+        debug_assert!(
+            self.offset <= batch.num_rows(),
+            "Offset {} exceeds batch size {}",
+            self.offset,
+            batch.num_rows()
+        );
+
+        let remaining = batch.num_rows() - self.offset;
+        let to_take = remaining.min(self.batch_size);
+        let out = batch.slice(self.offset, to_take);
+
+        self.metrics.batches_split.add(1);
+        self.offset += to_take;
+        if self.offset < batch.num_rows() {
+            // More data remains in this batch, store it back
+            self.current_batch = Some(batch);
+        } else {
+            // Batch is exhausted, reset offset
+            // Note: current_batch is already None since we took it at the start
+            self.offset = 0;
+        }
+        Some(Ok(out))
+    }
+
+    /// Poll the upstream input for the next batch.
+    ///
+    /// Returns the appropriate `Poll` result based on upstream state.
+    /// Small batches are passed through directly, large batches are stored
+    /// for slicing and return the first slice immediately.
+    fn poll_upstream(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        match ready!(self.input.as_mut().poll_next(cx)) {
+            Some(Ok(batch)) => {
+                if batch.num_rows() <= self.batch_size {
+                    // Small batch, pass through directly
+                    Poll::Ready(Some(Ok(batch)))
+                } else {
+                    // Large batch, store for slicing and return first slice
+                    self.current_batch = Some(batch);
+                    // Immediately produce the first slice
+                    match self.next_sliced_batch() {
+                        Some(result) => Poll::Ready(Some(result)),
+                        None => Poll::Ready(None), // Should not happen
+                    }
+                }
+            }
+            Some(Err(e)) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl Stream for BatchSplitStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // First, try to produce a slice from the current batch
+        if let Some(result) = self.next_sliced_batch() {
+            return Poll::Ready(Some(result));
+        }
+
+        // No current batch or current batch exhausted, poll upstream
+        self.poll_upstream(cx)
+    }
+}
+
+impl RecordBatchStream for BatchSplitStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
+/// A stream that holds a memory reservation for its lifetime,
+/// shrinking the reservation as batches are consumed.
+/// The original reservation must have its batch sizes calculated using [`get_record_batch_memory_size`]
+/// On error, the reservation is *NOT* freed, until the stream is dropped.
+pub(crate) struct ReservationStream {
+    schema: SchemaRef,
+    inner: SendableRecordBatchStream,
+    reservation: MemoryReservation,
+}
+
+impl ReservationStream {
+    pub(crate) fn new(
+        schema: SchemaRef,
+        inner: SendableRecordBatchStream,
+        reservation: MemoryReservation,
+    ) -> Self {
+        Self {
+            schema,
+            inner,
+            reservation,
+        }
+    }
+}
+
+impl Stream for ReservationStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let res = self.inner.poll_next_unpin(cx);
+
+        match res {
+            Poll::Ready(res) => {
+                match res {
+                    Some(Ok(batch)) => {
+                        self.reservation
+                            .shrink(get_record_batch_memory_size(&batch));
+                        Poll::Ready(Some(Ok(batch)))
+                    }
+                    Some(Err(err)) => Poll::Ready(Some(Err(err))),
+                    None => {
+                        // Stream is done so free the reservation completely
+                        self.reservation.free();
+                        Poll::Ready(None)
+                    }
+                }
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl RecordBatchStream for ReservationStream {
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::test::exec::{
-        assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
+        BlockingExec, MockExec, PanicExec, assert_strong_count_converges_to_zero,
     };
 
     use arrow::datatypes::{DataType, Field, Schema};
@@ -616,6 +859,44 @@ mod test {
         assert!(stream.next().await.is_none());
     }
 
+    #[tokio::test]
+    async fn batch_split_stream_basic_functionality() {
+        use arrow::array::{Int32Array, RecordBatch};
+        use futures::stream::{self, StreamExt};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create a large batch that should be split
+        let large_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..2000).collect::<Vec<_>>()))],
+        )
+        .unwrap();
+
+        // Create a stream with the large batch
+        let input_stream = stream::iter(vec![Ok(large_batch)]);
+        let adapter = RecordBatchStreamAdapter::new(Arc::clone(&schema), input_stream);
+        let batch_stream = Box::pin(adapter) as SendableRecordBatchStream;
+
+        // Create a BatchSplitStream with batch_size = 500
+        let metrics = ExecutionPlanMetricsSet::new();
+        let split_metrics = SplitMetrics::new(&metrics, 0);
+        let mut split_stream = BatchSplitStream::new(batch_stream, 500, split_metrics);
+
+        let mut total_rows = 0;
+        let mut batch_count = 0;
+
+        while let Some(result) = split_stream.next().await {
+            let batch = result.unwrap();
+            assert!(batch.num_rows() <= 500, "Batch size should not exceed 500");
+            total_rows += batch.num_rows();
+            batch_count += 1;
+        }
+
+        assert_eq!(total_rows, 2000, "All rows should be preserved");
+        assert_eq!(batch_count, 4, "Should have 4 batches of 500 rows each");
+    }
+
     /// Consumes all the input's partitions into a
     /// RecordBatchReceiverStream and runs it to completion
     ///
@@ -648,5 +929,187 @@ mod test {
                 "Got the limit of {num_batches} batches before seeing panic"
             );
         }
+    }
+
+    #[test]
+    fn record_batch_receiver_stream_builder_spawn_on_runtime() {
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let mut builder =
+            RecordBatchReceiverStreamBuilder::new(Arc::new(Schema::empty()), 10);
+
+        let tx1 = builder.tx();
+        builder.spawn_on(
+            async move {
+                tx1.send(Ok(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+                    .await
+                    .unwrap();
+
+                Ok(())
+            },
+            tokio_runtime.handle(),
+        );
+
+        let tx2 = builder.tx();
+        builder.spawn_blocking_on(
+            move || {
+                tx2.blocking_send(Ok(RecordBatch::new_empty(Arc::new(Schema::empty()))))
+                    .unwrap();
+
+                Ok(())
+            },
+            tokio_runtime.handle(),
+        );
+
+        let mut stream = builder.build();
+
+        let mut number_of_batches = 0;
+
+        loop {
+            let poll = stream.poll_next_unpin(&mut Context::from_waker(
+                futures::task::noop_waker_ref(),
+            ));
+
+            match poll {
+                Poll::Ready(None) => {
+                    break;
+                }
+                Poll::Ready(Some(Ok(batch))) => {
+                    number_of_batches += 1;
+                    assert_eq!(batch.num_rows(), 0);
+                }
+                Poll::Ready(Some(Err(e))) => panic!("Unexpected error: {e}"),
+                Poll::Pending => {
+                    continue;
+                }
+            }
+        }
+
+        assert_eq!(
+            number_of_batches, 2,
+            "Should have received exactly two empty batches"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_reservation_stream_shrinks_on_poll() {
+        use arrow::array::Int32Array;
+        use datafusion_execution::memory_pool::MemoryConsumer;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(10 * 1024 * 1024, 1.0)
+            .build_arc()
+            .unwrap();
+
+        let mut reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create batches
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+        )
+        .unwrap();
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10]))],
+        )
+        .unwrap();
+
+        let batch1_size = get_record_batch_memory_size(&batch1);
+        let batch2_size = get_record_batch_memory_size(&batch2);
+
+        // Reserve memory upfront
+        reservation.try_grow(batch1_size + batch2_size).unwrap();
+        let initial_reserved = runtime.memory_pool.reserved();
+        assert_eq!(initial_reserved, batch1_size + batch2_size);
+
+        // Create stream with batches
+        let stream = futures::stream::iter(vec![Ok(batch1), Ok(batch2)]);
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
+
+        let mut res_stream =
+            ReservationStream::new(Arc::clone(&schema), inner, reservation);
+
+        // Poll first batch
+        let result1 = res_stream.next().await;
+        assert!(result1.is_some());
+
+        // Memory should be reduced by batch1_size
+        let after_first = runtime.memory_pool.reserved();
+        assert_eq!(after_first, batch2_size);
+
+        // Poll second batch
+        let result2 = res_stream.next().await;
+        assert!(result2.is_some());
+
+        // Memory should be reduced by batch2_size
+        let after_second = runtime.memory_pool.reserved();
+        assert_eq!(after_second, 0);
+
+        // Poll None (end of stream)
+        let result3 = res_stream.next().await;
+        assert!(result3.is_none());
+
+        // Memory should still be 0
+        assert_eq!(runtime.memory_pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_reservation_stream_error_handling() {
+        use datafusion_execution::memory_pool::MemoryConsumer;
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(10 * 1024 * 1024, 1.0)
+            .build_arc()
+            .unwrap();
+
+        let mut reservation = MemoryConsumer::new("test").register(&runtime.memory_pool);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        reservation.try_grow(1000).unwrap();
+        let initial = runtime.memory_pool.reserved();
+        assert_eq!(initial, 1000);
+
+        // Create a stream that errors
+        let stream = futures::stream::iter(vec![exec_err!("Test error")]);
+        let inner = Box::pin(RecordBatchStreamAdapter::new(Arc::clone(&schema), stream))
+            as SendableRecordBatchStream;
+
+        let mut res_stream =
+            ReservationStream::new(Arc::clone(&schema), inner, reservation);
+
+        // Get the error
+        let result = res_stream.next().await;
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+
+        // Verify reservation is NOT automatically freed on error
+        // The reservation is only freed when poll_next returns Poll::Ready(None)
+        // After an error, the stream may continue to hold the reservation
+        // until it's explicitly dropped or polled to None
+        let after_error = runtime.memory_pool.reserved();
+        assert_eq!(
+            after_error, 1000,
+            "Reservation should still be held after error"
+        );
+
+        // Drop the stream to free the reservation
+        drop(res_stream);
+
+        // Now memory should be freed
+        assert_eq!(
+            runtime.memory_pool.reserved(),
+            0,
+            "Memory should be freed when stream is dropped"
+        );
     }
 }

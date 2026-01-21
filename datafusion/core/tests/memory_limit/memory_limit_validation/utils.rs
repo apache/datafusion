@@ -16,16 +16,14 @@
 // under the License.
 
 use datafusion_common_runtime::SpawnedTask;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_execution::{
-    memory_pool::{human_readable_size, FairSpillPool},
-    runtime_env::RuntimeEnvBuilder,
-};
+use datafusion_common::human_readable_size;
+use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBuilder};
 
 /// Measures the maximum RSS (in bytes) during the execution of an async task. RSS
 /// will be sampled every 7ms.
@@ -40,7 +38,7 @@ use datafusion_execution::{
 async fn measure_max_rss<F, Fut, T>(f: F) -> (T, usize)
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = T>,
+    Fut: Future<Output = T>,
 {
     // Initialize system information
     let mut system = System::new_all();

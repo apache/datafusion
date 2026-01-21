@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, AsArray};
+use arrow::array::{Array, ArrayRef, Scalar};
 use arrow::compute::contains as arrow_contains;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Boolean, LargeUtf8, Utf8, Utf8View};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::binary::{binary_to_string_coercion, string_coercion};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -46,7 +45,7 @@ use std::sync::Arc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "search_str", description = "The string to search for in str.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ContainsFunc {
     signature: Signature,
 }
@@ -89,7 +88,7 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(contains, vec![])(&args.args)
+        contains(args.args.as_slice())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -97,50 +96,78 @@ impl ScalarUDFImpl for ContainsFunc {
     }
 }
 
+fn to_array(value: &ColumnarValue) -> Result<(ArrayRef, bool)> {
+    match value {
+        ColumnarValue::Array(array) => Ok((Arc::clone(array), false)),
+        ColumnarValue::Scalar(scalar) => Ok((scalar.to_array()?, true)),
+    }
+}
+
+/// Helper to call arrow_contains with proper Datum handling.
+/// When an argument is marked as scalar, we wrap it in `Scalar` to tell arrow's
+/// kernel to use the optimized single-value code path instead of iterating.
+fn call_arrow_contains(
+    haystack: &ArrayRef,
+    haystack_is_scalar: bool,
+    needle: &ArrayRef,
+    needle_is_scalar: bool,
+) -> Result<ColumnarValue> {
+    // Arrow's Datum trait is implemented for ArrayRef, Arc<dyn Array>, and Scalar<T>
+    // We pass ArrayRef directly when not scalar, or wrap in Scalar when it is
+    let result = match (haystack_is_scalar, needle_is_scalar) {
+        (false, false) => arrow_contains(haystack, needle)?,
+        (false, true) => arrow_contains(haystack, &Scalar::new(Arc::clone(needle)))?,
+        (true, false) => arrow_contains(&Scalar::new(Arc::clone(haystack)), needle)?,
+        (true, true) => arrow_contains(
+            &Scalar::new(Arc::clone(haystack)),
+            &Scalar::new(Arc::clone(needle)),
+        )?,
+    };
+
+    // If both inputs were scalar, return a scalar result
+    if haystack_is_scalar && needle_is_scalar {
+        let scalar = datafusion_common::ScalarValue::try_from_array(&result, 0)?;
+        Ok(ColumnarValue::Scalar(scalar))
+    } else {
+        Ok(ColumnarValue::Array(Arc::new(result)))
+    }
+}
+
 /// use `arrow::compute::contains` to do the calculation for contains
-fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+fn contains(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let (haystack, haystack_is_scalar) = to_array(&args[0])?;
+    let (needle, needle_is_scalar) = to_array(&args[1])?;
+
     if let Some(coercion_data_type) =
-        string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
-            binary_to_string_coercion(args[0].data_type(), args[1].data_type())
+        string_coercion(haystack.data_type(), needle.data_type()).or_else(|| {
+            binary_to_string_coercion(haystack.data_type(), needle.data_type())
         })
     {
-        let arg0 = if args[0].data_type() == &coercion_data_type {
-            Arc::clone(&args[0])
+        let haystack = if haystack.data_type() == &coercion_data_type {
+            haystack
         } else {
-            arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
+            arrow::compute::kernels::cast::cast(&haystack, &coercion_data_type)?
         };
-        let arg1 = if args[1].data_type() == &coercion_data_type {
-            Arc::clone(&args[1])
+        let needle = if needle.data_type() == &coercion_data_type {
+            needle
         } else {
-            arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
+            arrow::compute::kernels::cast::cast(&needle, &coercion_data_type)?
         };
 
         match coercion_data_type {
-            Utf8View => {
-                let mod_str = arg0.as_string_view();
-                let match_str = arg1.as_string_view();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
-            Utf8 => {
-                let mod_str = arg0.as_string::<i32>();
-                let match_str = arg1.as_string::<i32>();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
-            LargeUtf8 => {
-                let mod_str = arg0.as_string::<i64>();
-                let match_str = arg1.as_string::<i64>();
-                let res = arrow_contains(mod_str, match_str)?;
-                Ok(Arc::new(res) as ArrayRef)
-            }
+            Utf8View | Utf8 | LargeUtf8 => call_arrow_contains(
+                &haystack,
+                haystack_is_scalar,
+                &needle,
+                needle_is_scalar,
+            ),
             other => {
                 exec_err!("Unsupported data type {other:?} for function `contains`.")
             }
         }
     } else {
         exec_err!(
-            "Unsupported data type {:?}, {:?} for function `contains`.",
+            "Unsupported data type {}, {:?} for function `contains`.",
             args[0].data_type(),
             args[1].data_type()
         )
@@ -150,10 +177,12 @@ fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 #[cfg(test)]
 mod test {
     use super::ContainsFunc;
+    use crate::expr_fn::contains;
     use arrow::array::{BooleanArray, StringArray};
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -165,15 +194,16 @@ mod test {
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
         let arg_fields = vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("a", DataType::Utf8, true),
+            Field::new("a", DataType::Utf8, true).into(),
+            Field::new("a", DataType::Utf8, true).into(),
         ];
 
         let args = ScalarFunctionArgs {
             args: vec![array, scalar],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 2,
-            return_field: &Field::new("f", DataType::Boolean, true),
+            return_field: Field::new("f", DataType::Boolean, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let actual = udf.invoke_with_args(args).unwrap();
@@ -184,6 +214,21 @@ mod test {
         assert_eq!(
             *actual.into_array(2).unwrap(),
             *expect.into_array(2).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_contains_api() {
+        let expr = contains(
+            Expr::Literal(
+                ScalarValue::Utf8(Some("the quick brown fox".to_string())),
+                None,
+            ),
+            Expr::Literal(ScalarValue::Utf8(Some("row".to_string())), None),
+        );
+        assert_eq!(
+            expr.to_string(),
+            "contains(Utf8(\"the quick brown fox\"), Utf8(\"row\"))"
         );
     }
 }

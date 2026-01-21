@@ -28,24 +28,24 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
-    RecordBatch, StringArray, StructArray,
+    ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
+    cast::AsArray, downcast_dictionary_array,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
-    as_float32_array, as_float64_array, as_int16_array, as_int32_array, as_int64_array,
-    as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
-    as_uint32_array, as_uint64_array, as_uint8_array,
+    as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
+    as_int64_array, as_string_array, as_string_view_array, as_uint8_array,
+    as_uint16_array, as_uint32_array, as_uint64_array,
 };
-use datafusion_common::{exec_datafusion_err, not_impl_err, DataFusionError};
+use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::TaskContext;
 
 use chrono::NaiveDate;
+use datafusion_execution::TaskContext;
 use futures::StreamExt;
 use object_store::path::Path;
-use rand::distributions::DistString;
+use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
@@ -67,6 +67,11 @@ pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 /// A path with an extension will force only a single file to
 /// be written with the extension from the path. Otherwise the default extension
 /// will be used and the output will be split into multiple files.
+///
+/// Output file guarantees:
+///  - Partitioned files: Files are created only for non-empty partitions.
+///  - Single-file output: 1 file is always written, even when the stream is empty.
+///  - Multi-file output: Depending on the number of record batches, 0 or more files are written.
 ///
 /// Examples of `base_output_path`
 ///  * `tmp/dataset/` -> is a folder since it ends in `/`
@@ -151,8 +156,7 @@ async fn row_count_demuxer(
     let max_buffered_batches = exec_options.max_buffered_batches_per_output_file;
     let minimum_parallel_files = exec_options.minimum_parallel_output_files;
     let mut part_idx = 0;
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let mut open_file_streams = Vec::with_capacity(minimum_parallel_files);
 
@@ -172,7 +176,26 @@ async fn row_count_demuxer(
         max_rows_per_file
     };
 
+    if single_file_output {
+        // ensure we have one file open, even when the input stream is empty
+        open_file_streams.push(create_new_file_stream(
+            &base_output_path,
+            &write_id,
+            part_idx,
+            &file_extension,
+            single_file_output,
+            max_buffered_batches,
+            &mut tx,
+        )?);
+        row_counts.push(0);
+        part_idx += 1;
+    }
+
+    let schema = input.schema();
+    let mut is_batch_received = false;
+
     while let Some(rb) = input.next().await.transpose()? {
+        is_batch_received = true;
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
             open_file_streams.push(create_new_file_stream(
@@ -204,13 +227,24 @@ async fn row_count_demuxer(
             .send(rb)
             .await
             .map_err(|_| {
-                DataFusionError::Execution(
-                    "Error sending RecordBatch to file stream!".into(),
-                )
+                exec_datafusion_err!("Error sending RecordBatch to file stream!")
             })?;
 
         next_send_steam = (next_send_steam + 1) % minimum_parallel_files;
     }
+
+    // if there is no batch send but with a single file, send an empty batch
+    if single_file_output && !is_batch_received {
+        open_file_streams
+            .first_mut()
+            .ok_or_else(|| internal_datafusion_err!("Expected a single output file"))?
+            .send(RecordBatch::new_empty(schema))
+            .await
+            .map_err(|_| {
+                exec_datafusion_err!("Error sending empty RecordBatch to file stream!")
+            })?;
+    }
+
     Ok(())
 }
 
@@ -225,7 +259,7 @@ fn generate_file_path(
     if !single_file_output {
         base_output_path
             .prefix()
-            .child(format!("{}_{}.{}", write_id, part_idx, file_extension))
+            .child(format!("{write_id}_{part_idx}.{file_extension}"))
     } else {
         base_output_path.prefix().to_owned()
     }
@@ -249,9 +283,8 @@ fn create_new_file_stream(
         single_file_output,
     );
     let (tx_file, rx_file) = mpsc::channel(max_buffered_batches / 2);
-    tx.send((file_path, rx_file)).map_err(|_| {
-        DataFusionError::Execution("Error sending RecordBatch to file stream!".into())
-    })?;
+    tx.send((file_path, rx_file))
+        .map_err(|_| exec_datafusion_err!("Error sending RecordBatch to file stream!"))?;
     Ok(tx_file)
 }
 
@@ -267,8 +300,7 @@ async fn hive_style_partitions_demuxer(
     file_extension: String,
     keep_partition_by_columns: bool,
 ) -> Result<()> {
-    let write_id =
-        rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let write_id = rand::distr::Alphanumeric.sample_string(&mut rand::rng(), 16);
 
     let exec_options = &context.session_config().options().execution;
     let max_buffered_recordbatches = exec_options.max_buffered_batches_per_output_file;
@@ -281,7 +313,7 @@ async fn hive_style_partitions_demuxer(
         let all_partition_values = compute_partition_keys_by_row(&rb, &partition_by)?;
 
         // Next compute how the batch should be split up to take each distinct key to its own batch
-        let take_map = compute_take_arrays(&rb, all_partition_values);
+        let take_map = compute_take_arrays(&rb, &all_partition_values);
 
         // Divide up the batch into distinct partition key batches and send each batch
         for (part_key, mut builder) in take_map.into_iter() {
@@ -309,17 +341,13 @@ async fn hive_style_partitions_demuxer(
                     );
 
                     tx.send((file_path, part_rx)).map_err(|_| {
-                        DataFusionError::Execution(
-                            "Error sending new file stream!".into(),
-                        )
+                        exec_datafusion_err!("Error sending new file stream!")
                     })?;
 
                     value_map.insert(part_key.clone(), part_tx);
-                    value_map
-                        .get_mut(&part_key)
-                        .ok_or(DataFusionError::Internal(
-                            "Key must exist since it was just inserted!".into(),
-                        ))?
+                    value_map.get_mut(&part_key).ok_or_else(|| {
+                        exec_datafusion_err!("Key must exist since it was just inserted!")
+                    })?
                 }
             };
 
@@ -331,7 +359,7 @@ async fn hive_style_partitions_demuxer(
 
             // Finally send the partial batch partitioned by distinct value!
             part_tx.send(final_batch_to_send).await.map_err(|_| {
-                DataFusionError::Internal("Unexpected error sending parted batch!".into())
+                internal_datafusion_err!("Unexpected error sending parted batch!")
             })?;
         }
     }
@@ -491,9 +519,9 @@ fn compute_partition_keys_by_row<'a>(
             }
             _ => {
                 return not_impl_err!(
-                "it is not yet supported to write to hive partitions with datatype {}",
-                dtype
-            )
+                    "it is not yet supported to write to hive partitions with datatype {}",
+                    dtype
+                );
             }
         }
 
@@ -505,7 +533,7 @@ fn compute_partition_keys_by_row<'a>(
 
 fn compute_take_arrays(
     rb: &RecordBatch,
-    all_partition_values: Vec<Vec<Cow<str>>>,
+    all_partition_values: &[Vec<Cow<str>>],
 ) -> HashMap<Vec<String>, UInt64Builder> {
     let mut take_map = HashMap::new();
     for i in 0..rb.num_rows() {
@@ -513,7 +541,7 @@ fn compute_take_arrays(
         for vals in all_partition_values.iter() {
             part_key.push(vals[i].clone().into());
         }
-        let builder = take_map.entry(part_key).or_insert(UInt64Builder::new());
+        let builder = take_map.entry(part_key).or_insert_with(UInt64Builder::new);
         builder.append_value(i as u64);
     }
     take_map
@@ -556,5 +584,5 @@ fn compute_hive_style_file_path(
         file_path = file_path.child(format!("{}={}", partition_by[j].0, part_key[j]));
     }
 
-    file_path.child(format!("{}.{}", write_id, file_extension))
+    file_path.child(format!("{write_id}.{file_extension}"))
 }

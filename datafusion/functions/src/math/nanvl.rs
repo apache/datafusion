@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
 
-use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
-use arrow::datatypes::DataType::{Float32, Float64};
-use arrow::datatypes::{DataType, Float32Type, Float64Type};
-use datafusion_common::{exec_err, DataFusionError, Result};
+use arrow::array::{ArrayRef, AsArray, Float16Array, Float32Array, Float64Array};
+use arrow::datatypes::DataType::{Float16, Float32, Float64};
+use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -36,6 +36,14 @@ use datafusion_macros::user_doc;
     description = r#"Returns the first argument if it's not _NaN_.
 Returns the second argument otherwise."#,
     syntax_example = "nanvl(expression_x, expression_y)",
+    sql_example = r#"```sql
+> SELECT nanvl(0, 5);
++------------+
+| nanvl(0,5) |
++------------+
+| 0          |
++------------+
+```"#,
     argument(
         name = "expression_x",
         description = "Numeric expression to return if it's not _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -45,7 +53,7 @@ Returns the second argument otherwise."#,
         description = "Numeric expression to return if the first expression is _NaN_. Can be a constant, column, or function, and any combination of arithmetic operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NanvlFunc {
     signature: Signature,
 }
@@ -58,10 +66,13 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+                vec![
+                    Exact(vec![Float16, Float16]),
+                    Exact(vec![Float32, Float32]),
+                    Exact(vec![Float64, Float64]),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -83,6 +94,7 @@ impl ScalarUDFImpl for NanvlFunc {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
+            Float16 => Ok(Float16),
             Float32 => Ok(Float32),
             _ => Ok(Float64),
         }
@@ -102,11 +114,7 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Float64 => {
             let compute_nanvl = |x: f64, y: f64| {
-                if x.is_nan() {
-                    y
-                } else {
-                    x
-                }
+                if x.is_nan() { y } else { x }
             };
 
             let x = args[0].as_primitive() as &Float64Array;
@@ -117,16 +125,25 @@ fn nanvl(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Float32 => {
             let compute_nanvl = |x: f32, y: f32| {
-                if x.is_nan() {
-                    y
-                } else {
-                    x
-                }
+                if x.is_nan() { y } else { x }
             };
 
             let x = args[0].as_primitive() as &Float32Array;
             let y = args[1].as_primitive() as &Float32Array;
             arrow::compute::binary::<_, _, _, Float32Type>(x, y, compute_nanvl)
+                .map(|res| Arc::new(res) as _)
+                .map_err(DataFusionError::from)
+        }
+        Float16 => {
+            let compute_nanvl =
+                |x: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native,
+                 y: <Float16Type as arrow::datatypes::ArrowPrimitiveType>::Native| {
+                    if x.is_nan() { y } else { x }
+                };
+
+            let x = args[0].as_primitive() as &Float16Array;
+            let y = args[1].as_primitive() as &Float16Array;
+            arrow::compute::binary::<_, _, _, Float16Type>(x, y, compute_nanvl)
                 .map(|res| Arc::new(res) as _)
                 .map_err(DataFusionError::from)
         }

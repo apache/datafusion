@@ -67,12 +67,12 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 ///         &NativeType::String
 ///     }
 ///
-///    fn signature(&self) -> TypeSignature<'_> {
-///        TypeSignature::Extension {
-///            name: "JSON",
-///            parameters: &[],
-///        }
-///    }
+///     fn signature(&self) -> TypeSignature<'_> {
+///         TypeSignature::Extension {
+///             name: "JSON",
+///             parameters: &[],
+///         }
+///     }
 /// }
 /// ```
 pub trait LogicalType: Sync + Send {
@@ -106,6 +106,7 @@ impl std::fmt::Display for dyn LogicalType {
 
 impl PartialEq for dyn LogicalType {
     fn eq(&self, other: &Self) -> bool {
+        // Logical types with identical signatures are considered equal.
         self.signature().eq(&other.signature())
     }
 }
@@ -120,15 +121,14 @@ impl PartialOrd for dyn LogicalType {
 
 impl Ord for dyn LogicalType {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.signature()
-            .cmp(&other.signature())
-            .then(self.native().cmp(other.native()))
+        // Logical types with identical signatures are considered equal.
+        self.signature().cmp(&other.signature())
     }
 }
 
 impl Hash for dyn LogicalType {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Logical types with identical signatures are considered equal.
         self.signature().hash(state);
-        self.native().hash(state);
     }
 }

@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::Transformed;
 use datafusion_common::JoinType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{EmptyRelation, Projection, Union};
 
@@ -33,7 +33,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 pub struct PropagateEmptyRelation;
 
 impl PropagateEmptyRelation {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -140,10 +140,10 @@ impl OptimizerRule for PropagateEmptyRelation {
                 }
             }
             LogicalPlan::Aggregate(ref agg) => {
-                if !agg.group_expr.is_empty() {
-                    if let Some(empty_plan) = empty_child(&plan)? {
-                        return Ok(Transformed::yes(empty_plan));
-                    }
+                if !agg.group_expr.is_empty()
+                    && let Some(empty_plan) = empty_child(&plan)?
+                {
+                    return Ok(Transformed::yes(empty_plan));
                 }
                 Ok(Transformed::no(LogicalPlan::Aggregate(agg.clone())))
             }
@@ -239,12 +239,13 @@ mod tests {
     use datafusion_common::{Column, DFSchema, JoinType};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder, Operator,
+        Operator, binary_expr, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
 
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_filter::EliminateFilter;
-    use crate::eliminate_nested_union::EliminateNestedUnion;
+    use crate::optimize_unions::OptimizeUnions;
     use crate::test::{
         assert_optimized_plan_with_rules, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
@@ -257,9 +258,11 @@ mod tests {
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
-            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> = Arc::new(PropagateEmptyRelation::new());
+            let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PropagateEmptyRelation::new())];
             assert_optimized_plan_eq_snapshot!(
-                rule,
+                optimizer_ctx,
+                rules,
                 $plan,
                 @ $expected,
             )
@@ -274,7 +277,7 @@ mod tests {
         assert_optimized_plan_with_rules(
             vec![
                 Arc::new(EliminateFilter::new()),
-                Arc::new(EliminateNestedUnion::new()),
+                Arc::new(OptimizeUnions::new()),
                 Arc::new(PropagateEmptyRelation::new()),
             ],
             plan,
@@ -291,7 +294,7 @@ mod tests {
             .project(vec![binary_expr(lit(1), Operator::Plus, lit(1))])?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @"EmptyRelation")
+        assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
     }
 
     #[test]
@@ -313,7 +316,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -376,7 +379,7 @@ mod tests {
             .union(four)?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -431,7 +434,7 @@ mod tests {
             .filter(col("a").lt_eq(lit(1i64)))?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, true)
     }
 
@@ -471,7 +474,7 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "EmptyRelation";
+        let expected = "EmptyRelation: rows=0";
         assert_together_optimized_plan(plan, expected, eq)
     }
 

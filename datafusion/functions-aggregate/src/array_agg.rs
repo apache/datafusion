@@ -17,28 +17,32 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
+use std::cmp::Ordering;
+use std::collections::{HashSet, VecDeque};
+use std::mem::{size_of, size_of_val, take};
+use std::sync::Arc;
+
 use arrow::array::{
-    new_empty_array, Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray,
+    Array, ArrayRef, AsArray, BooleanArray, ListArray, StructArray, new_empty_array,
 };
-use arrow::compute::{filter, SortOptions};
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::compute::{SortOptions, filter};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
-use datafusion_common::{exec_err, ScalarValue};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::utils::{
+    SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
+};
+use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, Signature, Volatility};
-use datafusion_expr::{AggregateUDFImpl, Documentation};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
+use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
-use std::mem::{size_of, size_of_val};
-use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -71,16 +75,18 @@ This aggregation function can only mix DISTINCT and ORDER BY if the ordering exp
 "#,
     standard_argument(name = "expression",)
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
     signature: Signature,
+    is_input_pre_ordered: bool,
 }
 
 impl Default for ArrayAgg {
     fn default() -> Self {
         Self {
             signature: Signature::any(1, Volatility::Immutable),
+            is_input_pre_ordered: false,
         }
     }
 }
@@ -94,10 +100,6 @@ impl AggregateUDFImpl for ArrayAgg {
         "array_agg"
     }
 
-    fn aliases(&self) -> &[String] {
-        &[]
-    }
-
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -109,41 +111,64 @@ impl AggregateUDFImpl for ArrayAgg {
         ))))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
-            return Ok(vec![Field::new_list(
-                format_state_name(args.name, "distinct_array_agg"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_types[0].clone(), true),
-                true,
-            )]);
+            return Ok(vec![
+                Field::new_list(
+                    format_state_name(args.name, "distinct_array_agg"),
+                    // See COMMENTS.md to understand why nullable is set to true
+                    Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                    true,
+                )
+                .into(),
+            ]);
         }
 
-        let mut fields = vec![Field::new_list(
-            format_state_name(args.name, "array_agg"),
-            // See COMMENTS.md to understand why nullable is set to true
-            Field::new_list_field(args.input_types[0].clone(), true),
-            true,
-        )];
+        let mut fields = vec![
+            Field::new_list(
+                format_state_name(args.name, "array_agg"),
+                // See COMMENTS.md to understand why nullable is set to true
+                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                true,
+            )
+            .into(),
+        ];
 
         if args.ordering_fields.is_empty() {
             return Ok(fields);
         }
 
         let orderings = args.ordering_fields.to_vec();
-        fields.push(Field::new_list(
-            format_state_name(args.name, "array_agg_orderings"),
-            Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
-            false,
-        ));
+        fields.push(
+            Field::new_list(
+                format_state_name(args.name, "array_agg_orderings"),
+                Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
+                false,
+            )
+            .into(),
+        );
 
         Ok(fields)
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::SoftRequirement
+    }
+
+    fn with_beneficial_ordering(
+        self: Arc<Self>,
+        beneficial_ordering: bool,
+    ) -> Result<Option<Arc<dyn AggregateUDFImpl>>> {
+        Ok(Some(Arc::new(Self {
+            signature: self.signature.clone(),
+            is_input_pre_ordered: beneficial_ordering,
+        })))
+    }
+
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let data_type = acc_args.exprs[0].data_type(acc_args.schema)?;
-        let ignore_nulls =
-            acc_args.ignore_nulls && acc_args.exprs[0].nullable(acc_args.schema)?;
+        let field = &acc_args.expr_fields[0];
+        let data_type = field.data_type();
+        let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
 
         if acc_args.is_distinct {
             // Limitation similar to Postgres. The aggregation function can only mix
@@ -160,41 +185,39 @@ impl AggregateUDFImpl for ArrayAgg {
             // ARRAY_AGG(DISTINCT concat(col, '') ORDER BY concat(col, '')) <- Valid
             // ARRAY_AGG(DISTINCT col ORDER BY other_col)                   <- Invalid
             // ARRAY_AGG(DISTINCT col ORDER BY concat(col, ''))             <- Invalid
-            if acc_args.ordering_req.len() > 1 {
-                return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
-            }
-            let mut sort_option: Option<SortOptions> = None;
-            if let Some(order) = acc_args.ordering_req.first() {
-                if !order.expr.eq(&acc_args.exprs[0]) {
-                    return exec_err!("In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list");
+            let sort_option = match acc_args.order_bys {
+                [single] if single.expr.eq(&acc_args.exprs[0]) => Some(single.options),
+                [] => None,
+                _ => {
+                    return exec_err!(
+                        "In an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+                    );
                 }
-                sort_option = Some(order.options)
-            }
-
+            };
             return Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-                &data_type,
+                data_type,
                 sort_option,
                 ignore_nulls,
             )?));
         }
 
-        if acc_args.ordering_req.is_empty() {
+        let Some(ordering) = LexOrdering::new(acc_args.order_bys.to_vec()) else {
             return Ok(Box::new(ArrayAggAccumulator::try_new(
-                &data_type,
+                data_type,
                 ignore_nulls,
             )?));
-        }
+        };
 
-        let ordering_dtypes = acc_args
-            .ordering_req
+        let ordering_dtypes = ordering
             .iter()
             .map(|e| e.expr.data_type(acc_args.schema))
             .collect::<Result<Vec<_>>>()?;
 
         OrderSensitiveArrayAggAccumulator::try_new(
-            &data_type,
+            data_type,
             &ordering_dtypes,
-            acc_args.ordering_req.clone(),
+            ordering,
+            self.is_input_pre_ordered,
             acc_args.is_reversed,
             ignore_nulls,
         )
@@ -203,6 +226,10 @@ impl AggregateUDFImpl for ArrayAgg {
 
     fn reverse_expr(&self) -> datafusion_expr::ReversedUDAF {
         datafusion_expr::ReversedUDAF::Reversed(array_agg_udaf())
+    }
+
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -296,9 +323,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
 
-        if values.len() != 1 {
-            return internal_err!("expects single batch");
-        }
+        assert_eq_or_internal_err!(values.len(), 1, "expects single batch");
 
         let val = &values[0];
         let nulls = if self.ignore_nulls {
@@ -314,7 +339,7 @@ impl Accumulator for ArrayAggAccumulator {
         };
 
         if !val.is_empty() {
-            self.values.push(val);
+            self.values.push(val)
         }
 
         Ok(())
@@ -326,9 +351,7 @@ impl Accumulator for ArrayAggAccumulator {
             return Ok(());
         }
 
-        if states.len() != 1 {
-            return internal_err!("expects single state");
-        }
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
         let list_arr = as_list_array(&states[0])?;
 
@@ -373,7 +396,18 @@ impl Accumulator for ArrayAggAccumulator {
             + self
                 .values
                 .iter()
-                .map(|arr| arr.get_array_memory_size())
+                // Each ArrayRef might be just a reference to a bigger array, and many
+                // ArrayRefs here might be referencing exactly the same array, so if we
+                // were to call `arr.get_array_memory_size()`, we would be double-counting
+                // the same underlying data many times.
+                //
+                // Instead, we do an approximation by estimating how much memory each
+                // ArrayRef would occupy if its underlying data was fully owned by this
+                // accumulator.
+                //
+                // Note that this is just an estimation, but the reality is that this
+                // accumulator might not own any data.
+                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
                 .sum::<usize>()
             + self.datatype.size()
             - size_of_val(&self.datatype)
@@ -381,7 +415,7 @@ impl Accumulator for ArrayAggAccumulator {
 }
 
 #[derive(Debug)]
-struct DistinctArrayAggAccumulator {
+pub struct DistinctArrayAggAccumulator {
     values: HashSet<ScalarValue>,
     datatype: DataType,
     sort_options: Option<SortOptions>,
@@ -424,7 +458,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values.insert(ScalarValue::try_from_array(val, i)?);
+                    self.values
+                        .insert(ScalarValue::try_from_array(val, i)?.compacted());
                 }
             }
         }
@@ -437,9 +472,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        if states.len() != 1 {
-            return internal_err!("expects single state");
-        }
+        assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
         states[0]
             .as_list::<i32>()
@@ -455,6 +488,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
         }
 
         if let Some(opts) = self.sort_options {
+            let mut delayed_cmp_err = Ok(());
             values.sort_by(|a, b| {
                 if a.is_null() {
                     return match opts.nulls_first {
@@ -469,10 +503,15 @@ impl Accumulator for DistinctArrayAggAccumulator {
                     };
                 }
                 match opts.descending {
-                    true => b.partial_cmp(a).unwrap_or(Ordering::Equal),
-                    false => a.partial_cmp(b).unwrap_or(Ordering::Equal),
+                    true => b.try_cmp(a),
+                    false => a.try_cmp(b),
                 }
+                .unwrap_or_else(|err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                })
             });
+            delayed_cmp_err?;
         };
 
         let arr = ScalarValue::new_list(&values, &self.datatype, true);
@@ -506,6 +545,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     datatypes: Vec<DataType>,
     /// Stores the ordering requirement of the `Accumulator`.
     ordering_req: LexOrdering,
+    /// Whether the input is known to be pre-ordered
+    is_input_pre_ordered: bool,
     /// Whether the aggregation is running in reverse.
     reverse: bool,
     /// Whether the aggregation should ignore null values.
@@ -519,6 +560,7 @@ impl OrderSensitiveArrayAggAccumulator {
         datatype: &DataType,
         ordering_dtypes: &[DataType],
         ordering_req: LexOrdering,
+        is_input_pre_ordered: bool,
         reverse: bool,
         ignore_nulls: bool,
     ) -> Result<Self> {
@@ -529,9 +571,57 @@ impl OrderSensitiveArrayAggAccumulator {
             ordering_values: vec![],
             datatypes,
             ordering_req,
+            is_input_pre_ordered,
             reverse,
             ignore_nulls,
         })
+    }
+
+    fn sort(&mut self) {
+        let sort_options = self
+            .ordering_req
+            .iter()
+            .map(|sort_expr| sort_expr.options)
+            .collect::<Vec<_>>();
+        let mut values = take(&mut self.values)
+            .into_iter()
+            .zip(take(&mut self.ordering_values))
+            .collect::<Vec<_>>();
+        let mut delayed_cmp_err = Ok(());
+        values.sort_by(|(_, left_ordering), (_, right_ordering)| {
+            compare_rows(left_ordering, right_ordering, &sort_options).unwrap_or_else(
+                |err| {
+                    delayed_cmp_err = Err(err);
+                    Ordering::Equal
+                },
+            )
+        });
+        (self.values, self.ordering_values) = values.into_iter().unzip();
+    }
+
+    fn evaluate_orderings(&self) -> Result<ScalarValue> {
+        let fields = ordering_fields(&self.ordering_req, &self.datatypes[1..]);
+
+        let column_wise_ordering_values = if self.ordering_values.is_empty() {
+            fields
+                .iter()
+                .map(|f| new_empty_array(f.data_type()))
+                .collect::<Vec<_>>()
+        } else {
+            (0..fields.len())
+                .map(|i| {
+                    let column_values = self.ordering_values.iter().map(|x| x[i].clone());
+                    ScalarValue::iter_to_array(column_values)
+                })
+                .collect::<Result<_>>()?
+        };
+
+        let ordering_array = StructArray::try_new(
+            Fields::from(fields),
+            column_wise_ordering_values,
+            None,
+        )?;
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
 
@@ -553,8 +643,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if nulls.is_none_or(|nulls| nulls.null_count() < val.len()) {
             for i in 0..val.len() {
                 if nulls.is_none_or(|nulls| nulls.is_valid(i)) {
-                    self.values.push(ScalarValue::try_from_array(val, i)?);
-                    self.ordering_values.push(get_row_at_idx(ord, i)?)
+                    self.values
+                        .push(ScalarValue::try_from_array(val, i)?.compacted());
+                    self.ordering_values.push(
+                        get_row_at_idx(ord, i)?
+                            .into_iter()
+                            .map(|v| v.compacted())
+                            .collect(),
+                    )
                 }
             }
         }
@@ -573,9 +669,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         // inside `ARRAY_AGG` list, we will receive an `Array` that stores values
         // received from its ordering requirement expression. (This information
         // is necessary for during merging).
-        let [array_agg_values, agg_orderings, ..] = &states else {
-            return exec_err!("State should have two elements");
-        };
+        let [array_agg_values, agg_orderings] =
+            take_function_args("OrderSensitiveArrayAggAccumulator::merge_batch", states)?;
         let Some(agg_orderings) = agg_orderings.as_list_opt::<i32>() else {
             return exec_err!("Expects to receive a list array");
         };
@@ -586,18 +681,24 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let mut partition_ordering_values = vec![];
 
         // Existing values should be merged also.
-        partition_values.push(self.values.clone().into());
-        partition_ordering_values.push(self.ordering_values.clone().into());
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+        partition_values.push(take(&mut self.values).into());
+        partition_ordering_values.push(take(&mut self.ordering_values).into());
 
         // Convert array to Scalars to sort them easily. Convert back to array at evaluation.
         let array_agg_res = ScalarValue::convert_array_to_scalar_vec(array_agg_values)?;
-        for v in array_agg_res.into_iter() {
-            partition_values.push(v.into());
+        for maybe_v in array_agg_res.into_iter() {
+            if let Some(v) = maybe_v {
+                partition_values.push(v.into());
+            } else {
+                partition_values.push(vec![].into());
+            }
         }
 
         let orderings = ScalarValue::convert_array_to_scalar_vec(agg_orderings)?;
-
-        for partition_ordering_rows in orderings.into_iter() {
+        for partition_ordering_rows in orderings.into_iter().flatten() {
             // Extract value from struct to ordering_rows for each group/partition
             let ordering_value = partition_ordering_rows.into_iter().map(|ordering_row| {
                     if let ScalarValue::Struct(s) = ordering_row {
@@ -636,6 +737,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+
         let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
 
@@ -643,6 +748,10 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        if !self.is_input_pre_ordered {
+            self.sort();
+        }
+
         if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(
                 self.datatypes[0].clone(),
@@ -687,41 +796,16 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 }
 
-impl OrderSensitiveArrayAggAccumulator {
-    fn evaluate_orderings(&self) -> Result<ScalarValue> {
-        let fields = ordering_fields(self.ordering_req.as_ref(), &self.datatypes[1..]);
-        let num_columns = fields.len();
-        let struct_field = Fields::from(fields.clone());
-
-        let mut column_wise_ordering_values = vec![];
-        for i in 0..num_columns {
-            let column_values = self
-                .ordering_values
-                .iter()
-                .map(|x| x[i].clone())
-                .collect::<Vec<_>>();
-            let array = if column_values.is_empty() {
-                new_empty_array(fields[i].data_type())
-            } else {
-                ScalarValue::iter_to_array(column_values.into_iter())?
-            };
-            column_wise_ordering_values.push(array);
-        }
-
-        let ordering_array =
-            StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Schema;
+    use arrow::array::{ListBuilder, StringBuilder};
+    use arrow::datatypes::{FieldRef, Schema};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
-    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use std::sync::Arc;
 
     #[test]
@@ -983,10 +1067,59 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn does_not_over_account_memory() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string().build_two()?;
+
+        acc1.update_batch(&[data(["a", "c", "b"])])?;
+        acc2.update_batch(&[data(["b", "c", "a"])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        assert_eq!(acc1.size(), 266);
+
+        Ok(())
+    }
+    #[test]
+    fn does_not_over_account_memory_distinct() -> Result<()> {
+        let (mut acc1, mut acc2) = ArrayAggAccumulatorBuilder::string()
+            .distinct()
+            .build_two()?;
+
+        acc1.update_batch(&[string_list_data([
+            vec!["a", "b", "c"],
+            vec!["d", "e", "f"],
+        ])])?;
+        acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
+        acc1 = merge(acc1, acc2)?;
+
+        // without compaction, the size is 16660
+        assert_eq!(acc1.size(), 1660);
+
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_over_account_memory_ordered() -> Result<()> {
+        let mut acc = ArrayAggAccumulatorBuilder::string()
+            .order_by_col("col", SortOptions::new(false, false))
+            .build()?;
+
+        acc.update_batch(&[string_list_data([
+            vec!["a", "b", "c"],
+            vec!["c", "d", "e"],
+            vec!["b", "c", "d"],
+        ])])?;
+
+        // without compaction, the size is 17112
+        assert_eq!(acc.size(), 2224);
+
+        Ok(())
+    }
+
     struct ArrayAggAccumulatorBuilder {
-        data_type: DataType,
+        return_field: FieldRef,
         distinct: bool,
-        ordering: LexOrdering,
+        order_bys: Vec<PhysicalSortExpr>,
         schema: Schema,
     }
 
@@ -997,9 +1130,9 @@ mod tests {
 
         fn new(data_type: DataType) -> Self {
             Self {
-                data_type: data_type.clone(),
+                return_field: Field::new("f", data_type.clone(), true).into(),
                 distinct: false,
-                ordering: Default::default(),
+                order_bys: vec![],
                 schema: Schema {
                     fields: Fields::from(vec![Field::new(
                         "col",
@@ -1017,26 +1150,30 @@ mod tests {
         }
 
         fn order_by_col(mut self, col: &str, sort_options: SortOptions) -> Self {
-            self.ordering.extend([PhysicalSortExpr::new(
+            let new_order = PhysicalSortExpr::new(
                 Arc::new(
                     Column::new_with_schema(col, &self.schema)
                         .expect("column not available in schema"),
                 ),
                 sort_options,
-            )]);
+            );
+            self.order_bys.push(new_order);
             self
         }
 
         fn build(&self) -> Result<Box<dyn Accumulator>> {
+            let expr = Arc::new(Column::new("col", 0));
+            let expr_field = expr.return_field(&self.schema)?;
             ArrayAgg::default().accumulator(AccumulatorArgs {
-                return_type: &self.data_type,
+                return_field: Arc::clone(&self.return_field),
                 schema: &self.schema,
+                expr_fields: &[expr_field],
                 ignore_nulls: false,
-                ordering_req: &self.ordering,
+                order_bys: &self.order_bys,
                 is_reversed: false,
                 name: "",
                 is_distinct: self.distinct,
-                exprs: &[Arc::new(Column::new("col", 0))],
+                exprs: &[expr],
             })
         }
 
@@ -1057,8 +1194,17 @@ mod tests {
 
     fn print_nulls(sort: Vec<Option<String>>) -> Vec<String> {
         sort.into_iter()
-            .map(|v| v.unwrap_or("NULL".to_string()))
+            .map(|v| v.unwrap_or_else(|| "NULL".to_string()))
             .collect()
+    }
+
+    fn string_list_data<'a>(data: impl IntoIterator<Item = Vec<&'a str>>) -> ArrayRef {
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        for string_list in data.into_iter() {
+            builder.append_value(string_list.iter().map(Some).collect::<Vec<_>>());
+        }
+
+        Arc::new(builder.finish())
     }
 
     fn data<T, const N: usize>(list: [T; N]) -> ArrayRef

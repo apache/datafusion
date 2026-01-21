@@ -22,22 +22,21 @@ use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion_physical_plan::ExecutionPlanProperties;
-use datafusion_physical_plan::{
-    execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
-    PlanProperties, SendableRecordBatchStream,
-};
-
 use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{LexRequirement, OrderingRequirements};
+use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
+    PlanProperties, SendableRecordBatchStream, execute_input_stream,
+};
 
 use async_trait::async_trait;
+use datafusion_physical_plan::execution_plan::{EvaluationType, SchedulingType};
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -47,7 +46,7 @@ use futures::StreamExt;
 /// output.
 #[async_trait]
 pub trait DataSink: DisplayAs + Debug + Send + Sync {
-    /// Returns the data sink as [`Any`](std::any::Any) so that it can be
+    /// Returns the data sink as [`Any`] so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
 
@@ -101,6 +100,11 @@ impl Debug for DataSinkExec {
 
 impl DataSinkExec {
     /// Create a plan to write to `sink`
+    /// Note: DataSinkExec requires its input to have a single partition.
+    /// If the input has multiple partitions, the physical optimizer will
+    /// automatically insert a Merge-related operator to merge them.
+    /// If you construct PhysicalPlan without going through the physical optimizer,
+    /// you must ensure that the input has a single partition.
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
@@ -143,6 +147,8 @@ impl DataSinkExec {
             input.pipeline_behavior(),
             input.boundedness(),
         )
+        .with_scheduling_type(SchedulingType::Cooperative)
+        .with_evaluation_type(EvaluationType::Eager)
     }
 }
 
@@ -184,10 +190,10 @@ impl ExecutionPlan for DataSinkExec {
         vec![Distribution::SinglePartition; self.children().len()]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
-        // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
-        vec![self.sort_order.as_ref().cloned()]
+        // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
+        vec![self.sort_order.as_ref().cloned().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -220,9 +226,11 @@ impl ExecutionPlan for DataSinkExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if partition != 0 {
-            return internal_err!("DataSinkExec can only be called on partition 0!");
-        }
+        assert_eq_or_internal_err!(
+            partition,
+            0,
+            "DataSinkExec can only be called on partition 0!"
+        );
         let data = execute_input_stream(
             Arc::clone(&self.input),
             Arc::clone(self.sink.schema()),

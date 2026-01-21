@@ -42,11 +42,13 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::{
+    OrderingRequirements, PhysicalSortExpr,
+};
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -79,8 +81,8 @@ impl WindowAggExec {
         let schema = Arc::new(schema);
 
         let ordered_partition_by_indices =
-            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input);
-        let cache = Self::compute_properties(Arc::clone(&schema), &input, &window_expr);
+            get_ordered_partition_by_indices(window_expr[0].partition_by(), &input)?;
+        let cache = Self::compute_properties(&schema, &input, &window_expr)?;
         Ok(Self {
             input,
             window_expr,
@@ -107,7 +109,7 @@ impl WindowAggExec {
     // We are sure that partition by columns are always at the beginning of sort_keys
     // Hence returned `PhysicalSortExpr` corresponding to `PARTITION BY` columns can be used safely
     // to calculate partition separation points
-    pub fn partition_by_sort_keys(&self) -> Result<LexOrdering> {
+    pub fn partition_by_sort_keys(&self) -> Result<Vec<PhysicalSortExpr>> {
         let partition_by = self.window_expr()[0].partition_by();
         get_partition_by_sort_exprs(
             &self.input,
@@ -118,12 +120,12 @@ impl WindowAggExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
-        schema: SchemaRef,
+        schema: &SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
         window_exprs: &[Arc<dyn WindowExpr>],
-    ) -> PlanProperties {
+    ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(&schema, input, window_exprs);
+        let eq_properties = window_equivalence_properties(schema, input, window_exprs)?;
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this
@@ -131,13 +133,13 @@ impl WindowAggExec {
         let output_partitioning = input.output_partitioning().clone();
 
         // Construct properties cache:
-        PlanProperties::new(
+        Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
             // TODO: Emission type and boundedness information can be enhanced here
             EmissionType::Final,
             input.boundedness(),
-        )
+        ))
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -155,24 +157,6 @@ impl WindowAggExec {
                 .min_by_key(|s| s.len())
                 .unwrap_or_else(Vec::new)
         }
-    }
-
-    fn statistics_inner(&self) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(None)?;
-        let win_cols = self.window_expr.len();
-        let input_cols = self.input.schema().fields().len();
-        // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        // copy stats of the input to the beginning of the schema.
-        column_statistics.extend(input_stat.column_statistics);
-        for _ in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_unknown())
-        }
-        Ok(Statistics {
-            num_rows: input_stat.num_rows,
-            column_statistics,
-            total_byte_size: Precision::Absent,
-        })
     }
 }
 
@@ -234,17 +218,17 @@ impl ExecutionPlan for WindowAggExec {
         vec![true]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         if self.ordered_partition_by_indices.len() < partition_bys.len() {
-            vec![calc_requirements(partition_bys, order_keys.iter())]
+            vec![calc_requirements(partition_bys, order_keys)]
         } else {
             let partition_bys = self
                 .ordered_partition_by_indices
                 .iter()
                 .map(|idx| &partition_bys[*idx]);
-            vec![calc_requirements(partition_bys, order_keys.iter())]
+            vec![calc_requirements(partition_bys, order_keys)]
         }
     }
 
@@ -289,15 +273,25 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.statistics_inner()
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+        let input_stat = self.input.partition_statistics(partition)?;
+        let win_cols = self.window_expr.len();
+        let input_cols = self.input.schema().fields().len();
+        // TODO stats: some windowing function will maintain invariants such as min, max...
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(input_stat.column_statistics);
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
         }
+        Ok(Statistics {
+            num_rows: input_stat.num_rows,
+            column_statistics,
+            total_byte_size: Precision::Absent,
+        })
     }
 }
 
@@ -319,7 +313,7 @@ pub struct WindowAggStream {
     batches: Vec<RecordBatch>,
     finished: bool,
     window_expr: Vec<Arc<dyn WindowExpr>>,
-    partition_by_sort_keys: LexOrdering,
+    partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
 }
@@ -331,13 +325,15 @@ impl WindowAggStream {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
-        partition_by_sort_keys: LexOrdering,
+        partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
-        if window_expr[0].partition_by().len() != ordered_partition_by_indices.len() {
-            return internal_err!("All partition by columns should have an ordering");
-        }
+        assert_eq_or_internal_err!(
+            window_expr[0].partition_by().len(),
+            ordered_partition_by_indices.len(),
+            "All partition by columns should have an ordering"
+        );
         Ok(Self {
             schema,
             input,

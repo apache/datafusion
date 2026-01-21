@@ -20,23 +20,24 @@
 //! Currently, this module houses code to sort file groups if they are non-overlapping with
 //! respect to the required sort order. See [`MinMaxStatistics`]
 
-use futures::{Stream, StreamExt};
 use std::sync::Arc;
 
-use crate::file_groups::FileGroup;
 use crate::PartitionedFile;
+use crate::file_groups::FileGroup;
 
 use arrow::array::RecordBatch;
+use arrow::compute::SortColumn;
 use arrow::datatypes::SchemaRef;
-use arrow::{
-    compute::SortColumn,
-    row::{Row, Rows},
-};
+use arrow::row::{Row, Rows};
 use datafusion_common::stats::Precision;
-use datafusion_common::{plan_datafusion_err, plan_err, DataFusionError, Result};
-use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
+};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::{ColumnStatistics, Statistics};
+
+use futures::{Stream, StreamExt};
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
@@ -49,19 +50,19 @@ pub(crate) struct MinMaxStatistics {
 
 impl MinMaxStatistics {
     /// Sort order used to sort the statistics
-    #[allow(unused)]
+    #[expect(unused)]
     pub fn sort_order(&self) -> &LexOrdering {
         &self.sort_order
     }
 
     /// Min value at index
-    #[allow(unused)]
-    pub fn min(&self, idx: usize) -> Row {
+    #[expect(unused)]
+    pub fn min(&'_ self, idx: usize) -> Row<'_> {
         self.min_by_sort_order.row(idx)
     }
 
     /// Max value at index
-    pub fn max(&self, idx: usize) -> Row {
+    pub fn max(&'_ self, idx: usize) -> Row<'_> {
         self.max_by_sort_order.row(idx)
     }
 
@@ -71,9 +72,7 @@ impl MinMaxStatistics {
         projection: Option<&[usize]>, // Indices of projection in full table schema (None = all columns)
         files: impl IntoIterator<Item = &'a PartitionedFile>,
     ) -> Result<Self> {
-        use datafusion_common::ScalarValue;
-
-        let statistics_and_partition_values = files
+        let Some(statistics_and_partition_values) = files
             .into_iter()
             .map(|file| {
                 file.statistics
@@ -81,9 +80,9 @@ impl MinMaxStatistics {
                     .zip(Some(file.partition_values.as_slice()))
             })
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                DataFusionError::Plan("Parquet file missing statistics".to_string())
-            })?;
+        else {
+            return plan_err!("Parquet file missing statistics");
+        };
 
         // Helper function to get min/max statistics for a given column of projected_schema
         let get_min_max = |i: usize| -> Result<(Vec<ScalarValue>, Vec<ScalarValue>)> {
@@ -96,9 +95,7 @@ impl MinMaxStatistics {
                             .get_value()
                             .cloned()
                             .zip(s.column_statistics[i].max_value.get_value().cloned())
-                            .ok_or_else(|| {
-                                DataFusionError::Plan("statistics not found".to_string())
-                            })
+                            .ok_or_else(|| plan_datafusion_err!("statistics not found"))
                     } else {
                         let partition_value = &pv[i - s.column_statistics.len()];
                         Ok((partition_value.clone(), partition_value.clone()))
@@ -109,27 +106,28 @@ impl MinMaxStatistics {
                 .unzip())
         };
 
-        let sort_columns = sort_columns_from_physical_sort_exprs(projected_sort_order)
-            .ok_or(DataFusionError::Plan(
-                "sort expression must be on column".to_string(),
-            ))?;
+        let Some(sort_columns) =
+            sort_columns_from_physical_sort_exprs(projected_sort_order)
+        else {
+            return plan_err!("sort expression must be on column");
+        };
 
         // Project the schema & sort order down to just the relevant columns
         let min_max_schema = Arc::new(
             projected_schema
                 .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
         );
-        let min_max_sort_order = LexOrdering::from(
-            sort_columns
-                .iter()
-                .zip(projected_sort_order.iter())
-                .enumerate()
-                .map(|(i, (col, sort))| PhysicalSortExpr {
-                    expr: Arc::new(Column::new(col.name(), i)),
-                    options: sort.options,
-                })
-                .collect::<Vec<_>>(),
-        );
+
+        let min_max_sort_order = projected_sort_order
+            .iter()
+            .zip(sort_columns.iter())
+            .enumerate()
+            .map(|(idx, (sort_expr, col))| {
+                let expr = Arc::new(Column::new(col.name(), idx));
+                PhysicalSortExpr::new(expr, sort_expr.options)
+            });
+        // Safe to `unwrap` as we know that sort columns are non-empty:
+        let min_max_sort_order = LexOrdering::new(min_max_sort_order).unwrap();
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()
@@ -137,7 +135,9 @@ impl MinMaxStatistics {
                 // Reverse the projection to get the index of the column in the full statistics
                 // The file statistics contains _every_ column , but the sort column's index()
                 // refers to the index in projected_schema
-                let i = projection.map(|p| p[c.index()]).unwrap_or(c.index());
+                let i = projection
+                    .map(|p| p[c.index()])
+                    .unwrap_or_else(|| c.index());
 
                 let (min, max) = get_min_max(i).map_err(|e| {
                     e.context(format!("get min/max for column: '{}'", c.name()))
@@ -152,22 +152,25 @@ impl MinMaxStatistics {
             .into_iter()
             .unzip();
 
-        Self::new(
-            &min_max_sort_order,
-            &min_max_schema,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), min_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate min batch".to_string()))
-                },
-            )?,
-            RecordBatch::try_new(Arc::clone(&min_max_schema), max_values).map_err(
-                |e| {
-                    DataFusionError::ArrowError(e, Some("\ncreate max batch".to_string()))
-                },
-            )?,
-        )
+        let min_batch = RecordBatch::try_new(Arc::clone(&min_max_schema), min_values)
+            .map_err(|e| {
+                DataFusionError::ArrowError(
+                    Box::new(e),
+                    Some("\ncreate min batch".to_string()),
+                )
+            })?;
+        let max_batch = RecordBatch::try_new(Arc::clone(&min_max_schema), max_values)
+            .map_err(|e| {
+                DataFusionError::ArrowError(
+                    Box::new(e),
+                    Some("\ncreate max batch".to_string()),
+                )
+            })?;
+
+        Self::new(&min_max_sort_order, &min_max_schema, min_batch, max_batch)
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new(
         sort_order: &LexOrdering,
         schema: &SchemaRef,
@@ -187,25 +190,23 @@ impl MinMaxStatistics {
             .map_err(|e| e.context("create sort fields"))?;
         let converter = RowConverter::new(sort_fields)?;
 
-        let sort_columns = sort_columns_from_physical_sort_exprs(sort_order).ok_or(
-            DataFusionError::Plan("sort expression must be on column".to_string()),
-        )?;
+        let Some(sort_columns) = sort_columns_from_physical_sort_exprs(sort_order) else {
+            return plan_err!("sort expression must be on column");
+        };
 
         // swap min/max if they're reversed in the ordering
         let (new_min_cols, new_max_cols): (Vec<_>, Vec<_>) = sort_order
             .iter()
             .zip(sort_columns.iter().copied())
             .map(|(sort_expr, column)| {
-                if sort_expr.options.descending {
-                    max_values
-                        .column_by_name(column.name())
-                        .zip(min_values.column_by_name(column.name()))
+                let maxes = max_values.column_by_name(column.name());
+                let mins = min_values.column_by_name(column.name());
+                let opt_value = if sort_expr.options.descending {
+                    maxes.zip(mins)
                 } else {
-                    min_values
-                        .column_by_name(column.name())
-                        .zip(max_values.column_by_name(column.name()))
-                }
-                .ok_or_else(|| {
+                    mins.zip(maxes)
+                };
+                opt_value.ok_or_else(|| {
                     plan_datafusion_err!(
                         "missing column in MinMaxStatistics::new: '{}'",
                         column.name()
@@ -226,14 +227,7 @@ impl MinMaxStatistics {
                 .zip(sort_columns.iter().copied())
                 .map(|(sort_expr, column)| {
                     let schema = values.schema();
-
                     let idx = schema.index_of(column.name())?;
-                    let field = schema.field(idx);
-
-                    // check that sort columns are non-nullable
-                    if field.is_nullable() {
-                        return plan_err!("cannot sort by nullable column");
-                    }
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),
@@ -250,7 +244,10 @@ impl MinMaxStatistics {
                         .collect::<Vec<_>>(),
                 )
                 .map_err(|e| {
-                    DataFusionError::ArrowError(e, Some("convert columns".to_string()))
+                    DataFusionError::ArrowError(
+                        Box::new(e),
+                        Some("convert columns".to_string()),
+                    )
                 })
         });
 
@@ -283,7 +280,7 @@ fn sort_columns_from_physical_sort_exprs(
     sort_order
         .iter()
         .map(|expr| expr.expr.as_any().downcast_ref::<Column>())
-        .collect::<Option<Vec<_>>>()
+        .collect()
 }
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
@@ -295,7 +292,7 @@ fn sort_columns_from_physical_sort_exprs(
     since = "47.0.0",
     note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
 )]
-#[allow(unused)]
+#[expect(unused)]
 pub async fn get_statistics_with_limit(
     all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
     file_schema: SchemaRef,
@@ -370,12 +367,14 @@ pub async fn get_statistics_with_limit(
                         min_value: file_min,
                         sum_value: file_sum,
                         distinct_count: _,
+                        byte_size: file_sbs,
                     } = file_col_stats;
 
                     col_stats.null_count = col_stats.null_count.add(file_nc);
                     col_stats.max_value = col_stats.max_value.max(file_max);
                     col_stats.min_value = col_stats.min_value.min(file_min);
                     col_stats.sum_value = col_stats.sum_value.add(file_sum);
+                    col_stats.byte_size = col_stats.byte_size.add(file_sbs);
                 }
 
                 // If the number of rows exceeds the limit, we can stop processing
@@ -421,6 +420,7 @@ pub async fn get_statistics_with_limit(
 ///
 /// # Returns
 /// A new file group with summary statistics attached
+#[expect(clippy::needless_pass_by_value)]
 pub fn compute_file_group_statistics(
     file_group: FileGroup,
     file_schema: SchemaRef,
@@ -456,6 +456,7 @@ pub fn compute_file_group_statistics(
 /// A tuple containing:
 /// * The processed file groups with their individual statistics attached
 /// * The summary statistics across all file groups, aka all files summary statistics
+#[expect(clippy::needless_pass_by_value)]
 pub fn compute_all_files_statistics(
     file_groups: Vec<FileGroup>,
     table_schema: SchemaRef,

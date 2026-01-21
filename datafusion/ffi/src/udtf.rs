@@ -15,43 +15,40 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::ffi::c_void;
+use std::sync::Arc;
 
-use abi_stable::{
-    std_types::{RResult, RString, RVec},
-    StableAbi,
+use abi_stable::StableAbi;
+use abi_stable::std_types::{RResult, RVec};
+use datafusion_catalog::{TableFunctionImpl, TableProvider};
+use datafusion_common::error::Result;
+use datafusion_execution::TaskContext;
+use datafusion_expr::Expr;
+use datafusion_proto::logical_plan::from_proto::parse_exprs;
+use datafusion_proto::logical_plan::to_proto::serialize_exprs;
+use datafusion_proto::logical_plan::{
+    DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
-
-use datafusion::error::Result;
-use datafusion::{
-    catalog::{TableFunctionImpl, TableProvider},
-    prelude::{Expr, SessionContext},
-};
-use datafusion_proto::{
-    logical_plan::{
-        from_proto::parse_exprs, to_proto::serialize_exprs, DefaultLogicalExtensionCodec,
-    },
-    protobuf::LogicalExprList,
-};
+use datafusion_proto::protobuf::LogicalExprList;
 use prost::Message;
 use tokio::runtime::Handle;
 
-use crate::{
-    df_result, rresult_return,
-    table_provider::{FFI_TableProvider, ForeignTableProvider},
-};
+use crate::execution::FFI_TaskContextProvider;
+use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
+use crate::table_provider::FFI_TableProvider;
+use crate::util::FFIResult;
+use crate::{df_result, rresult_return};
 
 /// A stable struct for sharing a [`TableFunctionImpl`] across FFI boundaries.
 #[repr(C)]
 #[derive(Debug, StableAbi)]
-#[allow(non_camel_case_types)]
 pub struct FFI_TableFunction {
     /// Equivalent to the `call` function of the TableFunctionImpl.
     /// The arguments are Expr passed as protobuf encoded bytes.
-    pub call: unsafe extern "C" fn(
-        udtf: &Self,
-        args: RVec<u8>,
-    ) -> RResult<FFI_TableProvider, RString>,
+    pub call:
+        unsafe extern "C" fn(udtf: &Self, args: RVec<u8>) -> FFIResult<FFI_TableProvider>,
+
+    pub logical_codec: FFI_LogicalExtensionCodec,
 
     /// Used to create a clone on the provider of the udtf. This should
     /// only need to be called by the receiver of the udtf.
@@ -63,6 +60,11 @@ pub struct FFI_TableFunction {
     /// Internal data. This is only to be accessed by the provider of the udtf.
     /// A [`ForeignTableFunction`] should never attempt to access this data.
     pub private_data: *mut c_void,
+
+    /// Utility to identify when FFI objects are accessed locally through
+    /// the foreign interface. See [`crate::get_library_marker_id`] and
+    /// the crate's `README.md` for more information.
+    pub library_marker_id: extern "C" fn() -> usize,
 }
 
 unsafe impl Send for FFI_TableFunction {}
@@ -88,32 +90,50 @@ impl FFI_TableFunction {
 unsafe extern "C" fn call_fn_wrapper(
     udtf: &FFI_TableFunction,
     args: RVec<u8>,
-) -> RResult<FFI_TableProvider, RString> {
+) -> FFIResult<FFI_TableProvider> {
     let runtime = udtf.runtime();
-    let udtf = udtf.inner();
+    let udtf_inner = udtf.inner();
 
-    let default_ctx = SessionContext::new();
-    let codec = DefaultLogicalExtensionCodec {};
+    let ctx: Arc<TaskContext> =
+        rresult_return!((&udtf.logical_codec.task_ctx_provider).try_into());
+    let codec: Arc<dyn LogicalExtensionCodec> = (&udtf.logical_codec).into();
 
     let proto_filters = rresult_return!(LogicalExprList::decode(args.as_ref()));
 
-    let args =
-        rresult_return!(parse_exprs(proto_filters.expr.iter(), &default_ctx, &codec));
+    let args = rresult_return!(parse_exprs(
+        proto_filters.expr.iter(),
+        ctx.as_ref(),
+        codec.as_ref()
+    ));
 
-    let table_provider = rresult_return!(udtf.call(&args));
-    RResult::ROk(FFI_TableProvider::new(table_provider, false, runtime))
+    let table_provider = rresult_return!(udtf_inner.call(&args));
+    RResult::ROk(FFI_TableProvider::new_with_ffi_codec(
+        table_provider,
+        false,
+        runtime,
+        udtf.logical_codec.clone(),
+    ))
 }
 
 unsafe extern "C" fn release_fn_wrapper(udtf: &mut FFI_TableFunction) {
-    let private_data = Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
-    drop(private_data);
+    unsafe {
+        debug_assert!(!udtf.private_data.is_null());
+        let private_data =
+            Box::from_raw(udtf.private_data as *mut TableFunctionPrivateData);
+        drop(private_data);
+        udtf.private_data = std::ptr::null_mut();
+    }
 }
 
 unsafe extern "C" fn clone_fn_wrapper(udtf: &FFI_TableFunction) -> FFI_TableFunction {
     let runtime = udtf.runtime();
-    let udtf = udtf.inner();
+    let udtf_inner = udtf.inner();
 
-    FFI_TableFunction::new(Arc::clone(udtf), runtime)
+    FFI_TableFunction::new_with_ffi_codec(
+        Arc::clone(udtf_inner),
+        runtime,
+        udtf.logical_codec.clone(),
+    )
 }
 
 impl Clone for FFI_TableFunction {
@@ -123,30 +143,38 @@ impl Clone for FFI_TableFunction {
 }
 
 impl FFI_TableFunction {
-    pub fn new(udtf: Arc<dyn TableFunctionImpl>, runtime: Option<Handle>) -> Self {
+    pub fn new(
+        udtf: Arc<dyn TableFunctionImpl>,
+        runtime: Option<Handle>,
+        task_ctx_provider: impl Into<FFI_TaskContextProvider>,
+        logical_codec: Option<Arc<dyn LogicalExtensionCodec>>,
+    ) -> Self {
+        let task_ctx_provider = task_ctx_provider.into();
+        let logical_codec =
+            logical_codec.unwrap_or_else(|| Arc::new(DefaultLogicalExtensionCodec {}));
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            logical_codec,
+            runtime.clone(),
+            task_ctx_provider.clone(),
+        );
+
+        Self::new_with_ffi_codec(udtf, runtime, logical_codec)
+    }
+
+    pub fn new_with_ffi_codec(
+        udtf: Arc<dyn TableFunctionImpl>,
+        runtime: Option<Handle>,
+        logical_codec: FFI_LogicalExtensionCodec,
+    ) -> Self {
         let private_data = Box::new(TableFunctionPrivateData { udtf, runtime });
 
         Self {
             call: call_fn_wrapper,
+            logical_codec,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
-        }
-    }
-}
-
-impl From<Arc<dyn TableFunctionImpl>> for FFI_TableFunction {
-    fn from(udtf: Arc<dyn TableFunctionImpl>) -> Self {
-        let private_data = Box::new(TableFunctionPrivateData {
-            udtf,
-            runtime: None,
-        });
-
-        Self {
-            call: call_fn_wrapper,
-            clone: clone_fn_wrapper,
-            release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            library_marker_id: crate::get_library_marker_id,
         }
     }
 }
@@ -169,40 +197,45 @@ pub struct ForeignTableFunction(FFI_TableFunction);
 unsafe impl Send for ForeignTableFunction {}
 unsafe impl Sync for ForeignTableFunction {}
 
-impl From<FFI_TableFunction> for ForeignTableFunction {
+impl From<FFI_TableFunction> for Arc<dyn TableFunctionImpl> {
     fn from(value: FFI_TableFunction) -> Self {
-        Self(value)
+        if (value.library_marker_id)() == crate::get_library_marker_id() {
+            Arc::clone(value.inner())
+        } else {
+            Arc::new(ForeignTableFunction(value))
+        }
     }
 }
 
 impl TableFunctionImpl for ForeignTableFunction {
     fn call(&self, args: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let codec = DefaultLogicalExtensionCodec {};
+        let codec: Arc<dyn LogicalExtensionCodec> = (&self.0.logical_codec).into();
         let expr_list = LogicalExprList {
-            expr: serialize_exprs(args, &codec)?,
+            expr: serialize_exprs(args, codec.as_ref())?,
         };
         let filters_serialized = expr_list.encode_to_vec().into();
 
         let table_provider = unsafe { (self.0.call)(&self.0, filters_serialized) };
 
         let table_provider = df_result!(table_provider)?;
-        let table_provider: ForeignTableProvider = (&table_provider).into();
+        let table_provider: Arc<dyn TableProvider> = (&table_provider).into();
 
-        Ok(Arc::new(table_provider))
+        Ok(table_provider)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow::{
-        array::{
-            record_batch, ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array,
-        },
-        datatypes::{DataType, Field, Schema},
+    use arrow::array::{
+        ArrayRef, Float64Array, RecordBatch, StringArray, UInt64Array, record_batch,
     };
-    use datafusion::{
-        catalog::MemTable, common::exec_err, prelude::lit, scalar::ScalarValue,
-    };
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::catalog::MemTable;
+    use datafusion::common::exec_err;
+    use datafusion::logical_expr::ptr_eq::arc_ptr_eq;
+    use datafusion::prelude::{SessionContext, lit};
+    use datafusion::scalar::ScalarValue;
+    use datafusion_execution::TaskContextProvider;
 
     use super::*;
 
@@ -214,7 +247,7 @@ mod tests {
             let args = args
                 .iter()
                 .map(|arg| {
-                    if let Expr::Literal(scalar) = arg {
+                    if let Expr::Literal(scalar, _) = arg {
                         Ok(scalar)
                     } else {
                         exec_err!("Expected only literal arguments to table udf")
@@ -243,21 +276,21 @@ mod tests {
                     ScalarValue::Utf8(s) => {
                         let s_vec = vec![s.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::Utf8, true),
+                            Field::new(format!("field-{idx}"), DataType::Utf8, true),
                             Arc::new(StringArray::from(s_vec)) as ArrayRef,
                         )
                     }
                     ScalarValue::UInt64(v) => {
                         let v_vec = vec![v.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::UInt64, true),
+                            Field::new(format!("field-{idx}"), DataType::UInt64, true),
                             Arc::new(UInt64Array::from(v_vec)) as ArrayRef,
                         )
                     }
                     ScalarValue::Float64(v) => {
                         let v_vec = vec![v.to_owned(); num_rows];
                         (
-                            Field::new(format!("field-{}", idx), DataType::Float64, true),
+                            Field::new(format!("field-{idx}"), DataType::Float64, true),
                             Arc::new(Float64Array::from(v_vec)) as ArrayRef,
                         )
                     }
@@ -287,16 +320,22 @@ mod tests {
     #[tokio::test]
     async fn test_round_trip_udtf() -> Result<()> {
         let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
+        let ctx = Arc::new(SessionContext::default());
+        let task_ctx_provider = Arc::clone(&ctx) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&task_ctx_provider);
 
-        let local_udtf: FFI_TableFunction =
-            FFI_TableFunction::new(Arc::clone(&original_udtf), None);
+        let mut local_udtf: FFI_TableFunction = FFI_TableFunction::new(
+            Arc::clone(&original_udtf),
+            None,
+            task_ctx_provider,
+            None,
+        );
+        local_udtf.library_marker_id = crate::mock_foreign_marker_id;
 
-        let foreign_udf: ForeignTableFunction = local_udtf.into();
+        let foreign_udf: Arc<dyn TableFunctionImpl> = local_udtf.into();
 
-        let table =
-            foreign_udf.call(&vec![lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
+        let table = foreign_udf.call(&[lit(6_u64), lit("one"), lit(2.0), lit(3_u64)])?;
 
-        let ctx = SessionContext::default();
         let _ = ctx.register_table("test-table", table)?;
 
         let returned_batches = ctx.table("test-table").await?.collect().await?;
@@ -315,6 +354,31 @@ mod tests {
             ("field-2", UInt64, [3, 3, 3, 3])
         )?;
         assert_eq!(returned_batches[1], expected_batch_1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_udtf_local_bypass() -> Result<()> {
+        let original_udtf = Arc::new(TestUDTF {}) as Arc<dyn TableFunctionImpl>;
+
+        let ctx = Arc::new(SessionContext::default()) as Arc<dyn TaskContextProvider>;
+        let task_ctx_provider = FFI_TaskContextProvider::from(&ctx);
+        let mut ffi_udtf = FFI_TableFunction::new(
+            Arc::clone(&original_udtf),
+            None,
+            task_ctx_provider,
+            None,
+        );
+
+        // Verify local libraries can be downcast to their original
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.clone().into();
+        assert!(arc_ptr_eq(&original_udtf, &foreign_udtf));
+
+        // Verify different library markers generate foreign providers
+        ffi_udtf.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_udtf: Arc<dyn TableFunctionImpl> = ffi_udtf.into();
+        assert!(!arc_ptr_eq(&original_udtf, &foreign_udtf));
 
         Ok(())
     }

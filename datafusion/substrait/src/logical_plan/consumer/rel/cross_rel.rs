@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+
+use datafusion::logical_expr::requalify_sides_if_needed;
+
 use substrait::proto::CrossRel;
 
 pub async fn from_cross_rel(
@@ -30,6 +32,6 @@ pub async fn from_cross_rel(
     let right = LogicalPlanBuilder::from(
         consumer.consume_rel(cross.right.as_ref().unwrap()).await?,
     );
-    let (left, right) = requalify_sides_if_needed(left, right)?;
+    let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
     left.cross_join(right.build()?)?.build()
 }

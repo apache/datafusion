@@ -19,10 +19,12 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+#![deny(clippy::allow_attributes)]
 
 //! An [Avro](https://avro.apache.org/) based [`FileSource`](datafusion_datasource::file::FileSource) implementation and related functionality.
 
@@ -30,4 +32,5 @@ pub mod avro_to_arrow;
 pub mod file_format;
 pub mod source;
 
+pub use apache_avro;
 pub use file_format::*;

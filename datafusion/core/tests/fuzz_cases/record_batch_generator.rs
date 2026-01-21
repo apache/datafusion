@@ -17,22 +17,25 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, DictionaryArray, PrimitiveArray, RecordBatch};
 use arrow::datatypes::{
-    BooleanType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    ArrowPrimitiveType, BooleanType, DataType, Date32Type, Date64Type, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    DurationMillisecondType, DurationNanosecondType, DurationSecondType, Field,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow_schema::{
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE,
+    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
-use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use datafusion_common::{Result, arrow_datafusion_err};
+use rand::{Rng, SeedableRng, rng, rngs::StdRng};
 use test_utils::array_gen::{
     BinaryArrayGenerator, BooleanArrayGenerator, DecimalArrayGenerator,
     PrimitiveArrayGenerator, StringArrayGenerator,
@@ -85,16 +88,47 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
             "interval_month_day_nano",
             DataType::Interval(IntervalUnit::MonthDayNano),
         ),
+        // Internal error: AggregationFuzzer task error: JoinError::Panic(Id(29108), "called `Option::unwrap()` on a `None` value", ...).
+        // ColumnDescr::new(
+        //     "duration_seconds",
+        //     DataType::Duration(TimeUnit::Second),
+        // ),
+        ColumnDescr::new(
+            "duration_milliseconds",
+            DataType::Duration(TimeUnit::Millisecond),
+        ),
+        ColumnDescr::new(
+            "duration_microsecond",
+            DataType::Duration(TimeUnit::Microsecond),
+        ),
+        ColumnDescr::new(
+            "duration_nanosecond",
+            DataType::Duration(TimeUnit::Nanosecond),
+        ),
+        ColumnDescr::new("decimal32", {
+            let precision: u8 = rng.random_range(1..=DECIMAL32_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL32_MAX_SCALE),
+            );
+            DataType::Decimal32(precision, scale)
+        }),
+        ColumnDescr::new("decimal64", {
+            let precision: u8 = rng.random_range(1..=DECIMAL64_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
+                i8::MIN..=std::cmp::min(precision as i8, DECIMAL64_MAX_SCALE),
+            );
+            DataType::Decimal64(precision, scale)
+        }),
         ColumnDescr::new("decimal128", {
-            let precision: u8 = rng.gen_range(1..=DECIMAL128_MAX_PRECISION);
-            let scale: i8 = rng.gen_range(
+            let precision: u8 = rng.random_range(1..=DECIMAL128_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL128_MAX_SCALE),
             );
             DataType::Decimal128(precision, scale)
         }),
         ColumnDescr::new("decimal256", {
-            let precision: u8 = rng.gen_range(1..=DECIMAL256_MAX_PRECISION);
-            let scale: i8 = rng.gen_range(
+            let precision: u8 = rng.random_range(1..=DECIMAL256_MAX_PRECISION);
+            let scale: i8 = rng.random_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL256_MAX_SCALE),
             );
             DataType::Decimal256(precision, scale)
@@ -108,6 +142,11 @@ pub fn get_supported_types_columns(rng_seed: u64) -> Vec<ColumnDescr> {
         ColumnDescr::new("binary", DataType::Binary),
         ColumnDescr::new("large_binary", DataType::LargeBinary),
         ColumnDescr::new("binaryview", DataType::BinaryView),
+        ColumnDescr::new(
+            "dictionary_utf8_low",
+            DataType::Dictionary(Box::new(DataType::UInt64), Box::new(DataType::Utf8)),
+        )
+        .with_max_num_distinct(10),
     ]
 }
 
@@ -161,22 +200,19 @@ pub struct RecordBatchGenerator {
 
     /// If a seed is provided when constructing the generator, it will be used to
     /// create `rng` and the pseudo-randomly generated batches will be deterministic.
-    /// Otherwise, `rng` will be initialized using `thread_rng()` and the batches
+    /// Otherwise, `rng` will be initialized using `rng()` and the batches
     /// generated will be different each time.
     rng: StdRng,
 }
 
 macro_rules! generate_decimal_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $NULL_PCT:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
         let mut generator = DecimalArrayGenerator {
             precision: $PRECISION,
             scale: $SCALE,
             num_decimals: $NUM_ROWS,
             num_distinct_decimals: $MAX_NUM_DISTINCT,
-            null_pct,
+            null_pct: $NULL_PCT,
             rng: $ARRAY_GEN_RNG,
         };
 
@@ -186,17 +222,13 @@ macro_rules! generate_decimal_array {
 
 // Generating `BooleanArray` due to it being a special type in Arrow (bit-packed)
 macro_rules! generate_boolean_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
-        // Select a null percentage from the candidate percentages
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $NULL_PCT:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
         let num_distinct_booleans = if $MAX_NUM_DISTINCT >= 2 { 2 } else { 1 };
 
         let mut generator = BooleanArrayGenerator {
             num_booleans: $NUM_ROWS,
             num_distinct_booleans,
-            null_pct,
+            null_pct: $NULL_PCT,
             rng: $ARRAY_GEN_RNG,
         };
 
@@ -205,18 +237,37 @@ macro_rules! generate_boolean_array {
 }
 
 macro_rules! generate_primitive_array {
-    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
-        let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $NULL_PCT:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
         let mut generator = PrimitiveArrayGenerator {
             num_primitives: $NUM_ROWS,
             num_distinct_primitives: $MAX_NUM_DISTINCT,
-            null_pct,
+            null_pct: $NULL_PCT,
             rng: $ARRAY_GEN_RNG,
         };
 
         generator.gen_data::<$ARROW_TYPE>()
+    }};
+}
+
+macro_rules! generate_dict {
+    ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $NULL_PCT:ident, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident, $VALUES: ident) => {{
+        debug_assert_eq!($VALUES.len(), $MAX_NUM_DISTINCT);
+        let keys: PrimitiveArray<$ARROW_TYPE> = (0..$NUM_ROWS)
+            .map(|_| {
+                if $BATCH_GEN_RNG.random::<f64>() < $NULL_PCT {
+                    None
+                } else if $MAX_NUM_DISTINCT > 1 {
+                    let range = 0..($MAX_NUM_DISTINCT
+                        as <$ARROW_TYPE as ArrowPrimitiveType>::Native);
+                    Some($ARRAY_GEN_RNG.random_range(range))
+                } else {
+                    Some(0)
+                }
+            })
+            .collect();
+
+        let dict = DictionaryArray::new(keys, $VALUES);
+        Arc::new(dict) as ArrayRef
     }};
 }
 
@@ -235,7 +286,7 @@ impl RecordBatchGenerator {
             max_rows_num,
             columns,
             candidate_null_pcts,
-            rng: StdRng::from_rng(thread_rng()).unwrap(),
+            rng: StdRng::from_rng(&mut rng()),
         }
     }
 
@@ -247,9 +298,9 @@ impl RecordBatchGenerator {
     }
 
     pub fn generate(&mut self) -> Result<RecordBatch> {
-        let num_rows = self.rng.gen_range(self.min_rows_num..=self.max_rows_num);
-        let array_gen_rng = StdRng::from_seed(self.rng.gen());
-        let mut batch_gen_rng = StdRng::from_seed(self.rng.gen());
+        let num_rows = self.rng.random_range(self.min_rows_num..=self.max_rows_num);
+        let array_gen_rng = StdRng::from_seed(self.rng.random());
+        let mut batch_gen_rng = StdRng::from_seed(self.rng.random());
         let columns = self.columns.clone();
 
         // Build arrays
@@ -282,8 +333,27 @@ impl RecordBatchGenerator {
         batch_gen_rng: &mut StdRng,
         array_gen_rng: StdRng,
     ) -> ArrayRef {
+        let null_pct_idx = batch_gen_rng.random_range(0..self.candidate_null_pcts.len());
+        let null_pct = self.candidate_null_pcts[null_pct_idx];
+
+        Self::generate_array_of_type_inner(
+            col,
+            num_rows,
+            batch_gen_rng,
+            array_gen_rng,
+            null_pct,
+        )
+    }
+
+    fn generate_array_of_type_inner(
+        col: &ColumnDescr,
+        num_rows: usize,
+        batch_gen_rng: &mut StdRng,
+        array_gen_rng: StdRng,
+        null_pct: f64,
+    ) -> ArrayRef {
         let num_distinct = if num_rows > 1 {
-            batch_gen_rng.gen_range(1..num_rows)
+            batch_gen_rng.random_range(1..num_rows)
         } else {
             num_rows
         };
@@ -299,6 +369,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Int8Type
@@ -309,6 +380,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Int16Type
@@ -319,6 +391,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Int32Type
@@ -329,6 +402,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Int64Type
@@ -339,6 +413,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     UInt8Type
@@ -349,6 +424,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     UInt16Type
@@ -359,6 +435,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     UInt32Type
@@ -369,6 +446,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     UInt64Type
@@ -379,6 +457,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Float32Type
@@ -389,6 +468,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Float64Type
@@ -399,6 +479,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Date32Type
@@ -409,6 +490,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Date64Type
@@ -419,6 +501,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Time32SecondType
@@ -429,6 +512,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Time32MillisecondType
@@ -439,6 +523,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Time64MicrosecondType
@@ -449,6 +534,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     Time64NanosecondType
@@ -459,6 +545,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     IntervalYearMonthType
@@ -469,6 +556,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     IntervalDayTimeType
@@ -479,9 +567,54 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     IntervalMonthDayNanoType
+                )
+            }
+            DataType::Duration(TimeUnit::Second) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationSecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationMillisecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationMicrosecondType
+                )
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                generate_primitive_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    DurationNanosecondType
                 )
             }
             DataType::Timestamp(TimeUnit::Second, None) => {
@@ -489,6 +622,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     TimestampSecondType
@@ -499,6 +633,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     TimestampMillisecondType
@@ -509,6 +644,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     TimestampMicrosecondType
@@ -519,16 +655,14 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     TimestampNanosecondType
                 )
             }
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                let null_pct_idx =
-                    batch_gen_rng.gen_range(0..self.candidate_null_pcts.len());
-                let null_pct = self.candidate_null_pcts[null_pct_idx];
-                let max_len = batch_gen_rng.gen_range(1..50);
+                let max_len = batch_gen_rng.random_range(1..50);
 
                 let mut generator = StringArrayGenerator {
                     max_len,
@@ -546,10 +680,7 @@ impl RecordBatchGenerator {
                 }
             }
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-                let null_pct_idx =
-                    batch_gen_rng.gen_range(0..self.candidate_null_pcts.len());
-                let null_pct = self.candidate_null_pcts[null_pct_idx];
-                let max_len = batch_gen_rng.gen_range(1..100);
+                let max_len = batch_gen_rng.random_range(1..100);
 
                 let mut generator = BinaryArrayGenerator {
                     max_len,
@@ -566,11 +697,38 @@ impl RecordBatchGenerator {
                     _ => unreachable!(),
                 }
             }
+            DataType::Decimal32(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal32Type
+                )
+            }
+            DataType::Decimal64(precision, scale) => {
+                generate_decimal_array!(
+                    self,
+                    num_rows,
+                    max_num_distinct,
+                    null_pct,
+                    batch_gen_rng,
+                    array_gen_rng,
+                    precision,
+                    scale,
+                    Decimal64Type
+                )
+            }
             DataType::Decimal128(precision, scale) => {
                 generate_decimal_array!(
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     precision,
@@ -583,6 +741,7 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     precision,
@@ -595,9 +754,39 @@ impl RecordBatchGenerator {
                     self,
                     num_rows,
                     max_num_distinct,
+                    null_pct,
                     batch_gen_rng,
                     array_gen_rng,
                     BooleanType
+                }
+            }
+            DataType::Dictionary(ref key_type, ref value_type)
+                if key_type.is_dictionary_key_type() =>
+            {
+                // We generate just num_distinct values because they will be reused by different keys
+                let mut array_gen_rng = array_gen_rng;
+                debug_assert!((0.0..=1.0).contains(&null_pct));
+                let values = Self::generate_array_of_type_inner(
+                    &ColumnDescr::new("values", *value_type.clone()),
+                    num_distinct,
+                    batch_gen_rng,
+                    array_gen_rng.clone(),
+                    null_pct, // generate some null values
+                );
+
+                match key_type.as_ref() {
+                    // new key types can be added here
+                    DataType::UInt64 => generate_dict!(
+                        self,
+                        num_rows,
+                        num_distinct,
+                        null_pct,
+                        batch_gen_rng,
+                        array_gen_rng,
+                        UInt64Type,
+                        values
+                    ),
+                    _ => panic!("Invalid dictionary keys type: {key_type}"),
                 }
             }
             _ => {
@@ -636,8 +825,8 @@ mod tests {
         let batch1 = gen1.generate().unwrap();
         let batch2 = gen2.generate().unwrap();
 
-        let batch1_formatted = format!("{:?}", batch1);
-        let batch2_formatted = format!("{:?}", batch2);
+        let batch1_formatted = format!("{batch1:?}");
+        let batch2_formatted = format!("{batch2:?}");
 
         assert_eq!(batch1_formatted, batch2_formatted);
     }

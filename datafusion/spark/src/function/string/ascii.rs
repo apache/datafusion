@@ -15,21 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
-use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
-use datafusion_common::{internal_err, plan_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_functions::utils::make_scalar_function;
-use std::any::Any;
 use std::sync::Arc;
 
-/// <https://spark.apache.org/docs/latest/api/sql/index.html#ascii>
-#[derive(Debug)]
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::{Result, internal_err};
+use datafusion_expr::{
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
+};
+use datafusion_functions::string::ascii::ascii;
+use datafusion_functions::utils::make_scalar_function;
+use std::any::Any;
+
+/// Spark compatible version of the [ascii] function. Differs from the [default ascii function]
+/// in that it is more permissive of input types, for example casting numeric input to string
+/// before executing the function (default version doesn't allow numeric input).
+///
+/// [ascii]: https://spark.apache.org/docs/latest/api/sql/index.html#ascii
+/// [default ascii function]: datafusion_functions::string::ascii::AsciiFunc
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkAscii {
     signature: Signature,
-    aliases: Vec<String>,
 }
 
 impl Default for SparkAscii {
@@ -40,9 +47,17 @@ impl Default for SparkAscii {
 
 impl SparkAscii {
     pub fn new() -> Self {
+        // Spark's ascii uses ImplicitCastInputTypes with StringType,
+        // which allows numeric types to be implicitly cast to String.
+        // See: https://github.com/apache/spark/blob/master/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/stringExpressions.scala
+        let string_coercion = Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_string()),
+            vec![TypeSignatureClass::Numeric],
+            NativeType::String,
+        );
+
         Self {
-            signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec![],
+            signature: Signature::coercible(vec![string_coercion], Volatility::Immutable),
         }
     }
 }
@@ -61,114 +76,61 @@ impl ScalarUDFImpl for SparkAscii {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Int32)
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // ascii returns an Int32 value
+        // The result is nullable only if any of the input arguments is nullable
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new("ascii", DataType::Int32, nullable)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(&args.args)
     }
-
-    fn aliases(&self) -> &[String] {
-        &self.aliases
-    }
-
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return plan_err!(
-                "The {} function requires 1 argument, but got {}.",
-                self.name(),
-                arg_types.len()
-            );
-        }
-        Ok(vec![DataType::Utf8])
-    }
-}
-
-fn calculate_ascii<'a, V>(array: V) -> Result<ArrayRef, ArrowError>
-where
-    V: ArrayAccessor<Item = &'a str>,
-{
-    let iter = ArrayIter::new(array);
-    let result = iter
-        .map(|string| {
-            string.map(|s| {
-                let mut chars = s.chars();
-                chars.next().map_or(0, |v| v as i32)
-            })
-        })
-        .collect::<Int32Array>();
-
-    Ok(Arc::new(result) as ArrayRef)
-}
-
-/// Returns the numeric code of the first character of the argument.
-pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Utf8 => {
-            let string_array = args[0].as_string::<i32>();
-            Ok(calculate_ascii(string_array)?)
-        }
-        DataType::LargeUtf8 => {
-            let string_array = args[0].as_string::<i64>();
-            Ok(calculate_ascii(string_array)?)
-        }
-        DataType::Utf8View => {
-            let string_array = args[0].as_string_view();
-            Ok(calculate_ascii(string_array)?)
-        }
-        _ => internal_err!("Unsupported data type"),
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::function::string::ascii::SparkAscii;
-    use crate::function::utils::test::test_scalar_function;
-    use arrow::array::{Array, Int32Array};
-    use arrow::datatypes::DataType::Int32;
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use super::*;
+    use datafusion_expr::ReturnFieldArgs;
 
-    macro_rules! test_ascii_string_invoke {
-        ($INPUT:expr, $EXPECTED:expr) => {
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Utf8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
+    #[test]
+    fn test_return_field_nullable_input() {
+        let ascii_func = SparkAscii::new();
+        let nullable_field = Arc::new(Field::new("input", DataType::Utf8, true));
 
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::LargeUtf8($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
+        let result = ascii_func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[nullable_field],
+                scalar_arguments: &[],
+            })
+            .unwrap();
 
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Utf8View($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-        };
+        assert_eq!(result.data_type(), &DataType::Int32);
+        assert!(
+            result.is_nullable(),
+            "Output should be nullable when input is nullable"
+        );
     }
 
     #[test]
-    fn test_ascii_invoke() -> Result<()> {
-        test_ascii_string_invoke!(Some(String::from("x")), Ok(Some(120)));
-        test_ascii_string_invoke!(Some(String::from("a")), Ok(Some(97)));
-        test_ascii_string_invoke!(Some(String::from("")), Ok(Some(0)));
-        test_ascii_string_invoke!(Some(String::from("\n")), Ok(Some(10)));
-        test_ascii_string_invoke!(Some(String::from("\t")), Ok(Some(9)));
-        test_ascii_string_invoke!(None, Ok(None));
+    fn test_return_field_non_nullable_input() {
+        let ascii_func = SparkAscii::new();
+        let non_nullable_field = Arc::new(Field::new("input", DataType::Utf8, false));
 
-        Ok(())
+        let result = ascii_func
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[non_nullable_field],
+                scalar_arguments: &[],
+            })
+            .unwrap();
+
+        assert_eq!(result.data_type(), &DataType::Int32);
+        assert!(
+            !result.is_nullable(),
+            "Output should not be nullable when input is not nullable"
+        );
     }
 }

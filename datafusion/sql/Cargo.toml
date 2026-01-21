@@ -31,6 +31,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -43,11 +46,17 @@ unicode_expressions = []
 unparser = []
 recursive_protection = ["dep:recursive"]
 
+# Note the sql planner should not depend directly on the datafusion-function packages
+# so that it can be used in a standalone manner with other function implementations.
+#
+# They are used for testing purposes only, so they are in the dev-dependencies section.
 [dependencies]
 arrow = { workspace = true }
 bigdecimal = { workspace = true }
-datafusion-common = { workspace = true, default-features = true }
-datafusion-expr = { workspace = true }
+chrono = { workspace = true }
+datafusion-common = { workspace = true, features = ["sql"] }
+datafusion-expr = { workspace = true, features = ["sql"] }
+datafusion-functions-nested = { workspace = true, features = ["sql"] }
 indexmap = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
@@ -56,11 +65,13 @@ sqlparser = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
+# please do not move these dependencies to the main dependencies section
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-nested = { workspace = true }
+datafusion-functions-nested = { workspace = true, features = ["sql"] }
 datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }
 insta = { workspace = true }
-paste = "^1.0"
+itertools = { workspace = true }
+paste = { workspace = true }
 rstest = { workspace = true }

@@ -193,10 +193,25 @@ SELECT substr('alphabet', 3, CAST(NULL AS int))
 ----
 NULL
 
-statement error The first argument of the substr function can only be a string, but got Int64
+query T
+SELECT substr(NULL, 1, 2)
+----
+NULL
+
+query T
+SELECT substr('alphabet', 1, NULL)
+----
+NULL
+
+query T
+SELECT substr('alphabet', NULL, 2)
+----
+NULL
+
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3)
 
-statement error The first argument of the substr function can only be a string, but got Int64
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3, 4)
 
 query T

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_largestring_array, Array, StringArray};
+use arrow::array::{Array, StringArray, as_largestring_array};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -26,10 +26,10 @@ use crate::string::concat::simplify_concat;
 use crate::string::concat_ws;
 use crate::strings::{ColumnarValueRef, StringArrayBuilder};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
-use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
@@ -59,7 +59,7 @@ use datafusion_macros::user_doc;
     ),
     related_udf(name = "concat")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ConcatWsFunc {
     signature: Signature,
 }
@@ -136,43 +136,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
                 None => return internal_err!("Expected string literal, got {scalar:?}"),
             };
 
-            let mut result = String::new();
-            // iterator over Option<str>
-            let iter = &mut args[1..].iter().map(|arg| {
+            let mut values = Vec::with_capacity(args.len() - 1);
+            for arg in &args[1..] {
                 let ColumnarValue::Scalar(scalar) = arg else {
                     // loop above checks for all args being scalar
                     unreachable!()
                 };
-                scalar.try_as_str()
-            });
 
-            // append first non null arg
-            for scalar in iter.by_ref() {
-                match scalar {
-                    Some(Some(s)) => {
-                        result.push_str(s);
-                        break;
-                    }
+                match scalar.try_as_str() {
+                    Some(Some(v)) => values.push(v),
                     Some(None) => {} // null literal string
                     None => {
-                        return internal_err!("Expected string literal, got {scalar:?}")
+                        return internal_err!("Expected string literal, got {scalar:?}");
                     }
                 }
             }
-
-            // handle subsequent non null args
-            for scalar in iter.by_ref() {
-                match scalar {
-                    Some(Some(s)) => {
-                        result.push_str(sep);
-                        result.push_str(s);
-                    }
-                    Some(None) => {} // null literal string
-                    None => {
-                        return internal_err!("Expected string literal, got {scalar:?}")
-                    }
-                }
-            }
+            let result = values.join(sep);
 
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(result))));
         }
@@ -225,7 +204,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
                                 ColumnarValueRef::NonNullableArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let string_array = as_largestring_array(array);
 
@@ -233,23 +212,31 @@ impl ScalarUDFImpl for ConcatWsFunc {
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableLargeStringArray(string_array)
                             } else {
-                                ColumnarValueRef::NonNullableLargeStringArray(string_array)
+                                ColumnarValueRef::NonNullableLargeStringArray(
+                                    string_array,
+                                )
                             };
                             columns.push(column);
-                        },
+                        }
                         DataType::Utf8View => {
                             let string_array = as_string_view_array(array)?;
 
-                            data_size += string_array.data_buffers().iter().map(|buf| buf.len()).sum::<usize>();
+                            data_size += string_array
+                                .data_buffers()
+                                .iter()
+                                .map(|buf| buf.len())
+                                .sum::<usize>();
                             let column = if array.is_nullable() {
                                 ColumnarValueRef::NullableStringViewArray(string_array)
                             } else {
                                 ColumnarValueRef::NonNullableStringViewArray(string_array)
                             };
                             columns.push(column);
-                        },
+                        }
                         other => {
-                            return plan_err!("Input was {other} which is not a supported datatype for concat_ws function.")
+                            return plan_err!(
+                                "Input was {other} which is not a supported datatype for concat_ws function."
+                            );
                         }
                     };
                 }
@@ -293,7 +280,7 @@ impl ScalarUDFImpl for ConcatWsFunc {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         match &args[..] {
             [delimiter, vals @ ..] => simplify_concat_ws(delimiter, vals),
@@ -312,6 +299,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
             ScalarValue::Utf8(delimiter)
             | ScalarValue::LargeUtf8(delimiter)
             | ScalarValue::Utf8View(delimiter),
+            _,
         ) => {
             match delimiter {
                 // when the delimiter is an empty string,
@@ -336,18 +324,30 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                     for arg in args {
                         match arg {
                             // filter out null args
-                            Expr::Literal(ScalarValue::Utf8(None) | ScalarValue::LargeUtf8(None) | ScalarValue::Utf8View(None)) => {}
-                            Expr::Literal(ScalarValue::Utf8(Some(v)) | ScalarValue::LargeUtf8(Some(v)) | ScalarValue::Utf8View(Some(v))) => {
-                                match contiguous_scalar {
-                                    None => contiguous_scalar = Some(v.to_string()),
-                                    Some(mut pre) => {
-                                        pre += delimiter;
-                                        pre += v;
-                                        contiguous_scalar = Some(pre)
-                                    }
+                            Expr::Literal(
+                                ScalarValue::Utf8(None)
+                                | ScalarValue::LargeUtf8(None)
+                                | ScalarValue::Utf8View(None),
+                                _,
+                            ) => {}
+                            Expr::Literal(
+                                ScalarValue::Utf8(Some(v))
+                                | ScalarValue::LargeUtf8(Some(v))
+                                | ScalarValue::Utf8View(Some(v)),
+                                _,
+                            ) => match contiguous_scalar {
+                                None => contiguous_scalar = Some(v.to_string()),
+                                Some(mut pre) => {
+                                    pre += delimiter;
+                                    pre += v;
+                                    contiguous_scalar = Some(pre)
                                 }
+                            },
+                            Expr::Literal(s, _) => {
+                                return internal_err!(
+                                    "The scalar {s} should be casted to string type during the type coercion."
+                                );
                             }
-                            Expr::Literal(s) => return internal_err!("The scalar {s} should be casted to string type during the type coercion."),
                             // If the arg is not a literal, we should first push the current `contiguous_scalar`
                             // to the `new_args` and reset it to None.
                             // Then pushing this arg to the `new_args`.
@@ -374,10 +374,11 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
                 // if the delimiter is null, then the value of the whole expression is null.
                 None => Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::Utf8(None),
+                    None,
                 ))),
             }
         }
-        Expr::Literal(d) => internal_err!(
+        Expr::Literal(d, _) => internal_err!(
             "The scalar {d} should be casted to string type during the type coercion."
         ),
         _ => {
@@ -394,7 +395,7 @@ fn simplify_concat_ws(delimiter: &Expr, args: &[Expr]) -> Result<ExprSimplifyRes
 
 fn is_null(expr: &Expr) -> bool {
     match expr {
-        Expr::Literal(v) => v.is_null(),
+        Expr::Literal(v, _) => v.is_null(),
         _ => false,
     }
 }
@@ -409,6 +410,7 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::utils::test::test_function;
@@ -482,15 +484,16 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 3,
-            return_field: &Field::new("f", Utf8, true),
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -518,15 +521,16 @@ mod tests {
         ])));
 
         let arg_fields = vec![
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
-            Field::new("a", Utf8, true),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
+            Field::new("a", Utf8, true).into(),
         ];
         let args = ScalarFunctionArgs {
             args: vec![c0, c1, c2],
-            arg_fields: arg_fields.iter().collect(),
+            arg_fields,
             number_rows: 3,
-            return_field: &Field::new("f", Utf8, true),
+            return_field: Field::new("f", Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

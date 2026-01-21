@@ -20,15 +20,15 @@
 use std::sync::Arc;
 
 use crate::{
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::Interval;
 
 /// Indicates whether interval arithmetic is supported for the given expression.
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
@@ -45,13 +45,13 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         if let Ok(field) = schema.field_with_name(column.name()) {
             is_datatype_supported(field.data_type())
         } else {
-            return false;
+            false
         }
     } else if let Some(literal) = expr_any.downcast_ref::<Literal>() {
         if let Ok(dt) = literal.data_type(schema) {
             is_datatype_supported(&dt)
         } else {
-            return false;
+            false
         }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)

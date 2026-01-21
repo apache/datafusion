@@ -19,10 +19,13 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Make sure fast / cheap clones on Arc are explicit:
 // https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+// https://github.com/apache/datafusion/issues/18881
+#![deny(clippy::allow_attributes)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
 //!
@@ -30,26 +33,28 @@
 
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
+pub use datafusion_common::{ColumnStatistics, Statistics, internal_err};
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
-pub use datafusion_physical_expr::window::WindowExpr;
 use datafusion_physical_expr::PhysicalSortExpr;
+pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, Distribution, Partitioning, PhysicalExpr,
+    Distribution, Partitioning, PhysicalExpr, expressions,
 };
 
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 pub use crate::execution_plan::{
-    collect, collect_partitioned, displayable, execute_input_stream, execute_stream,
-    execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, collect, collect_partitioned,
+    displayable, execute_input_stream, execute_stream, execute_stream_partitioned,
+    get_plan_string, with_new_children_if_necessary,
 };
 pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
+pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
-pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
+pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
+pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
 
 mod ordering;
@@ -59,9 +64,12 @@ mod visitor;
 
 pub mod aggregates;
 pub mod analyze;
+pub mod async_func;
+pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
+pub mod coop;
 pub mod display;
 pub mod empty;
 pub mod execution_plan;
@@ -76,6 +84,7 @@ pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
 pub mod repartition;
+pub mod sort_pushdown;
 pub mod sorts;
 pub mod spill;
 pub mod stream;
@@ -83,7 +92,6 @@ pub mod streaming;
 pub mod tree_node;
 pub mod union;
 pub mod unnest;
-pub mod values;
 pub mod windows;
 pub mod work_table;
 pub mod udaf {
@@ -91,6 +99,4 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
-pub mod coalesce;
-#[cfg(test)]
 pub mod test;

@@ -18,25 +18,30 @@
 use std::fs;
 use std::sync::Arc;
 
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::datasource::source::DataSourceExec;
-use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
+use datafusion_common::DFSchema;
 use datafusion_common::stats::Precision;
+use datafusion_execution::cache::DefaultListFilesCache;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
-use datafusion_execution::cache::cache_unit::{
-    DefaultFileStatisticsCache, DefaultListFilesCache,
-};
+use datafusion_execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{Expr, col, lit};
 
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion_common::config::ConfigOptions;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::filter::FilterExec;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -45,23 +50,52 @@ async fn check_stats_precision_with_filter_pushdown() {
     let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
     let table_path = ListingTableUrl::parse(filename).unwrap();
 
-    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    let opt =
+        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
     let table = get_listing_table(&table_path, None, &opt).await;
+
     let (_, _, state) = get_cache_runtime_state();
+    let mut options: ConfigOptions = state.config().options().as_ref().clone();
+    options.execution.parquet.pushdown_filters = true;
+
     // Scan without filter, stats are exact
     let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
         exec.partition_statistics(None).unwrap().num_rows,
-        Precision::Exact(8)
+        Precision::Exact(8),
+        "Stats without filter should be exact"
     );
 
-    // Scan with filter pushdown, stats are inexact
-    let filter = Expr::gt(col("id"), lit(1));
+    // This is a filter that cannot be evaluated by the table provider scanning
+    // (it is not a partition filter). Therefore; it will be pushed down to the
+    // source operator after the appropriate optimizer pass.
+    let filter_expr = Expr::gt(col("id"), lit(1));
+    let exec_with_filter = table
+        .scan(&state, None, std::slice::from_ref(&filter_expr), None)
+        .await
+        .unwrap();
 
-    let exec = table.scan(&state, None, &[filter], None).await.unwrap();
+    let ctx = SessionContext::new();
+    let df_schema = DFSchema::try_from(table.schema()).unwrap();
+    let physical_filter = ctx.create_physical_expr(filter_expr, &df_schema).unwrap();
+
+    let filtered_exec =
+        Arc::new(FilterExec::try_new(physical_filter, exec_with_filter).unwrap())
+            as Arc<dyn ExecutionPlan>;
+
+    let optimized_exec = FilterPushdown::new()
+        .optimize(filtered_exec, &options)
+        .unwrap();
+
+    assert!(
+        optimized_exec.as_any().is::<DataSourceExec>(),
+        "Sanity check that the pushdown did what we expected"
+    );
+    // Scan with filter pushdown, stats are inexact
     assert_eq!(
-        exec.partition_statistics(None).unwrap().num_rows,
-        Precision::Inexact(8)
+        optimized_exec.partition_statistics(None).unwrap().num_rows,
+        Precision::Inexact(8),
+        "Stats after filter pushdown should be inexact"
     );
 }
 
@@ -76,7 +110,8 @@ async fn load_table_stats_with_session_level_cache() {
     // Create a separate DefaultFileStatisticsCache
     let (cache2, _, state2) = get_cache_runtime_state();
 
-    let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+    let opt =
+        ListingOptions::new(Arc::new(ParquetFormat::default())).with_collect_stat(true);
 
     let table1 = get_listing_table(&table_path, Some(cache1), &opt).await;
     let table2 = get_listing_table(&table_path, Some(cache2), &opt).await;
@@ -91,8 +126,9 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec1.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Byte size is absent because we cannot estimate the output size
+        // of the Arrow data since there are variable length columns.
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -106,8 +142,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec2.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -121,8 +157,8 @@ async fn load_table_stats_with_session_level_cache() {
     );
     assert_eq!(
         exec3.partition_statistics(None).unwrap().total_byte_size,
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
-        Precision::Exact(671),
+        // Absent because the data contains variable length columns
+        Precision::Absent,
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);
@@ -132,23 +168,15 @@ async fn load_table_stats_with_session_level_cache() {
 async fn list_files_with_session_level_cache() {
     let p_name = "alltypes_plain.parquet";
     let testdata = datafusion::test_util::parquet_test_data();
-    let filename = format!("{}/{}", testdata, p_name);
+    let filename = format!("{testdata}/{p_name}");
 
-    let temp_path1 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
-    let temp_filename1 = format!("{}/{}", temp_path1, p_name);
+    let temp_dir1 = tempdir().unwrap();
+    let temp_path1 = temp_dir1.path().to_str().unwrap();
+    let temp_filename1 = format!("{temp_path1}/{p_name}");
 
-    let temp_path2 = tempdir()
-        .unwrap()
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
-    let temp_filename2 = format!("{}/{}", temp_path2, p_name);
+    let temp_dir2 = tempdir().unwrap();
+    let temp_path2 = temp_dir2.path().to_str().unwrap();
+    let temp_filename2 = format!("{temp_path2}/{p_name}");
 
     fs::copy(filename.clone(), temp_filename1).expect("panic");
     fs::copy(filename, temp_filename2).expect("panic");

@@ -23,7 +23,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 
 use crate::aggregate::groups_accumulator::accumulate::NullStateAdapter;
@@ -114,7 +114,8 @@ where
             opt_filter,
             total_num_groups,
             |block_id, block_offset, new_value| {
-                let value = &mut self.values[block_id as usize][block_offset as usize];
+                // SAFETY: `block_id` and `block_offset` are guaranteed to be in bounds
+                let value = unsafe {self.values.get_unchecked_mut(block_id as usize).get_unchecked_mut(block_offset as usize)};
                 (self.prim_fn)(value, new_value);
             },
         );
@@ -125,7 +126,7 @@ where
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let values = self.values.emit(emit_to);
         let nulls = self.null_state.build(emit_to);
-        let values = PrimitiveArray::<T>::new(values.into(), Some(nulls)) // no copy
+        let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
             .with_data_type(self.data_type.clone());
         Ok(Arc::new(values))
     }
@@ -150,7 +151,6 @@ where
     /// The state is:
     /// - self.prim_fn for all non null, non filtered values
     /// - null otherwise
-    ///
     fn convert_to_state(
         &self,
         values: &[ArrayRef],

@@ -27,7 +27,10 @@ pub(crate) mod test_util {
 
     use crate::test::object_store::local_unpartitioned_file;
 
-    /// Writes `batches` to a temporary parquet file
+    /// Writes each `batch` to at least one temporary parquet file
+    ///
+    /// For example, if `batches` contains 2 batches, the function will create
+    /// 2 temporary files, each containing the contents of one batch
     ///
     /// If multi_page is set to `true`, the parquet file(s) are written
     /// with 2 rows per data page (used to test page filtering and
@@ -52,7 +55,7 @@ pub(crate) mod test_util {
             }
         }
 
-        // we need the tmp files to be sorted as some tests rely on the how the returning files are ordered
+        // we need the tmp files to be sorted as some tests rely on the returned file ordering
         // https://github.com/apache/datafusion/pull/6629
         let tmp_files = {
             let mut tmp_files: Vec<_> = (0..batches.len())
@@ -104,10 +107,8 @@ pub(crate) mod test_util {
 mod tests {
 
     use std::fmt::{self, Display, Formatter};
-    use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Context, Poll};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
@@ -117,8 +118,9 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 
     use arrow::array::RecordBatch;
-    use arrow_schema::{Schema, SchemaRef};
+    use arrow_schema::Schema;
     use datafusion_catalog::Session;
+    use datafusion_common::ScalarValue::Utf8;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
@@ -126,44 +128,44 @@ mod tests {
     use datafusion_common::config::{ParquetOptions, TableParquetOptions};
     use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::ScalarValue::Utf8;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
     use datafusion_datasource::{ListingTableUrl, PartitionedFile};
     use datafusion_datasource_parquet::{
-        fetch_parquet_metadata, fetch_statistics, statistics_from_parquet_meta_calc,
         ParquetFormat, ParquetFormatFactory, ParquetSink,
     };
+    use datafusion_execution::TaskContext;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
-    use datafusion_execution::{RecordBatchStream, TaskContext};
     use datafusion_expr::dml::InsertOp;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-    use datafusion_physical_plan::{collect, ExecutionPlan};
+    use datafusion_physical_plan::{ExecutionPlan, collect};
 
+    use crate::test_util::bounded_stream;
     use arrow::array::{
-        types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
-        StringArray,
+        Array, ArrayRef, DictionaryArray, Int32Array, Int64Array, StringArray,
+        types::Int32Type,
     };
     use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_datasource::file_groups::FileGroup;
+    use datafusion_datasource_parquet::metadata::DFParquetMetadata;
+    use futures::StreamExt;
     use futures::stream::BoxStream;
-    use futures::{Stream, StreamExt};
     use insta::assert_snapshot;
-    use log::error;
-    use object_store::local::LocalFileSystem;
     use object_store::ObjectMeta;
+    use object_store::local::LocalFileSystem;
     use object_store::{
-        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOpts, PutOptions, PutPayload, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
     };
-    use parquet::arrow::arrow_reader::ArrowReaderOptions;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::file::metadata::{KeyValue, ParquetColumnIndex, ParquetOffsetIndex};
-    use parquet::file::page_index::index::Index;
-    use parquet::format::FileMetaData;
+    use parquet::arrow::arrow_reader::ArrowReaderOptions;
+    use parquet::file::metadata::{
+        KeyValue, ParquetColumnIndex, ParquetMetaData, ParquetOffsetIndex,
+    };
+    use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use tokio::fs::File;
 
     enum ForceViews {
@@ -177,8 +179,8 @@ mod tests {
 
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
 
-        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
-        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())])?;
+        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)])?;
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
@@ -190,10 +192,14 @@ mod tests {
             ForceViews::No => false,
         };
         let format = ParquetFormat::default().with_force_view_types(force_views);
-        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+        let schema = format.infer_schema(&ctx, &store, &meta).await?;
 
-        let stats =
-            fetch_statistics(store.as_ref(), schema.clone(), &meta[0], None).await?;
+        let file_metadata_cache =
+            ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let stats = DFParquetMetadata::new(&store, &meta[0])
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .fetch_statistics(&schema)
+            .await?;
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -201,7 +207,11 @@ mod tests {
         assert_eq!(c1_stats.null_count, Precision::Exact(1));
         assert_eq!(c2_stats.null_count, Precision::Exact(3));
 
-        let stats = fetch_statistics(store.as_ref(), schema, &meta[1], None).await?;
+        let stats = DFParquetMetadata::new(&store, &meta[1])
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .fetch_statistics(&schema)
+            .await?;
+
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
         let c2_stats = &stats.column_statistics[1];
@@ -235,11 +245,9 @@ mod tests {
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
 
         let batch1 =
-            RecordBatch::try_from_iter(vec![("a", c1.clone()), ("b", c1.clone())])
-                .unwrap();
+            RecordBatch::try_from_iter(vec![("a", c1.clone()), ("b", c1.clone())])?;
         let batch2 =
-            RecordBatch::try_from_iter(vec![("c", c2.clone()), ("d", c2.clone())])
-                .unwrap();
+            RecordBatch::try_from_iter(vec![("c", c2.clone()), ("d", c2.clone())])?;
 
         let store = Arc::new(LocalFileSystem::new()) as _;
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
@@ -247,7 +255,7 @@ mod tests {
         let session = SessionContext::new();
         let ctx = session.state();
         let format = ParquetFormat::default();
-        let schema = format.infer_schema(&ctx, &store, &meta).await.unwrap();
+        let schema = format.infer_schema(&ctx, &store, &meta).await?;
 
         let order: Vec<_> = ["a", "b", "c", "d"]
             .into_iter()
@@ -306,7 +314,7 @@ mod tests {
         async fn put_multipart_opts(
             &self,
             _location: &Path,
-            _opts: PutMultipartOpts,
+            _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             Err(object_store::Error::NotImplemented)
         }
@@ -363,24 +371,42 @@ mod tests {
 
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
 
-        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
-        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())])?;
+        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)])?;
 
         let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
             LocalFileSystem::new(),
         )));
         let (meta, _files) = store_parquet(vec![batch1, batch2], false).await?;
 
-        // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
-        // for the remaining metadata
-        fetch_parquet_metadata(store.as_ref() as &dyn ObjectStore, &meta[0], Some(9))
-            .await
-            .expect("error reading metadata with hint");
-
-        assert_eq!(store.request_count(), 2);
-
         let session = SessionContext::new();
         let ctx = session.state();
+
+        // Use a size hint larger than the parquet footer but smaller than the actual metadata, requiring a second fetch
+        // for the remaining metadata
+        let file_metadata_cache =
+            ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_metadata_size_hint(Some(9));
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 2);
+
+        let df_meta =
+            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+
+        // Increases by 3 because cache has no entries yet
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 5);
+
+        // No increase because cache has an entry
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 5);
+
+        // Increase by 2  because `get_file_metadata_cache()` is None
+        let df_meta = df_meta.with_file_metadata_cache(None);
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 7);
+
         let force_views = match force_views {
             ForceViews::Yes => true,
             ForceViews::No => false,
@@ -388,14 +414,18 @@ mod tests {
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(9))
             .with_force_view_types(force_views);
-        let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
-            .await
-            .unwrap();
+        // Increase by 3, partial cache being used.
+        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        assert_eq!(store.request_count(), 10);
+        // No increase, full cache being used.
+        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        assert_eq!(store.request_count(), 10);
 
-        let stats =
-            fetch_statistics(store.upcast().as_ref(), schema.clone(), &meta[0], Some(9))
-                .await?;
+        // No increase, cache being used
+        let df_meta =
+            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let stats = df_meta.fetch_statistics(&schema).await?;
+        assert_eq!(store.request_count(), 10);
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -409,28 +439,46 @@ mod tests {
 
         // Use the file size as the hint so we can get the full metadata from the first fetch
         let size_hint = meta[0].size as usize;
+        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_metadata_size_hint(Some(size_hint));
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
-            .await
-            .expect("error reading metadata with hint");
-
+        df_meta.fetch_metadata().await?;
         // ensure the requests were coalesced into a single request
         assert_eq!(store.request_count(), 1);
+
+        let session = SessionContext::new();
+        let ctx = session.state();
+        let file_metadata_cache =
+            ctx.runtime_env().cache_manager.get_file_metadata_cache();
+        let df_meta =
+            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        // Increases by 1 because cache has no entries yet and new session context
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 2);
+
+        // No increase because cache has an entry
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 2);
+
+        // Increase by 1  because `get_file_metadata_cache` is None
+        let df_meta = df_meta.with_file_metadata_cache(None);
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 3);
 
         let format = ParquetFormat::default()
             .with_metadata_size_hint(Some(size_hint))
             .with_force_view_types(force_views);
-        let schema = format
-            .infer_schema(&ctx, &store.upcast(), &meta)
-            .await
-            .unwrap();
-        let stats = fetch_statistics(
-            store.upcast().as_ref(),
-            schema.clone(),
-            &meta[0],
-            Some(size_hint),
-        )
-        .await?;
+        // Increase by 1, partial cache being used.
+        let _schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        assert_eq!(store.request_count(), 4);
+        // No increase, full cache being used.
+        let schema = format.infer_schema(&ctx, &store.upcast(), &meta).await?;
+        assert_eq!(store.request_count(), 4);
+        // No increase, cache being used
+        let df_meta =
+            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        let stats = df_meta.fetch_statistics(&schema).await?;
+        assert_eq!(store.request_count(), 4);
 
         assert_eq!(stats.num_rows, Precision::Exact(3));
         let c1_stats = &stats.column_statistics[0];
@@ -442,13 +490,18 @@ mod tests {
             LocalFileSystem::new(),
         )));
 
-        // Use the a size hint larger than the file size to make sure we don't panic
+        // Use a size hint larger than the file size to make sure we don't panic
         let size_hint = (meta[0].size + 100) as usize;
+        let df_meta = DFParquetMetadata::new(store.as_ref(), &meta[0])
+            .with_metadata_size_hint(Some(size_hint));
 
-        fetch_parquet_metadata(store.upcast().as_ref(), &meta[0], Some(size_hint))
-            .await
-            .expect("error reading metadata with hint");
+        df_meta.fetch_metadata().await?;
+        assert_eq!(store.request_count(), 1);
 
+        // No increase because cache has an entry
+        let df_meta =
+            df_meta.with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)));
+        df_meta.fetch_metadata().await?;
         assert_eq!(store.request_count(), 1);
 
         Ok(())
@@ -467,25 +520,47 @@ mod tests {
         // Data for column c_dic: ["a", "b", "c", "d"]
         let values = StringArray::from_iter_values(["a", "b", "c", "d"]);
         let keys = Int32Array::from_iter_values([0, 1, 2, 3]);
-        let dic_array =
-            DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values)).unwrap();
+        let dic_array = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
         let c_dic: ArrayRef = Arc::new(dic_array);
 
-        let batch1 = RecordBatch::try_from_iter(vec![("c_dic", c_dic)]).unwrap();
+        // Data for column string_truncation: ["a".repeat(128), null, "b".repeat(128), null]
+        let string_truncation: ArrayRef = Arc::new(StringArray::from(vec![
+            Some("a".repeat(128)),
+            None,
+            Some("b".repeat(128)),
+            None,
+        ]));
+
+        let batch1 = RecordBatch::try_from_iter(vec![
+            ("c_dic", c_dic),
+            ("string_truncation", string_truncation),
+        ])?;
 
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
         //    - column c_dic that has 4 rows with no null. Stats min and max of dictionary column is available.
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        //    - column string_truncation that has 4 rows with 2 nulls. Stats min and max of string column is available but not exact.
+        let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
+            LocalFileSystem::new(),
+        )));
         let (files, _file_names) = store_parquet(vec![batch1], false).await?;
 
         let state = SessionContext::new().state();
-        let format = ParquetFormat::default();
-        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+        // Make metadata size hint None to keep original behavior
+        let format = ParquetFormat::default().with_metadata_size_hint(None);
+        let _schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        assert_eq!(store.request_count(), 3);
+        // No increase, cache being used.
+        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        assert_eq!(store.request_count(), 3);
 
-        // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        // No increase in request count because cache is not empty
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .fetch_statistics(&schema)
+            .await?;
         assert_eq!(stats.num_rows, Precision::Exact(4));
 
         // column c_dic
@@ -501,6 +576,19 @@ mod tests {
             Precision::Exact(Utf8(Some("a".into())))
         );
 
+        // column string_truncation
+        let string_truncation_stats = &stats.column_statistics[1];
+
+        assert_eq!(string_truncation_stats.null_count, Precision::Exact(2));
+        assert_eq!(
+            string_truncation_stats.max_value,
+            Precision::Inexact(ScalarValue::Utf8View(Some("b".repeat(63) + "c")))
+        );
+        assert_eq!(
+            string_truncation_stats.min_value,
+            Precision::Inexact(ScalarValue::Utf8View(Some("a".repeat(64))))
+        );
+
         Ok(())
     }
 
@@ -510,18 +598,20 @@ mod tests {
         // Data for column c1: ["Foo", null, "bar"]
         let c1: ArrayRef =
             Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
-        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())]).unwrap();
+        let batch1 = RecordBatch::try_from_iter(vec![("c1", c1.clone())])?;
 
         // Data for column c2: [1, 2, null]
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
-        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)]).unwrap();
+        let batch2 = RecordBatch::try_from_iter(vec![("c2", c2)])?;
 
         // Use store_parquet to write each batch to its own file
         // . batch1 written into first file and includes:
         //    - column c1 that has 3 rows with one null. Stats min and max of string column is missing for this test even the column has values
         // . batch2 written into second file and includes:
         //    - column c2 that has 3 rows with one null. Stats min and max of int are available and 1 and 2 respectively
-        let store = Arc::new(LocalFileSystem::new()) as _;
+        let store = Arc::new(RequestCountingObjectStore::new(Arc::new(
+            LocalFileSystem::new(),
+        )));
         let (files, _file_names) = store_parquet(vec![batch1, batch2], false).await?;
 
         let force_views = match force_views {
@@ -531,8 +621,11 @@ mod tests {
 
         let mut state = SessionContext::new().state();
         state = set_view_state(state, force_views);
-        let format = ParquetFormat::default().with_force_view_types(force_views);
-        let schema = format.infer_schema(&state, &store, &files).await.unwrap();
+        let format = ParquetFormat::default()
+            .with_force_view_types(force_views)
+            .with_metadata_size_hint(None);
+        let schema = format.infer_schema(&state, &store.upcast(), &files).await?;
+        assert_eq!(store.request_count(), 6);
 
         let null_i64 = ScalarValue::Int64(None);
         let null_utf8 = if force_views {
@@ -541,9 +634,14 @@ mod tests {
             Utf8(None)
         };
 
-        // Fetch statistics for first file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[0], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        // No increase in request count because cache is not empty
+        let file_metadata_cache =
+            state.runtime_env().cache_manager.get_file_metadata_cache();
+        let stats = DFParquetMetadata::new(store.as_ref(), &files[0])
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .fetch_statistics(&schema)
+            .await?;
+        assert_eq!(store.request_count(), 6);
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1
         let c1_stats = &stats.column_statistics[0];
@@ -567,9 +665,12 @@ mod tests {
         assert_eq!(c2_stats.max_value, Precision::Exact(null_i64.clone()));
         assert_eq!(c2_stats.min_value, Precision::Exact(null_i64.clone()));
 
-        // Fetch statistics for second file
-        let pq_meta = fetch_parquet_metadata(store.as_ref(), &files[1], None).await?;
-        let stats = statistics_from_parquet_meta_calc(&pq_meta, schema.clone())?;
+        // No increase in request count because cache is not empty
+        let stats = DFParquetMetadata::new(store.as_ref(), &files[1])
+            .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+            .fetch_statistics(&schema)
+            .await?;
+        assert_eq!(store.request_count(), 6);
         assert_eq!(stats.num_rows, Precision::Exact(3));
         // column c1: missing from the file so the table treats all 3 rows as null
         let c1_stats = &stats.column_statistics[0];
@@ -623,7 +724,7 @@ mod tests {
         // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
 
         Ok(())
@@ -669,10 +770,9 @@ mod tests {
             exec.partition_statistics(None)?.num_rows,
             Precision::Exact(8)
         );
-        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(
             exec.partition_statistics(None)?.total_byte_size,
-            Precision::Exact(671)
+            Precision::Absent,
         );
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -830,7 +930,10 @@ mod tests {
             values.push(array.value(i));
         }
 
-        assert_eq!("[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]", format!("{values:?}"));
+        assert_eq!(
+            "[1235865600000000000, 1235865660000000000, 1238544000000000000, 1238544060000000000, 1233446400000000000, 1233446460000000000, 1230768000000000000, 1230768060000000000]",
+            format!("{values:?}")
+        );
 
         Ok(())
     }
@@ -999,22 +1102,20 @@ mod tests {
     async fn test_read_parquet_page_index() -> Result<()> {
         let testdata = datafusion_common::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
-        let file = File::open(path).await.unwrap();
+        let file = File::open(path).await?;
         let options = ArrowReaderOptions::new().with_page_index(true);
         let builder =
             ParquetRecordBatchStreamBuilder::new_with_options(file, options.clone())
-                .await
-                .unwrap()
+                .await?
                 .metadata()
                 .clone();
         check_page_index_validation(builder.column_index(), builder.offset_index());
 
         let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
-        let file = File::open(path).await.unwrap();
+        let file = File::open(path).await?;
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
-            .await
-            .unwrap()
+            .await?
             .metadata()
             .clone();
         check_page_index_validation(builder.column_index(), builder.offset_index());
@@ -1048,18 +1149,14 @@ mod tests {
 
         // 325 pages in int_col
         assert_eq!(int_col_offset.len(), 325);
-        match int_col_index {
-            Index::INT32(index) => {
-                assert_eq!(index.indexes.len(), 325);
-                for min_max in index.clone().indexes {
-                    assert!(min_max.min.is_some());
-                    assert!(min_max.max.is_some());
-                    assert!(min_max.null_count.is_some());
-                }
-            }
-            _ => {
-                error!("fail to read page index.")
-            }
+        let ColumnIndexMetaData::INT32(index) = int_col_index else {
+            panic!("fail to read page index.")
+        };
+        assert_eq!(index.min_values().len(), 325);
+        assert_eq!(index.max_values().len(), 325);
+        // all values are non null
+        for idx in 0..325 {
+            assert_eq!(index.null_count(idx), Some(0));
         }
     }
 
@@ -1085,7 +1182,7 @@ mod tests {
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
-            .unwrap_or(Arc::new(ParquetFormat::new()));
+            .unwrap_or_else(|| Arc::new(ParquetFormat::new()));
 
         scan_format(
             state, &*format, None, &testdata, file_name, projection, limit,
@@ -1096,7 +1193,7 @@ mod tests {
     /// Test that 0-byte files don't break while reading
     #[tokio::test]
     async fn test_read_empty_parquet() -> Result<()> {
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let tmp_dir = tempfile::TempDir::new()?;
         let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
         File::create(&path).await?;
 
@@ -1109,10 +1206,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1120,12 +1217,10 @@ mod tests {
     /// Test that 0-byte files don't break while reading
     #[tokio::test]
     async fn test_read_partitioned_empty_parquet() -> Result<()> {
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let tmp_dir = tempfile::TempDir::new()?;
         let partition_dir = tmp_dir.path().join("col1=a");
-        std::fs::create_dir(&partition_dir).unwrap();
-        File::create(partition_dir.join("empty.parquet"))
-            .await
-            .unwrap();
+        std::fs::create_dir(&partition_dir)?;
+        File::create(partition_dir.join("empty.parquet")).await?;
 
         let ctx = SessionContext::new();
 
@@ -1140,10 +1235,10 @@ mod tests {
 
         let result = df.collect().await?;
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            ++
-            ++
-       "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        ++
+        ++
+        ");
 
         Ok(())
     }
@@ -1244,6 +1339,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_empty_recordbatch_creates_file() -> Result<()> {
+        let empty_record_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(Vec::<i32>::new()))],
+        )
+        .expect("Failed to create empty RecordBatch");
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty2.parquet", tmp_dir.path().to_string_lossy());
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_batch(empty_record_batch.clone())?;
+        df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        assert!(std::path::Path::new(&path).exists());
+
+        let stream = ctx
+            .read_parquet(&path, ParquetReadOptions::new())
+            .await?
+            .execute_stream()
+            .await?;
+        assert_eq!(stream.schema(), empty_record_batch.schema());
+        let results = stream.collect::<Vec<_>>().await;
+        assert_eq!(results.len(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_empty_parquet_from_sql() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let tmp_dir = tempfile::TempDir::new()?;
+        let path = format!("{}/empty_sql.parquet", tmp_dir.path().to_string_lossy());
+        let df = ctx.sql("SELECT CAST(1 AS INT) AS id LIMIT 0").await?;
+        df.write_parquet(&path, crate::dataframe::DataFrameWriteOptions::new(), None)
+            .await?;
+        // Expected the file to exist
+        assert!(std::path::Path::new(&path).exists());
+        let read_df = ctx.read_parquet(&path, ParquetReadOptions::new()).await?;
+        let stream = read_df.execute_stream().await?;
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+
+        let results: Vec<_> = stream.collect().await;
+        assert_eq!(results.len(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_insert_schema_into_metadata() -> Result<()> {
         // expected kv metadata without schema
         let expected_without = vec![
@@ -1320,7 +1465,7 @@ mod tests {
     #[tokio::test]
     async fn parquet_sink_write_with_extension() -> Result<()> {
         let filename = "test_file.custom_ext";
-        let file_path = format!("file:///path/to/{}", filename);
+        let file_path = format!("file:///path/to/{filename}");
         let parquet_sink = create_written_parquet_sink(file_path.as_str()).await?;
 
         // assert written to proper path
@@ -1418,7 +1563,7 @@ mod tests {
         // create data
         let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
         let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
-        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)])?;
 
         // write stream
         FileSink::write_all(
@@ -1434,7 +1579,7 @@ mod tests {
         Ok(parquet_sink)
     }
 
-    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, FileMetaData)> {
+    fn get_written(parquet_sink: Arc<ParquetSink>) -> Result<(Path, ParquetMetaData)> {
         let mut written = parquet_sink.written();
         let written = written.drain();
         assert_eq!(
@@ -1444,28 +1589,33 @@ mod tests {
             written.len()
         );
 
-        let (path, file_metadata) = written.take(1).next().unwrap();
-        Ok((path, file_metadata))
+        let (path, parquet_meta_data) = written.take(1).next().unwrap();
+        Ok((path, parquet_meta_data))
     }
 
-    fn assert_file_metadata(file_metadata: FileMetaData, expected_kv: &Vec<KeyValue>) {
-        let FileMetaData {
-            num_rows,
-            schema,
-            key_value_metadata,
-            ..
-        } = file_metadata;
-        assert_eq!(num_rows, 2, "file metadata to have 2 rows");
+    fn assert_file_metadata(
+        parquet_meta_data: ParquetMetaData,
+        expected_kv: &Vec<KeyValue>,
+    ) {
+        let file_metadata = parquet_meta_data.file_metadata();
+        let schema_descr = file_metadata.schema_descr();
+        assert_eq!(file_metadata.num_rows(), 2, "file metadata to have 2 rows");
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "a"),
+            schema_descr
+                .columns()
+                .iter()
+                .any(|col_schema| col_schema.name() == "a"),
             "output file metadata should contain col a"
         );
         assert!(
-            schema.iter().any(|col_schema| col_schema.name == "b"),
+            schema_descr
+                .columns()
+                .iter()
+                .any(|col_schema| col_schema.name() == "b"),
             "output file metadata should contain col b"
         );
 
-        let mut key_value_metadata = key_value_metadata.unwrap();
+        let mut key_value_metadata = file_metadata.key_value_metadata().unwrap().clone();
         key_value_metadata.sort_by(|a, b| a.key.cmp(&b.key));
         assert_eq!(&key_value_metadata, expected_kv);
     }
@@ -1497,7 +1647,7 @@ mod tests {
         // create data with 2 partitions
         let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
         let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
-        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)])?;
 
         // write stream
         FileSink::write_all(
@@ -1522,31 +1672,34 @@ mod tests {
 
         // check the file metadata includes partitions
         let mut expected_partitions = std::collections::HashSet::from(["a=foo", "a=bar"]);
-        for (
-            path,
-            FileMetaData {
-                num_rows, schema, ..
-            },
-        ) in written.take(2)
-        {
+        for (path, parquet_metadata) in written.take(2) {
+            let file_metadata = parquet_metadata.file_metadata();
+            let schema = file_metadata.schema_descr();
+            let num_rows = file_metadata.num_rows();
+
             let path_parts = path.parts().collect::<Vec<_>>();
             assert_eq!(path_parts.len(), 2, "should have path prefix");
 
             let prefix = path_parts[0].as_ref();
             assert!(
                 expected_partitions.contains(prefix),
-                "expected path prefix to match partition, instead found {:?}",
-                prefix
+                "expected path prefix to match partition, instead found {prefix:?}"
             );
             expected_partitions.remove(prefix);
 
             assert_eq!(num_rows, 1, "file metadata to have 1 row");
             assert!(
-                !schema.iter().any(|col_schema| col_schema.name == "a"),
+                !schema
+                    .columns()
+                    .iter()
+                    .any(|col_schema| col_schema.name() == "a"),
                 "output file metadata will not contain partitioned col a"
             );
             assert!(
-                schema.iter().any(|col_schema| col_schema.name == "b"),
+                schema
+                    .columns()
+                    .iter()
+                    .any(|col_schema| col_schema.name() == "b"),
                 "output file metadata should contain col b"
             );
         }
@@ -1591,8 +1744,7 @@ mod tests {
             // create data
             let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
             let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
-            let batch =
-                RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)]).unwrap();
+            let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)])?;
 
             // create task context
             let task_context = build_ctx(object_store_url.as_ref());
@@ -1659,44 +1811,5 @@ mod tests {
             .expect("should track for column-parallel writes");
 
         Ok(())
-    }
-
-    /// Creates an bounded stream for testing purposes.
-    fn bounded_stream(
-        batch: RecordBatch,
-        limit: usize,
-    ) -> datafusion_execution::SendableRecordBatchStream {
-        Box::pin(BoundedStream {
-            count: 0,
-            limit,
-            batch,
-        })
-    }
-
-    struct BoundedStream {
-        limit: usize,
-        count: usize,
-        batch: RecordBatch,
-    }
-
-    impl Stream for BoundedStream {
-        type Item = Result<RecordBatch>;
-
-        fn poll_next(
-            mut self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Self::Item>> {
-            if self.count >= self.limit {
-                return Poll::Ready(None);
-            }
-            self.count += 1;
-            Poll::Ready(Some(Ok(self.batch.clone())))
-        }
-    }
-
-    impl RecordBatchStream for BoundedStream {
-        fn schema(&self) -> SchemaRef {
-            self.batch.schema()
-        }
     }
 }

@@ -21,11 +21,10 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::merge_schema;
-use datafusion_expr::Expr;
 
 use crate::optimizer::ApplyOrder;
 use crate::utils::NamePreserver;
@@ -67,16 +66,14 @@ impl OptimizerRule for SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        let mut execution_props = ExecutionProps::new();
-        execution_props.query_execution_start_time = config.query_execution_start_time();
-        Self::optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, config)
     }
 }
 
 impl SimplifyExpressions {
     fn optimize_internal(
         plan: LogicalPlan,
-        execution_props: &ExecutionProps,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
@@ -99,7 +96,10 @@ impl SimplifyExpressions {
             Arc::new(DFSchema::empty())
         };
 
-        let info = SimplifyContext::new(execution_props).with_schema(schema);
+        let info = SimplifyContext::default()
+            .with_schema(schema)
+            .with_config_options(config.options())
+            .with_query_execution_start_time(config.query_execution_start_time());
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions
@@ -142,7 +142,7 @@ impl SimplifyExpressions {
 }
 
 impl SimplifyExpressions {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -155,14 +155,14 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
 
-    use crate::optimizer::Optimizer;
     use datafusion_expr::logical_plan::builder::table_scan_with_filters;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::*;
     use datafusion_functions_aggregate::expr_fn::{max, min};
 
-    use crate::test::{assert_fields_eq, test_table_scan_with_name};
     use crate::OptimizerContext;
+    use crate::assert_optimized_plan_eq_snapshot;
+    use crate::test::{assert_fields_eq, test_table_scan_with_name};
 
     use super::*;
 
@@ -180,15 +180,20 @@ mod tests {
             .expect("building plan")
     }
 
-    fn assert_optimized_plan_eq(plan: LogicalPlan, expected: &str) -> Result<()> {
-        // Use Optimizer to do plan traversal
-        fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
-        let optimizer = Optimizer::with_rules(vec![Arc::new(SimplifyExpressions::new())]);
-        let optimized_plan =
-            optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
-        let formatted_plan = format!("{optimized_plan}");
-        assert_eq!(formatted_plan, expected);
-        Ok(())
+    macro_rules! assert_optimized_plan_equal {
+        (
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(SimplifyExpressions::new())];
+            let optimizer_ctx = OptimizerContext::new();
+            assert_optimized_plan_eq_snapshot!(
+                optimizer_ctx,
+                rules,
+                $plan,
+                @ $expected,
+            )
+        }};
     }
 
     #[test]
@@ -211,9 +216,10 @@ mod tests {
         assert_eq!(1, table_scan.schema().fields().len());
         assert_fields_eq(&table_scan, vec!["a"]);
 
-        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true)]";
-
-        assert_optimized_plan_eq(table_scan, expected)
+        assert_optimized_plan_equal!(
+            table_scan,
+            @ "TableScan: test projection=[a], full_filters=[Boolean(true)]"
+        )
     }
 
     #[test]
@@ -224,12 +230,13 @@ mod tests {
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
 
-        assert_optimized_plan_eq(
+        assert_optimized_plan_equal!(
             plan,
-            "\
-	        Filter: test.b > Int32(1)\
-            \n  Projection: test.a\
-            \n    TableScan: test",
+            @ r"
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -241,12 +248,13 @@ mod tests {
             .filter(and(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
 
-        assert_optimized_plan_eq(
+        assert_optimized_plan_equal!(
             plan,
-            "\
-	        Filter: test.b > Int32(1)\
-            \n  Projection: test.a\
-            \n    TableScan: test",
+            @ r"
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -258,12 +266,13 @@ mod tests {
             .filter(or(col("b").gt(lit(1)), col("b").gt(lit(1))))?
             .build()?;
 
-        assert_optimized_plan_eq(
+        assert_optimized_plan_equal!(
             plan,
-            "\
-            Filter: test.b > Int32(1)\
-            \n  Projection: test.a\
-            \n    TableScan: test",
+            @ r"
+        Filter: test.b > Int32(1)
+          Projection: test.a
+            TableScan: test
+        "
         )
     }
 
@@ -279,12 +288,13 @@ mod tests {
             ))?
             .build()?;
 
-        assert_optimized_plan_eq(
+        assert_optimized_plan_equal!(
             plan,
-            "\
-            Filter: test.a > Int32(5) AND test.b < Int32(6)\
-            \n  Projection: test.a, test.b\
-	        \n    TableScan: test",
+            @ r"
+        Filter: test.a > Int32(5) AND test.b < Int32(6)
+          Projection: test.a, test.b
+            TableScan: test
+        "
         )
     }
 
@@ -297,13 +307,15 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: NOT test.c\
-        \n    Filter: test.b\
-        \n      TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a
+          Filter: NOT test.c
+            Filter: test.b
+              TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -316,14 +328,16 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a\
-        \n  Limit: skip=0, fetch=1\
-        \n    Filter: test.c\
-        \n      Filter: NOT test.b\
-        \n        TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a
+          Limit: skip=0, fetch=1
+            Filter: test.c
+              Filter: NOT test.b
+                TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -334,12 +348,14 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: NOT test.b AND test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a
+          Filter: NOT test.b AND test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -350,12 +366,14 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: NOT test.b OR NOT test.c\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a
+          Filter: NOT test.b OR NOT test.c
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -366,12 +384,14 @@ mod tests {
             .project(vec![col("a")])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a\
-        \n  Filter: test.b\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a
+          Filter: test.b
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -381,11 +401,13 @@ mod tests {
             .project(vec![col("a"), col("d"), col("b").eq(lit(false))])?
             .build()?;
 
-        let expected = "\
-        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)\
-        \n  TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Projection: test.a, test.d, NOT test.b AS test.b = Boolean(false)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -399,12 +421,14 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "\
-        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]\
-        \n  Projection: test.a, test.c, test.b\
-        \n    TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]
+          Projection: test.a, test.c, test.b
+            TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -422,10 +446,10 @@ mod tests {
         let values = vec![vec![expr1, expr2]];
         let plan = LogicalPlanBuilder::values(values)?.build()?;
 
-        let expected = "\
-        Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ "Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))"
+        )
     }
 
     fn get_optimized_plan_formatted(
@@ -467,8 +491,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected =
-            "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -482,10 +505,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").gt(lit(10)).not())?
             .build()?;
-        let expected = "Filter: test.d <= Int32(10)\
-            \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d <= Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -495,10 +522,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").gt(lit(10)).and(col("d").lt(lit(100))).not())?
             .build()?;
-        let expected = "Filter: test.d <= Int32(10) OR test.d >= Int32(100)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d <= Int32(10) OR test.d >= Int32(100)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -508,10 +539,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").gt(lit(10)).or(col("d").lt(lit(100))).not())?
             .build()?;
-        let expected = "Filter: test.d <= Int32(10) AND test.d >= Int32(100)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d <= Int32(10) AND test.d >= Int32(100)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -521,10 +556,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").gt(lit(10)).not().not())?
             .build()?;
-        let expected = "Filter: test.d > Int32(10)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d > Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -534,10 +573,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("e").is_null().not())?
             .build()?;
-        let expected = "Filter: test.e IS NOT NULL\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.e IS NOT NULL
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -547,10 +590,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("e").is_not_null().not())?
             .build()?;
-        let expected = "Filter: test.e IS NULL\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.e IS NULL
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -560,11 +607,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], false).not())?
             .build()?;
-        let expected =
-            "Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d != Int32(1) AND test.d != Int32(2) AND test.d != Int32(3)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -574,11 +624,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").in_list(vec![lit(1), lit(2), lit(3)], true).not())?
             .build()?;
-        let expected =
-            "Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d = Int32(1) OR test.d = Int32(2) OR test.d = Int32(3)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -589,10 +642,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?
             .build()?;
-        let expected = "Filter: test.d < Int32(1) OR test.d > Int32(10)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d < Int32(1) OR test.d > Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -603,10 +660,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(qual.not())?
             .build()?;
-        let expected = "Filter: test.d >= Int32(1) AND test.d <= Int32(10)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d >= Int32(1) AND test.d <= Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -623,10 +684,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("a").like(col("b")).not())?
             .build()?;
-        let expected = "Filter: test.a NOT LIKE test.b\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a NOT LIKE test.b
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -643,10 +708,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("a").not_like(col("b")).not())?
             .build()?;
-        let expected = "Filter: test.a LIKE test.b\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a LIKE test.b
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -663,10 +732,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("a").ilike(col("b")).not())?
             .build()?;
-        let expected = "Filter: test.a NOT ILIKE test.b\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a NOT ILIKE test.b
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -676,10 +749,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(binary_expr(col("d"), Operator::IsDistinctFrom, lit(10)).not())?
             .build()?;
-        let expected = "Filter: test.d IS NOT DISTINCT FROM Int32(10)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d IS NOT DISTINCT FROM Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -689,10 +766,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(binary_expr(col("d"), Operator::IsNotDistinctFrom, lit(10)).not())?
             .build()?;
-        let expected = "Filter: test.d IS DISTINCT FROM Int32(10)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.d IS DISTINCT FROM Int32(10)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -714,11 +795,14 @@ mod tests {
 
         // before simplify: t1.a + CAST(Int64(1), UInt32) = t2.a + CAST(Int64(2), UInt32)
         // after simplify: t1.a + UInt32(1) = t2.a + UInt32(2) AS t1.a + Int64(1) = t2.a + Int64(2)
-        let expected = "Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)\
-            \n  TableScan: t1\
-            \n  TableScan: t2";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Inner Join: t1.a + UInt32(1) = t2.a + UInt32(2)
+          TableScan: t1
+          TableScan: t2
+        "
+        )
     }
 
     #[test]
@@ -728,10 +812,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").is_not_null())?
             .build()?;
-        let expected = "Filter: Boolean(true)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(true)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -741,10 +829,14 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(col("d").is_null())?
             .build()?;
-        let expected = "Filter: Boolean(false)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(false)
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -761,10 +853,13 @@ mod tests {
             )?
             .build()?;
 
-        let expected = "Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3) AS Int32(1) + Int32(2)))]], aggr=[[]]\
-        \n  TableScan: test";
-
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3) AS Int32(1) + Int32(2)))]], aggr=[[]]
+          TableScan: test
+        "
+        )
     }
 
     #[test]
@@ -779,19 +874,27 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
-        let expected = "Filter: test.a IS NOT NULL\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a IS NOT NULL
+          TableScan: test
+        "
+        )?;
 
         // Test `!= ".*"` transforms to checking if the column is empty
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotMatch, lit(".*")))?
             .build()?;
-        let expected = "Filter: test.a = Utf8(\"\")\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a = Utf8("")
+          TableScan: test
+        "#
+        )?;
 
         // Test case-insensitive versions
 
@@ -799,18 +902,174 @@ mod tests {
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("b"), Operator::RegexIMatch, lit(".*")))?
             .build()?;
-        let expected = "Filter: Boolean(true)\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)?;
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: Boolean(true)
+          TableScan: test
+        "
+        )?;
 
         // Test `!~ ".*"` (case-insensitive) transforms to checking if the column is empty
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexNotIMatch, lit(".*")))?
             .build()?;
-        let expected = "Filter: test.a = Utf8(\"\")\
-        \n  TableScan: test";
 
-        assert_optimized_plan_eq(plan, expected)
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a = Utf8("")
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
+    fn simplify_not_in_list() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").in_list(vec![lit("a"), lit("b")], false).not())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a != Utf8("a") AND test.a != Utf8("b")
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_in_list() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                col("a")
+                    .in_list(vec![lit("a"), lit("b")], false)
+                    .not()
+                    .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r#"
+        Filter: test.a = Utf8("a") OR test.a = Utf8("b")
+          TableScan: test
+        "#
+        )
+    }
+
+    #[test]
+    fn simplify_not_exists() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(LogicalPlanBuilder::from(table_scan2).build()?)).not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: NOT EXISTS (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_exists() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                exists(Arc::new(LogicalPlanBuilder::from(table_scan2).build()?))
+                    .not()
+                    .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_in_subquery() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                in_subquery(
+                    col("a"),
+                    Arc::new(LogicalPlanBuilder::from(table_scan2).build()?),
+                )
+                .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a NOT IN (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn simplify_not_not_in_subquery() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+        let table_scan2 =
+            datafusion_expr::table_scan(Some("test2"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(
+                in_subquery(
+                    col("a"),
+                    Arc::new(LogicalPlanBuilder::from(table_scan2).build()?),
+                )
+                .not()
+                .not(),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: test.a IN (<subquery>)
+          Subquery:
+            TableScan: test2
+          TableScan: test
+        "
+        )
     }
 }

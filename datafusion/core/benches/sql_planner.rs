@@ -23,21 +23,23 @@ extern crate datafusion;
 mod data_utils;
 
 use crate::criterion::Criterion;
+use arrow::array::PrimitiveArray;
 use arrow::array::{ArrayRef, RecordBatch};
+use arrow::datatypes::ArrowNativeTypeOp;
+use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion_common::ScalarValue;
+use datafusion_common::{ScalarValue, config::Dialect};
 use datafusion_expr::col;
-use itertools::Itertools;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use rand_distr::num_traits::NumCast;
+use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
+use test_utils::TableDef;
 use test_utils::tpcds::tpcds_schemas;
 use test_utils::tpch::tpch_schemas;
-use test_utils::TableDef;
 use tokio::runtime::Runtime;
 
 const BENCHMARKS_PATH_1: &str = "../../benchmarks/";
@@ -46,12 +48,12 @@ const CLICKBENCH_DATA_PATH: &str = "data/hits_partitioned/";
 
 /// Create a logical plan from the specified sql
 fn logical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(ctx.sql(sql)).unwrap());
+    black_box(rt.block_on(ctx.sql(sql)).unwrap());
 }
 
 /// Create a physical ExecutionPlan (by way of logical plan)
 fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
-    criterion::black_box(rt.block_on(async {
+    black_box(rt.block_on(async {
         ctx.sql(sql)
             .await
             .unwrap()
@@ -91,6 +93,7 @@ fn create_context() -> SessionContext {
 
 /// Register the table definitions as a MemTable with the context and return the
 /// context
+#[expect(clippy::needless_pass_by_value)]
 fn register_defs(ctx: SessionContext, defs: Vec<TableDef>) -> SessionContext {
     defs.iter().for_each(|TableDef { name, schema }| {
         ctx.register_table(
@@ -115,6 +118,11 @@ fn register_clickbench_hits_table(rt: &Runtime) -> SessionContext {
 
     let sql = format!("CREATE EXTERNAL TABLE hits STORED AS PARQUET LOCATION '{path}'");
 
+    // ClickBench partitioned dataset was written by an ancient version of pyarrow that
+    // that wrote strings with the wrong logical type. To read it correctly, we must
+    // automatically convert binary to string.
+    rt.block_on(ctx.sql("SET datafusion.execution.parquet.binary_as_string  = true;"))
+        .unwrap();
     rt.block_on(ctx.sql(&sql)).unwrap();
 
     let count =
@@ -136,16 +144,19 @@ fn benchmark_with_param_values_many_columns(
         if i > 0 {
             aggregates.push_str(", ");
         }
-        aggregates.push_str(format!("MAX(a{})", i).as_str());
+        aggregates.push_str(format!("MAX(a{i})").as_str());
     }
     // SELECT max(attr0), ..., max(attrN) FROM t1.
-    let query = format!("SELECT {} FROM t1", aggregates);
-    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let query = format!("SELECT {aggregates} FROM t1");
+    let statement = ctx
+        .state()
+        .sql_to_statement(&query, &Dialect::Generic)
+        .unwrap();
     let plan =
         rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
     b.iter(|| {
         let plan = plan.clone();
-        criterion::black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
+        black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
     });
 }
 
@@ -154,25 +165,37 @@ fn benchmark_with_param_values_many_columns(
 /// 0,100...9900
 /// 0,200...19800
 /// 0,300...29700
-fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows: usize) {
-    // ("c0", [0, 0, ...])
-    // ("c1": [100, 200, ...])
-    // etc
-    let iter = (0..num_columns).map(|i| i as u64).map(|i| {
-        let array: ArrayRef = Arc::new(arrow::array::UInt64Array::from_iter_values(
-            (0..num_rows)
-                .map(|j| j as u64 * 100 + i)
-                .collect::<Vec<_>>(),
-        ));
-        (format!("c{}", i), array)
+fn register_union_order_table_generic<T>(
+    ctx: &SessionContext,
+    num_columns: usize,
+    num_rows: usize,
+) where
+    T: ArrowPrimitiveType,
+    T::Native: ArrowNativeTypeOp + NumCast,
+{
+    let iter = (0..num_columns).map(|i| {
+        let array_data: Vec<T::Native> = (0..num_rows)
+            .map(|j| {
+                let value = (j as u64) * 100 + (i as u64);
+                <T::Native as NumCast>::from(value).unwrap_or_else(|| {
+                    panic!("Failed to cast numeric value to Native type")
+                })
+            })
+            .collect();
+
+        // Use PrimitiveArray which is generic over the ArrowPrimitiveType T
+        let array: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter_values(array_data));
+
+        (format!("c{i}"), array)
     });
+
     let batch = RecordBatch::try_from_iter(iter).unwrap();
     let schema = batch.schema();
     let partitions = vec![vec![batch]];
 
     // tell DataFusion that the table is sorted by all columns
     let sort_order = (0..num_columns)
-        .map(|i| col(format!("c{}", i)).sort(true, true))
+        .map(|i| col(format!("c{i}")).sort(true, true))
         .collect::<Vec<_>>();
 
     // create the table
@@ -182,14 +205,13 @@ fn register_union_order_table(ctx: &SessionContext, num_columns: usize, num_rows
 
     ctx.register_table("t", Arc::new(table)).unwrap();
 }
-
 /// return a query like
 /// ```sql
-/// select c1, null as c2, ... null as cn from t ORDER BY c1
+/// select c1, 2 as c2, ... n as cn from t ORDER BY c1
 ///   UNION ALL
-/// select null as c1, c2, ... null as cn from t ORDER BY c2
+/// select 1 as c1, c2, ... n as cn from t ORDER BY c2
 /// ...
-/// select null as c1, null as c2, ... cn from t ORDER BY cn
+/// select 1 as c1, 2 as c2, ... cn from t ORDER BY cn
 ///  ORDER BY c1, c2 ... CN
 /// ```
 fn union_orderby_query(n: usize) -> String {
@@ -203,17 +225,17 @@ fn union_orderby_query(n: usize) -> String {
                 if i == j {
                     format!("c{j}")
                 } else {
-                    format!("null as c{j}")
+                    format!("{j} as c{j}")
                 }
             })
             .collect::<Vec<_>>()
             .join(", ");
-        query.push_str(&format!("(SELECT {} FROM t ORDER BY c{})", select_list, i));
+        query.push_str(&format!("(SELECT {select_list} FROM t ORDER BY c{i})"));
     }
     query.push_str(&format!(
         "\nORDER BY {}",
         (0..n)
-            .map(|i| format!("c{}", i))
+            .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(", ")
     ));
@@ -225,8 +247,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     if !PathBuf::from(format!("{BENCHMARKS_PATH_1}{CLICKBENCH_DATA_PATH}")).exists()
         && !PathBuf::from(format!("{BENCHMARKS_PATH_2}{CLICKBENCH_DATA_PATH}")).exists()
     {
-        panic!("benchmarks/data/hits_partitioned/ could not be loaded. Please run \
-         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark")
+        panic!(
+            "benchmarks/data/hits_partitioned/ could not be loaded. Please run \
+         'benchmarks/bench.sh data clickbench_partitioned' prior to running this benchmark"
+        )
     }
 
     let ctx = create_context();
@@ -293,13 +317,41 @@ fn criterion_benchmark(c: &mut Criterion) {
             if i > 0 {
                 aggregates.push_str(", ");
             }
-            aggregates.push_str(format!("MAX(a{})", i).as_str());
+            aggregates.push_str(format!("MAX(a{i})").as_str());
         }
-        let query = format!("SELECT {} FROM t1", aggregates);
+        let query = format!("SELECT {aggregates} FROM t1");
         b.iter(|| {
             physical_plan(&ctx, &rt, &query);
         });
     });
+
+    // It was observed in production that queries with window functions sometimes partition over more than 30 columns
+    for partitioning_columns in [4, 7, 8, 12, 30] {
+        c.bench_function(
+            &format!(
+                "physical_window_function_partition_by_{partitioning_columns}_on_values"
+            ),
+            |b| {
+                let source = format!(
+                    "SELECT 1 AS n{}",
+                    (0..partitioning_columns)
+                        .map(|i| format!(", {i} AS c{i}"))
+                        .collect::<String>()
+                );
+                let window = format!(
+                    "SUM(n) OVER (PARTITION BY {}) AS sum_n",
+                    (0..partitioning_columns)
+                        .map(|i| format!("c{i}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                let query = format!("SELECT {window} FROM ({source})");
+                b.iter(|| {
+                    physical_plan(&ctx, &rt, &query);
+                });
+            },
+        );
+    }
 
     // Benchmark for Physical Planning Joins
     c.bench_function("physical_join_consider_sort", |b| {
@@ -373,15 +425,50 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     // -- Sorted Queries --
-    register_union_order_table(&ctx, 100, 1000);
+    // 100, 200 && 300 is taking too long - https://github.com/apache/datafusion/issues/18366
+    // Logical Plan for datatype Int64 and UInt64 differs, UInt64 Logical Plan's Union are wrapped
+    // up in Projection, and EliminateNestedUnion OptimezerRule is not applied leading to significantly
+    // longer execution time.
+    // https://github.com/apache/datafusion/issues/17261
 
-    // this query has many expressions in its sort order so stresses
-    // order equivalence validation
-    c.bench_function("physical_sorted_union_orderby", |b| {
-        // SELECT ... UNION ALL ...
-        let query = union_orderby_query(20);
-        b.iter(|| physical_plan(&ctx, &rt, &query))
-    });
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table_generic::<arrow::datatypes::Int64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
+
+        // this query has many expressions in its sort order so stresses
+        // order equivalence validation
+        c.bench_function(
+            &format!("physical_sorted_union_order_by_{column_count}_int64"),
+            |b| {
+                // SELECT ... UNION ALL ...
+                let query = union_orderby_query(column_count);
+                b.iter(|| physical_plan(&ctx, &rt, &query))
+            },
+        );
+
+        let _ = ctx.deregister_table("t");
+    }
+
+    for column_count in [10, 50 /* 100, 200, 300 */] {
+        register_union_order_table_generic::<arrow::datatypes::UInt64Type>(
+            &ctx,
+            column_count,
+            1000,
+        );
+        c.bench_function(
+            &format!("physical_sorted_union_order_by_{column_count}_uint64"),
+            |b| {
+                // SELECT ... UNION ALL ...
+                let query = union_orderby_query(column_count);
+                b.iter(|| physical_plan(&ctx, &rt, &query))
+            },
+        );
+
+        let _ = ctx.deregister_table("t");
+    }
 
     // --- TPC-H ---
 
@@ -402,7 +489,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     for q in tpch_queries {
         let sql =
             std::fs::read_to_string(format!("{benchmarks_path}queries/{q}.sql")).unwrap();
-        c.bench_function(&format!("physical_plan_tpch_{}", q), |b| {
+        c.bench_function(&format!("physical_plan_tpch_{q}"), |b| {
             b.iter(|| physical_plan(&tpch_ctx, &rt, &sql))
         });
     }
@@ -466,17 +553,20 @@ fn criterion_benchmark(c: &mut Criterion) {
     // });
 
     // -- clickbench --
-
-    let queries_file =
-        File::open(format!("{benchmarks_path}queries/clickbench/queries.sql")).unwrap();
-    let extended_file =
-        File::open(format!("{benchmarks_path}queries/clickbench/extended.sql")).unwrap();
-
-    let clickbench_queries: Vec<String> = BufReader::new(queries_file)
-        .lines()
-        .chain(BufReader::new(extended_file).lines())
-        .map(|l| l.expect("Could not parse line"))
-        .collect_vec();
+    let clickbench_queries = (0..=42)
+        .map(|q| {
+            std::fs::read_to_string(format!(
+                "{benchmarks_path}queries/clickbench/queries/q{q}.sql"
+            ))
+            .unwrap()
+        })
+        .chain((0..=7).map(|q| {
+            std::fs::read_to_string(format!(
+                "{benchmarks_path}queries/clickbench/extended/q{q}.sql"
+            ))
+            .unwrap()
+        }))
+        .collect::<Vec<_>>();
 
     let clickbench_ctx = register_clickbench_hits_table(&rt);
 

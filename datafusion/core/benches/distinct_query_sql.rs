@@ -24,18 +24,20 @@ mod data_utils;
 use crate::criterion::Criterion;
 use data_utils::{create_table_provider, make_data};
 use datafusion::execution::context::SessionContext;
-use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::{datasource::MemTable, error::Result};
-use datafusion_execution::config::SessionConfig;
 use datafusion_execution::TaskContext;
+use datafusion_execution::config::SessionConfig;
 
 use parking_lot::Mutex;
+use std::hint::black_box;
 use std::{sync::Arc, time::Duration};
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn query(ctx: Arc<Mutex<SessionContext>>, rt: &Runtime, sql: &str) {
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
-    criterion::black_box(rt.block_on(df.collect()).unwrap());
+    black_box(rt.block_on(df.collect()).unwrap());
 }
 
 fn create_context(
@@ -123,9 +125,9 @@ async fn distinct_with_limit(
     Ok(())
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn run(rt: &Runtime, plan: Arc<dyn ExecutionPlan>, ctx: Arc<TaskContext>) {
-    criterion::black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone())))
-        .unwrap();
+    black_box(rt.block_on(distinct_with_limit(plan.clone(), ctx.clone()))).unwrap();
 }
 
 pub async fn create_context_sampled_data(
@@ -154,7 +156,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
@@ -168,7 +170,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)
@@ -182,7 +184,7 @@ fn criterion_benchmark_limited_distinct_sampled(c: &mut Criterion) {
     let sql =
         format!("select DISTINCT trace_id from traces group by trace_id limit {limit};");
     c.bench_function(
-        format!("distinct query with {} partitions and {} samples per partition with limit {}", partitions, samples, limit).as_str(),
+        format!("distinct query with {partitions} partitions and {samples} samples per partition with limit {limit}").as_str(),
         |b| b.iter(|| {
             let (plan, ctx) = rt.block_on(
                 create_context_sampled_data(sql.as_str(), partitions, samples)

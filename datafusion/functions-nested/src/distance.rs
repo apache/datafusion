@@ -29,14 +29,12 @@ use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
-use datafusion_common::utils::{coerced_type_with_base_type_only, ListCoercion};
-use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, utils::take_function_args, Result,
-};
+use datafusion_common::utils::{ListCoercion, coerced_type_with_base_type_only};
+use datafusion_common::{Result, exec_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_functions::{downcast_arg, downcast_named_arg};
+use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
@@ -71,7 +69,7 @@ make_udf_expr_and_func!(
         description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ArrayDistance {
     signature: Signature,
     aliases: Vec<String>,
@@ -143,7 +141,7 @@ impl ScalarUDFImpl for ArrayDistance {
     }
 }
 
-pub fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_distance_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array1, array2] = take_function_args("array_distance", args)?;
     match (array1.data_type(), array2.data_type()) {
         (List(_), List(_)) => general_array_distance::<i32>(args),

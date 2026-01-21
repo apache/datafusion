@@ -20,9 +20,9 @@
 use std::any::Any;
 use std::fmt;
 
-use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
-use datafusion_common::{not_impl_err, Result};
+use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -60,6 +60,7 @@ make_udaf_expr_and_func!(
         description = "Expression to evaluate whether data is aggregated across the specified column. Can be a constant, column, or function."
     )
 )]
+#[derive(PartialEq, Eq, Hash)]
 pub struct Grouping {
     signature: Signature,
 }
@@ -105,12 +106,15 @@ impl AggregateUDFImpl for Grouping {
         Ok(DataType::Int32)
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            format_state_name(args.name, "grouping"),
-            DataType::Int32,
-            true,
-        )])
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, "grouping"),
+                DataType::Int32,
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {

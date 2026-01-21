@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{parse_identifiers_normalized, quote_identifier};
+use crate::utils::parse_identifiers_normalized;
+use crate::utils::quote_identifier;
 use std::sync::Arc;
 
 /// A fully resolved path to a table of the form "catalog.schema.table"
@@ -68,8 +69,11 @@ impl std::fmt::Display for ResolvedTableReference {
 ///
 /// // Get a table reference to 'myschema.mytable' (note the capitalization)
 /// let table_reference = TableReference::from("MySchema.MyTable");
-/// assert_eq!(table_reference, TableReference::partial("myschema", "mytable"));
-///```
+/// assert_eq!(
+///     table_reference,
+///     TableReference::partial("myschema", "mytable")
+/// );
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableReference {
     /// An unqualified table reference, e.g. "table"
@@ -246,7 +250,10 @@ impl TableReference {
     /// assert_eq!(table_reference.to_quoted_string(), "myschema.mytable");
     ///
     /// let table_reference = TableReference::partial("MySchema", "MyTable");
-    /// assert_eq!(table_reference.to_quoted_string(), r#""MySchema"."MyTable""#);
+    /// assert_eq!(
+    ///     table_reference.to_quoted_string(),
+    ///     r#""MySchema"."MyTable""#
+    /// );
     /// ```
     pub fn to_quoted_string(&self) -> String {
         match self {
@@ -268,24 +275,41 @@ impl TableReference {
     }
 
     /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
-    /// identifier. See docs on [`TableReference`] for more details.
+    /// identifier, normalizing `s` to lowercase.
+    /// See docs on [`TableReference`] for more details.
     pub fn parse_str(s: &str) -> Self {
-        let mut parts = parse_identifiers_normalized(s, false);
+        Self::parse_str_normalized(s, false)
+    }
 
+    /// Forms a [`TableReference`] by parsing `s` as a multipart SQL
+    /// identifier, normalizing `s` to lowercase if `ignore_case` is `false`.
+    /// See docs on [`TableReference`] for more details.
+    pub fn parse_str_normalized(s: &str, ignore_case: bool) -> Self {
+        let table_parts = parse_identifiers_normalized(s, ignore_case);
+
+        Self::from_vec(table_parts).unwrap_or_else(|| Self::Bare { table: s.into() })
+    }
+
+    /// Consume a vector of identifier parts to compose a [`TableReference`]. The input vector
+    /// should contain 1 <= N <= 3 elements in the following sequence:
+    /// ```no_rust
+    /// [<catalog>, <schema>, table]
+    /// ```
+    fn from_vec(mut parts: Vec<String>) -> Option<Self> {
         match parts.len() {
-            1 => Self::Bare {
-                table: parts.remove(0).into(),
-            },
-            2 => Self::Partial {
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            3 => Self::Full {
-                catalog: parts.remove(0).into(),
-                schema: parts.remove(0).into(),
-                table: parts.remove(0).into(),
-            },
-            _ => Self::Bare { table: s.into() },
+            1 => Some(Self::Bare {
+                table: parts.pop()?.into(),
+            }),
+            2 => Some(Self::Partial {
+                table: parts.pop()?.into(),
+                schema: parts.pop()?.into(),
+            }),
+            3 => Some(Self::Full {
+                table: parts.pop()?.into(),
+                schema: parts.pop()?.into(),
+                catalog: parts.pop()?.into(),
+            }),
+            _ => None,
         }
     }
 
@@ -367,26 +391,32 @@ mod tests {
         let actual = TableReference::from("TABLE");
         assert_eq!(expected, actual);
 
-        // if fail to parse, take entire input string as identifier
-        let expected = TableReference::Bare {
-            table: "TABLE()".into(),
-        };
-        let actual = TableReference::from("TABLE()");
-        assert_eq!(expected, actual);
+        // Disable this test for non-sql features so that we don't need to reproduce
+        // things like table function upper case conventions, since those will not
+        // be used if SQL is not selected.
+        #[cfg(feature = "sql")]
+        {
+            // if fail to parse, take entire input string as identifier
+            let expected = TableReference::Bare {
+                table: "TABLE()".into(),
+            };
+            let actual = TableReference::from("TABLE()");
+            assert_eq!(expected, actual);
+        }
     }
 
     #[test]
     fn test_table_reference_to_vector() {
-        let table_reference = TableReference::parse_str("table");
+        let table_reference = TableReference::from("table");
         assert_eq!(vec!["table".to_string()], table_reference.to_vec());
 
-        let table_reference = TableReference::parse_str("schema.table");
+        let table_reference = TableReference::from("schema.table");
         assert_eq!(
             vec!["schema".to_string(), "table".to_string()],
             table_reference.to_vec()
         );
 
-        let table_reference = TableReference::parse_str("catalog.schema.table");
+        let table_reference = TableReference::from("catalog.schema.table");
         assert_eq!(
             vec![
                 "catalog".to_string(),

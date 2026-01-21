@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use log::debug;
 
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
-use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
@@ -37,14 +37,6 @@ use self::function_rewrite::ApplyFunctionRewrites;
 pub mod function_rewrite;
 pub mod resolve_grouping_function;
 pub mod type_coercion;
-
-pub mod subquery {
-    #[deprecated(
-        since = "44.0.0",
-        note = "please use `datafusion_expr::check_subquery_expr` instead"
-    )]
-    pub use datafusion_expr::check_subquery_expr;
-}
 
 /// [`AnalyzerRule`]s transform [`LogicalPlan`]s in some way to make
 /// the plan valid prior to the rest of the DataFusion optimization process.

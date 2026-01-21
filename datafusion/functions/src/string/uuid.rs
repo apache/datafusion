@@ -24,14 +24,14 @@ use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
 use uuid::Uuid;
 
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "String Functions"),
-    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)) string value which is unique per row.",
+    description = "Returns [`UUID v4`](https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_%28random%29) string value which is unique per row.",
     syntax_example = "uuid()",
     sql_example = r#"```sql
 > select uuid();
@@ -42,7 +42,7 @@ use datafusion_macros::user_doc;
 +--------------------------------------+
 ```"#
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct UuidFunc {
     signature: Signature,
 }
@@ -56,7 +56,7 @@ impl Default for UuidFunc {
 impl UuidFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(vec![], Volatility::Volatile),
+            signature: Signature::nullary(Volatility::Volatile),
         }
     }
 }
@@ -81,12 +81,14 @@ impl ScalarUDFImpl for UuidFunc {
     /// Prints random (v4) uuid values per row
     /// uuid() = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if !args.args.is_empty() {
-            return internal_err!("{} function does not accept arguments", self.name());
-        }
+        assert_or_internal_err!(
+            args.args.is_empty(),
+            "{} function does not accept arguments",
+            self.name()
+        );
 
         // Generate random u128 values
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut randoms = vec![0u128; args.number_rows];
         rng.fill(&mut randoms[..]);
 

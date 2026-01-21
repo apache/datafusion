@@ -23,11 +23,11 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{
-    downcast_array, Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder,
-    UInt64Array,
+    Array, AsArray, BooleanArray, Float64Array, NullBufferBuilder, UInt64Array,
+    downcast_array,
 };
-use arrow::compute::{and, filter, is_not_null, kernels::cast};
-use arrow::datatypes::{Float64Type, UInt64Type};
+use arrow::compute::{and, filter, is_not_null};
+use arrow::datatypes::{FieldRef, Float64Type, UInt64Type};
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},
@@ -40,10 +40,9 @@ use crate::covariance::CovarianceAccumulator;
 use crate::stddev::StddevAccumulator;
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
-    function::{AccumulatorArgs, StateFieldsArgs},
-    type_coercion::aggregates::NUMERICS,
-    utils::format_state_name,
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::format_state_name,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
 use datafusion_macros::user_doc;
@@ -71,7 +70,7 @@ make_udaf_expr_and_func!(
     standard_argument(name = "expression1", prefix = "First"),
     standard_argument(name = "expression2", prefix = "Second")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Correlation {
     signature: Signature,
 }
@@ -83,10 +82,15 @@ impl Default for Correlation {
 }
 
 impl Correlation {
-    /// Create a new COVAR_POP aggregate function
+    /// Create a new CORR aggregate function
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            )
+            .with_parameter_names(vec!["y".to_string(), "x".to_string()])
+            .expect("valid parameter names for corr"),
         }
     }
 }
@@ -105,11 +109,7 @@ impl AggregateUDFImpl for Correlation {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Correlation requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
@@ -117,7 +117,7 @@ impl AggregateUDFImpl for Correlation {
         Ok(Box::new(CorrelationAccumulator::try_new()?))
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         let name = args.name;
         Ok(vec![
             Field::new(format_state_name(name, "count"), DataType::UInt64, true),
@@ -130,7 +130,10 @@ impl AggregateUDFImpl for Correlation {
                 DataType::Float64,
                 true,
             ),
-        ])
+        ]
+        .into_iter()
+        .map(Arc::new)
+        .collect())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -197,15 +200,28 @@ impl Accumulator for CorrelationAccumulator {
         let stddev1 = self.stddev1.evaluate()?;
         let stddev2 = self.stddev2.evaluate()?;
 
-        if let ScalarValue::Float64(Some(c)) = covar {
-            if let ScalarValue::Float64(Some(s1)) = stddev1 {
-                if let ScalarValue::Float64(Some(s2)) = stddev2 {
-                    if s1 == 0_f64 || s2 == 0_f64 {
-                        return Ok(ScalarValue::Float64(Some(0_f64)));
-                    } else {
-                        return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
-                    }
-                }
+        // First check if we have NaN values by examining the internal state
+        // This handles the case where both inputs are NaN even with count=1
+        let mean1 = self.covar.get_mean1();
+        let mean2 = self.covar.get_mean2();
+
+        // If both means are NaN, then both input columns contain only NaN values
+        if mean1.is_nan() && mean2.is_nan() {
+            return Ok(ScalarValue::Float64(Some(f64::NAN)));
+        }
+        let n = self.covar.get_count();
+        if mean1.is_nan() || mean2.is_nan() || n < 2 {
+            return Ok(ScalarValue::Float64(None));
+        }
+
+        if let ScalarValue::Float64(Some(c)) = covar
+            && let ScalarValue::Float64(Some(s1)) = stddev1
+            && let ScalarValue::Float64(Some(s2)) = stddev2
+        {
+            if s1 == 0_f64 || s2 == 0_f64 {
+                return Ok(ScalarValue::Float64(None));
+            } else {
+                return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
             }
         }
 
@@ -372,10 +388,8 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         self.sum_xx.resize(total_num_groups, 0.0);
         self.sum_yy.resize(total_num_groups, 0.0);
 
-        let array_x = &cast(&values[0], &DataType::Float64)?;
-        let array_x = downcast_array::<Float64Array>(array_x);
-        let array_y = &cast(&values[1], &DataType::Float64)?;
-        let array_y = downcast_array::<Float64Array>(array_y);
+        let array_x = downcast_array::<Float64Array>(&values[0]);
+        let array_y = downcast_array::<Float64Array>(&values[1]);
 
         accumulate_multiple(
             group_indices,
@@ -394,6 +408,87 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         );
 
         Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
+        // Drain the state vectors for the groups being emitted
+        let counts = emit_to.take_needed(&mut self.count);
+        let sum_xs = emit_to.take_needed(&mut self.sum_x);
+        let sum_ys = emit_to.take_needed(&mut self.sum_y);
+        let sum_xys = emit_to.take_needed(&mut self.sum_xy);
+        let sum_xxs = emit_to.take_needed(&mut self.sum_xx);
+        let sum_yys = emit_to.take_needed(&mut self.sum_yy);
+
+        let n = counts.len();
+        let mut values = Vec::with_capacity(n);
+        let mut nulls = NullBufferBuilder::new(n);
+
+        // Notes for `Null` handling:
+        // - If the `count` state of a group is 0, no valid records are accumulated
+        //   for this group, so the aggregation result is `Null`.
+        // - Correlation can't be calculated when a group only has 1 record, or when
+        //   the `denominator` state is 0. In these cases, the final aggregation
+        //   result should be `Null` (according to PostgreSQL's behavior).
+        // - However, if any of the accumulated values contain NaN, the result should
+        //   be NaN regardless of the count (even for single-row groups).
+        for i in 0..n {
+            let count = counts[i];
+            let sum_x = sum_xs[i];
+            let sum_y = sum_ys[i];
+            let sum_xy = sum_xys[i];
+            let sum_xx = sum_xxs[i];
+            let sum_yy = sum_yys[i];
+
+            // If BOTH sum_x AND sum_y are NaN, then both input values are NaN → return NaN
+            // If only ONE of them is NaN, then only one input value is NaN → return NULL
+            if sum_x.is_nan() && sum_y.is_nan() {
+                // Both inputs are NaN → return NaN
+                values.push(f64::NAN);
+                nulls.append_non_null();
+                continue;
+            } else if count < 2 || sum_x.is_nan() || sum_y.is_nan() {
+                // Only one input is NaN → return NULL
+                values.push(0.0);
+                nulls.append_null();
+                continue;
+            }
+
+            let mean_x = sum_x / count as f64;
+            let mean_y = sum_y / count as f64;
+
+            let numerator = sum_xy - sum_x * mean_y;
+            let denominator =
+                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
+
+            if denominator == 0.0 {
+                values.push(0.0);
+                nulls.append_null();
+            } else {
+                values.push(numerator / denominator);
+                nulls.append_non_null();
+            }
+        }
+
+        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
+    }
+
+    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        // Drain the state vectors for the groups being emitted
+        let count = emit_to.take_needed(&mut self.count);
+        let sum_x = emit_to.take_needed(&mut self.sum_x);
+        let sum_y = emit_to.take_needed(&mut self.sum_y);
+        let sum_xy = emit_to.take_needed(&mut self.sum_xy);
+        let sum_xx = emit_to.take_needed(&mut self.sum_xx);
+        let sum_yy = emit_to.take_needed(&mut self.sum_yy);
+
+        Ok(vec![
+            Arc::new(UInt64Array::from(count)),
+            Arc::new(Float64Array::from(sum_x)),
+            Arc::new(Float64Array::from(sum_y)),
+            Arc::new(Float64Array::from(sum_xy)),
+            Arc::new(Float64Array::from(sum_xx)),
+            Arc::new(Float64Array::from(sum_yy)),
+        ])
     }
 
     fn merge_batch(
@@ -419,7 +514,10 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         let partial_sum_xx = values[4].as_primitive::<Float64Type>();
         let partial_sum_yy = values[5].as_primitive::<Float64Type>();
 
-        assert!(opt_filter.is_none(), "aggregate filter should be applied in partial stage, there should be no filter in final stage");
+        assert!(
+            opt_filter.is_none(),
+            "aggregate filter should be applied in partial stage, there should be no filter in final stage"
+        );
 
         accumulate_correlation_states(
             group_indices,
@@ -444,88 +542,13 @@ impl GroupsAccumulator for CorrelationGroupsAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
-        let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
-            EmitTo::NextBlock => {
-                return internal_err!("correlation does not support blocked groups")
-            }
-        };
-
-        let mut values = Vec::with_capacity(n);
-        let mut nulls = NullBufferBuilder::new(n);
-
-        // Notes for `Null` handling:
-        // - If the `count` state of a group is 0, no valid records are accumulated
-        //   for this group, so the aggregation result is `Null`.
-        // - Correlation can't be calculated when a group only has 1 record, or when
-        //   the `denominator` state is 0. In these cases, the final aggregation
-        //   result should be `Null` (according to PostgreSQL's behavior).
-        //
-        // TODO: Old datafusion implementation returns 0.0 for these invalid cases.
-        // Update this to match PostgreSQL's behavior.
-        for i in 0..n {
-            if self.count[i] < 2 {
-                // TODO: Evaluate as `Null` (see notes above)
-                values.push(0.0);
-                nulls.append_null();
-                continue;
-            }
-
-            let count = self.count[i];
-            let sum_x = self.sum_x[i];
-            let sum_y = self.sum_y[i];
-            let sum_xy = self.sum_xy[i];
-            let sum_xx = self.sum_xx[i];
-            let sum_yy = self.sum_yy[i];
-
-            let mean_x = sum_x / count as f64;
-            let mean_y = sum_y / count as f64;
-
-            let numerator = sum_xy - sum_x * mean_y;
-            let denominator =
-                ((sum_xx - sum_x * mean_x) * (sum_yy - sum_y * mean_y)).sqrt();
-
-            if denominator == 0.0 {
-                // TODO: Evaluate as `Null` (see notes above)
-                values.push(0.0);
-                nulls.append_null();
-            } else {
-                values.push(numerator / denominator);
-                nulls.append_non_null();
-            }
-        }
-
-        Ok(Arc::new(Float64Array::new(values.into(), nulls.finish())))
-    }
-
-    fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
-        let n = match emit_to {
-            EmitTo::All => self.count.len(),
-            EmitTo::First(n) => n,
-            EmitTo::NextBlock => {
-                return internal_err!("correlation does not support blocked groups")
-            }
-        };
-
-        Ok(vec![
-            Arc::new(UInt64Array::from(self.count[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_x[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_y[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_xy[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_xx[0..n].to_vec())),
-            Arc::new(Float64Array::from(self.sum_yy[0..n].to_vec())),
-        ])
-    }
-
     fn size(&self) -> usize {
-        size_of_val(&self.count)
-            + size_of_val(&self.sum_x)
-            + size_of_val(&self.sum_y)
-            + size_of_val(&self.sum_xy)
-            + size_of_val(&self.sum_xx)
-            + size_of_val(&self.sum_yy)
+        self.count.capacity() * size_of::<u64>()
+            + self.sum_x.capacity() * size_of::<f64>()
+            + self.sum_y.capacity() * size_of::<f64>()
+            + self.sum_xy.capacity() * size_of::<f64>()
+            + self.sum_xx.capacity() * size_of::<f64>()
+            + self.sum_yy.capacity() * size_of::<f64>()
     }
 }
 

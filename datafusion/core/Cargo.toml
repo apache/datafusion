@@ -32,6 +32,9 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+# Note: add additional linter rules in lib.rs.
+# Rust does not support workspace + new linter rules in subcrates yet
+# https://github.com/rust-lang/cargo/issues/13157
 [lints]
 workspace = true
 
@@ -43,10 +46,11 @@ array_expressions = ["nested_expressions"]
 avro = ["datafusion-common/avro", "datafusion-datasource-avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = [
-    "xz2",
+    "liblzma",
     "bzip2",
     "flate2",
     "zstd",
+    "datafusion-datasource-arrow/compression",
     "datafusion-datasource/compression",
 ]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
@@ -62,13 +66,19 @@ default = [
     "compression",
     "parquet",
     "recursive_protection",
+    "sql",
 ]
 encoding_expressions = ["datafusion-functions/encoding_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-physical-plan/force_hash_collisions", "datafusion-common/force_hash_collisions"]
 math_expressions = ["datafusion-functions/math_expressions"]
 parquet = ["datafusion-common/parquet", "dep:parquet", "datafusion-datasource-parquet"]
-pyarrow = ["datafusion-common/pyarrow", "parquet"]
+parquet_encryption = [
+    "parquet",
+    "parquet/encryption",
+    "datafusion-common/parquet_encryption",
+    "datafusion-datasource-parquet/parquet_encryption",
+]
 regex_expressions = [
     "datafusion-functions/regex_expressions",
 ]
@@ -77,7 +87,9 @@ recursive_protection = [
     "datafusion-expr/recursive_protection",
     "datafusion-optimizer/recursive_protection",
     "datafusion-physical-optimizer/recursive_protection",
+    "datafusion-physical-expr/recursive_protection",
     "datafusion-sql/recursive_protection",
+    "sqlparser/recursive-protection",
 ]
 serde = [
     "dep:serde",
@@ -85,49 +97,56 @@ serde = [
     # statements in `arrow-schema` crate
     "arrow-schema/serde",
 ]
+sql = [
+    "datafusion-common/sql",
+    "datafusion-functions-nested?/sql",
+    "datafusion-sql",
+    "sqlparser",
+]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
-    "datafusion-sql/unicode_expressions",
+    "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
 extended_tests = []
 
 [dependencies]
 arrow = { workspace = true }
-arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.5.2", optional = true }
+bzip2 = { workspace = true, optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-datasource-arrow = { workspace = true }
 datafusion-datasource-avro = { workspace = true, optional = true }
 datafusion-datasource-csv = { workspace = true }
 datafusion-datasource-json = { workspace = true }
 datafusion-datasource-parquet = { workspace = true, optional = true }
 datafusion-execution = { workspace = true }
-datafusion-expr = { workspace = true }
+datafusion-expr = { workspace = true, default-features = false }
 datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
-datafusion-functions-nested = { workspace = true, optional = true }
+datafusion-functions-nested = { workspace = true, default-features = false, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
-datafusion-macros = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-adapter = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-session = { workspace = true }
-datafusion-sql = { workspace = true }
-flate2 = { version = "1.1.1", optional = true }
+datafusion-sql = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+liblzma = { workspace = true, optional = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
@@ -135,13 +154,12 @@ parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-sqlparser = { workspace = true }
+sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.16", features = ["v4", "js"] }
-xz2 = { version = "0.1", optional = true, features = ["static"] }
-zstd = { version = "0.13", optional = true, default-features = false }
+uuid = { version = "1.19", features = ["v4", "js"] }
+zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
@@ -150,22 +168,28 @@ ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+glob = { workspace = true }
 insta = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
-rand_distr = "0.4.3"
+rand_distr = "0.5"
+recursive = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.34.2"
+sysinfo = "0.37.2"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
+[package.metadata.cargo-machete]
+ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
+
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.29.0", features = ["fs"] }
+nix = { version = "0.30.1", features = ["fs"] }
 
 [[bench]]
 harness = false
@@ -178,6 +202,10 @@ name = "csv_load"
 [[bench]]
 harness = false
 name = "distinct_query_sql"
+
+[[bench]]
+harness = false
+name = "push_down_filter"
 
 [[bench]]
 harness = false
@@ -214,7 +242,15 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "range_and_generate_series"
+
+[[bench]]
+harness = false
 name = "sql_planner"
+
+[[bench]]
+harness = false
+name = "sql_planner_extended"
 
 [[bench]]
 harness = false
@@ -240,3 +276,12 @@ name = "dataframe"
 [[bench]]
 harness = false
 name = "spm"
+
+[[bench]]
+harness = false
+name = "preserve_file_partitioning"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "reset_plan_states"

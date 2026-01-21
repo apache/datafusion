@@ -22,9 +22,11 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
-use arrow::datatypes::{ArrowNativeType, DataType, Field, Int32Type, Int64Type};
+use arrow::datatypes::{
+    ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type,
+};
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -47,7 +49,7 @@ use datafusion_macros::user_doc;
     standard_argument(name = "str", prefix = "String"),
     argument(name = "substr", description = "Substring expression to search for.")
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StrposFunc {
     signature: Signature,
     aliases: Vec<String>,
@@ -94,7 +96,7 @@ impl ScalarUDFImpl for StrposFunc {
     fn return_field_from_args(
         &self,
         args: datafusion_expr::ReturnFieldArgs,
-    ) -> Result<Field> {
+    ) -> Result<FieldRef> {
         utf8_to_int_type(args.arg_fields[0].data_type(), "strpos/instr/position").map(
             |data_type| {
                 Field::new(
@@ -102,6 +104,7 @@ impl ScalarUDFImpl for StrposFunc {
                     data_type,
                     args.arg_fields.iter().any(|x| x.is_nullable()),
                 )
+                .into()
             },
         )
     }
@@ -127,47 +130,47 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::Utf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8, DataType::Utf8View) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::Utf8View) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int64Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::Utf8View) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string_view();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::Utf8) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string::<i32>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
         (DataType::Utf8View, DataType::LargeUtf8) => {
             let string_array = args[0].as_string_view();
             let substring_array = args[1].as_string::<i64>();
-            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+            calculate_strpos::<_, _, Int32Type>(&string_array, &substring_array)
         }
 
         other => {
@@ -180,8 +183,8 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// strpos('high', 'ig') = 2
 /// The implementation uses UTF-8 code points as characters
 fn calculate_strpos<'a, V1, V2, T: ArrowPrimitiveType>(
-    string_array: V1,
-    substring_array: V2,
+    string_array: &V1,
+    substring_array: &V2,
 ) -> Result<ArrayRef>
 where
     V1: StringArrayType<'a, Item = &'a str>,
@@ -212,14 +215,37 @@ where
                         )
                     }
                 } else {
-                    // The `find` method returns the byte index of the substring.
-                    // We count the number of chars up to that byte index.
-                    T::Native::from_usize(
-                        string
-                            .find(substring)
-                            .map(|x| string[..x].chars().count() + 1)
-                            .unwrap_or(0),
-                    )
+                    // For non-ASCII, use a single-pass search that tracks both
+                    // byte position and character position simultaneously
+                    if substring.is_empty() {
+                        return T::Native::from_usize(1);
+                    }
+
+                    let substring_bytes = substring.as_bytes();
+                    let string_bytes = string.as_bytes();
+
+                    if substring_bytes.len() > string_bytes.len() {
+                        return T::Native::from_usize(0);
+                    }
+
+                    // Single pass: find substring while counting characters
+                    let mut char_pos = 0;
+                    for (byte_idx, _) in string.char_indices() {
+                        char_pos += 1;
+                        if byte_idx + substring_bytes.len() <= string_bytes.len() {
+                            // SAFETY: We just checked that byte_idx + substring_bytes.len() <= string_bytes.len()
+                            let slice = unsafe {
+                                string_bytes.get_unchecked(
+                                    byte_idx..byte_idx + substring_bytes.len(),
+                                )
+                            };
+                            if slice == substring_bytes {
+                                return T::Native::from_usize(char_pos);
+                            }
+                        }
+                    }
+
+                    T::Native::from_usize(0)
                 }
             }
             _ => None,
@@ -329,8 +355,8 @@ mod tests {
             let strpos = StrposFunc::new();
             let args = datafusion_expr::ReturnFieldArgs {
                 arg_fields: &[
-                    Field::new("f1", DataType::Utf8, string_array_nullable),
-                    Field::new("f2", DataType::Utf8, substring_nullable),
+                    Field::new("f1", DataType::Utf8, string_array_nullable).into(),
+                    Field::new("f2", DataType::Utf8, substring_nullable).into(),
                 ],
                 scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
             };

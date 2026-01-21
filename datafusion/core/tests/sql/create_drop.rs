@@ -61,8 +61,31 @@ async fn create_external_table_with_ddl() -> Result<()> {
     assert_eq!(3, table_schema.fields().len());
 
     assert_eq!(&DataType::Int32, table_schema.field(0).data_type());
-    assert_eq!(&DataType::Utf8, table_schema.field(1).data_type());
+    assert_eq!(&DataType::Utf8View, table_schema.field(1).data_type());
     assert_eq!(&DataType::Boolean, table_schema.field(2).data_type());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_drop_table() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "CREATE TABLE dt (a_id integer, a_str string, a_bool boolean);";
+    ctx.sql(sql).await.unwrap();
+
+    let cat = ctx.catalog("datafusion").unwrap();
+    let schema = cat.schema("public").unwrap();
+
+    let exists = schema.table_exist("dt");
+    assert!(exists, "Table should have been created!");
+
+    // Drop the table
+    let sql = "DROP TABLE dt;";
+    ctx.sql(sql).await.unwrap();
+
+    let exists = schema.table_exist("dt");
+    assert!(!exists, "Table should have been dropped!");
 
     Ok(())
 }

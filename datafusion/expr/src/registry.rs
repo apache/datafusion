@@ -20,15 +20,21 @@
 use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
-use datafusion_common::{not_impl_err, plan_datafusion_err, HashMap, Result};
+use datafusion_common::{HashMap, Result, not_impl_err, plan_datafusion_err};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 /// A registry knows how to build logical expressions out of user-defined function' names
 pub trait FunctionRegistry {
-    /// Set of all available udfs.
+    /// Returns names of all available scalar user defined functions.
     fn udfs(&self) -> HashSet<String>;
+
+    /// Returns names of all available aggregate user defined functions.
+    fn udafs(&self) -> HashSet<String>;
+
+    /// Returns names of all available window user defined functions.
+    fn udwfs(&self) -> HashSet<String>;
 
     /// Returns a reference to the user defined scalar function (udf) named
     /// `name`.
@@ -199,5 +205,13 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
         vec![]
+    }
+
+    fn udafs(&self) -> HashSet<String> {
+        self.udafs.keys().cloned().collect()
+    }
+
+    fn udwfs(&self) -> HashSet<String> {
+        self.udwfs.keys().cloned().collect()
     }
 }

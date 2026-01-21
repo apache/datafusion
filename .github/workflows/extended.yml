@@ -32,6 +32,19 @@ on:
   push:
     branches:
       - main
+      # support extended test suite for release candidate branches,
+      # it is not expected to have many changes in these branches,
+      # so running extended tests is not a burden
+      - 'branch-*'
+  # Also run for changes to some critical areas that are most likely
+  # to trigger errors in extended tests
+  pull_request:
+    branches: [ '**' ]
+    paths:
+      - 'datafusion/physical*/**/*.rs'
+      - 'datafusion/expr*/**/*.rs'
+      - 'datafusion/optimizer/**/*.rs'
+      - 'datafusion-testing'
   workflow_dispatch:
     inputs:
       pr_number:
@@ -56,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -80,13 +93,13 @@ jobs:
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -101,7 +114,17 @@ jobs:
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
-        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests,recursive_protection
+        run: |
+          cargo test \
+            --profile ci \
+            --exclude datafusion-examples \
+            --exclude datafusion-benchmarks \
+            --exclude datafusion-cli \
+            --workspace \
+            --lib \
+            --tests \
+            --bins \
+            --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Cleanup
@@ -114,7 +137,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -126,7 +149,7 @@ jobs:
       - name: Run tests
         run: |
           cd datafusion
-          cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro
+          cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --exclude datafusion-cli --workspace --lib --tests --features=force_hash_collisions,avro
           cargo clean
 
   sqllogictest-sqlite:
@@ -135,7 +158,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # will be empty if triggered by push
           submodules: true
@@ -146,46 +169,8 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         run: |
-          cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace,parquet_encryption --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
-
-  # If the workflow was triggered by the PR comment (through pr_comment_commands.yml action) we need to manually update check status to display in UI
-  update-check-status:
-    needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
-    runs-on: ubuntu-latest
-    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
-    steps:
-      - name: Determine workflow status
-        id: status
-        run: |
-          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
-            echo "workflow_status=failure" >> $GITHUB_OUTPUT
-            echo "conclusion=failure" >> $GITHUB_OUTPUT
-          else
-            echo "workflow_status=completed" >> $GITHUB_OUTPUT
-            echo "conclusion=success" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Update check run
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const workflowRunUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-            await github.rest.checks.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              check_run_id: ${{ github.event.inputs.check_run_id }},
-              status: 'completed',
-              conclusion: '${{ steps.status.outputs.conclusion }}',
-              output: {
-                title: '${{ steps.status.outputs.conclusion == 'success' && 'Extended Tests Passed' || 'Extended Tests Failed' }}',
-                summary: `Extended tests have completed with status: ${{ steps.status.outputs.conclusion }}.\n\n[View workflow run](${workflowRunUrl})`
-              },
-              details_url: workflowRunUrl
-            });
-
 
 
 

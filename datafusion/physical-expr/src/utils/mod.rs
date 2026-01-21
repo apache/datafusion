@@ -21,20 +21,18 @@ pub use guarantee::{Guarantee, LiteralGuarantee};
 use std::borrow::Borrow;
 use std::sync::Arc;
 
-use crate::expressions::{BinaryExpr, Column};
-use crate::tree_node::ExprContext;
 use crate::PhysicalExpr;
 use crate::PhysicalSortExpr;
+use crate::expressions::{BinaryExpr, Column};
+use crate::tree_node::ExprContext;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::Schema;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
@@ -231,7 +229,7 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     let mut columns = HashSet::<Column>::new();
     expr.apply(|expr| {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            columns.get_or_insert_owned(column);
+            columns.get_or_insert_with(column, |c| c.clone());
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -240,22 +238,23 @@ pub fn collect_columns(expr: &Arc<dyn PhysicalExpr>) -> HashSet<Column> {
     columns
 }
 
-/// Re-assign column indices referenced in predicate according to given schema.
-/// This may be helpful when dealing with projections.
-pub fn reassign_predicate_columns(
-    pred: Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-    ignore_not_found: bool,
+/// Re-assign indices of [`Column`]s within the given [`PhysicalExpr`] according to
+/// the provided [`Schema`].
+///
+/// This can be useful when attempting to map an expression onto a different schema.
+///
+/// # Errors
+///
+/// This function will return an error if any column in the expression cannot be found
+/// in the provided schema.
+pub fn reassign_expr_columns(
+    expr: Arc<dyn PhysicalExpr>,
+    schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    pred.transform_down(|expr| {
-        let expr_any = expr.as_any();
+    expr.transform_down(|expr| {
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let index = schema.index_of(column.name())?;
 
-        if let Some(column) = expr_any.downcast_ref::<Column>() {
-            let index = match schema.index_of(column.name()) {
-                Ok(idx) => idx,
-                Err(_) if ignore_not_found => usize::MAX,
-                Err(e) => return Err(e.into()),
-            };
             return Ok(Transformed::yes(Arc::new(Column::new(
                 column.name(),
                 index,
@@ -266,26 +265,17 @@ pub fn reassign_predicate_columns(
     .data()
 }
 
-/// Merge left and right sort expressions, checking for duplicates.
-pub fn merge_vectors(left: &LexOrdering, right: &LexOrdering) -> LexOrdering {
-    left.iter()
-        .cloned()
-        .chain(right.iter().cloned())
-        .unique()
-        .collect()
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use std::any::Any;
     use std::fmt::{Display, Formatter};
 
     use super::*;
-    use crate::expressions::{binary, cast, col, in_list, lit, Literal};
+    use crate::expressions::{Literal, binary, cast, col, in_list, lit};
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{exec_err, DataFusionError, ScalarValue};
+    use datafusion_common::{ScalarValue, exec_err, internal_datafusion_err};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -293,7 +283,7 @@ pub(crate) mod tests {
 
     use petgraph::visit::Bfs;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     pub struct TestScalarUDF {
         pub(crate) signature: Signature,
     }
@@ -345,11 +335,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float64Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float64Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()
@@ -361,11 +351,11 @@ pub(crate) mod tests {
                         .as_any()
                         .downcast_ref::<Float32Array>()
                         .ok_or_else(|| {
-                            DataFusionError::Internal(format!(
+                            internal_datafusion_err!(
                                 "could not cast {} to {}",
                                 self.name(),
                                 std::any::type_name::<Float32Array>()
-                            ))
+                            )
                         })?;
 
                     arg.iter()
@@ -517,7 +507,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_reassign_predicate_columns_in_list() {
+    fn test_reassign_expr_columns_in_list() {
         let int_field = Field::new("should_not_matter", DataType::Int64, true);
         let dict_field = Field::new(
             "id",
@@ -537,7 +527,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let actual = reassign_predicate_columns(pred, &schema_small, false).unwrap();
+        let actual = reassign_expr_columns(pred, &schema_small).unwrap();
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),

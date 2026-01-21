@@ -1,0 +1,155 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# --------------------------------------
+# 1. Min/Max over integers
+# --------------------------------------
+statement ok
+create table min_max_base_int as values
+  (make_array(1, 2, 3, 4)),
+  (make_array(1, 2))
+;
+
+# --------------------------------------
+# 2. Min/Max over strings
+# --------------------------------------
+statement ok
+create table min_max_base_string as values
+  (make_array('a', 'b', 'c')),
+  (make_array('a', 'b'))
+;
+
+# --------------------------------------
+# 3. Min/Max over booleans
+# --------------------------------------
+statement ok
+create table min_max_base_bool as values
+  (make_array(true, false, true)),
+  (make_array(true, false))
+;
+
+# --------------------------------------
+# 4. Min/Max over nullable integers
+# --------------------------------------
+statement ok
+create table min_max_base_nullable_int as values
+  (make_array(NULL, 1, 2)),
+  (make_array(1, 2))
+;
+
+# --------------------------------------
+# 5. Min/Max with mixed lengths and nulls
+# --------------------------------------
+statement ok
+create table min_max_base_mixed_lengths_nulls as values
+  (make_array(1, 2, 3, 4)),
+  (make_array(1, 2)),
+  (make_array(1, NULL, 3))
+;
+
+# --------------------------------------
+# 6. Min/Max with only NULLs
+# --------------------------------------
+statement ok
+create table min_max_base_all_nulls as values
+  (make_array(NULL, NULL)),
+  (make_array(NULL))
+;
+
+# --------------------------------------
+# 7. Min/Max with partial NULLs
+# --------------------------------------
+statement ok
+create table min_max_base_null_variants as values
+  (make_array(1, 2, 3)),
+  (make_array(NULL, 2, 3)),
+  (make_array(1, 2, NULL))
+;
+
+# --------------------------------------
+# 8. Min/Max grouped by key with NULLs and differing lengths
+# --------------------------------------
+statement ok
+create table min_max_base_grouped_nulls as values
+  (0, make_array(1, NULL, 3)),
+  (0, make_array(1, 2, 3, 4)),
+  (1, make_array(1, 2)),
+  (1, make_array(NULL, 5)),
+  (1, make_array())
+;
+
+# --------------------------------------
+# 9. Min/Max grouped by key with only NULLs
+# --------------------------------------
+statement ok
+create table min_max_base_grouped_all_null as values
+  (0, make_array(NULL)),
+  (0, make_array(NULL, NULL)),
+  (1, make_array(NULL))
+;
+
+# --------------------------------------
+# 10. Min/Max grouped with empty and non-empty lists
+# --------------------------------------
+statement ok
+create table min_max_base_grouped_simple as values
+  (0, make_array()),
+  (0, make_array(1)),
+  (0, make_array()),
+  (1, make_array()),
+  (1, make_array(5, 6))
+;
+
+# --------------------------------------
+# 11. Min over with window function
+# --------------------------------------
+statement ok
+create table min_base_window_simple as values
+  (make_array(1, 2, 3)),
+  (make_array(1, 2, 3)),
+  (make_array(2, 3))
+;
+
+# --------------------------------------
+# 12. Min over with window + NULLs
+# --------------------------------------
+statement ok
+create table min_base_window_with_null as values
+  (make_array(NULL)),
+  (make_array(4, 5)),
+  (make_array(2, 3))
+;
+
+# --------------------------------------
+# 13. Min over with ROWS BETWEEN clause
+# --------------------------------------
+statement ok
+create table min_base_window_rows_between as values
+  (make_array(NULL)),
+  (make_array(4, 5)),
+  (make_array(2, 3))
+;
+
+# --------------------------------------
+# 14. Max over  using different order column
+# --------------------------------------
+statement ok
+create table max_base_window_different_column as values
+  (make_array(1, 2, 3), make_array(4, 5)),
+  (make_array(2, 3), make_array(2, 3)),
+  (make_array(2, 3), NULL)
+;

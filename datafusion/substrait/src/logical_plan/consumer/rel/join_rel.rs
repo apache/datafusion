@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::utils::requalify_sides_if_needed;
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{not_impl_err, plan_err, Column, JoinType};
+use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
+use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
-use substrait::proto::{join_rel, JoinRel};
+
+use substrait::proto::{JoinRel, join_rel};
 
 pub async fn from_join_rel(
     consumer: &impl SubstraitConsumer,
@@ -38,7 +39,7 @@ pub async fn from_join_rel(
     let right = LogicalPlanBuilder::from(
         consumer.consume_rel(join.right.as_ref().unwrap()).await?,
     );
-    let (left, right) = requalify_sides_if_needed(left, right)?;
+    let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
 
     let join_type = from_substrait_jointype(join.r#type)?;
     // The join condition expression needs full input schema and not the output schema from join since we lose columns from
@@ -59,19 +60,30 @@ pub async fn from_join_rel(
                 split_eq_and_noneq_join_predicate_with_nulls_equality(&on);
             let (left_cols, right_cols): (Vec<_>, Vec<_>) =
                 itertools::multiunzip(join_ons);
+            let null_equality = if nulls_equal_nulls {
+                NullEquality::NullEqualsNull
+            } else {
+                NullEquality::NullEqualsNothing
+            };
             left.join_detailed(
                 right.build()?,
                 join_type,
                 (left_cols, right_cols),
                 join_filter,
-                nulls_equal_nulls,
+                null_equality,
             )?
             .build()
         }
         None => {
             let on: Vec<String> = vec![];
-            left.join_detailed(right.build()?, join_type, (on.clone(), on), None, false)?
-                .build()
+            left.join_detailed(
+                right.build()?,
+                join_type,
+                (on.clone(), on),
+                None,
+                NullEquality::NullEqualsNothing,
+            )?
+            .build()
         }
     }
 }
@@ -86,7 +98,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     let mut nulls_equal_nulls = false;
 
     for expr in exprs {
-        #[allow(clippy::collapsible_match)]
+        #[expect(clippy::collapsible_match)]
         match expr {
             Expr::BinaryExpr(binary_expr) => match binary_expr {
                 x @ (BinaryExpr {
@@ -132,9 +144,12 @@ fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinTyp
             join_rel::JoinType::LeftAnti => Ok(JoinType::LeftAnti),
             join_rel::JoinType::LeftSemi => Ok(JoinType::LeftSemi),
             join_rel::JoinType::LeftMark => Ok(JoinType::LeftMark),
+            join_rel::JoinType::RightMark => Ok(JoinType::RightMark),
+            join_rel::JoinType::RightAnti => Ok(JoinType::RightAnti),
+            join_rel::JoinType::RightSemi => Ok(JoinType::RightSemi),
             _ => plan_err!("unsupported join type {substrait_join_type:?}"),
         }
     } else {
-        plan_err!("invalid join type variant {join_type:?}")
+        plan_err!("invalid join type variant {join_type}")
     }
 }

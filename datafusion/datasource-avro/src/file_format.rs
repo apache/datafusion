@@ -27,17 +27,16 @@ use crate::source::AvroSource;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use datafusion_common::DEFAULT_AVRO_EXTENSION;
+use datafusion_common::GetExt;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::GetExt;
-use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_common::{Result, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_session::Session;
 
@@ -111,6 +110,10 @@ impl FileFormat for AvroFormat {
         }
     }
 
+    fn compression_type(&self) -> Option<FileCompressionType> {
+        None
+    }
+
     async fn infer_schema(
         &self,
         _state: &dyn Session,
@@ -150,15 +153,14 @@ impl FileFormat for AvroFormat {
         &self,
         _state: &dyn Session,
         conf: FileScanConfig,
-        _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let config = FileScanConfigBuilder::from(conf)
-            .with_source(self.file_source())
-            .build();
-        Ok(DataSourceExec::from_data_source(config))
+        Ok(DataSourceExec::from_data_source(conf))
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(AvroSource::new())
+    fn file_source(
+        &self,
+        table_schema: datafusion_datasource::TableSchema,
+    ) -> Arc<dyn FileSource> {
+        Arc::new(AvroSource::new(table_schema))
     }
 }

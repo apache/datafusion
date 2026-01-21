@@ -19,6 +19,7 @@
 //! `StringViewArray`/`BinaryViewArray`.
 //! Much of the code is from `binary_map.rs`, but with simpler implementation because we directly use the
 //! [`GenericByteViewBuilder`].
+use crate::binary_map::OutputType;
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::{Array, ArrayBuilder, ArrayRef, GenericByteViewBuilder};
@@ -27,8 +28,6 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
 use std::sync::Arc;
-
-use crate::binary_map::OutputType;
 
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
@@ -243,7 +242,7 @@ where
         let batch_hashes = &mut self.hashes_buffer;
         batch_hashes.clear();
         batch_hashes.resize(values.len(), 0);
-        create_hashes(&[Arc::clone(values)], &self.random_state, batch_hashes)
+        create_hashes([values], &self.random_state, batch_hashes)
             // hash is supported for all types and create_hashes only
             // returns errors for unsupported types
             .unwrap();

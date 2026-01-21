@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{types::Int32Type, ListArray};
+use arrow::array::{ListArray, types::Int32Type};
 use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
@@ -31,7 +31,7 @@ use datafusion::prelude::*;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
-use datafusion_expr::{table_scan, ExprSchemable, LogicalPlanBuilder};
+use datafusion_expr::{ExprSchemable, LogicalPlanBuilder, table_scan};
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 use datafusion_functions_nested::map::map;
 use insta::assert_snapshot;
@@ -274,6 +274,33 @@ async fn test_nvl2() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_nvl2_short_circuit() -> Result<()> {
+    let expr = nvl2(
+        col("a"),
+        arrow_cast(lit("1"), lit("Int32")),
+        arrow_cast(col("a"), lit("Int32")),
+    );
+
+    let batches = get_batches(expr).await?;
+
+    assert_snapshot!(
+        batches_to_string(&batches),
+        @r#"
+    +-----------------------------------------------------------------------------------+
+    | nvl2(test.a,arrow_cast(Utf8("1"),Utf8("Int32")),arrow_cast(test.a,Utf8("Int32"))) |
+    +-----------------------------------------------------------------------------------+
+    | 1                                                                                 |
+    | 1                                                                                 |
+    | 1                                                                                 |
+    | 1                                                                                 |
+    +-----------------------------------------------------------------------------------+
+    "#
+    );
+
+    Ok(())
+}
 #[tokio::test]
 async fn test_fn_arrow_typeof() -> Result<()> {
     let expr = arrow_typeof(col("l"));
@@ -282,16 +309,16 @@ async fn test_fn_arrow_typeof() -> Result<()> {
 
     assert_snapshot!(
         batches_to_string(&batches),
-        @r#"
-    +------------------------------------------------------------------------------------------------------------------+
-    | arrow_typeof(test.l)                                                                                             |
-    +------------------------------------------------------------------------------------------------------------------+
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    | List(Field { name: "item", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }) |
-    +------------------------------------------------------------------------------------------------------------------+
-    "#);
+        @r"
+    +----------------------+
+    | arrow_typeof(test.l) |
+    +----------------------+
+    | List(Int32)          |
+    | List(Int32)          |
+    | List(Int32)          |
+    | List(Int32)          |
+    +----------------------+
+    ");
 
     Ok(())
 }
@@ -1215,7 +1242,7 @@ async fn test_fn_decode() -> Result<()> {
     // Note that the decode function returns binary, and the default display of
     // binary is "hexadecimal" and therefore the output looks like decode did
     // nothing. So compare to a constant.
-    let df_schema = DFSchema::try_from(test_schema().as_ref().clone())?;
+    let df_schema = DFSchema::try_from(test_schema())?;
     let expr = decode(encode(col("a"), lit("hex")), lit("hex"))
         // need to cast to utf8 otherwise the default display of binary array is hex
         // so it looks like nothing is done
@@ -1313,6 +1340,31 @@ async fn test_count_wildcard() -> Result<()> {
         Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1)) AS count(*)]] [b:UInt32, count(*):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
     ");
+
+    Ok(())
+}
+
+/// Call count wildcard with alias from dataframe API
+#[tokio::test]
+async fn test_count_wildcard_with_alias() -> Result<()> {
+    let df = create_test_table().await?;
+    let result_df = df.aggregate(vec![], vec![count_all().alias("total_count")])?;
+
+    let schema = result_df.schema();
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "total_count");
+    assert_eq!(*schema.field(0).data_type(), DataType::Int64);
+
+    let batches = result_df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 1);
+
+    let count_array = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
+    assert_eq!(count_array.value(0), 4);
 
     Ok(())
 }

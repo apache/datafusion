@@ -18,10 +18,15 @@
 //! Utility functions to make testing DataFusion based crates easier
 
 use crate::arrow::util::pretty::pretty_format_batches_with_options;
-use arrow::array::RecordBatch;
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::error::ArrowError;
 use std::fmt::Display;
 use std::{error::Error, path::PathBuf};
+
+/// Converts a vector or array into an ArrayRef.
+pub trait IntoArrayRef {
+    fn into_array_ref(self) -> ArrayRef;
+}
 
 pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowError> {
     let datafusion_format_options = crate::config::FormatOptions::default();
@@ -50,7 +55,7 @@ pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowErro
 /// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
-///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
+/// let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
 /// // Expected output is a vec of strings
 /// let expected = vec![
 ///     "+--------+",
@@ -153,7 +158,7 @@ macro_rules! assert_batches_sorted_eq {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_contains {
     ($ACTUAL: expr, $EXPECTED: expr) => {
@@ -176,7 +181,7 @@ macro_rules! assert_contains {
 /// Is a macro so test error
 /// messages are on the same line as the failure;
 ///
-/// Both arguments must be convertable into Strings ([`Into`]<[`String`]>)
+/// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
 #[macro_export]
 macro_rules! assert_not_contains {
     ($ACTUAL: expr, $UNEXPECTED: expr) => {
@@ -250,7 +255,14 @@ pub fn arrow_test_data() -> String {
 #[cfg(feature = "parquet")]
 pub fn parquet_test_data() -> String {
     match get_data_dir("PARQUET_TEST_DATA", "../../parquet-testing/data") {
-        Ok(pb) => pb.display().to_string(),
+        Ok(pb) => {
+            let mut path = pb.display().to_string();
+            if cfg!(target_os = "windows") {
+                // Replace backslashes (Windows paths; avoids some test issues).
+                path = path.replace("\\", "/");
+            }
+            path
+        }
         Err(err) => panic!("failed to get parquet data dir: {err}"),
     }
 }
@@ -309,43 +321,43 @@ pub fn get_data_dir(
 #[macro_export]
 macro_rules! create_array {
     (Boolean, $values: expr) => {
-        std::sync::Arc::new(arrow::array::BooleanArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::BooleanArray::from($values))
     };
     (Int8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int8Array::from($values))
     };
     (Int16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int16Array::from($values))
     };
     (Int32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int32Array::from($values))
     };
     (Int64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Int64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Int64Array::from($values))
     };
     (UInt8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt8Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt8Array::from($values))
     };
     (UInt16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt16Array::from($values))
     };
     (UInt32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt32Array::from($values))
     };
     (UInt64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::UInt64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::UInt64Array::from($values))
     };
     (Float16, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float16Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float16Array::from($values))
     };
     (Float32, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float32Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float32Array::from($values))
     };
     (Float64, $values: expr) => {
-        std::sync::Arc::new(arrow::array::Float64Array::from($values))
+        std::sync::Arc::new($crate::arrow::array::Float64Array::from($values))
     };
     (Utf8, $values: expr) => {
-        std::sync::Arc::new(arrow::array::StringArray::from($values))
+        std::sync::Arc::new($crate::arrow::array::StringArray::from($values))
     };
 }
 
@@ -354,7 +366,7 @@ macro_rules! create_array {
 ///
 /// Example:
 /// ```
-/// use datafusion_common::{record_batch, create_array};
+/// use datafusion_common::record_batch;
 /// let batch = record_batch!(
 ///     ("a", Int32, vec![1, 2, 3]),
 ///     ("b", Float64, vec![Some(4.0), None, Some(5.0)]),
@@ -365,13 +377,13 @@ macro_rules! create_array {
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
-            let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            let schema = std::sync::Arc::new($crate::arrow::datatypes::Schema::new(vec![
                 $(
-                    arrow::datatypes::Field::new($name, arrow::datatypes::DataType::$type, true),
+                    $crate::arrow::datatypes::Field::new($name, $crate::arrow::datatypes::DataType::$type, true),
                 )*
             ]));
 
-            let batch = arrow::array::RecordBatch::try_new(
+            let batch = $crate::arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),
@@ -379,6 +391,326 @@ macro_rules! record_batch {
             );
 
             batch
+        }
+    }
+}
+
+pub mod array_conversion {
+    use arrow::array::ArrayRef;
+
+    use super::IntoArrayRef;
+
+    impl IntoArrayRef for Vec<bool> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<bool>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self)
+        }
+    }
+
+    impl IntoArrayRef for &[bool] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<bool>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Boolean, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i8> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i8>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i8] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i8>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i16> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i16>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i16] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i16>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<i64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<i64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[i64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<i64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Int64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u8> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u8>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u8] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u8>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u16> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u16>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u16] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u16>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt16, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<u64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<u64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[u64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<u64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(UInt64, self.to_vec())
+        }
+    }
+
+    //#TODO add impl for f16
+
+    impl IntoArrayRef for Vec<f32> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<f32>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self)
+        }
+    }
+
+    impl IntoArrayRef for &[f32] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<f32>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float32, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<f64> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<f64>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self)
+        }
+    }
+
+    impl IntoArrayRef for &[f64] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<f64>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Float64, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<&str> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<&str>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[&str] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<&str>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for Vec<String> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for Vec<Option<String>> {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self)
+        }
+    }
+
+    impl IntoArrayRef for &[String] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
+        }
+    }
+
+    impl IntoArrayRef for &[Option<String>] {
+        fn into_array_ref(self) -> ArrayRef {
+            create_array!(Utf8, self.to_vec())
         }
     }
 }
@@ -403,32 +735,34 @@ mod tests {
         let non_existing = cwd.join("non-existing-dir").display().to_string();
         let non_existing_str = non_existing.as_str();
 
-        env::set_var(udf_env, non_existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_err());
+        unsafe {
+            env::set_var(udf_env, non_existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_err());
 
-        env::set_var(udf_env, "");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, "");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, " ");
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, " ");
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::set_var(udf_env, existing_str);
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            env::set_var(udf_env, existing_str);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
 
-        env::remove_var(udf_env);
-        let res = get_data_dir(udf_env, non_existing_str);
-        assert!(res.is_err());
+            env::remove_var(udf_env);
+            let res = get_data_dir(udf_env, non_existing_str);
+            assert!(res.is_err());
 
-        let res = get_data_dir(udf_env, existing_str);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), existing_pb);
+            let res = get_data_dir(udf_env, existing_str);
+            assert!(res.is_ok());
+            assert_eq!(res.unwrap(), existing_pb);
+        }
     }
 
     #[test]

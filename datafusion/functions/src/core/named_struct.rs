@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, internal_err, Result};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
 };
@@ -58,7 +58,7 @@ a struct type of fields `field_a` and `field_b`:
         description = "Expression to include in the output struct. Can be a constant, column, or function, and any combination of arithmetic or string operators."
     )
 )]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NamedStructFunc {
     signature: Signature,
 }
@@ -96,7 +96,7 @@ impl ScalarUDFImpl for NamedStructFunc {
         )
     }
 
-    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<Field> {
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         // do not accept 0 arguments.
         if args.scalar_arguments.is_empty() {
             return exec_err!(
@@ -104,7 +104,7 @@ impl ScalarUDFImpl for NamedStructFunc {
             );
         }
 
-        if args.scalar_arguments.len() % 2 != 0 {
+        if !args.scalar_arguments.len().is_multiple_of(2) {
             return exec_err!(
                 "named_struct requires an even number of arguments, got {} instead",
                 args.scalar_arguments.len()
@@ -146,11 +146,12 @@ impl ScalarUDFImpl for NamedStructFunc {
             self.name(),
             DataType::Struct(Fields::from(return_fields)),
             true,
-        ))
+        )
+        .into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let DataType::Struct(fields) = args.return_field.data_type() else {
+        let DataType::Struct(fields) = args.return_type() else {
             return internal_err!("incorrect named_struct return type");
         };
 
