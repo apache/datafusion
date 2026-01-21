@@ -975,18 +975,17 @@ async fn test_parquet_opener_without_page_index() {
     )
     .unwrap();
 
-    // Create a temp file
-    let file = tempfile::Builder::new()
-        .suffix(".parquet")
-        .tempfile()
-        .unwrap();
-    let path = file.path().to_str().unwrap().to_string();
+    // Create a temp directory
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("no_index.parquet");
+    let path_str = path.to_str().unwrap().to_string();
 
     // Write parquet WITHOUT page index
+    // The default WriterProperties does not write page index
     let props = WriterProperties::builder().build();
 
-    let file_fs = std::fs::File::create(&path).unwrap();
-    let mut writer = ArrowWriter::try_new(file_fs, batch.schema(), Some(props)).unwrap();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
     writer.write(&batch).unwrap();
     writer.close().unwrap();
 
@@ -997,7 +996,7 @@ async fn test_parquet_opener_without_page_index() {
     let ctx = SessionContext::new_with_config(config);
 
     // Register the table
-    ctx.register_parquet("t", &path, Default::default())
+    ctx.register_parquet("t", &path_str, Default::default())
         .await
         .unwrap();
 
