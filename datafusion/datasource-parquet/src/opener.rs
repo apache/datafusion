@@ -1200,6 +1200,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+                pruning_max_inlist_limit: 20,
                 coerce_int96: self.coerce_int96,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,

@@ -316,6 +316,7 @@ impl RowGroupAccessPlanFilter {
     /// predicate, which implies all rows match the original predicate.
     ///
     /// Note: This optimization is relatively inexpensive for a limited number of row groups.
+    #[expect(clippy::too_many_arguments)]
     fn identify_fully_matched_row_groups(
         &mut self,
         candidate_row_group_indices: &[usize],
