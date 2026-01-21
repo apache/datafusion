@@ -522,7 +522,7 @@ impl FileOpener for ParquetOpener {
                         rg_metadata,
                         predicate,
                         &file_metrics,
-                        &pruning_predicate_config
+                        &pruning_predicate_config,
                     );
                 } else {
                     // Update metrics: statistics unavailable, so all row groups are

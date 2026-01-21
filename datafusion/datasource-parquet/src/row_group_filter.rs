@@ -297,7 +297,7 @@ impl RowGroupAccessPlanFilter {
                     groups,
                     predicate,
                     metrics,
-                    pruning_predicate_config
+                    pruning_predicate_config,
                 );
             }
             // stats filter array could not be built, so we can't prune
