@@ -49,7 +49,9 @@ use datafusion_physical_expr_common::physical_expr::{
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate, PruningPredicateConfig};
+use datafusion_pruning::{
+    FilePruner, PruningPredicate, PruningPredicateConfig, build_pruning_predicate,
+};
 
 use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
@@ -424,7 +426,9 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
 
             // Build predicates for this specific file
-            let pruning_config = PruningPredicateConfig { max_in_list: self.pruning_max_inlist_limit };
+            let pruning_config = PruningPredicateConfig {
+                max_in_list: self.pruning_max_inlist_limit,
+            };
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
                 &physical_file_schema,
@@ -947,7 +951,7 @@ pub(crate) fn build_page_pruning_predicate(
     Arc::new(PagePruningAccessPlanFilter::new(
         predicate,
         Arc::clone(file_schema),
-        config
+        config,
     ))
 }
 
@@ -968,7 +972,8 @@ pub(crate) fn build_pruning_predicates(
         file_schema,
         predicate_creation_errors,
     );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema, config);
+    let page_pruning_predicate =
+        build_page_pruning_predicate(predicate, file_schema, config);
     (pruning_predicate, Some(page_pruning_predicate))
 }
 

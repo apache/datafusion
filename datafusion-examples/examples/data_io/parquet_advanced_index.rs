@@ -301,8 +301,11 @@ impl IndexTableProvider {
         // In this example, we use the PruningPredicate's literal guarantees to
         // analyze the predicate. In a real system, using
         // `PruningPredicate::prune` would likely be easier to do.
-        let pruning_predicate =
-            PruningPredicate::try_new(Arc::clone(predicate), self.schema(), &PruningPredicateConfig::default())?;
+        let pruning_predicate = PruningPredicate::try_new(
+            Arc::clone(predicate),
+            self.schema(),
+            &PruningPredicateConfig::default(),
+        )?;
 
         // The PruningPredicate's guarantees must all be satisfied in order for
         // the predicate to possibly evaluate to true.

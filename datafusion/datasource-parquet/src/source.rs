@@ -55,11 +55,11 @@ use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_pruning::PruningPredicateConfig;
 use itertools::Itertools;
 use object_store::ObjectStore;
 #[cfg(feature = "parquet_encryption")]
 use parquet::encryption::decrypt::FileDecryptionProperties;
-use datafusion_pruning::PruningPredicateConfig;
 
 /// Execution plan for reading one or more Parquet files.
 ///
@@ -561,7 +561,10 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
-            pruning_max_inlist_limit: self.table_parquet_options.global.pruning_max_inlist_limit,
+            pruning_max_inlist_limit: self
+                .table_parquet_options
+                .global
+                .pruning_max_inlist_limit,
             coerce_int96,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
@@ -638,7 +641,12 @@ impl FileSource for ParquetSource {
                 // Instead we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
-                    let pruning_config = PruningPredicateConfig { max_in_list: self.table_parquet_options.global.pruning_max_inlist_limit };
+                    let pruning_config = PruningPredicateConfig {
+                        max_in_list: self
+                            .table_parquet_options
+                            .global
+                            .pruning_max_inlist_limit,
+                    };
                     if let (Some(pruning_predicate), _) = build_pruning_predicates(
                         Some(predicate),
                         self.table_schema.table_schema(),
