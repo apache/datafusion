@@ -346,7 +346,7 @@ impl FileOpener for ParquetOpener {
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
             // unnecessary I/O. We decide later if it is needed to evaluate the
-            // pruning predicates. Thus default to not requesting if from the
+            // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
             #[cfg(feature = "parquet_encryption")]
