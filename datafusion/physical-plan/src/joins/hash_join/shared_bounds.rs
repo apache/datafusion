@@ -512,12 +512,11 @@ impl SharedBuildAccumulator {
                             .filter_map(|(partition_id, partition_opt)| {
                                 partition_opt.as_ref().and_then(|partition| {
                                     // Skip empty partitions - they would always return false anyway
-                                    // Skip disabled partitions when bounds are also disabled - no filter to create
                                     match &partition.pushdown {
                                         PushdownStrategy::Empty => None,
-                                        PushdownStrategy::Disabled if !bounds_enabled => {
-                                            None
-                                        }
+                                        // Note: We intentionally keep Disabled partitions even when bounds
+                                        // are disabled. This allows measuring the CASE routing overhead
+                                        // independently. The (None, None) case returns lit(true).
                                         _ => Some((partition_id, partition)),
                                     }
                                 })
