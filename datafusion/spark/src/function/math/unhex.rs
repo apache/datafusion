@@ -23,7 +23,7 @@ use datafusion_common::cast::{
 use datafusion_common::types::logical_string;
 use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::{
-    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,
 };
 use std::any::Any;
@@ -45,11 +45,9 @@ impl Default for SparkUnhex {
 impl SparkUnhex {
     pub fn new() -> Self {
         let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
-        // accepts string types (Utf8, Utf8View, LargeUtf8)
-        let variants = vec![TypeSignature::Coercible(vec![string])];
 
         Self {
-            signature: Signature::one_of(variants, Volatility::Immutable),
+            signature: Signature::coercible(vec![string], Volatility::Immutable),
             aliases: vec![],
         }
     }
