@@ -372,6 +372,7 @@ mod parquet {
             global: Some(ParquetOptionsProto {
                 enable_page_index: global_options.global.enable_page_index,
                 pruning: global_options.global.pruning,
+                pruning_max_inlist_limit_opt: Some(parquet_options::PruningMaxInlistLimitOpt::PruningMaxInlistLimit(global_options.global.pruning_max_inlist_limit as u64)),
                 skip_metadata: global_options.global.skip_metadata,
                 metadata_size_hint_opt: global_options.global.metadata_size_hint.map(|size| {
                     parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size as u64)
@@ -468,6 +469,9 @@ mod parquet {
             ParquetOptions {
             enable_page_index: proto.enable_page_index,
             pruning: proto.pruning,
+            pruning_max_inlist_limit: proto.pruning_max_inlist_limit_opt.as_ref().map(|opt| match opt {
+                parquet_options::PruningMaxInlistLimitOpt::PruningMaxInlistLimit(size) => *size as usize,
+            }).unwrap_or(20),
             skip_metadata: proto.skip_metadata,
             metadata_size_hint: proto.metadata_size_hint_opt.as_ref().map(|opt| match opt {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(size) => *size as usize,
