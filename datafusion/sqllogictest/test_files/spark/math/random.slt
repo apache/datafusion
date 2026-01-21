@@ -38,6 +38,10 @@ SELECT
 ----
 true false true
 
+query error `random` function expects a constant Int64 seed argument
+SELECT random(column1)
+FROM VALUES
+(1);
 
 query R
 SELECT rand(42::integer);
@@ -85,6 +89,11 @@ SELECT
 ----
 false true
 
+query error `randn` function expects a constant Int64 seed argument
+SELECT randn(column1)
+FROM VALUES
+(1);
+
 
 query T
 SELECT randstr(3::integer, 42::integer);
@@ -106,10 +115,10 @@ SELECT randstr(0::integer);
 ----
 (empty)
 
-query error Execution error: `randstr` function expects a positive Int32 length argument
+query error Execution error: `randstr` function expects a constant positive Int32 length argument
 SELECT randstr(NULL::integer, 23::integer);
 
-query error Execution error: `randstr` function expects a positive Int32 length argument
+query error Execution error: `randstr` function expects a constant positive Int32 length argument
 SELECT randstr(-2::integer, 23::integer);
 
 query BB
@@ -119,6 +128,15 @@ SELECT
 ----
 false true
 
+query error `randstr` function expects a constant positive Int32 length argument
+SELECT randstr(column1, 12::integer)
+FROM VALUES
+(1);
+
+query error `randstr` function expects a constant Int64 seed argument
+SELECT randstr(12::integer, column1)
+FROM VALUES
+(1);
 
 query I
 SELECT uniform(3::integer, 42::integer, 42::integer);
@@ -163,3 +181,8 @@ SELECT
     uniform(10, 2, 23) = uniform(10, 2, 23);
 ----
 true true false true
+
+query error Error during planning: arguments of `uniform` should be literals
+SELECT uniform(column1, column2)
+FROM VALUES
+(1, 10);

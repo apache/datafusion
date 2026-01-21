@@ -302,7 +302,7 @@ impl ScalarUDFImpl for SparkRandStr {
                 ColumnarValue::Scalar(ScalarValue::Int64(None)) => 0,
                 _ => {
                     return exec_err!(
-                        "`{}` function expects an Int64 seed argument",
+                        "`{}` function expects a constant Int64 seed argument",
                         self.name()
                     );
                 }
@@ -428,6 +428,10 @@ impl ScalarUDFImpl for SparkUniform {
                 );
             }
         };
+
+        if args.iter().any(|e| e.as_literal().is_none()) {
+            return plan_err!("arguments of `{}` should be literals", self.name());
+        }
 
         let min = args[0].clone();
         let max = args[1].clone();
