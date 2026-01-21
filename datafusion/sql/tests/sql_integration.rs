@@ -4810,7 +4810,6 @@ fn test_using_join_wildcard_schema() {
         "o1.qty".to_string(),
         "o1.price".to_string(),
         "o1.delivered".to_string(),
-
     ];
     assert_eq!(plan.schema().field_names(), expected_fields);
 
@@ -4862,7 +4861,8 @@ fn test_using_join_wildcard_schema() {
 }
 
 #[test]
-fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_relation() {
+fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_relation()
+{
     let sql = "SELECT * FROM j1 j1_outer, LATERAL (
     SELECT * FROM j1 j1_inner, LATERAL (
         SELECT * FROM j2 WHERE j1_inner.j1_id = j2_id and j1_outer.j1_id=j2_id
@@ -4889,11 +4889,12 @@ Projection: j1_outer.j1_id, j1_outer.j1_string, j2.j1_id, j2.j1_string, j2.j2_id
                   Filter: outer_ref(j1_inner.j1_id) = j2.j2_id AND outer_ref(j1_outer.j1_id) = j2.j2_id
                     TableScan: j2
 "#
-);
+    );
 }
 
 #[test]
-fn test_correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_referencing_level1_relation() {
+fn test_correlated_recursive_scalar_subquery_with_level_3_scalar_subquery_referencing_level1_relation()
+ {
     let sql = "select c_custkey from customer
             where c_acctbal < (
             select sum(o_totalprice) from orders
@@ -4923,11 +4924,12 @@ Sort: customer.c_custkey ASC NULLS LAST
               TableScan: orders
       TableScan: customer
 "#
-);
+    );
 }
 
 #[test]
-fn correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation() {
+fn correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation()
+ {
     let sql = "select c_custkey from customer
         where c_acctbal < (
         select sum(o_totalprice) from orders
@@ -4940,8 +4942,8 @@ fn correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
-         plan,
-         @r#"
+        plan,
+        @r#"
 Sort: customer.c_custkey ASC NULLS LAST
   Projection: customer.c_custkey
     Filter: customer.c_acctbal < (<subquery>)
@@ -4956,11 +4958,12 @@ Sort: customer.c_custkey ASC NULLS LAST
               TableScan: orders
       TableScan: customer
 "#
-);
+    );
 }
 
 #[test]
-fn correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_level1_relation() {
+fn correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_level1_relation()
+ {
     let sql = "select c_custkey from customer
     where c_acctbal < (
     select sum(o_totalprice) from orders
@@ -4973,8 +4976,8 @@ fn correlated_recursive_scalar_subquery_with_level_3_in_subquery_referencing_lev
 
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
-         plan,
-         @r#"
+        plan,
+        @r#"
 Sort: customer.c_custkey ASC NULLS LAST
   Projection: customer.c_custkey
     Filter: customer.c_acctbal < (<subquery>)
@@ -4989,5 +4992,5 @@ Sort: customer.c_custkey ASC NULLS LAST
               TableScan: orders
       TableScan: customer
 "#
-);
+    );
 }
