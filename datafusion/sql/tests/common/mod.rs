@@ -160,6 +160,7 @@ impl ContextProvider for MockContextProvider {
                 Field::new("last_name", DataType::Utf8, false),
             ])),
             "orders" => Ok(Schema::new(vec![
+                Field::new("order_id", DataType::UInt32, false),
                 Field::new("o_orderkey", DataType::UInt32, false),
                 Field::new("o_custkey", DataType::UInt32, false),
                 Field::new("o_orderstatus", DataType::Utf8, false),
