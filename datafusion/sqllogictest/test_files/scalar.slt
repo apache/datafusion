@@ -951,15 +951,24 @@ query TR
 select arrow_typeof(round('12345.55'::decimal(10,2), -1)),
        round('12345.55'::decimal(10,2), -1);
 ----
-Decimal128(10, 2) 12350
+Decimal128(11, 2) 12350
 
 # round decimal256 keeps decimals
 query TR
 select arrow_typeof(round('1234.5678'::decimal(50,4), 2)),
        round('1234.5678'::decimal(50,4), 2);
 ----
-Decimal256(50, 4) 1234.57
+Decimal256(51, 4) 1234.57
 
+# round decimal with carry-over that increases precision (issue fix)
+# Previously this returned 100.0 due to precision overflow, now correctly returns 1000.0
+query TRRR
+select arrow_typeof(round('999.9'::decimal(4,1))),
+       round('999.9'::decimal(4,1)),
+       round('-999.9'::decimal(4,1)),
+       round('99.99'::decimal(4,2));
+----
+Decimal128(5, 1) 1000 -1000 100
 
 ## signum
 
