@@ -19,6 +19,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 
 use crate::Expr;
 
+/// Return from [`ScalarUDFImpl::preimage`]
 pub enum PreimageResult {
     /// No preimage exists for the specified value
     None,
