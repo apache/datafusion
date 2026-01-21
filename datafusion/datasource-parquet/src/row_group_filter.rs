@@ -256,6 +256,7 @@ impl RowGroupAccessPlanFilter {
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        pruning_predicate_config: &PruningPredicateConfig,
     ) {
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
@@ -296,6 +297,7 @@ impl RowGroupAccessPlanFilter {
                     groups,
                     predicate,
                     metrics,
+                    pruning_predicate_config
                 );
             }
             // stats filter array could not be built, so we can't prune
@@ -322,6 +324,7 @@ impl RowGroupAccessPlanFilter {
         groups: &[RowGroupMetaData],
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        pruning_predicate_config: &PruningPredicateConfig,
     ) {
         if candidate_row_group_indices.is_empty() {
             return;
@@ -337,11 +340,10 @@ impl RowGroupAccessPlanFilter {
             return;
         };
 
-        // TODO(QPIERRE): inject from upstream
         let Ok(inverted_predicate) = PruningPredicate::try_new(
             inverted_expr,
             Arc::clone(predicate.schema()),
-            &PruningPredicateConfig::default(),
+            pruning_predicate_config,
         ) else {
             return;
         };
@@ -775,6 +777,7 @@ mod tests {
             &[rgm1, rgm2],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]))
     }
@@ -820,6 +823,7 @@ mod tests {
             &[rgm1, rgm2],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::None);
     }
@@ -872,6 +876,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
 
@@ -895,6 +900,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::None);
     }
@@ -955,6 +961,7 @@ mod tests {
             groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
     }
@@ -1009,6 +1016,7 @@ mod tests {
             &groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
@@ -1047,6 +1055,7 @@ mod tests {
             &groups,
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1]));
     }
@@ -1121,6 +1130,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 2]));
     }
@@ -1223,6 +1233,7 @@ mod tests {
             &[rgm1, rgm2, rgm3, rgm4, rgm5],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0, 1, 4]));
     }
@@ -1285,6 +1296,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
@@ -1368,6 +1380,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }
@@ -1442,6 +1455,7 @@ mod tests {
             &[rgm1, rgm2, rgm3],
             &pruning_predicate,
             &metrics,
+            &PruningPredicateConfig::default(),
         );
         assert_pruned(row_groups, ExpectedPruning::Some(vec![1, 2]));
     }

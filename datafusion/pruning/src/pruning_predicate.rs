@@ -380,7 +380,6 @@ pub struct PruningPredicate {
 
 #[derive(Debug, Clone)]
 pub struct PruningPredicateConfig {
-    // TODO(QPIERRE): name/docs
     pub max_in_list: usize,
 }
 

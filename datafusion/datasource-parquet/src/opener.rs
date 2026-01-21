@@ -106,7 +106,7 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
-    // TODO(QPIERRE): docs
+    /// Maximum number of elements (inclusive) in InList exprs to be eligible for pruning
     pub pruning_max_inlist_limit: usize,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
@@ -522,6 +522,7 @@ impl FileOpener for ParquetOpener {
                         rg_metadata,
                         predicate,
                         &file_metrics,
+                        &pruning_predicate_config
                     );
                 } else {
                     // Update metrics: statistics unavailable, so all row groups are

@@ -691,7 +691,9 @@ config_namespace! {
         /// the parquet file
         pub pruning: bool, default = true
 
-        // TODO(QPIERRE): docs
+        /// (reading) Maximum number of elements (inclusive) in InList exprs to be eligible for pruning.
+        /// When some InList exprs contain more than this threshold, these expressions are ignored during pruning,
+        /// but other expressions may still be used for pruning.
         pub pruning_max_inlist_limit: usize, default = 20
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
