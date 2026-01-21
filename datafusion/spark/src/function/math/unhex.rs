@@ -22,7 +22,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignatureClass, Volatility,

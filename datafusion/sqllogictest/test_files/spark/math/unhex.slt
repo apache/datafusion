@@ -39,12 +39,12 @@ abc
 
 # Odd length hex (left pad with 0)
 query ?
-SELECT unhex(a) FROM VALUES ('1A2B3', '1', 'ABC', '123');
+SELECT unhex(a) FROM VALUES ('1A2B3'), ('1'), ('ABC'), ('123') AS t(a);
 ----
 01a2b3
-1
-abc
-123
+01
+0abc
+0123
 
 # Null input
 query ?
