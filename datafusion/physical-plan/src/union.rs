@@ -600,7 +600,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
         let field_count = input.schema().fields().len();
         if field_count != first_field_count {
             return exec_err!(
-                "UnionExec requires all inputs to have the same number of fields. \
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields. \
                  Input 0 has {first_field_count} fields, but input {idx} has {field_count} fields"
             );
         }
