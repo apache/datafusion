@@ -399,11 +399,12 @@ pub fn build_pruning_predicate(
     predicate: Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    config: &PruningPredicateConfig,
 ) -> Option<Arc<PruningPredicate>> {
     match PruningPredicate::try_new(
         predicate,
         Arc::clone(file_schema),
-        &PruningPredicateConfig::default(),
+        config,
     ) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {

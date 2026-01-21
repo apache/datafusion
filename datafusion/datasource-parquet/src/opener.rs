@@ -284,6 +284,7 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
+        let pruning_predicate_config = PruningPredicateConfig { max_in_list: self.pruning_max_inlist_limit };
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -330,6 +331,7 @@ impl FileOpener for ParquetOpener {
                         &logical_file_schema,
                         &partitioned_file,
                         predicate_creation_errors.clone(),
+                        pruning_predicate_config.clone(),
                     )
                 });
 
@@ -426,14 +428,11 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
 
             // Build predicates for this specific file
-            let pruning_config = PruningPredicateConfig {
-                max_in_list: self.pruning_max_inlist_limit,
-            };
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
-                &pruning_config,
+                &pruning_predicate_config,
             );
 
             // The page index is not stored inline in the parquet footer so the
@@ -971,6 +970,7 @@ pub(crate) fn build_pruning_predicates(
         Arc::clone(predicate),
         file_schema,
         predicate_creation_errors,
+        config,
     );
     let page_pruning_predicate =
         build_page_pruning_predicate(predicate, file_schema, config);

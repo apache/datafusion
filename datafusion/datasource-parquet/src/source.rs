@@ -641,7 +641,7 @@ impl FileSource for ParquetSource {
                 // Instead we use the logical schema of the file (the table schema without partition columns).
                 if let Some(predicate) = &self.predicate {
                     let predicate_creation_errors = Count::new();
-                    let pruning_config = PruningPredicateConfig {
+                    let pruning_predicate_config = PruningPredicateConfig {
                         max_in_list: self
                             .table_parquet_options
                             .global
@@ -651,7 +651,7 @@ impl FileSource for ParquetSource {
                         Some(predicate),
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
-                        &pruning_config,
+                        &pruning_predicate_config,
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
