@@ -21,6 +21,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::vec;
 
 use arrow::array::{
     Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
@@ -80,11 +81,18 @@ impl TestContext {
             // hardcode target partitions so plans are deterministic
             .with_target_partitions(4);
         let runtime = Arc::new(RuntimeEnv::default());
-        let mut state = SessionStateBuilder::new()
+
+        let mut state_builder = SessionStateBuilder::new()
             .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build();
+            .with_runtime_env(runtime);
+
+        if is_spark_path(relative_path) {
+            state_builder = state_builder.with_expr_planners(vec![Arc::new(
+                datafusion_spark::planner::SparkFunctionPlanner,
+            )]);
+        }
+
+        let mut state = state_builder.with_default_features().build();
 
         if is_spark_path(relative_path) {
             info!("Registering Spark functions");
