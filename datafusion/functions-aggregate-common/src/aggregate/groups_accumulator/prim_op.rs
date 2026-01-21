@@ -115,7 +115,10 @@ where
             total_num_groups,
             |block_id, block_offset, new_value| {
                 // SAFETY: `block_id` and `block_offset` are guaranteed to be in bounds
-                let value = unsafe {self.values.get_unchecked_mut(block_id as usize).get_unchecked_mut(block_offset as usize)};
+                let value = unsafe {
+                    self.values[block_id as usize]
+                        .get_unchecked_mut(block_offset as usize)
+                };
                 (self.prim_fn)(value, new_value);
             },
         );

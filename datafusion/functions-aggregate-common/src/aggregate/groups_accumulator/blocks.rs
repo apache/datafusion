@@ -123,7 +123,7 @@ impl<B: Block> Blocks<B> {
         self.inner.pop_front()
     }
 
-    pub fn len(&self) -> usize {
+    pub fn num_blocks(&self) -> usize {
         self.inner.len()
     }
 
@@ -163,10 +163,13 @@ impl<B: Block> IndexMut<usize> for Blocks<B> {
 pub trait Block: Debug {
     type T: Clone;
 
+    /// Fill the block with default value
     fn fill_default_value(&mut self, fill_len: usize, default_value: Self::T);
 
+    /// Return the length of the block
     fn len(&self) -> usize;
 
+    /// Return true if the block is empty
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -187,7 +190,7 @@ impl<Ty: Clone + Debug> Block for Vec<Ty> {
 
     fn len(&self) -> usize {
         self.len()
-    }
+    }   
 }
 
 impl<T: Clone + Debug> GeneralBlocks<T> {
@@ -227,26 +230,26 @@ mod test {
         };
 
         let mut blocks = TestBlocks::new(None);
-        assert_eq!(blocks.len(), 0);
+        assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
             // Should have single block, 5 block len, all data are 42
             blocks.resize(5, new_block, 42);
-            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks.num_blocks(), 1);
             assert_eq!(blocks[0].len(), 5);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
 
             // Resize to a larger block
             // Should still have single block, 10 block len, all data are 42
             blocks.resize(10, new_block, 42);
-            assert_eq!(blocks.len(), 1);
+            assert_eq!(blocks.num_blocks(), 1);
             assert_eq!(blocks[0].len(), 10);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
 
             // Clear
             // Should have nothing after clearing
             blocks.clear();
-            assert_eq!(blocks.len(), 0);
+            assert_eq!(blocks.num_blocks(), 0);
 
             // Test resize after clear in next round
         }
@@ -260,7 +263,7 @@ mod test {
         };
 
         let mut blocks = TestBlocks::new(Some(3));
-        assert_eq!(blocks.len(), 0);
+        assert_eq!(blocks.num_blocks(), 0);
 
         for _ in 0..2 {
             // Should have:
@@ -269,7 +272,7 @@ mod test {
             //  - `block 1` of 2 len
             //  - all data are 42
             blocks.resize(5, new_block, 42);
-            assert_eq!(blocks.len(), 2);
+            assert_eq!(blocks.num_blocks(), 2);
             assert_eq!(blocks[0].len(), 3);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
             assert_eq!(blocks[1].len(), 2);
@@ -284,7 +287,7 @@ mod test {
             //  - `block 3` of 1 len
             //  - all data are 42
             blocks.resize(10, new_block, 42);
-            assert_eq!(blocks.len(), 4);
+            assert_eq!(blocks.num_blocks(), 4);
             assert_eq!(blocks[0].len(), 3);
             blocks[0].iter().for_each(|num| assert_eq!(*num, 42));
             assert_eq!(blocks[1].len(), 3);
@@ -297,7 +300,7 @@ mod test {
             // Clear
             // Should have nothing after clearing
             blocks.clear();
-            assert_eq!(blocks.len(), 0);
+            assert_eq!(blocks.num_blocks(), 0);
 
             // Test resize after clear in next round
         }
