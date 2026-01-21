@@ -2664,6 +2664,7 @@ dependencies = [
 name = "datafusion-wasmtest"
 version = "52.0.0"
 dependencies = [
+ "bytes",
  "chrono",
  "console_error_panic_hook",
  "datafusion",
@@ -2673,6 +2674,7 @@ dependencies = [
  "datafusion-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
+ "futures",
  "getrandom 0.3.4",
  "object_store",
  "tokio",
