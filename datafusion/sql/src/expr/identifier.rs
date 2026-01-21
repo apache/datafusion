@@ -185,10 +185,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     {
                                         // TODO: remove when can support nested identifiers for OuterReferenceColumn
                                         not_impl_err!(
-                                        "Nested identifiers are not yet supported for OuterReferenceColumn {}",
-                                        Column::from((qualifier, field))
-                                            .quoted_flat_name()
-                                    )
+                                            "Nested identifiers are not yet supported for OuterReferenceColumn {}",
+                                            Column::from((qualifier, field))
+                                                .quoted_flat_name()
+                                        )
                                     }
                                     // Found matching field with no spare identifier(s)
                                     Some((field, qualifier, _nested_names)) => {
