@@ -266,11 +266,6 @@ pub struct PlannerContext {
     /// columns in subquery (recursive aware)
     outer_queries_schemas_stack: Vec<DFSchemaRef>,
 
-    /// The query schema of the outer query plan, used to resolve the columns in subquery
-    /// This field is maintained to support deprecated functions
-    /// `outer_query_schema` and `set_outer_query_schema`
-    /// which is only aware of the adjacent outer relation
-    outer_query_schema: Option<DFSchemaRef>,
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
@@ -290,7 +285,6 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
-            outer_query_schema: None,
             outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
@@ -304,30 +298,6 @@ impl PlannerContext {
     ) -> Self {
         self.prepare_param_data_types = prepare_param_data_types.into();
         self
-    }
-
-    /// Return a reference to the outer query's schema
-    /// This function should not be used together with
-    /// `outer_queries_schemas`, `append_outer_query_schema`
-    /// `latest_outer_query_schema` and `pop_outer_query_schema`
-    #[deprecated(note = "Use outer_queries_schemas instead")]
-    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
-    }
-
-    /// Sets the outer query schema, returning the existing one, if
-    /// any, this function should not be used together with
-    /// `outer_queries_schemas`, `append_outer_query_schema`
-    /// `latest_outer_query_schema` and `pop_outer_query_schema`
-    #[deprecated(
-        note = "This struct is now aware of a stack of schemas, check pop_outer_query_schema"
-    )]
-    pub fn set_outer_query_schema(
-        &mut self,
-        mut schema: Option<DFSchemaRef>,
-    ) -> Option<DFSchemaRef> {
-        std::mem::swap(&mut self.outer_query_schema, &mut schema);
-        schema
     }
 
     /// Return the stack of outer relations' schemas, the outer most
