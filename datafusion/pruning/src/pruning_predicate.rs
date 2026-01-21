@@ -3271,15 +3271,11 @@ mod tests {
     #[test]
     fn row_group_predicate_in_list_to_many_values() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        // test c1 in(1..21)
-        // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
-        // always true
-        // TODO(QPIERRE): parametrize this test
-        let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
+        let limit = 15u64;
+        let expr = col("c1").in_list((1..=limit).map(lit).collect(), false);
 
         let expected_expr = "true";
-        let predicate_expr =
-            test_build_predicate_expression(&expr, &schema, &mut RequiredColumns::new());
+        let predicate_expr = test_build_predicate_expression_with_pruning_predicate_config(&expr, &schema, &mut RequiredColumns::new(), &PruningPredicateConfig { max_in_list: limit as usize });
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -5454,6 +5450,15 @@ mod tests {
         schema: &Schema,
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
+        test_build_predicate_expression_with_pruning_predicate_config(expr, schema, required_columns, &PruningPredicateConfig::default())
+    }
+
+    fn test_build_predicate_expression_with_pruning_predicate_config(
+        expr: &Expr,
+        schema: &Schema,
+        required_columns: &mut RequiredColumns,
+        pruning_predicate_config: &PruningPredicateConfig
+    ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
         build_predicate_expression(
@@ -5461,7 +5466,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
-            &PruningPredicateConfig::default(),
+            pruning_predicate_config
         )
     }
 
