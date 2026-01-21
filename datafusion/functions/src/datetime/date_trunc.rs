@@ -225,10 +225,6 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // This UDF implements `return_field_from_args` and should use that
-        // for return type (including nullability) decisions. Returning an
-        // internal error here makes misuse visible and matches other UDFs
-        // that implement `return_field_from_args` directly.
         internal_err!("return_field_from_args should be used instead")
     }
 
