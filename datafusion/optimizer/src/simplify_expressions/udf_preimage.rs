@@ -25,16 +25,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 /// x`) where `<expr>` is known to have a pre-image (aka the entire single
 /// range for which it is valid) and `x` is not `NULL`
 ///
-/// This rewrite is described in the [ClickHouse Paper] and is particularly
-/// useful for simplifying expressions `date_part` or equivalent functions. The
-/// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
-/// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
-/// covering the entire year of 2024. Thus, you can rewrite the expression to
-/// `k >= '2024-01-01' AND k < '2025-01-01'`, which uses an inclusive lower bound
-/// and exclusive upper bound and is often more optimizable.
-///
-/// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
-/// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+/// For details see [`datafusion_expr::ScalarUDFImpl::preimage`]
 ///
 pub(super) fn rewrite_with_preimage(
     _info: &SimplifyContext,
