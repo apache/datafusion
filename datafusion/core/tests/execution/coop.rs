@@ -24,7 +24,7 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::execution_plan::Boundedness;
 use datafusion::prelude::SessionContext;
@@ -233,6 +233,7 @@ async fn agg_grouped_topk_yields(
     #[values(false, true)] pretend_infinite: bool,
 ) -> Result<(), Box<dyn Error>> {
     // build session
+
     let session_ctx = SessionContext::new();
 
     // set up a top-k aggregation
@@ -260,7 +261,7 @@ async fn agg_grouped_topk_yields(
             inf.clone(),
             inf.schema(),
         )?
-        .with_limit(Some(100)),
+        .with_limit_options(Some(LimitOptions::new(100))),
     );
 
     query_yields(aggr, session_ctx.task_ctx()).await
