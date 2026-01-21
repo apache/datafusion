@@ -1541,7 +1541,7 @@ async fn join_on() -> Result<()> {
     )?;
 
     assert_snapshot!(join.logical_plan(), @r"
-    Inner Join:  Filter: a.c1 != b.c1 AND a.c2 = b.c2
+    Inner Join:  Filter: (a.c1 != b.c1) AND (a.c2 = b.c2)
       Projection: a.c1, a.c2
         TableScan: a
       Projection: b.c1, b.c2

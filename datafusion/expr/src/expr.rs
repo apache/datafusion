@@ -4122,12 +4122,11 @@ mod test {
             Box::new(three.clone()),
         ));
 
-        let display = format!("{}", mul);
+        let display = format!("{mul}");
         // Should contain parentheses around the addition
         assert!(
             display.contains("("),
-            "Expected parentheses in display: {}",
-            display
+            "Expected parentheses in display: {display}"
         );
         assert_eq!(display, "(Int64(1) + Int64(2)) * Int64(3)");
 
@@ -4143,11 +4142,10 @@ mod test {
             Box::new(add_right),
         ));
 
-        let display_right = format!("{}", mul_right);
+        let display_right = format!("{mul_right}");
         assert!(
             display_right.contains("("),
-            "Expected parentheses in display: {}",
-            display_right
+            "Expected parentheses in display: {display_right}"
         );
         assert_eq!(display_right, "Int64(1) + (Int64(2) * Int64(3))");
 
@@ -4164,11 +4162,10 @@ mod test {
             Box::new(c),
         ));
 
-        let display_logical = format!("{}", and_expr);
+        let display_logical = format!("{and_expr}");
         assert!(
             display_logical.contains("("),
-            "Expected parentheses in display: {}",
-            display_logical
+            "Expected parentheses in display: {display_logical}"
         );
         assert_eq!(display_logical, "(a OR b) AND c");
     }
