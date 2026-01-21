@@ -691,6 +691,9 @@ config_namespace! {
         /// the parquet file
         pub pruning: bool, default = true
 
+        // TODO(QPIERRE): docs
+        pub pruning_max_inlist_limit: usize, default = 20
+
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
         /// multiple parquet files with schemas containing compatible types but different metadata

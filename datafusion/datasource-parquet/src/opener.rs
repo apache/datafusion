@@ -49,7 +49,7 @@ use datafusion_physical_expr_common::physical_expr::{
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, PruningMetrics,
 };
-use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate};
+use datafusion_pruning::{FilePruner, PruningPredicate, build_pruning_predicate, PruningPredicateConfig};
 
 use crate::sort::reverse_row_selection;
 #[cfg(feature = "parquet_encryption")]
@@ -104,6 +104,8 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
+    // TODO(QPIERRE): docs
+    pub pruning_max_inlist_limit: usize,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
@@ -422,10 +424,12 @@ impl FileOpener for ParquetOpener {
                 .try_map_exprs(|p| simplifier.simplify(rewriter.rewrite(p)?))?;
 
             // Build predicates for this specific file
+            let pruning_config = PruningPredicateConfig { max_in_list: self.pruning_max_inlist_limit };
             let (pruning_predicate, page_pruning_predicate) = build_pruning_predicates(
                 predicate.as_ref(),
                 &physical_file_schema,
                 &predicate_creation_errors,
+                &pruning_config,
             );
 
             // The page index is not stored inline in the parquet footer so the
@@ -938,10 +942,12 @@ fn create_initial_plan(
 pub(crate) fn build_page_pruning_predicate(
     predicate: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
+    config: &PruningPredicateConfig,
 ) -> Arc<PagePruningAccessPlanFilter> {
     Arc::new(PagePruningAccessPlanFilter::new(
         predicate,
         Arc::clone(file_schema),
+        config
     ))
 }
 
@@ -949,6 +955,7 @@ pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
+    config: &PruningPredicateConfig,
 ) -> (
     Option<Arc<PruningPredicate>>,
     Option<Arc<PagePruningAccessPlanFilter>>,
@@ -961,7 +968,7 @@ pub(crate) fn build_pruning_predicates(
         file_schema,
         predicate_creation_errors,
     );
-    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema);
+    let page_pruning_predicate = build_page_pruning_predicate(predicate, file_schema, config);
     (pruning_predicate, Some(page_pruning_predicate))
 }
 

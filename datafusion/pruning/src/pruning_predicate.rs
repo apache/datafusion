@@ -381,7 +381,7 @@ pub struct PruningPredicate {
 #[derive(Debug, Clone)]
 pub struct PruningPredicateConfig {
     // TODO(QPIERRE): name/docs
-    max_in_list: usize,
+    pub max_in_list: usize,
 }
 
 impl Default for PruningPredicateConfig {
@@ -400,7 +400,7 @@ pub fn build_pruning_predicate(
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), PruningPredicateConfig::default()) {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), &PruningPredicateConfig::default()) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -473,7 +473,7 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef, _config: PruningPredicateConfig) -> Result<Self> {
+    pub fn try_new(mut expr: Arc<dyn PhysicalExpr>, schema: SchemaRef, config: &PruningPredicateConfig) -> Result<Self> {
         // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
         // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
         // so that PruningPredicate can work with a static expression.
@@ -499,6 +499,7 @@ impl PruningPredicate {
             &schema,
             &mut required_columns,
             &unhandled_hook,
+            config,
         );
         let predicate_schema = required_columns.schema();
         // Simplify the newly created predicate to get rid of redundant casts, comparisons, etc.
@@ -1375,20 +1376,18 @@ fn build_is_null_column_expr(
     }
 }
 
-/// The maximum number of entries in an `InList` that might be rewritten into
-/// an OR chain
-const MAX_LIST_VALUE_SIZE_REWRITE: usize = 20;
-
 /// Rewrite a predicate expression in terms of statistics (min/max/null_counts)
 /// for use as a [`PruningPredicate`].
 pub struct PredicateRewriter {
     unhandled_hook: Arc<dyn UnhandledPredicateHook>,
+    pruning_predicate_config: PruningPredicateConfig,
 }
 
 impl Default for PredicateRewriter {
     fn default() -> Self {
         Self {
             unhandled_hook: Arc::new(ConstantUnhandledPredicateHook::default()),
+            pruning_predicate_config: PruningPredicateConfig::default(),
         }
     }
 }
@@ -1404,7 +1403,7 @@ impl PredicateRewriter {
         self,
         unhandled_hook: Arc<dyn UnhandledPredicateHook>,
     ) -> Self {
-        Self { unhandled_hook }
+        Self { unhandled_hook, ..Self::default() }
     }
 
     /// Translate logical filter expression into pruning predicate
@@ -1427,6 +1426,7 @@ impl PredicateRewriter {
             &Arc::new(schema.clone()),
             &mut required_columns,
             &self.unhandled_hook,
+            &self.pruning_predicate_config
         )
     }
 }
@@ -1445,6 +1445,7 @@ fn build_predicate_expression(
     schema: &SchemaRef,
     required_columns: &mut RequiredColumns,
     unhandled_hook: &Arc<dyn UnhandledPredicateHook>,
+    config: &PruningPredicateConfig,
 ) -> Arc<dyn PhysicalExpr> {
     if is_always_false(expr) {
         // Shouldn't return `unhandled_hook.handle(expr)`
@@ -1481,7 +1482,7 @@ fn build_predicate_expression(
     }
     if let Some(in_list) = expr_any.downcast_ref::<phys_expr::InListExpr>() {
         if !in_list.list().is_empty()
-            && in_list.list().len() <= MAX_LIST_VALUE_SIZE_REWRITE
+            && in_list.list().len() <= config.max_in_list
         {
             let eq_op = if in_list.negated() {
                 Operator::NotEq
@@ -1510,6 +1511,7 @@ fn build_predicate_expression(
                 schema,
                 required_columns,
                 unhandled_hook,
+                config
             );
         } else {
             return unhandled_hook.handle(expr);
@@ -1545,9 +1547,9 @@ fn build_predicate_expression(
 
     if op == Operator::And || op == Operator::Or {
         let left_expr =
-            build_predicate_expression(&left, schema, required_columns, unhandled_hook);
+            build_predicate_expression(&left, schema, required_columns, unhandled_hook, config);
         let right_expr =
-            build_predicate_expression(&right, schema, required_columns, unhandled_hook);
+            build_predicate_expression(&right, schema, required_columns, unhandled_hook, config);
         // simplify boolean expression if applicable
         let expr = match (&left_expr, op, &right_expr) {
             (left, Operator::And, right)
@@ -2383,7 +2385,7 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(expr, Arc::clone(&schema), PruningPredicateConfig::default()).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::clone(&schema), &PruningPredicateConfig::default()).unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -3025,7 +3027,7 @@ mod tests {
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
         let p =
-            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema), PruningPredicateConfig::default()).unwrap();
+            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema), &PruningPredicateConfig::default()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -3244,6 +3246,7 @@ mod tests {
         // test c1 in(1..21)
         // in pruning.rs has MAX_LIST_VALUE_SIZE_REWRITE = 20, more than this value will be rewrite
         // always true
+        // TODO(QPIERRE): parametrize this test
         let expr = col("c1").in_list((1..=21).map(lit).collect(), false);
 
         let expected_expr = "true";
@@ -5388,7 +5391,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), PruningPredicateConfig::default()).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), &PruningPredicateConfig::default()).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5403,7 +5406,7 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), PruningPredicateConfig::default()).unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema), &PruningPredicateConfig::default()).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5420,6 +5423,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
+            &PruningPredicateConfig::default(),
         )
     }
 

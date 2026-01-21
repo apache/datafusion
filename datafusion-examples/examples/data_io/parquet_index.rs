@@ -368,7 +368,7 @@ impl ParquetMetadataIndex {
         // Use the PruningPredicate API to determine which files can not
         // possibly have any relevant data.
         let pruning_predicate =
-            PruningPredicate::try_new(predicate, self.schema().clone(), PruningPredicateConfig::default())?;
+            PruningPredicate::try_new(predicate, self.schema().clone(), &PruningPredicateConfig::default())?;
 
         // Now evaluate the pruning predicate into a boolean mask, one element per
         // file in the index. If the mask is true, the file may have rows that
