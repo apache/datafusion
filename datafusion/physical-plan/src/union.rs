@@ -1091,7 +1091,7 @@ mod tests {
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains(
-                "UnionExec requires all inputs to have the same number of fields"
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
             )
         );
     }
