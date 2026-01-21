@@ -80,6 +80,8 @@ mod test {
     use std::sync::Arc;
 
     use super::*;
+    use bytes::Bytes;
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int32Array, RecordBatch, StringArray},
@@ -87,8 +89,9 @@ mod test {
         },
         datasource::MemTable,
         execution::context::SessionContext,
+        prelude::CsvReadOptions,
     };
-    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{DataFusionError, test_util::batches_to_string};
     use datafusion_execution::{
         config::SessionConfig,
         disk_manager::{DiskManagerBuilder, DiskManagerMode},
@@ -96,7 +99,8 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use object_store::{ObjectStore, memory::InMemory, path::Path};
+    use futures::{StreamExt, TryStreamExt, stream};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -247,6 +251,57 @@ mod test {
         let df = session_ctx.sql("SELECT * FROM a").await.unwrap();
 
         let result = df.collect().await.unwrap();
+
+        assert_eq!(
+            batches_to_string(&result),
+            "+----+-------+\n\
+             | id | value |\n\
+             +----+-------+\n\
+             | 1  | a     |\n\
+             | 2  | b     |\n\
+             | 3  | c     |\n\
+             +----+-------+"
+        );
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_csv_read_xz_compressed() {
+        let csv_data = "id,value\n1,a\n2,b\n3,c\n";
+        let input = Bytes::from(csv_data.as_bytes().to_vec());
+        let input_stream =
+            stream::iter(vec![Ok::<Bytes, DataFusionError>(input)]).boxed();
+
+        let compressed_stream = FileCompressionType::XZ
+            .convert_to_compress_stream(input_stream)
+            .unwrap();
+        let compressed_data: Vec<Bytes> = compressed_stream.try_collect().await.unwrap();
+
+        let store = InMemory::new();
+        let path = Path::from("data.csv.xz");
+        store
+            .put(&path, PutPayload::from_iter(compressed_data))
+            .await
+            .unwrap();
+
+        let url = Url::parse("memory://").unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_object_store(&url, Arc::new(store));
+
+        let csv_options = CsvReadOptions::new()
+            .has_header(true)
+            .file_compression_type(FileCompressionType::XZ)
+            .file_extension("csv.xz");
+        ctx.register_csv("compressed", "memory:///data.csv.xz", csv_options)
+            .await
+            .unwrap();
+
+        let result = ctx
+            .sql("SELECT * FROM compressed")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
 
         assert_eq!(
             batches_to_string(&result),

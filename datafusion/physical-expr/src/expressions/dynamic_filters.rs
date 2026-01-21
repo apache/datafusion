@@ -51,6 +51,10 @@ impl FilterState {
 /// Any `ExecutionPlan` that uses this expression and holds a reference to it internally should probably also
 /// implement `ExecutionPlan::reset_state` to remain compatible with recursive queries and other situations where
 /// the same `ExecutionPlan` is reused with different data.
+///
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug)]
 pub struct DynamicFilterPhysicalExpr {
     /// The original children of this PhysicalExpr, if any.
@@ -310,14 +314,14 @@ impl DynamicFilterPhysicalExpr {
     /// that created the filter). This is useful to avoid computing expensive filter
     /// expressions when no consumer will actually use them.
     ///
-    /// Note: We check the inner Arc's strong_count, not the outer Arc's count, because
-    /// when filters are transformed (e.g., via reassign_expr_columns during filter pushdown),
-    /// new outer Arc instances are created via with_new_children(), but they all share the
-    /// same inner `Arc<RwLock<Inner>>`. This is what allows filter updates to propagate to
-    /// consumers even after transformation.
+    /// # Implementation Details
+    ///
+    /// We check both Arc counts to handle two cases:
+    /// - Transformed filters (via `with_new_children`) share the inner Arc (inner count > 1)
+    /// - Direct clones (via `Arc::clone`) increment the outer count (outer count > 1)
     pub fn is_used(self: &Arc<Self>) -> bool {
         // Strong count > 1 means at least one consumer is holding a reference beyond the producer.
-        Arc::strong_count(&self.inner) > 1
+        Arc::strong_count(self) > 1 || Arc::strong_count(&self.inner) > 1
     }
 
     fn render(

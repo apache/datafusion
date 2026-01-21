@@ -4476,6 +4476,838 @@ FROM (VALUES
 
 
 ##########
+## to_timestamp functions with all numeric types
+##########
+
+# Test to_timestamp with all integer types
+# Int8
+query P
+SELECT to_timestamp(arrow_cast(0, 'Int8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(100, 'Int8'));
+----
+1970-01-01T00:01:40
+
+# Int16
+query P
+SELECT to_timestamp(arrow_cast(0, 'Int16'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1000, 'Int16'));
+----
+1970-01-01T00:16:40
+
+# Int32
+query P
+SELECT to_timestamp(arrow_cast(0, 'Int32'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(86400, 'Int32'));
+----
+1970-01-02T00:00:00
+
+# Int64
+query P
+SELECT to_timestamp(arrow_cast(0, 'Int64'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(86400, 'Int64'));
+----
+1970-01-02T00:00:00
+
+# UInt8
+query P
+SELECT to_timestamp(arrow_cast(0, 'UInt8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(100, 'UInt8'));
+----
+1970-01-01T00:01:40
+
+# UInt16
+query P
+SELECT to_timestamp(arrow_cast(0, 'UInt16'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1000, 'UInt16'));
+----
+1970-01-01T00:16:40
+
+# UInt32
+query P
+SELECT to_timestamp(arrow_cast(0, 'UInt32'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(86400, 'UInt32'));
+----
+1970-01-02T00:00:00
+
+# UInt64
+query P
+SELECT to_timestamp(arrow_cast(0, 'UInt64'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(86400, 'UInt64'));
+----
+1970-01-02T00:00:00
+
+# Float16
+query P
+SELECT to_timestamp(arrow_cast(0.0, 'Float16'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Float16'));
+----
+1970-01-01T00:00:01.500
+
+# Float32
+query P
+SELECT to_timestamp(arrow_cast(0.0, 'Float32'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Float32'));
+----
+1970-01-01T00:00:01.500
+
+# Float64
+query P
+SELECT to_timestamp(arrow_cast(0.0, 'Float64'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Float64'));
+----
+1970-01-01T00:00:01.500
+
+# Test to_timestamp_seconds with all integer types
+# Int8
+query P
+SELECT to_timestamp_seconds(arrow_cast(0, 'Int8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp_seconds(arrow_cast(100, 'Int8'));
+----
+1970-01-01T00:01:40
+
+# Int16
+query P
+SELECT to_timestamp_seconds(arrow_cast(1000, 'Int16'));
+----
+1970-01-01T00:16:40
+
+# Int32
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Int32'));
+----
+1970-01-02T00:00:00
+
+# Int64
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Int64'));
+----
+1970-01-02T00:00:00
+
+# UInt8
+query P
+SELECT to_timestamp_seconds(arrow_cast(100, 'UInt8'));
+----
+1970-01-01T00:01:40
+
+# UInt16
+query P
+SELECT to_timestamp_seconds(arrow_cast(1000, 'UInt16'));
+----
+1970-01-01T00:16:40
+
+# UInt32
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'UInt32'));
+----
+1970-01-02T00:00:00
+
+# UInt64
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'UInt64'));
+----
+1970-01-02T00:00:00
+
+# Float16
+query P
+SELECT to_timestamp_seconds(arrow_cast(1.9, 'Float16'));
+----
+1970-01-01T00:00:01
+
+# Float32
+query P
+SELECT to_timestamp_seconds(arrow_cast(1.9, 'Float32'));
+----
+1970-01-01T00:00:01
+
+# Float64
+query P
+SELECT to_timestamp_seconds(arrow_cast(1.9, 'Float64'));
+----
+1970-01-01T00:00:01
+
+# Test to_timestamp_millis with all integer types
+# Int8
+query P
+SELECT to_timestamp_millis(arrow_cast(0, 'Int8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp_millis(arrow_cast(100, 'Int8'));
+----
+1970-01-01T00:00:00.100
+
+# Int16
+query P
+SELECT to_timestamp_millis(arrow_cast(1000, 'Int16'));
+----
+1970-01-01T00:00:01
+
+# Int32
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'Int32'));
+----
+1970-01-02T00:00:00
+
+# Int64
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'Int64'));
+----
+1970-01-02T00:00:00
+
+# UInt8
+query P
+SELECT to_timestamp_millis(arrow_cast(100, 'UInt8'));
+----
+1970-01-01T00:00:00.100
+
+# UInt16
+query P
+SELECT to_timestamp_millis(arrow_cast(1000, 'UInt16'));
+----
+1970-01-01T00:00:01
+
+# UInt32
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'UInt32'));
+----
+1970-01-02T00:00:00
+
+# UInt64
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'UInt64'));
+----
+1970-01-02T00:00:00
+
+# Float16
+query P
+SELECT to_timestamp_millis(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:01
+
+# Float32
+query P
+SELECT to_timestamp_millis(arrow_cast(1000.9, 'Float32'));
+----
+1970-01-01T00:00:01
+
+# Float64
+query P
+SELECT to_timestamp_millis(arrow_cast(1000.9, 'Float64'));
+----
+1970-01-01T00:00:01
+
+# Test to_timestamp_micros with all integer types
+# Int8
+query P
+SELECT to_timestamp_micros(arrow_cast(0, 'Int8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp_micros(arrow_cast(100, 'Int8'));
+----
+1970-01-01T00:00:00.000100
+
+# Int16
+query P
+SELECT to_timestamp_micros(arrow_cast(1000, 'Int16'));
+----
+1970-01-01T00:00:00.001
+
+# Int32
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000, 'Int32'));
+----
+1970-01-01T00:00:01
+
+# Int64
+query P
+SELECT to_timestamp_micros(arrow_cast(86400000000, 'Int64'));
+----
+1970-01-02T00:00:00
+
+# UInt8
+query P
+SELECT to_timestamp_micros(arrow_cast(100, 'UInt8'));
+----
+1970-01-01T00:00:00.000100
+
+# UInt16
+query P
+SELECT to_timestamp_micros(arrow_cast(1000, 'UInt16'));
+----
+1970-01-01T00:00:00.001
+
+# UInt32
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000, 'UInt32'));
+----
+1970-01-01T00:00:01
+
+# UInt64
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000, 'UInt64'));
+----
+1970-01-01T00:00:01
+
+# Float16
+query P
+SELECT to_timestamp_micros(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:00.001
+
+# Float32
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000.9, 'Float32'));
+----
+1970-01-01T00:00:01
+
+# Float64
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000.9, 'Float64'));
+----
+1970-01-01T00:00:01
+
+# Test to_timestamp_nanos with all integer types
+# Int8
+query P
+SELECT to_timestamp_nanos(arrow_cast(0, 'Int8'));
+----
+1970-01-01T00:00:00
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(100, 'Int8'));
+----
+1970-01-01T00:00:00.000000100
+
+# Int16
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000, 'Int16'));
+----
+1970-01-01T00:00:00.000001
+
+# Int32
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000000, 'Int32'));
+----
+1970-01-01T00:00:01
+
+# Int64
+query P
+SELECT to_timestamp_nanos(arrow_cast(86400000000000, 'Int64'));
+----
+1970-01-02T00:00:00
+
+# UInt8
+query P
+SELECT to_timestamp_nanos(arrow_cast(100, 'UInt8'));
+----
+1970-01-01T00:00:00.000000100
+
+# UInt16
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000, 'UInt16'));
+----
+1970-01-01T00:00:00.000001
+
+# UInt32
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000000, 'UInt32'));
+----
+1970-01-01T00:00:01
+
+# UInt64
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000000, 'UInt64'));
+----
+1970-01-01T00:00:01
+
+# Float16
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000, 'Float16'));
+----
+1970-01-01T00:00:00.000001
+
+# Float32
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000000.9, 'Float32'));
+----
+1970-01-01T00:00:01
+
+# Float64
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000000.9, 'Float64'));
+----
+1970-01-01T00:00:01
+
+# Verify arrow_typeof for all to_timestamp functions with various input types
+query T
+SELECT arrow_typeof(to_timestamp(arrow_cast(0, 'Int8')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp(arrow_cast(0, 'UInt64')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp(arrow_cast(0.0, 'Float32')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp_seconds(arrow_cast(0, 'Int8')));
+----
+Timestamp(s)
+
+query T
+SELECT arrow_typeof(to_timestamp_seconds(arrow_cast(0, 'UInt64')));
+----
+Timestamp(s)
+
+query T
+SELECT arrow_typeof(to_timestamp_seconds(arrow_cast(0.0, 'Float32')));
+----
+Timestamp(s)
+
+query T
+SELECT arrow_typeof(to_timestamp_millis(arrow_cast(0, 'Int8')));
+----
+Timestamp(ms)
+
+query T
+SELECT arrow_typeof(to_timestamp_millis(arrow_cast(0, 'UInt64')));
+----
+Timestamp(ms)
+
+query T
+SELECT arrow_typeof(to_timestamp_millis(arrow_cast(0.0, 'Float32')));
+----
+Timestamp(ms)
+
+query T
+SELECT arrow_typeof(to_timestamp_micros(arrow_cast(0, 'Int8')));
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(to_timestamp_micros(arrow_cast(0, 'UInt64')));
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(to_timestamp_micros(arrow_cast(0.0, 'Float32')));
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(to_timestamp_nanos(arrow_cast(0, 'Int8')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp_nanos(arrow_cast(0, 'UInt64')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp_nanos(arrow_cast(0.0, 'Float32')));
+----
+Timestamp(ns)
+
+# Test decimal type support for all to_timestamp functions
+# Decimal32
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Decimal32(5,1)'));
+----
+1970-01-01T00:00:01.500
+
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Decimal32(9,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_millis(arrow_cast(1000, 'Decimal32(9,0)'));
+----
+1970-01-01T00:00:01
+
+query P
+SELECT to_timestamp_micros(arrow_cast(1000000, 'Decimal32(9,0)'));
+----
+1970-01-01T00:00:01
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(1000000, 'Decimal32(9,0)'));
+----
+1970-01-01T00:00:00.001
+
+# Decimal64
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Decimal64(10,1)'));
+----
+1970-01-01T00:00:01.500
+
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Decimal64(18,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'Decimal64(18,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_micros(arrow_cast(86400000000, 'Decimal64(18,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(86400000000000, 'Decimal64(18,0)'));
+----
+1970-01-02T00:00:00
+
+# Decimal128
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Decimal128(10,1)'));
+----
+1970-01-01T00:00:01.500
+
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Decimal128(10,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'Decimal128(15,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_micros(arrow_cast(86400000000, 'Decimal128(15,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(86400000000000, 'Decimal128(20,0)'));
+----
+1970-01-02T00:00:00
+
+# Decimal256
+query P
+SELECT to_timestamp(arrow_cast(1.5, 'Decimal256(10,1)'));
+----
+1970-01-01T00:00:01.500
+
+query P
+SELECT to_timestamp_seconds(arrow_cast(86400, 'Decimal256(38,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_millis(arrow_cast(86400000, 'Decimal256(38,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_micros(arrow_cast(86400000000, 'Decimal256(38,0)'));
+----
+1970-01-02T00:00:00
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(86400000000000, 'Decimal256(38,0)'));
+----
+1970-01-02T00:00:00
+
+# Verify arrow_typeof for decimal inputs
+query T
+SELECT arrow_typeof(to_timestamp(arrow_cast(0, 'Decimal128(10,0)')));
+----
+Timestamp(ns)
+
+query T
+SELECT arrow_typeof(to_timestamp_seconds(arrow_cast(0, 'Decimal128(10,0)')));
+----
+Timestamp(s)
+
+query T
+SELECT arrow_typeof(to_timestamp_millis(arrow_cast(0, 'Decimal128(10,0)')));
+----
+Timestamp(ms)
+
+query T
+SELECT arrow_typeof(to_timestamp_micros(arrow_cast(0, 'Decimal128(10,0)')));
+----
+Timestamp(µs)
+
+query T
+SELECT arrow_typeof(to_timestamp_nanos(arrow_cast(0, 'Decimal128(10,0)')));
+----
+Timestamp(ns)
+
+# Test decimal array inputs for to_timestamp
+statement ok
+CREATE TABLE test_decimal_timestamps (
+    d128 DECIMAL(20, 9),
+    d256 DECIMAL(40, 9)
+) AS VALUES
+    (1.5, 1.5),
+    (86400.123456789, 86400.123456789),
+    (0.0, 0.0),
+    (NULL, NULL);
+
+query P
+SELECT to_timestamp(d128) FROM test_decimal_timestamps ORDER BY d128 NULLS LAST;
+----
+1970-01-01T00:00:00
+1970-01-01T00:00:01.500
+1970-01-02T00:00:00.123456789
+NULL
+
+query P
+SELECT to_timestamp(d256) FROM test_decimal_timestamps ORDER BY d256 NULLS LAST;
+----
+1970-01-01T00:00:00
+1970-01-01T00:00:01.500
+1970-01-02T00:00:00.123456789
+NULL
+
+statement ok
+DROP TABLE test_decimal_timestamps;
+
+# Test negative values
+# to_timestamp with negative seconds
+# Int8
+query P
+SELECT to_timestamp(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59
+
+# Int16
+query P
+SELECT to_timestamp(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59
+
+# Int32
+query P
+SELECT to_timestamp(arrow_cast(-86400, 'Int32'));
+----
+1969-12-31T00:00:00
+
+# Int64
+query P
+SELECT to_timestamp(arrow_cast(-1, 'Int64'));
+----
+1969-12-31T23:59:59
+
+# Float64
+query P
+SELECT to_timestamp(arrow_cast(-0.5, 'Float64'));
+----
+1969-12-31T23:59:59.500
+
+# to_timestamp_seconds with negative values
+# Int8
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59
+
+# Int16
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59
+
+# Int32
+query P
+SELECT to_timestamp_seconds(arrow_cast(-86400, 'Int32'));
+----
+1969-12-31T00:00:00
+
+# Int64
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1, 'Int64'));
+----
+1969-12-31T23:59:59
+
+# to_timestamp_millis with negative values
+# Int8
+query P
+SELECT to_timestamp_millis(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999
+
+# Int16
+query P
+SELECT to_timestamp_millis(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999
+
+# Int32
+query P
+SELECT to_timestamp_millis(arrow_cast(-1000, 'Int32'));
+----
+1969-12-31T23:59:59
+
+# Int64
+query P
+SELECT to_timestamp_millis(arrow_cast(-1, 'Int64'));
+----
+1969-12-31T23:59:59.999
+
+# to_timestamp_micros with negative values
+# Int8
+query P
+SELECT to_timestamp_micros(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999999
+
+# Int16
+query P
+SELECT to_timestamp_micros(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999999
+
+# Int32
+query P
+SELECT to_timestamp_micros(arrow_cast(-1000000, 'Int32'));
+----
+1969-12-31T23:59:59
+
+# Int64
+query P
+SELECT to_timestamp_micros(arrow_cast(-1, 'Int64'));
+----
+1969-12-31T23:59:59.999999
+
+# to_timestamp_nanos with negative values
+# Int8
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1, 'Int8'));
+----
+1969-12-31T23:59:59.999999999
+
+# Int16
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1, 'Int16'));
+----
+1969-12-31T23:59:59.999999999
+
+# Int32
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1000000000, 'Int32'));
+----
+1969-12-31T23:59:59
+
+# Int64
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1000000000, 'Int64'));
+----
+1969-12-31T23:59:59
+
+query P
+SELECT to_timestamp_nanos(arrow_cast(-1, 'Int64'));
+----
+1969-12-31T23:59:59.999999999
+
+# Test large unsigned values
+query P
+SELECT to_timestamp_seconds(arrow_cast(4294967295, 'UInt64'));
+----
+2106-02-07T06:28:15
+
+# Large UInt64 value for milliseconds
+query P
+SELECT to_timestamp_millis(arrow_cast(4294967295000, 'UInt64'));
+----
+2106-02-07T06:28:15
+
+# Test UInt64 value larger than i64::MAX (9223372036854775808 = i64::MAX + 1)
+query error Cast error: Can't cast value 9223372036854775808 to type Int64
+SELECT to_timestamp_nanos(arrow_cast(9223372036854775808, 'UInt64'));
+
+# Test boundary values for to_timestamp
+query P
+SELECT to_timestamp(arrow_cast(9223372036, 'Int64'));
+----
+2262-04-11T23:47:16
+
+# Minimum value for to_timestamp
+query P
+SELECT to_timestamp(arrow_cast(-9223372036, 'Int64'));
+----
+1677-09-21T00:12:44
+
+# Overflow error when value exceeds valid range
+query error Arithmetic overflow
+SELECT to_timestamp(arrow_cast(9223372037, 'Int64'));
+
+# Float truncation behavior
+query P
+SELECT to_timestamp_seconds(arrow_cast(-1.9, 'Float64'));
+----
+1969-12-31T23:59:59
+
+query P
+SELECT to_timestamp_millis(arrow_cast(-1.9, 'Float64'));
+----
+1969-12-31T23:59:59.999
+
+
+##########
 ## Common timestamp data
 ##########
 
