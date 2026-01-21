@@ -1131,13 +1131,7 @@ impl OptimizerRule for PushDownFilter {
                 let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
                     filter_predicates
                         .into_iter()
-                        // TODO: subquery decorrelation sometimes cannot decorrelated all the expr
-                        // (i.e in the case of recursive subquery)
-                        // this function may accidentally pushdown the subquery expr as well
-                        // until then, we have to exclude these exprs here
-                        .partition(|pred| {
-                            pred.is_volatile() || has_scalar_subquery(pred)
-                        });
+                        .partition(|pred| pred.is_volatile());
 
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
@@ -1427,14 +1421,6 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
     })
     .unwrap();
     is_contain
-}
-
-fn has_scalar_subquery(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarSubquery(_) => Ok(true),
-        _ => Ok(false),
-    })
-    .unwrap()
 }
 
 #[cfg(test)]

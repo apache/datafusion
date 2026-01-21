@@ -995,15 +995,15 @@ fn select_nested_with_filters() {
 
 #[test]
 fn table_with_column_alias() {
-    let sql = "SELECT a, b, c
-                   FROM lineitem l (a, b, c)";
+    let sql = "SELECT a, b, c, d, e
+                   FROM lineitem l (a, b, c, d, e)";
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
         @r"
-    Projection: l.a, l.b, l.c
+    Projection: l.a, l.b, l.c, l.d, l.e
       SubqueryAlias: l
-        Projection: lineitem.l_item_id AS a, lineitem.l_description AS b, lineitem.price AS c
+        Projection: lineitem.l_orderkey AS a, lineitem.l_item_id AS b, lineitem.l_description AS c, lineitem.l_extendedprice AS d, lineitem.price AS e
           TableScan: lineitem
     "
     );
@@ -1017,7 +1017,7 @@ fn table_with_column_alias_number_cols() {
 
     assert_snapshot!(
         err.strip_backtrace(),
-        @"Error during planning: Source table contains 3 columns but only 2 names given as column alias"
+        @"Error during planning: Source table contains 5 columns but only 2 names given as column alias"
     );
 }
 
@@ -1058,7 +1058,7 @@ fn natural_left_join() {
         plan,
         @r"
     Projection: a.l_item_id
-      Left Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price
+      Left Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
         SubqueryAlias: b
@@ -1075,7 +1075,7 @@ fn natural_right_join() {
         plan,
         @r"
     Projection: a.l_item_id
-      Right Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price
+      Right Join: Using a.l_orderkey = b.l_orderkey, a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.l_extendedprice = b.l_extendedprice, a.price = b.price
         SubqueryAlias: a
           TableScan: lineitem
         SubqueryAlias: b
@@ -4801,11 +4801,16 @@ fn test_using_join_wildcard_schema() {
     // Only columns from one join side should be present
     let expected_fields = vec![
         "o1.order_id".to_string(),
+        "o1.o_orderkey".to_string(),
+        "o1.o_custkey".to_string(),
+        "o1.o_orderstatus".to_string(),
         "o1.customer_id".to_string(),
+        "o1.o_totalprice".to_string(),
         "o1.o_item_id".to_string(),
         "o1.qty".to_string(),
         "o1.price".to_string(),
         "o1.delivered".to_string(),
+
     ];
     assert_eq!(plan.schema().field_names(), expected_fields);
 
