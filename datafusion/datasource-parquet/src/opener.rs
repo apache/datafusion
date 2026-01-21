@@ -284,7 +284,9 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
-        let pruning_predicate_config = PruningPredicateConfig { max_in_list: self.pruning_max_inlist_limit };
+        let pruning_predicate_config = PruningPredicateConfig {
+            max_in_list: self.pruning_max_inlist_limit,
+        };
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]

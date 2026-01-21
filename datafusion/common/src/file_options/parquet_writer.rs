@@ -558,7 +558,8 @@ mod tests {
                 // not in WriterProperties
                 enable_page_index: global_options_defaults.enable_page_index,
                 pruning: global_options_defaults.pruning,
-                pruning_max_inlist_limit: global_options_defaults.pruning_max_inlist_limit,
+                pruning_max_inlist_limit: global_options_defaults
+                    .pruning_max_inlist_limit,
                 skip_metadata: global_options_defaults.skip_metadata,
                 metadata_size_hint: global_options_defaults.metadata_size_hint,
                 pushdown_filters: global_options_defaults.pushdown_filters,

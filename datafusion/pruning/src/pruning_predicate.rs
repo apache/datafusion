@@ -401,11 +401,7 @@ pub fn build_pruning_predicate(
     predicate_creation_errors: &Count,
     config: &PruningPredicateConfig,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(
-        predicate,
-        Arc::clone(file_schema),
-        config,
-    ) {
+    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), config) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -3276,7 +3272,15 @@ mod tests {
         let expr = col("c1").in_list((1..=limit).map(lit).collect(), false);
 
         let expected_expr = "true";
-        let predicate_expr = test_build_predicate_expression_with_pruning_predicate_config(&expr, &schema, &mut RequiredColumns::new(), &PruningPredicateConfig { max_in_list: (limit - 1) as usize });
+        let predicate_expr =
+            test_build_predicate_expression_with_pruning_predicate_config(
+                &expr,
+                &schema,
+                &mut RequiredColumns::new(),
+                &PruningPredicateConfig {
+                    max_in_list: (limit - 1) as usize,
+                },
+            );
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
@@ -5451,14 +5455,19 @@ mod tests {
         schema: &Schema,
         required_columns: &mut RequiredColumns,
     ) -> Arc<dyn PhysicalExpr> {
-        test_build_predicate_expression_with_pruning_predicate_config(expr, schema, required_columns, &PruningPredicateConfig::default())
+        test_build_predicate_expression_with_pruning_predicate_config(
+            expr,
+            schema,
+            required_columns,
+            &PruningPredicateConfig::default(),
+        )
     }
 
     fn test_build_predicate_expression_with_pruning_predicate_config(
         expr: &Expr,
         schema: &Schema,
         required_columns: &mut RequiredColumns,
-        pruning_predicate_config: &PruningPredicateConfig
+        pruning_predicate_config: &PruningPredicateConfig,
     ) -> Arc<dyn PhysicalExpr> {
         let expr = logical2physical(expr, schema);
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
@@ -5467,7 +5476,7 @@ mod tests {
             &Arc::new(schema.clone()),
             required_columns,
             &unhandled_hook,
-            pruning_predicate_config
+            pruning_predicate_config,
         )
     }
 
