@@ -286,7 +286,7 @@ fn roundtrip_crossjoin() -> Result<()> {
         plan_roundtrip,
         @r"
     Projection: j1.j1_id, j2.j2_string
-      Cross Join: 
+      Cross Join:
         TableScan: j1
         TableScan: j2
     "
