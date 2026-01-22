@@ -147,18 +147,9 @@ pub fn count_all_window() -> Expr {
 ```"#,
     standard_argument(name = "expression",)
 )]
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Count {
     signature: Signature,
-}
-
-impl Debug for Count {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("Count")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Count {
