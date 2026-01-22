@@ -26,13 +26,13 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
+use crate::column_rewriter::PhysicalColumnRewriter;
 use crate::execution_plan::CardinalityEffect;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterColumnChecker, FilterDescription,
     FilterPushdownPhase, FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
-use crate::util::PhysicalColumnRewriter;
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
 use std::collections::HashMap;
