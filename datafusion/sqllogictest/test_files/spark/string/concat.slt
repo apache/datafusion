@@ -46,3 +46,20 @@ SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a,
 ----
 abc
 NULL
+
+# Utf8View: no extra CAST in plan
+statement ok
+CREATE TABLE test_concat_view (a VARCHAR, b VARCHAR) AS VALUES ('foo', 'bar'), ('hello', 'world');
+
+query TT
+EXPLAIN SELECT concat(arrow_cast(a, 'Utf8View'), arrow_cast(b, 'Utf8View')) FROM test_concat_view;
+----
+logical_plan
+01)Projection: concat(test_concat_view.a, test_concat_view.b) AS concat(arrow_cast(test_concat_view.a,Utf8("Utf8View")),arrow_cast(test_concat_view.b,Utf8("Utf8View")))
+02)--TableScan: test_concat_view projection=[a, b]
+physical_plan
+01)ProjectionExec: expr=[concat(a@0, b@1) as concat(arrow_cast(test_concat_view.a,Utf8("Utf8View")),arrow_cast(test_concat_view.b,Utf8("Utf8View")))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE test_concat_view;

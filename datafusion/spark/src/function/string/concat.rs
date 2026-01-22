@@ -53,9 +53,13 @@ impl Default for SparkConcat {
 
 impl SparkConcat {
     pub fn new() -> Self {
+        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
+                vec![
+                    TypeSignature::Variadic(vec![Utf8View, Utf8, LargeUtf8]),
+                    TypeSignature::Nullary,
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -89,10 +93,21 @@ impl ScalarUDFImpl for SparkConcat {
         )
     }
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        use DataType::*;
+
         // Spark semantics: concat returns NULL if ANY input is NULL
         let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
 
-        Ok(Arc::new(Field::new("concat", DataType::Utf8, nullable)))
+        // Determine return type: Utf8View > LargeUtf8 > Utf8
+        let mut dt = &Utf8;
+        for field in args.arg_fields {
+            let data_type = field.data_type();
+            if data_type == &Utf8View || (data_type == &LargeUtf8 && dt != &Utf8View) {
+                dt = data_type;
+            }
+        }
+
+        Ok(Arc::new(Field::new("concat", dt.clone(), nullable)))
     }
 }
 
@@ -110,9 +125,18 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 
     // Handle zero-argument case: return empty string
     if arg_values.is_empty() {
-        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-            Some(String::new()),
-        )));
+        let return_type = return_field.data_type();
+        return match return_type {
+            DataType::Utf8View => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                String::new(),
+            )))),
+            DataType::LargeUtf8 => Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(
+                Some(String::new()),
+            ))),
+            _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                Some(String::new()),
+            ))),
+        };
     }
 
     // Step 1: Check for NULL mask in incoming args
@@ -120,7 +144,14 @@ fn spark_concat(args: ScalarFunctionArgs) -> Result<ColumnarValue> {
 
     // If all scalars and any is NULL, return NULL immediately
     if matches!(null_mask, NullMaskResolution::ReturnNull) {
-        return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+        let return_type = return_field.data_type();
+        return match return_type {
+            DataType::Utf8View => Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(None))),
+            DataType::LargeUtf8 => {
+                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)))
+            }
+            _ => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+        };
     }
 
     // Step 2: Delegate to DataFusion's concat
@@ -181,6 +212,24 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_concat_utf8view() -> Result<()> {
+        use arrow::array::StringViewArray;
+        test_scalar_function!(
+            SparkConcat::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("Spark".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("SQL".to_string()))),
+            ],
+            Ok(Some("SparkSQL")),
+            &str,
+            DataType::Utf8View,
+            StringViewArray
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_spark_concat_return_field_non_nullable() -> Result<()> {
         let func = SparkConcat::new();
@@ -223,6 +272,31 @@ mod tests {
         assert!(
             field.is_nullable(),
             "Expected concat result to be nullable when any input is nullable"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_spark_concat_return_field_largeutf8() -> Result<()> {
+        let func = SparkConcat::new();
+
+        let fields = vec![
+            Arc::new(Field::new("a", DataType::Utf8, false)),
+            Arc::new(Field::new("b", DataType::LargeUtf8, false)),
+        ];
+
+        let args = ReturnFieldArgs {
+            arg_fields: &fields,
+            scalar_arguments: &[],
+        };
+
+        let field = func.return_field_from_args(args)?;
+
+        assert_eq!(
+            field.data_type(),
+            &DataType::LargeUtf8,
+            "Expected concat result to be LargeUtf8 when any input is LargeUtf8"
         );
 
         Ok(())
