@@ -20,7 +20,7 @@ use super::{DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
 use datafusion::common::{not_impl_err, plan_err};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, col};
+use datafusion::logical_expr::{Aggregate, Expr, LogicalPlan, Projection};
 use std::sync::Arc;
 use substrait::proto::{Plan, plan_rel};
 
@@ -107,7 +107,7 @@ pub async fn from_substrait_plan_with_consumer(
                                     plan.schema()
                                         .columns()
                                         .iter()
-                                        .map(|c| col(c.to_owned())),
+                                        .map(|c| Expr::Column(c.clone())),
                                     plan.schema(),
                                     renamed_schema.fields(),
                                 )?,

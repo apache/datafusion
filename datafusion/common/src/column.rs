@@ -327,26 +327,6 @@ impl Column {
     }
 }
 
-impl From<&str> for Column {
-    fn from(c: &str) -> Self {
-        Self::from_qualified_name(c)
-    }
-}
-
-/// Create a column, cloning the string
-impl From<&String> for Column {
-    fn from(c: &String) -> Self {
-        Self::from_qualified_name(c)
-    }
-}
-
-/// Create a column, reusing the existing string
-impl From<String> for Column {
-    fn from(c: String) -> Self {
-        Self::from_qualified_name(c)
-    }
-}
-
 /// Create a column, use qualifier and field name
 impl From<(Option<&TableReference>, &Field)> for Column {
     fn from((relation, field): (Option<&TableReference>, &Field)) -> Self {
@@ -366,7 +346,7 @@ impl std::str::FromStr for Column {
     type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(s.into())
+        Ok(Self::from_qualified_name(s))
     }
 }
 
