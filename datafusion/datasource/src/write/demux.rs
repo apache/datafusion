@@ -33,7 +33,10 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
-    as_boolean_array, as_date32_array, as_date64_array, as_float16_array, as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array, as_int64_array, as_large_string_array, as_string_array, as_string_view_array, as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array
+    as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
+    as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
+    as_int64_array, as_large_string_array, as_string_array, as_string_view_array,
+    as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array,
 };
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
