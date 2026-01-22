@@ -32,7 +32,12 @@ use crate::variation_const::{
     TIMESTAMP_SECOND_TYPE_VARIATION_REF, UNSIGNED_INTEGER_TYPE_VARIATION_REF,
     VIEW_CONTAINER_TYPE_VARIATION_REF,
 };
-use crate::variation_const::{FLOAT_16_TYPE_NAME, NULL_TYPE_NAME};
+use crate::variation_const::{
+    DATE_MILLIS_TYPE_NAME, DECIMAL256_TYPE_NAME, DURATION_TYPE_NAME, FIXED_SIZE_LIST_TYPE_NAME,
+    FLOAT_16_TYPE_NAME, LARGE_BINARY_TYPE_NAME, LARGE_LIST_TYPE_NAME, LARGE_STRING_TYPE_NAME,
+    NULL_TYPE_NAME, TIME_MILLIS_TYPE_NAME, TIME_NANOS_TYPE_NAME, TIME_SECONDS_TYPE_NAME,
+    U16_TYPE_NAME, U32_TYPE_NAME, U64_TYPE_NAME, U8_TYPE_NAME,
+};
 use datafusion::arrow::datatypes::{
     DataType, Field, Fields, IntervalUnit, Schema, TimeUnit,
 };
@@ -247,7 +252,7 @@ pub fn from_substrait_type(
                 }
 
                 // TODO: remove the code below once the producer has been updated
-                if let Some(name) = consumer.get_extensions().types.get(&u.type_reference)
+                if let Some((name, _uri_anchor)) = consumer.get_extensions().types.get(&u.type_reference)
                 {
                     #[expect(deprecated)]
                     match name.as_ref() {
@@ -257,6 +262,128 @@ pub fn from_substrait_type(
                         }
                         FLOAT_16_TYPE_NAME => Ok(DataType::Float16),
                         NULL_TYPE_NAME => Ok(DataType::Null),
+                        U8_TYPE_NAME => Ok(DataType::UInt8),
+                        U16_TYPE_NAME => Ok(DataType::UInt16),
+                        U32_TYPE_NAME => Ok(DataType::UInt32),
+                        U64_TYPE_NAME => Ok(DataType::UInt64),
+                        LARGE_STRING_TYPE_NAME => Ok(DataType::LargeUtf8),
+                        LARGE_BINARY_TYPE_NAME => Ok(DataType::LargeBinary),
+                        LARGE_LIST_TYPE_NAME => {
+                            // Extract inner type from type_parameters
+                            let inner_type = u
+                                .type_parameters
+                                .first()
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::DataType(dt)) => {
+                                        Some(dt)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "large_list extension type requires element type parameter"
+                                    )
+                                })?;
+                            let inner_dt = from_substrait_type(
+                                consumer, inner_type, dfs_names, name_idx,
+                            )?;
+                            Ok(DataType::LargeList(Arc::new(Field::new_list_field(
+                                inner_dt, true,
+                            ))))
+                        }
+                        DECIMAL256_TYPE_NAME => {
+                            // Extract precision and scale from type_parameters
+                            let precision = u
+                                .type_parameters
+                                .first()
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::Integer(i)) => {
+                                        Some(*i as u8)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "decimal256 extension type requires precision parameter"
+                                    )
+                                })?;
+                            let scale = u
+                                .type_parameters
+                                .get(1)
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::Integer(i)) => {
+                                        Some(*i as i8)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "decimal256 extension type requires scale parameter"
+                                    )
+                                })?;
+                            Ok(DataType::Decimal256(precision, scale))
+                        }
+                        DURATION_TYPE_NAME => {
+                            // Extract precision from type_parameters
+                            let precision = u
+                                .type_parameters
+                                .first()
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::Integer(i)) => {
+                                        Some(*i as i32)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "duration extension type requires precision parameter"
+                                    )
+                                })?;
+                            let unit = from_substrait_precision(precision, "Duration")?;
+                            Ok(DataType::Duration(unit))
+                        }
+                        DATE_MILLIS_TYPE_NAME => Ok(DataType::Date64),
+                        TIME_SECONDS_TYPE_NAME => Ok(DataType::Time32(TimeUnit::Second)),
+                        TIME_MILLIS_TYPE_NAME => Ok(DataType::Time32(TimeUnit::Millisecond)),
+                        TIME_NANOS_TYPE_NAME => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+                        FIXED_SIZE_LIST_TYPE_NAME => {
+                            // Extract inner type and size from type_parameters
+                            let inner_type = u
+                                .type_parameters
+                                .first()
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::DataType(dt)) => {
+                                        Some(dt)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "fixed_size_list extension type requires element type parameter"
+                                    )
+                                })?;
+                            let size = u
+                                .type_parameters
+                                .get(1)
+                                .and_then(|p| match &p.parameter {
+                                    Some(r#type::parameter::Parameter::Integer(i)) => {
+                                        Some(*i as i32)
+                                    }
+                                    _ => None,
+                                })
+                                .ok_or_else(|| {
+                                    substrait_datafusion_err!(
+                                        "fixed_size_list extension type requires size parameter"
+                                    )
+                                })?;
+                            let inner_dt = from_substrait_type(
+                                consumer, inner_type, dfs_names, name_idx,
+                            )?;
+                            Ok(DataType::FixedSizeList(
+                                Arc::new(Field::new_list_field(inner_dt, true)),
+                                size,
+                            ))
+                        }
                         _ => not_impl_err!(
                             "Unsupported Substrait user defined type with ref {} and variation {}",
                             u.type_reference,

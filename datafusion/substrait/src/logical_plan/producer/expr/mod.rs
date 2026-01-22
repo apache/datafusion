@@ -84,10 +84,11 @@ pub fn to_substrait_extended_expr(
     let substrait_schema = to_substrait_named_struct(&mut producer, schema)?;
 
     let extensions = producer.get_extensions();
+    let extension_uris = extensions.to_extension_uris();
     Ok(Box::new(ExtendedExpression {
         advanced_extensions: None,
         expected_type_urls: vec![],
-        extension_uris: vec![],
+        extension_uris,
         extension_urns: vec![],
         extensions: extensions.into(),
         version: Some(version::version_with_producer("datafusion")),
