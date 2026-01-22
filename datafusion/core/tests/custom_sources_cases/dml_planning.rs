@@ -655,7 +655,7 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_update_from_drops_non_target_predicates() -> Result<()> {
+async fn test_update_from_rejects_mixed_target_predicates() -> Result<()> {
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
         TableProviderFilterPushDown::Exact,
@@ -672,35 +672,24 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
-    ctx.sql(
-        "UPDATE t1 SET value = 1 FROM t2 \
-         WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
-    )
-    .await?
-    .collect()
-    .await?;
-
-    let filters = target_provider
-        .captured_filters()
-        .expect("filters should be captured");
+    let df = ctx
+        .sql(
+            "UPDATE t1 SET value = 1 FROM t2 \
+             WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
+        )
+        .await?;
+    let res = df.collect().await;
     assert!(
-        !filters.is_empty(),
-        "expected target predicates extracted from UPDATE ... FROM"
+        res.is_err(),
+        "expected fail-closed on mixed-target predicates"
     );
-
-    let has_t2_reference = filters.iter().try_fold(false, |found, expr| {
-        expr_has_table_reference(expr, "t2").map(|has_ref| found || has_ref)
-    })?;
-    assert!(
-        !has_t2_reference,
-        "filters should only include target-table predicates"
-    );
-
-    let filter_strs: Vec<String> = filters.iter().map(|f| f.to_string()).collect();
-    assert!(
-        filter_strs.iter().any(|s| s.contains("value")),
-        "expected target-table predicate to be retained"
-    );
+    if let Err(e) = res {
+        let msg = e.to_string();
+        assert!(
+            msg.contains("mixed-target predicates") || msg.contains("non-target tables"),
+            "unexpected error message: {msg}"
+        );
+    }
     Ok(())
 }
 
