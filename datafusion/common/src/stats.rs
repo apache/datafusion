@@ -665,7 +665,7 @@ impl Statistics {
                 max_value: cs.max_value.clone(),
                 min_value: cs.min_value.clone(),
                 sum_value: cs.sum_value.clone(),
-                distinct_count: Precision::Absent,
+                distinct_count: cs.distinct_count,
                 byte_size: cs.byte_size,
             })
             .collect();
@@ -684,6 +684,24 @@ impl Statistics {
                     precision_add(&col_stats.sum_value, &item_cs.sum_value);
                 col_stats.min_value = col_stats.min_value.min(&item_cs.min_value);
                 col_stats.max_value = col_stats.max_value.max(&item_cs.max_value);
+                // Use max as a conservative lower bound for distinct count
+                // (can't accurately merge NDV since duplicates may exist across partitions)
+                col_stats.distinct_count =
+                    match (&col_stats.distinct_count, &item_cs.distinct_count) {
+                        (Precision::Exact(a), Precision::Exact(b))
+                        | (Precision::Inexact(a), Precision::Exact(b))
+                        | (Precision::Exact(a), Precision::Inexact(b))
+                        | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                            Precision::Inexact(if a >= b { *a } else { *b })
+                        }
+                        (Precision::Exact(v), Precision::Absent)
+                        | (Precision::Inexact(v), Precision::Absent)
+                        | (Precision::Absent, Precision::Exact(v))
+                        | (Precision::Absent, Precision::Inexact(v)) => {
+                            Precision::Inexact(*v)
+                        }
+                        (Precision::Absent, Precision::Absent) => Precision::Absent,
+                    };
             }
         }
 
@@ -1359,6 +1377,52 @@ mod tests {
             e.to_string(),
             "Error during planning: Cannot merge statistics with different number of columns: 0 vs 1"
         );
+    }
+
+    #[test]
+    fn test_try_merge_distinct_count_absent() {
+        // Create statistics with known distinct counts
+        let stats1 = Statistics::default()
+            .with_num_rows(Precision::Exact(10))
+            .with_total_byte_size(Precision::Exact(100))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(1))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(10))))
+                    .with_distinct_count(Precision::Exact(5)),
+            );
+
+        let stats2 = Statistics::default()
+            .with_num_rows(Precision::Exact(15))
+            .with_total_byte_size(Precision::Exact(150))
+            .add_column_statistics(
+                ColumnStatistics::new_unknown()
+                    .with_null_count(Precision::Exact(0))
+                    .with_min_value(Precision::Exact(ScalarValue::Int32(Some(5))))
+                    .with_max_value(Precision::Exact(ScalarValue::Int32(Some(20))))
+                    .with_distinct_count(Precision::Exact(7)),
+            );
+
+        // Merge statistics
+        let merged_stats = stats1.try_merge(&stats2).unwrap();
+
+        // Verify the results
+        assert_eq!(merged_stats.num_rows, Precision::Exact(25));
+        assert_eq!(merged_stats.total_byte_size, Precision::Exact(250));
+
+        let col_stats = &merged_stats.column_statistics[0];
+        assert_eq!(col_stats.null_count, Precision::Exact(0));
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Int32(Some(1)))
+        );
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Int32(Some(20)))
+        );
+        // Distinct count should be Inexact(max) after merge as a conservative lower bound
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(7));
     }
 
     #[test]
