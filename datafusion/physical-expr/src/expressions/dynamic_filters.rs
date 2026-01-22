@@ -276,6 +276,12 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
     /// It does not guarantee that the filter is complete.
+    ///
+    /// # Note
+    ///
+    /// This method should only be called on filters that have consumers. If you don't
+    /// know whether the filter is being used, call [`Self::is_used`] first to avoid
+    /// waiting indefinitely.
     pub async fn wait_update(&self) {
         let mut rx = self.state_watch.subscribe();
         // Get the current generation
