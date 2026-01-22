@@ -276,6 +276,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// This method will return when [`Self::update`] is called and the generation increases.
     /// It does not guarantee that the filter is complete.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_update(&self) {
         let mut rx = self.state_watch.subscribe();
         // Get the current generation
@@ -292,6 +296,10 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
+    ///
+    /// Producers (e.g.) HashJoinExec may never update the expression or mark it as completed if there are no consumers.
+    /// If you call this method on a dynamic filter created by such a producer and there are no consumers registered this method would wait indefinitely.
+    /// This should not happen under normal operation and would indicate a programming error either in your producer or in DataFusion if the producer is a built in node.
     pub async fn wait_complete(&self) {
         if self.inner.read().is_complete {
             return;
