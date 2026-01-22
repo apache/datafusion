@@ -696,7 +696,7 @@ config_namespace! {
         /// but other expressions may still be used for pruning.
         /// If an `InList` expression is not used for statistics pruning that does not mean it is ignored
         /// altogether, it is still used as a filter at the data / per row level.
-        /// This does not impact [`ParquetOptions::push_down_filters`], large `InList` expressions
+        /// This does not impact [`ParquetOptions::pushdown_filters`], large `InList` expressions
         /// are always evaluated against each row when this option is enabled.
         pub pruning_max_inlist_limit: usize, default = 20
 
