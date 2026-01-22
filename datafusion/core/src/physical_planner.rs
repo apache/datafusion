@@ -1931,39 +1931,17 @@ fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
 ) -> Result<Vec<Expr>> {
-    // First pass: collect all allowed table references for the target, including aliases.
-    let mut allowed_refs: HashSet<TableReference> = HashSet::new();
-    allowed_refs.insert(target.clone());
-
-    input.apply(|node| {
-        if let LogicalPlan::TableScan(TableScan { table_name, .. }) = node {
-            if table_name.resolved_eq(target) {
-                allowed_refs.insert(table_name.clone());
-            }
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-
-    // Second pass: extract filters while enforcing fail-closed behavior on non-target predicates
     let mut filters = Vec::new();
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
-                let conjuncts = split_conjunction(&filter.predicate);
-                // If any conjunct is not on the target (incl. alias), fail closed
-                let any_non_target = conjuncts
-                    .iter()
-                    .try_fold(false, |acc, pred| {
-                        predicate_is_on_allowed_refs(pred, &allowed_refs)
-                            .map(|on_target| acc || !on_target)
-                    })?;
-                if any_non_target {
-                    return exec_err!(
-                        "DML predicate references non-target tables; mixed-target predicates are not supported for fast-path DML"
-                    );
+                // Split AND predicates into individual expressions
+                for predicate in split_conjunction(&filter.predicate) {
+                    if predicate_is_on_target(predicate, target)? {
+                        filters.push(predicate.clone());
+                    }
                 }
-                filters.extend(conjuncts.into_iter().cloned());
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
@@ -2036,22 +2014,17 @@ fn extract_dml_filters(
         })
 }
 
-/// Determine whether a predicate references only columns from the target table
-/// or any of its aliases observed in the logical plan.
-fn predicate_is_on_allowed_refs(
-    expr: &Expr,
-    allowed_refs: &HashSet<TableReference>,
-) -> Result<bool> {
+/// Determine whether a predicate references only columns from the target table.
+fn predicate_is_on_target(expr: &Expr, target: &TableReference) -> Result<bool> {
     let mut columns = HashSet::new();
     expr_to_columns(expr, &mut columns)?;
 
-    Ok(columns.iter().all(|column| {
-        match &column.relation {
-            None => true, // Unqualified columns are allowed (single-target scenarios)
-            Some(relation) => allowed_refs
-                .iter()
-                .any(|allowed| relation.resolved_eq(allowed)),
-        }
+    // Short-circuit on first mismatch: returns false if any column references a different table
+    Ok(!columns.iter().any(|column| {
+        column
+            .relation
+            .as_ref()
+            .is_some_and(|relation| !relation.resolved_eq(target))
     }))
 }
 
