@@ -5623,73 +5623,75 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Create an in memory table with schema C1 and C2, both strings
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::Utf8, false),
-    ]));
+    for string_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", string_type.clone(), false),
+            Field::new("c2", string_type.clone(), false),
+        ]));
 
-    let record_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec!["abc", "def"])),
-            Arc::new(StringArray::from(vec!["123", "456"])),
-        ],
-    )?;
+        let columns = [
+            Arc::new(StringArray::from(vec!["abc", "def"])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["123", "456"])) as ArrayRef,
+        ]
+        .map(|col| arrow::compute::cast(&col, &string_type).unwrap())
+        .to_vec();
 
-    let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
+        let record_batch = RecordBatch::try_new(schema.clone(), columns)?;
 
-    // Register the table in the context
-    ctx.register_table("test", mem_table)?;
+        let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
 
-    let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
-    let local_url = Url::parse("file://local").unwrap();
-    ctx.register_object_store(&local_url, local);
+        // Register the table in the context
+        ctx.register_table("test", mem_table)?;
 
-    // execute a simple query and write the results to parquet
-    let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
-    let out_dir_url = format!("file://{out_dir}");
+        let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
+        let local_url = Url::parse("file://local").unwrap();
+        ctx.register_object_store(&local_url, local);
 
-    // Write the results to parquet with partitioning
-    let df = ctx.sql("SELECT c1, c2 FROM test").await?;
-    let df_write_options =
-        DataFrameWriteOptions::new().with_partition_by(vec![String::from("c2")]);
+        // execute a simple query and write the results to parquet
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out/";
+        let out_dir_url = format!("file://{out_dir}");
 
-    df.write_parquet(&out_dir_url, df_write_options, None)
-        .await?;
+        // Write the results to parquet with partitioning
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+        let df_write_options =
+            DataFrameWriteOptions::new().with_partition_by(vec![String::from("c2")]);
 
-    // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
-    let partitioned_file = format!("{out_dir}/c2=123");
-    let filter_df = ctx
-        .read_parquet(&partitioned_file, ParquetReadOptions::default())
-        .await?;
+        df.write_parquet(&out_dir_url, df_write_options, None)
+            .await?;
 
-    // Check that the c2 column is gone and that c1 is abc.
-    let results = filter_df.collect().await?;
-    assert_snapshot!(
-       batches_to_string(&results),
-        @r"
+        // Explicitly read the parquet file at c2=123 to verify the physical files are partitioned
+        let partitioned_file = format!("{out_dir}/c2=123");
+        let filter_df = ctx
+            .read_parquet(&partitioned_file, ParquetReadOptions::default())
+            .await?;
+
+        // Check that the c2 column is gone and that c1 is abc.
+        let results = filter_df.collect().await?;
+        assert_snapshot!(
+           batches_to_string(&results),
+            @r"
     +-----+
     | c1  |
     +-----+
     | abc |
     +-----+
     "
-    );
+        );
 
-    // Read the entire set of parquet files
-    let df = ctx
-        .read_parquet(
-            &out_dir_url,
-            ParquetReadOptions::default()
-                .table_partition_cols(vec![(String::from("c2"), DataType::Utf8)]),
-        )
-        .await?;
+        // Read the entire set of parquet files
+        let df = ctx
+            .read_parquet(
+                &out_dir_url,
+                ParquetReadOptions::default()
+                    .table_partition_cols(vec![(String::from("c2"), DataType::Utf8)]),
+            )
+            .await?;
 
-    // Check that the df has the entire set of data
-    let results = df.collect().await?;
-    assert_snapshot!(
-        batches_to_sort_string(&results),
-        @r"
+        // Check that the df has the entire set of data
+        let results = df.collect().await?;
+        assert_snapshot!(
+            batches_to_sort_string(&results),
+            @r"
     +-----+-----+
     | c1  | c2  |
     +-----+-----+
@@ -5697,7 +5699,8 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     | def | 456 |
     +-----+-----+
     "
-    );
+        );
+    }
 
     Ok(())
 }
