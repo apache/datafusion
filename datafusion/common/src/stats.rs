@@ -632,7 +632,24 @@ impl Statistics {
             col_stats.max_value = col_stats.max_value.max(&item_col_stats.max_value);
             col_stats.min_value = col_stats.min_value.min(&item_col_stats.min_value);
             col_stats.sum_value = col_stats.sum_value.add(&item_col_stats.sum_value);
-            col_stats.distinct_count = Precision::Absent;
+            // Use max as a conservative lower bound for distinct count
+            // (can't accurately merge NDV since duplicates may exist across partitions)
+            col_stats.distinct_count =
+                match (&col_stats.distinct_count, &item_col_stats.distinct_count) {
+                    (Precision::Exact(a), Precision::Exact(b))
+                    | (Precision::Inexact(a), Precision::Exact(b))
+                    | (Precision::Exact(a), Precision::Inexact(b))
+                    | (Precision::Inexact(a), Precision::Inexact(b)) => {
+                        Precision::Inexact(if a >= b { *a } else { *b })
+                    }
+                    (Precision::Exact(v), Precision::Absent)
+                    | (Precision::Inexact(v), Precision::Absent)
+                    | (Precision::Absent, Precision::Exact(v))
+                    | (Precision::Absent, Precision::Inexact(v)) => {
+                        Precision::Inexact(*v)
+                    }
+                    (Precision::Absent, Precision::Absent) => Precision::Absent,
+                };
             col_stats.byte_size = col_stats.byte_size.add(&item_col_stats.byte_size);
         }
 
@@ -1352,8 +1369,8 @@ mod tests {
             col_stats.max_value,
             Precision::Exact(ScalarValue::Int32(Some(20)))
         );
-        // Distinct count should be Absent after merge
-        assert_eq!(col_stats.distinct_count, Precision::Absent);
+        // Distinct count should be Inexact(max) after merge as a conservative lower bound
+        assert_eq!(col_stats.distinct_count, Precision::Inexact(7));
     }
 
     #[test]

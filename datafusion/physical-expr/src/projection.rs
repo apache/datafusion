@@ -660,9 +660,25 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // TODO stats: estimate more statistics from expressions
-                // (expressions should compute their statistics themselves)
-                ColumnStatistics::new_unknown()
+                // TODO: expressions should compute their own statistics
+                //
+                // For now, try to preserve NDV if the expression references a
+                // single column (as a conservative upper bound).
+                // More accurate NDV propagation would require tracking injectivity
+                // of functions (e.g., `a + 1` preserves NDV exactly, `ABS(a)` may
+                // reduce it, `a % 10` bounds it to 10)
+                let columns = collect_columns(expr);
+                if columns.len() == 1 {
+                    let col_idx = columns.iter().next().unwrap().index();
+                    ColumnStatistics {
+                        distinct_count: stats.column_statistics[col_idx]
+                            .distinct_count
+                            .to_inexact(),
+                        ..ColumnStatistics::new_unknown()
+                    }
+                } else {
+                    ColumnStatistics::new_unknown()
+                }
             };
             column_statistics.push(col_stats);
         }
@@ -2610,10 +2626,11 @@ pub(crate) mod tests {
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
 
-        // First column (expression) should have unknown statistics
+        // First column (expression `col0 + 1`) preserves NDV from the single
+        // referenced column as a conservative upper bound (marked Inexact)
         assert_eq!(
             output_stats.column_statistics[0].distinct_count,
-            Precision::Absent
+            Precision::Inexact(5)
         );
         assert_eq!(
             output_stats.column_statistics[0].max_value,
