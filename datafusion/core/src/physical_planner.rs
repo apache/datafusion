@@ -1965,13 +1965,12 @@ fn extract_dml_filters(
 
     // First pass: collect any alias references to the target table
     input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node {
+        if let LogicalPlan::SubqueryAlias(alias) = node
             // Check if this alias points to the target table
-            if let LogicalPlan::TableScan(scan) = alias.input.as_ref() {
-                if scan.table_name.resolved_eq(target) {
-                    allowed_refs.push(TableReference::bare(alias.alias.to_string()));
-                }
-            }
+            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
+            && scan.table_name.resolved_eq(target)
+        {
+            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
         }
         Ok(TreeNodeRecursion::Continue)
     })?;

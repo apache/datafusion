@@ -24,20 +24,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
-<<<<<<< HEAD
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::logical_expr::{
     Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
 };
 use datafusion_catalog::Session;
-use datafusion_common::TableReference;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-=======
-use datafusion::execution::context::{SessionConfig, SessionContext};
-use datafusion::logical_expr::Expr;
-use datafusion_catalog::Session;
-use datafusion_common::ScalarValue;
->>>>>>> main
+use datafusion_common::{ScalarValue, TableReference};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -587,7 +580,6 @@ async fn test_update_assignments() -> Result<()> {
 }
 
 #[tokio::test]
-<<<<<<< HEAD
 async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
@@ -658,7 +650,10 @@ async fn test_update_filter_pushdown_passes_table_scan_filters() -> Result<()> {
         !filters.is_empty(),
         "expected filters extracted from TableScan during UPDATE"
     );
-=======
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_truncate_calls_provider() -> Result<()> {
     let provider = Arc::new(CaptureTruncateProvider::new(test_schema()));
     let config = SessionConfig::new().set(
@@ -677,7 +672,6 @@ async fn test_truncate_calls_provider() -> Result<()> {
         "truncate() should be called on the TableProvider"
     );
 
->>>>>>> main
     Ok(())
 }
 
@@ -709,7 +703,6 @@ async fn test_unsupported_table_update() -> Result<()> {
 }
 
 #[tokio::test]
-<<<<<<< HEAD
 async fn test_delete_target_table_scoping() -> Result<()> {
     // Test that DELETE only extracts filters from the target table,
     // not from other tables (important for DELETE...FROM safety)
@@ -832,7 +825,10 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         filter_str.contains("id") || filter_str.contains("1"),
         "Filter should reference id column or the value 1, got: {filter_str}"
     );
-=======
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_unsupported_table_truncate() -> Result<()> {
     let schema = test_schema();
     let ctx = SessionContext::new();
@@ -844,6 +840,5 @@ async fn test_unsupported_table_truncate() -> Result<()> {
 
     assert!(result.is_err() || result.unwrap().collect().await.is_err());
 
->>>>>>> main
     Ok(())
 }
