@@ -412,6 +412,44 @@ physical_plan
 01)FilterExec: CAST(b@1 AS Float64) > random(), projection=[a@0]
 02)--DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet
 
+# Verify pruning behavior on large in_list predicates
+# By default, when more than 20 elements are specified pruning is skipped, but this behavior can be overridden.
+
+query TT
+EXPLAIN select a from t_pushdown where b IN (1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121);
+----
+logical_plan
+01)Projection: t_pushdown.a
+02)--Filter: t_pushdown.b IN ([Int32(1), Int32(102), Int32(103), Int32(104), Int32(105), Int32(106), Int32(107), Int32(108), Int32(109), Int32(110), Int32(111), Int32(112), Int32(113), Int32(114), Int32(115), Int32(116), Int32(117), Int32(118), Int32(119), Int32(120), Int32(121)])
+03)----TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b IN ([Int32(1), Int32(102), Int32(103), Int32(104), Int32(105), Int32(106), Int32(107), Int32(108), Int32(109), Int32(110), Int32(111), Int32(112), Int32(113), Int32(114), Int32(115), Int32(116), Int32(117), Int32(118), Int32(119), Int32(120), Int32(121)])]
+physical_plan DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 IN (SET) ([1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121]), pruning_predicate=true, required_guarantees=[b in (1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121)]
+
+# Override pruning_max_inlist_limit then re-run the same request
+statement ok
+set datafusion.execution.parquet.pruning_max_inlist_limit = 21;
+
+## Create table with override on pruning_max_inlist_limit
+## (pushdown setting is part of the table, but is copied from the session settings)
+statement ok
+CREATE EXTERNAL TABLE t_pruning_inlist_limit(a varchar, b int, c float) STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/parquet_table/';
+
+query TT
+EXPLAIN select a from t_pruning_inlist_limit where b IN (1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121);
+----
+logical_plan
+01)Projection: t_pruning_inlist_limit.a
+02)--Filter: t_pruning_inlist_limit.b IN ([Int32(1), Int32(102), Int32(103), Int32(104), Int32(105), Int32(106), Int32(107), Int32(108), Int32(109), Int32(110), Int32(111), Int32(112), Int32(113), Int32(114), Int32(115), Int32(116), Int32(117), Int32(118), Int32(119), Int32(120), Int32(121)])
+03)----TableScan: t_pruning_inlist_limit projection=[a, b], partial_filters=[t_pruning_inlist_limit.b IN ([Int32(1), Int32(102), Int32(103), Int32(104), Int32(105), Int32(106), Int32(107), Int32(108), Int32(109), Int32(110), Int32(111), Int32(112), Int32(113), Int32(114), Int32(115), Int32(116), Int32(117), Int32(118), Int32(119), Int32(120), Int32(121)])]
+physical_plan
+01)FilterExec: b@1 IN (SET) ([1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121]), projection=[a@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
+03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a, b], file_type=parquet, predicate=b@1 IN (SET) ([1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121]), pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 1 AND 1 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 102 AND 102 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 103 AND 103 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 104 AND 104 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 105 AND 105 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 106 AND 106 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 107 AND 107 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 108 AND 108 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 109 AND 109 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 110 AND 110 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 111 AND 111 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 112 AND 112 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 113 AND 113 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 114 AND 114 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 115 AND 115 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 116 AND 116 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 117 AND 117 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 118 AND 118 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 119 AND 119 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 120 AND 120 <= b_max@1 OR b_null_count@2 != row_count@3 AND b_min@0 <= 121 AND 121 <= b_max@1, required_guarantees=[b in (1, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121)]
+
+# Revert back pruning_max_inlist_limit to defaults
+statement ok
+set datafusion.execution.parquet.pruning_max_inlist_limit = 20;
+
 ## cleanup
 statement ok
 DROP TABLE t;
