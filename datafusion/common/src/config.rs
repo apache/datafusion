@@ -691,9 +691,13 @@ config_namespace! {
         /// the parquet file
         pub pruning: bool, default = true
 
-        /// (reading) Maximum number of elements (inclusive) in InList exprs to be eligible for pruning.
-        /// When some InList exprs contain more than this threshold, these expressions are ignored during pruning,
+        /// (reading) Maximum number of elements (inclusive) in InList exprs to be eligible for statistics pruning.
+        /// When some InList exprs contain more than this threshold, these expressions are ignored during statistics pruning,
         /// but other expressions may still be used for pruning.
+        /// If an `InList` expression is not used for statistics pruning that does not mean it is ignored
+        /// altogether, it is still used as a filter at the data / per row level.
+        /// This does not impact [`ParquetOptions::push_down_filters`], large `InList` expressions
+        /// are always evaluated against each row when this option is enabled.
         pub pruning_max_inlist_limit: usize, default = 20
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
