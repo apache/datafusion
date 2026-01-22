@@ -561,10 +561,9 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
-            pruning_max_inlist_limit: self
-                .table_parquet_options
-                .global
-                .pruning_max_inlist_limit,
+            pruning_predicate_config: PruningPredicateConfig {
+                max_in_list: self.table_parquet_options.global.pruning_max_inlist_limit,
+            },
             coerce_int96,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,

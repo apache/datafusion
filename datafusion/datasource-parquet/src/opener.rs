@@ -106,8 +106,8 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
-    /// Maximum number of elements (inclusive) in InList exprs to be eligible for pruning
-    pub pruning_max_inlist_limit: usize,
+    /// Internals configuration of predicate pruning
+    pub(crate) pruning_predicate_config: PruningPredicateConfig,
     /// Coerce INT96 timestamps to specific TimeUnit
     pub coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
@@ -284,9 +284,7 @@ impl FileOpener for ParquetOpener {
 
         let reverse_row_groups = self.reverse_row_groups;
         let preserve_order = self.preserve_order;
-        let pruning_predicate_config = PruningPredicateConfig {
-            max_in_list: self.pruning_max_inlist_limit,
-        };
+        let pruning_predicate_config = self.pruning_predicate_config.clone();
 
         Ok(Box::pin(async move {
             #[cfg(feature = "parquet_encryption")]
@@ -1047,6 +1045,7 @@ mod test {
         DefaultPhysicalExprAdapterFactory, replace_columns_with_literals,
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::PruningPredicateConfig;
     use futures::{Stream, StreamExt};
     use object_store::{ObjectStore, memory::InMemory, path::Path};
     use parquet::arrow::ArrowWriter;
@@ -1200,7 +1199,7 @@ mod test {
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
-                pruning_max_inlist_limit: 20,
+                pruning_predicate_config: PruningPredicateConfig::default(),
                 coerce_int96: self.coerce_int96,
                 #[cfg(feature = "parquet_encryption")]
                 file_decryption_properties: None,
