@@ -32,7 +32,9 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{
     SingleRowListArrayBuilder, compare_rows, get_row_at_idx, take_function_args,
 };
-use datafusion_common::{Result, ScalarValue, assert_eq_or_internal_err, exec_err};
+use datafusion_common::{
+    Result, ScalarValue, assert_eq_or_internal_err, exec_err, not_impl_err,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -104,20 +106,37 @@ impl AggregateUDFImpl for ArrayAgg {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            arg_types[0].clone(),
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        not_impl_err!("Not called because return_field is implemented")
+    }
+
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        // Outer field is always nullable in case of empty groups
+        // Inner list field nullability depends on input field
+        let input_field = &arg_fields[0];
+        let list_field = Field::new_list_field(
+            input_field.data_type().clone(),
+            input_field.is_nullable(),
+        );
+        Ok(Arc::new(Field::new(
+            self.name(),
+            DataType::List(Arc::new(list_field)),
             true,
-        ))))
+        )))
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        // Inner list field nullability matches input field (same as return_field)
+        let input_nullable = args.input_fields[0].is_nullable();
+
         if args.is_distinct {
             return Ok(vec![
                 Field::new_list(
                     format_state_name(args.name, "distinct_array_agg"),
-                    // See COMMENTS.md to understand why nullable is set to true
-                    Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                    Field::new_list_field(
+                        args.input_fields[0].data_type().clone(),
+                        input_nullable,
+                    ),
                     true,
                 )
                 .into(),
@@ -127,8 +146,10 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![
             Field::new_list(
                 format_state_name(args.name, "array_agg"),
-                // See COMMENTS.md to understand why nullable is set to true
-                Field::new_list_field(args.input_fields[0].data_type().clone(), true),
+                Field::new_list_field(
+                    args.input_fields[0].data_type().clone(),
+                    input_nullable,
+                ),
                 true,
             )
             .into(),
@@ -169,6 +190,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let field = &acc_args.expr_fields[0];
         let data_type = field.data_type();
         let ignore_nulls = acc_args.ignore_nulls && field.is_nullable();
+        let input_nullable = field.is_nullable();
 
         if acc_args.is_distinct {
             // Limitation similar to Postgres. The aggregation function can only mix
@@ -198,6 +220,7 @@ impl AggregateUDFImpl for ArrayAgg {
                 data_type,
                 sort_option,
                 ignore_nulls,
+                input_nullable,
             )?));
         }
 
@@ -205,6 +228,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(Box::new(ArrayAggAccumulator::try_new(
                 data_type,
                 ignore_nulls,
+                input_nullable,
             )?));
         };
 
@@ -220,6 +244,7 @@ impl AggregateUDFImpl for ArrayAgg {
             self.is_input_pre_ordered,
             acc_args.is_reversed,
             ignore_nulls,
+            input_nullable,
         )
         .map(|acc| Box::new(acc) as _)
     }
@@ -242,15 +267,22 @@ pub struct ArrayAggAccumulator {
     values: Vec<ArrayRef>,
     datatype: DataType,
     ignore_nulls: bool,
+    /// Whether the input field is nullable (preserved in result list elements)
+    input_nullable: bool,
 }
 
 impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
-    pub fn try_new(datatype: &DataType, ignore_nulls: bool) -> Result<Self> {
+    pub fn try_new(
+        datatype: &DataType,
+        ignore_nulls: bool,
+        input_nullable: bool,
+    ) -> Result<Self> {
         Ok(Self {
             values: vec![],
             datatype: datatype.clone(),
             ignore_nulls,
+            input_nullable,
         })
     }
 
@@ -377,17 +409,22 @@ impl Accumulator for ArrayAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Transform Vec<ListArr> to ListArr
         let element_arrays: Vec<&dyn Array> =
             self.values.iter().map(|a| a.as_ref()).collect();
 
         if element_arrays.is_empty() {
-            return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
+            return Ok(ScalarValue::new_null_list(
+                self.datatype.clone(),
+                self.input_nullable,
+                1,
+            ));
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
 
-        Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
+        Ok(SingleRowListArrayBuilder::new(concated_array)
+            .with_nullable(self.input_nullable)
+            .build_list_scalar())
     }
 
     fn size(&self) -> usize {
@@ -420,6 +457,8 @@ pub struct DistinctArrayAggAccumulator {
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
+    /// Whether the input field is nullable (preserved in result list elements)
+    input_nullable: bool,
 }
 
 impl DistinctArrayAggAccumulator {
@@ -427,12 +466,14 @@ impl DistinctArrayAggAccumulator {
         datatype: &DataType,
         sort_options: Option<SortOptions>,
         ignore_nulls: bool,
+        input_nullable: bool,
     ) -> Result<Self> {
         Ok(Self {
             values: HashSet::new(),
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
+            input_nullable,
         })
     }
 }
@@ -484,7 +525,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut values: Vec<ScalarValue> = self.values.iter().cloned().collect();
         if values.is_empty() {
-            return Ok(ScalarValue::new_null_list(self.datatype.clone(), true, 1));
+            return Ok(ScalarValue::new_null_list(
+                self.datatype.clone(),
+                self.input_nullable,
+                1,
+            ));
         }
 
         if let Some(opts) = self.sort_options {
@@ -514,7 +559,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             delayed_cmp_err?;
         };
 
-        let arr = ScalarValue::new_list(&values, &self.datatype, true);
+        let arr = ScalarValue::new_list(&values, &self.datatype, self.input_nullable);
         Ok(ScalarValue::List(arr))
     }
 
@@ -551,6 +596,8 @@ pub(crate) struct OrderSensitiveArrayAggAccumulator {
     reverse: bool,
     /// Whether the aggregation should ignore null values.
     ignore_nulls: bool,
+    /// Whether the input field is nullable (preserved in result list elements)
+    input_nullable: bool,
 }
 
 impl OrderSensitiveArrayAggAccumulator {
@@ -563,6 +610,7 @@ impl OrderSensitiveArrayAggAccumulator {
         is_input_pre_ordered: bool,
         reverse: bool,
         ignore_nulls: bool,
+        input_nullable: bool,
     ) -> Result<Self> {
         let mut datatypes = vec![datatype.clone()];
         datatypes.extend(ordering_dtypes.iter().cloned());
@@ -574,6 +622,7 @@ impl OrderSensitiveArrayAggAccumulator {
             is_input_pre_ordered,
             reverse,
             ignore_nulls,
+            input_nullable,
         })
     }
 
@@ -737,13 +786,8 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        if !self.is_input_pre_ordered {
-            self.sort();
-        }
-
         let mut result = vec![self.evaluate()?];
         result.push(self.evaluate_orderings()?);
-
         Ok(result)
     }
 
@@ -755,7 +799,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         if self.values.is_empty() {
             return Ok(ScalarValue::new_null_list(
                 self.datatypes[0].clone(),
-                true,
+                self.input_nullable,
                 1,
             ));
         }
@@ -765,10 +809,14 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
             ScalarValue::new_list_from_iter(
                 values.into_iter().rev(),
                 &self.datatypes[0],
-                true,
+                self.input_nullable,
             )
         } else {
-            ScalarValue::new_list_from_iter(values.into_iter(), &self.datatypes[0], true)
+            ScalarValue::new_list_from_iter(
+                values.into_iter(),
+                &self.datatypes[0],
+                self.input_nullable,
+            )
         };
         Ok(ScalarValue::List(array))
     }
@@ -799,7 +847,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ListBuilder, StringBuilder};
+    use arrow::array::{Int64Array, ListBuilder, StringBuilder};
     use arrow::datatypes::{FieldRef, Schema};
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
@@ -1112,6 +1160,135 @@ mod tests {
 
         // without compaction, the size is 17112
         assert_eq!(acc.size(), 2224);
+
+        Ok(())
+    }
+
+    #[test]
+    fn return_field_preserves_input_nullability() -> Result<()> {
+        let array_agg = ArrayAgg::default();
+
+        // Test with nullable input field
+        let nullable_field: FieldRef =
+            Arc::new(Field::new("input", DataType::Int64, true));
+        let result_field =
+            array_agg.return_field(std::slice::from_ref(&nullable_field))?;
+        // List itself should always be nullable (NULL for empty groups)
+        assert!(
+            result_field.is_nullable(),
+            "List result should always be nullable"
+        );
+        // Check inner field nullability is preserved
+        match result_field.data_type() {
+            DataType::List(inner) => {
+                assert!(
+                    inner.is_nullable(),
+                    "Inner field should be nullable when input is nullable"
+                );
+            }
+            _ => panic!("Expected List type"),
+        }
+
+        // Test with non-nullable input field
+        let non_nullable_field: FieldRef =
+            Arc::new(Field::new("input", DataType::Int64, false));
+        let result_field =
+            array_agg.return_field(std::slice::from_ref(&non_nullable_field))?;
+        // List itself should still be nullable
+        assert!(
+            result_field.is_nullable(),
+            "List result should always be nullable"
+        );
+        // Check inner field nullability is preserved
+        match result_field.data_type() {
+            DataType::List(inner) => {
+                assert!(
+                    !inner.is_nullable(),
+                    "Inner field should be non-nullable when input is non-nullable"
+                );
+            }
+            _ => panic!("Expected List type"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn accumulator_output_matches_return_field() -> Result<()> {
+        // Test that the ListArray returned by evaluate() has a data type
+        // that matches the return_field() specification
+
+        // Create a schema with a non-nullable input column
+        let input_schema = Schema::new(vec![Field::new(
+            "input",
+            DataType::Int64,
+            false, // non-nullable
+        )]);
+
+        // Get the expected return field
+        let array_agg = ArrayAgg::default();
+        let input_field: FieldRef = Arc::new(Field::new("input", DataType::Int64, false));
+        let expected_return_field =
+            array_agg.return_field(std::slice::from_ref(&input_field))?;
+
+        // Verify the expected field has non-nullable inner
+        if let DataType::List(inner) = expected_return_field.data_type() {
+            assert!(
+                !inner.is_nullable(),
+                "Expected non-nullable inner field from return_field"
+            );
+        } else {
+            panic!("Expected List type");
+        }
+
+        // Create an accumulator for non-nullable input
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("input", 0));
+        let expr_field = expr.return_field(&input_schema)?;
+        let mut acc = array_agg.accumulator(AccumulatorArgs {
+            return_field: Arc::clone(&expected_return_field),
+            schema: &input_schema,
+            expr_fields: &[expr_field],
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "test",
+            is_distinct: false,
+            exprs: &[expr],
+        })?;
+
+        // Add some values
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 3]));
+        acc.update_batch(&[values])?;
+
+        // Evaluate and check the result
+        let result = acc.evaluate()?;
+        let result_array = result.to_array()?;
+
+        // Check the result array's data type matches the expected
+        let result_list = result_array
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("Expected ListArray");
+
+        // For ListArray, get the inner field from the data type
+        let DataType::List(result_inner_field) = result_list.data_type() else {
+            panic!("Expected List data type");
+        };
+
+        assert!(
+            !result_inner_field.is_nullable(),
+            "Result list's inner field should be non-nullable, but got nullable. \
+            Expected data_type: {:?}, got: {:?}",
+            expected_return_field.data_type(),
+            result_array.data_type()
+        );
+
+        // Verify data types match exactly
+        assert_eq!(
+            expected_return_field.data_type(),
+            result_array.data_type(),
+            "Result data type should match return_field data type"
+        );
 
         Ok(())
     }

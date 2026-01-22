@@ -35,11 +35,12 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     //    | [4, 2, 3, 5, 1]                          |
     //    +------------------------------------------+
     // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
+    // The inner field nullability matches the input column c2 which is NOT NULL
     assert_eq!(
         *actual[0].schema(),
         Schema::new(vec![Field::new_list(
             "array_agg(DISTINCT aggregate_test_100.c2)",
-            Field::new_list_field(DataType::UInt32, true),
+            Field::new_list_field(DataType::UInt32, false),
             true
         ),])
     );
