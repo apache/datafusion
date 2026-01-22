@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tests for DELETE and UPDATE planning to verify filter and assignment extraction.
+//! Tests for DELETE, UPDATE, and TRUNCATE planning to verify filter and assignment extraction.
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
@@ -24,6 +24,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
+<<<<<<< HEAD
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{
     Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
@@ -31,6 +32,12 @@ use datafusion::logical_expr::{
 use datafusion_catalog::Session;
 use datafusion_common::TableReference;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+=======
+use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::logical_expr::Expr;
+use datafusion_catalog::Session;
+use datafusion_common::ScalarValue;
+>>>>>>> main
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -237,6 +244,66 @@ impl TableProvider for CaptureUpdateProvider {
         }
 
         Ok(vec![self.filter_pushdown.clone(); filters.len()])
+    }
+}
+
+/// A TableProvider that captures whether truncate() was called.
+struct CaptureTruncateProvider {
+    schema: SchemaRef,
+    truncate_called: Arc<Mutex<bool>>,
+}
+
+impl CaptureTruncateProvider {
+    fn new(schema: SchemaRef) -> Self {
+        Self {
+            schema,
+            truncate_called: Arc::new(Mutex::new(false)),
+        }
+    }
+
+    fn was_truncated(&self) -> bool {
+        *self.truncate_called.lock().unwrap()
+    }
+}
+
+impl std::fmt::Debug for CaptureTruncateProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaptureTruncateProvider")
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl TableProvider for CaptureTruncateProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        _state: &dyn Session,
+        _projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(EmptyExec::new(Arc::clone(&self.schema))))
+    }
+
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        *self.truncate_called.lock().unwrap() = true;
+
+        Ok(Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![
+            Field::new("count", DataType::UInt64, false),
+        ])))))
     }
 }
 
@@ -520,6 +587,7 @@ async fn test_update_assignments() -> Result<()> {
 }
 
 #[tokio::test]
+<<<<<<< HEAD
 async fn test_update_filter_pushdown_extracts_table_scan_filters() -> Result<()> {
     let provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
@@ -590,6 +658,26 @@ async fn test_update_filter_pushdown_passes_table_scan_filters() -> Result<()> {
         !filters.is_empty(),
         "expected filters extracted from TableScan during UPDATE"
     );
+=======
+async fn test_truncate_calls_provider() -> Result<()> {
+    let provider = Arc::new(CaptureTruncateProvider::new(test_schema()));
+    let config = SessionConfig::new().set(
+        "datafusion.optimizer.max_passes",
+        &ScalarValue::UInt64(Some(0)),
+    );
+
+    let ctx = SessionContext::new_with_config(config);
+
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    ctx.sql("TRUNCATE TABLE t").await?.collect().await?;
+
+    assert!(
+        provider.was_truncated(),
+        "truncate() should be called on the TableProvider"
+    );
+
+>>>>>>> main
     Ok(())
 }
 
@@ -621,6 +709,7 @@ async fn test_unsupported_table_update() -> Result<()> {
 }
 
 #[tokio::test]
+<<<<<<< HEAD
 async fn test_delete_target_table_scoping() -> Result<()> {
     // Test that DELETE only extracts filters from the target table,
     // not from other tables (important for DELETE...FROM safety)
@@ -743,5 +832,18 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         filter_str.contains("id") || filter_str.contains("1"),
         "Filter should reference id column or the value 1, got: {filter_str}"
     );
+=======
+async fn test_unsupported_table_truncate() -> Result<()> {
+    let schema = test_schema();
+    let ctx = SessionContext::new();
+
+    let empty_table = datafusion::datasource::empty::EmptyTable::new(schema);
+    ctx.register_table("empty_t", Arc::new(empty_table))?;
+
+    let result = ctx.sql("TRUNCATE TABLE empty_t").await;
+
+    assert!(result.is_err() || result.unwrap().collect().await.is_err());
+
+>>>>>>> main
     Ok(())
 }

@@ -88,6 +88,7 @@ pub async fn from_substrait_rex(
                 consumer.consume_subquery(expr.as_ref(), input_schema).await
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
+            #[expect(deprecated)]
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
             RexType::DynamicParameter(expr) => {
                 consumer.consume_dynamic_parameter(expr, input_schema).await

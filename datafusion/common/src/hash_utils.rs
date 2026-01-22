@@ -27,8 +27,9 @@ use arrow::{downcast_dictionary_array, downcast_primitive_array};
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
-    as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
-    as_string_array, as_string_view_array, as_struct_array, as_union_array,
+    as_generic_binary_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array, as_map_array, as_string_array,
+    as_string_view_array, as_struct_array, as_union_array,
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
@@ -539,6 +540,45 @@ where
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
+fn hash_list_view_array<OffsetSize>(
+    array: &GenericListViewArray<OffsetSize>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let values = array.values();
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+    let nulls = array.nulls();
+    let mut values_hashes = vec![0u64; values.len()];
+    create_hashes([values], random_state, &mut values_hashes)?;
+    if let Some(nulls) = nulls {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                let start = offset.as_usize();
+                let end = start + size.as_usize();
+                for values_hash in &values_hashes[start..end] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+            let hash = &mut hashes_buffer[i];
+            let start = offset.as_usize();
+            let end = start + size.as_usize();
+            for values_hash in &values_hashes[start..end] {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
 fn hash_union_array(
     array: &UnionArray,
     random_state: &RandomState,
@@ -713,6 +753,14 @@ fn hash_single_array(
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
             hash_list_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::ListView(_) => {
+            let array = as_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::LargeListView(_) => {
+            let array = as_large_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
@@ -1126,6 +1174,106 @@ mod tests {
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
         assert_eq!(hashes[1], hashes[6]); // null vs empty list
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create ListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i32, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i32, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let list_view_array =
+            Arc::new(ListViewArray::new(field, offsets, sizes, values, nulls))
+                as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_view_array.len()];
+        create_hashes(&[list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_large_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create LargeListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i64, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i64, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let large_list_view_array = Arc::new(LargeListViewArray::new(
+            field, offsets, sizes, values, nulls,
+        )) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; large_list_view_array.len()];
+        create_hashes(&[large_list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
     }
 
     #[test]
