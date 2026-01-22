@@ -666,13 +666,15 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let source_schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("status", DataType::Utf8, true),
+        // t2-only column to avoid false negatives after qualifier stripping
+        Field::new("src_only", DataType::Utf8, true),
     ]));
     let source_table = datafusion::datasource::empty::EmptyTable::new(source_schema);
     ctx.register_table("t2", Arc::new(source_table))?;
 
     ctx.sql(
         "UPDATE t1 SET value = 1 FROM t2 \
-         WHERE t1.id = t2.id AND t2.status = 'active' AND t1.value > 10",
+         WHERE t1.id = t2.id AND t2.src_only = 'active' AND t1.value > 10",
     )
     .await?
     .collect()
