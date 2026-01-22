@@ -15,23 +15,174 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query R
+SELECT random(42::integer);
+----
+0.81430514512291
 
-## Original Query: SELECT random();
-## PySpark 3.5.5 Result: {'rand()': 0.7460731389309176, 'typeof(rand())': 'double'}
-#query
-#SELECT random();
+query R
+SELECT random(0::integer);
+----
+0.324575268031407
 
-## Original Query: SELECT random(0);
-## PySpark 3.5.5 Result: {'rand(0)': 0.7604953758285915, 'typeof(rand(0))': 'double', 'typeof(0)': 'int'}
-#query
-#SELECT random(0::int);
+query R
+SELECT random(NULL::integer);
+----
+0.324575268031407
 
-## Original Query: SELECT random(null);
-## PySpark 3.5.5 Result: {'rand(NULL)': 0.7604953758285915, 'typeof(rand(NULL))': 'double', 'typeof(NULL)': 'void'}
-#query
-#SELECT random(NULL::void);
+query BBB
+SELECT
+    random() BETWEEN 0.0 AND 1.0,
+    random() = random(),
+    random(1) = random(1);
+----
+true false true
+
+query error `random` function expects a constant Int64 seed argument
+SELECT random(column1)
+FROM VALUES
+(1);
+
+query R
+SELECT rand(42::integer);
+----
+0.81430514512291
+
+query R
+SELECT rand(0::integer);
+----
+0.324575268031407
+
+query R
+SELECT rand(NULL::integer);
+----
+0.324575268031407
+
+query BBB
+SELECT
+    rand() BETWEEN 0.0 AND 1.0,
+    rand() = rand(),
+    rand(1) = rand(1);
+----
+true false true
+
+
+query R
+SELECT randn(42::integer);
+----
+0.834397546843796
+
+query R
+SELECT randn(0::integer);
+----
+-0.292803298604708
+
+query R
+SELECT randn(NULL::integer);
+----
+-0.292803298604708
+
+query BB
+SELECT
+    randn() = randn(),
+    randn(1) = randn(1);
+----
+false true
+
+query error `randn` function expects a constant Int64 seed argument
+SELECT randn(column1)
+FROM VALUES
+(1);
+
+
+query T
+SELECT randstr(3::integer, 42::integer);
+----
+0Us
+
+query T
+SELECT randstr(3::integer, 0::integer);
+----
+UYX
+
+query T
+SELECT randstr(3::integer, NULL::integer);
+----
+UYX
+
+query T
+SELECT randstr(0::integer);
+----
+(empty)
+
+query error Execution error: `randstr` function expects a constant positive Int32 length argument
+SELECT randstr(NULL::integer, 23::integer);
+
+query error Execution error: `randstr` function expects a constant positive Int32 length argument
+SELECT randstr(-2::integer, 23::integer);
+
+query BB
+SELECT
+    randstr(10) = randstr(10),
+    randstr(10, 2) = randstr(10, 2);
+----
+false true
+
+query error `randstr` function expects a constant positive Int32 length argument
+SELECT randstr(column1, 12::integer)
+FROM VALUES
+(1);
+
+query error `randstr` function expects a constant Int64 seed argument
+SELECT randstr(12::integer, column1)
+FROM VALUES
+(1);
+
+query I
+SELECT uniform(3::integer, 42::integer, 42::integer);
+----
+34
+
+query I
+SELECT uniform(0::integer, 34::integer, 12::integer);
+----
+19
+
+query I
+SELECT uniform(3::integer, 0::integer, 12::integer);
+----
+1
+
+query R
+SELECT uniform(3::float, 42::integer, 42::integer);
+----
+34.7579
+
+query R
+SELECT uniform(3::double, 42::integer, 42::integer);
+----
+34.75790065979348
+
+query I
+SELECT uniform(3::integer, NULL::integer);
+----
+NULL
+
+query I
+SELECT uniform(NULL::integer, 3::integer);
+----
+NULL
+
+query BBBB
+SELECT
+    uniform(0, 1) BETWEEN 0 AND 1,
+    uniform(0.0, 1.0) BETWEEN 0.0 AND 1.0,
+    uniform(0.0, 1.0) = uniform(0.0, 1.0),
+    uniform(10, 2, 23) = uniform(10, 2, 23);
+----
+true true false true
+
+query error Error during planning: arguments of `uniform` should be literals
+SELECT uniform(column1, column2)
+FROM VALUES
+(1, 10);

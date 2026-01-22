@@ -53,6 +53,7 @@ datafusion-functions-nested = { workspace = true }
 log = { workspace = true }
 percent-encoding = "2.3.2"
 rand = { workspace = true }
+rand_distr = { workspace = true }
 sha1 = "0.10"
 url = { workspace = true }
 

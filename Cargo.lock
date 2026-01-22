@@ -2578,6 +2578,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "rand 0.9.2",
+ "rand_distr",
  "sha1",
  "url",
 ]
