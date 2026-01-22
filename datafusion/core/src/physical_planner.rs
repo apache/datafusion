@@ -1932,13 +1932,27 @@ fn extract_dml_filters(
     target: &TableReference,
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
+    let mut allowed_refs = vec![target.clone()];
+
+    // First pass: collect any alias references to the target table
+    input.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node {
+            // Check if this alias points to the target table
+            if let LogicalPlan::TableScan(scan) = alias.input.as_ref() {
+                if scan.table_name.resolved_eq(target) {
+                    allowed_refs.push(TableReference::bare(alias.alias.to_string()));
+                }
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target(predicate, target)? {
+                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
                         filters.push(predicate.clone());
                     }
                 }
@@ -2014,17 +2028,28 @@ fn extract_dml_filters(
         })
 }
 
-/// Determine whether a predicate references only columns from the target table.
-fn predicate_is_on_target(expr: &Expr, target: &TableReference) -> Result<bool> {
+/// Determine whether a predicate references only columns from the target table
+/// or its aliases.
+///
+/// Columns may be qualified with the target table name or any of its aliases.
+/// Unqualified columns are also accepted as they implicitly belong to the target table.
+fn predicate_is_on_target_multi(
+    expr: &Expr,
+    allowed_refs: &[TableReference],
+) -> Result<bool> {
     let mut columns = HashSet::new();
     expr_to_columns(expr, &mut columns)?;
 
-    // Short-circuit on first mismatch: returns false if any column references a different table
+    // Short-circuit on first mismatch: returns false if any column references a table not in allowed_refs.
+    // Columns are accepted if:
+    // 1. They are unqualified (no relation specified), OR
+    // 2. Their relation matches one of the allowed table references using resolved equality
     Ok(!columns.iter().any(|column| {
-        column
-            .relation
-            .as_ref()
-            .is_some_and(|relation| !relation.resolved_eq(target))
+        column.relation.as_ref().is_some_and(|relation| {
+            !allowed_refs
+                .iter()
+                .any(|allowed| relation.resolved_eq(allowed))
+        })
     }))
 }
 
