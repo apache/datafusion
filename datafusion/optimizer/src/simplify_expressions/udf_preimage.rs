@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_common::{Result, internal_err, tree_node::Transformed};
-use datafusion_expr::{Expr, Operator, and, lit, or, simplify::SimplifyContext};
+use datafusion_expr::{Expr, Operator, and, lit, or};
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 /// Rewrites a binary expression using its "preimage"
@@ -37,7 +37,6 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
 ///
 pub(super) fn rewrite_with_preimage(
-    _info: &SimplifyContext,
     preimage_interval: Interval,
     op: Operator,
     expr: Expr,

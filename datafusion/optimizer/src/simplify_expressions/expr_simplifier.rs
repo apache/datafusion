@@ -2011,12 +2011,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 if let PreimageResult::Range { interval, expr } =
                     get_preimage(left.as_ref(), right.as_ref(), info)?
                 {
-                    rewrite_with_preimage(info, *interval, op, expr)?
+                    rewrite_with_preimage(*interval, op, expr)?
                 } else if let Some(swapped) = op.swap() {
                     if let PreimageResult::Range { interval, expr } =
                         get_preimage(right.as_ref(), left.as_ref(), info)?
                     {
-                        rewrite_with_preimage(info, *interval, swapped, expr)?
+                        rewrite_with_preimage(*interval, swapped, expr)?
                     } else {
                         Transformed::no(Expr::BinaryExpr(BinaryExpr { left, op, right }))
                     }
