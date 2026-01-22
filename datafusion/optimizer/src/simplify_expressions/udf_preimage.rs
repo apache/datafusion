@@ -25,16 +25,7 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 /// x`) where `<expr>` is known to have a pre-image (aka the entire single
 /// range for which it is valid) and `x` is not `NULL`
 ///
-/// This rewrite is described in the [ClickHouse Paper] and is particularly
-/// useful for simplifying expressions `date_part` or equivalent functions. The
-/// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
-/// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
-/// covering the entire year of 2024. Thus, you can rewrite the expression to
-/// `k >= '2024-01-01' AND k < '2025-01-01'`, which uses an inclusive lower bound
-/// and exclusive upper bound and is often more optimizable.
-///
-/// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
-/// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+/// For details see [`datafusion_expr::ScalarUDFImpl::preimage`]
 ///
 pub(super) fn rewrite_with_preimage(
     preimage_interval: Interval,
@@ -46,22 +37,24 @@ pub(super) fn rewrite_with_preimage(
 
     let rewritten_expr = match op {
         // <expr> < x   ==>  <expr> < lower
-        // <expr> >= x  ==>  <expr> >= lower
         Operator::Lt => expr.lt(lower),
+        // <expr> >= x  ==>  <expr> >= lower
         Operator::GtEq => expr.gt_eq(lower),
         // <expr> > x ==> <expr> >= upper
         Operator::Gt => expr.gt_eq(upper),
         // <expr> <= x ==> <expr> < upper
         Operator::LtEq => expr.lt(upper),
         // <expr> = x ==> (<expr> >= lower) and (<expr> < upper)
-        //
-        // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
-        // but since x is always not NULL => (<expr> >= lower) and (<expr> < upper)
-        Operator::Eq | Operator::IsNotDistinctFrom => {
-            and(expr.clone().gt_eq(lower), expr.lt(upper))
-        }
+        Operator::Eq => and(expr.clone().gt_eq(lower), expr.lt(upper)),
         // <expr> != x ==> (<expr> < lower) or (<expr> >= upper)
         Operator::NotEq => or(expr.clone().lt(lower), expr.gt_eq(upper)),
+        // <expr> is not distinct from x ==> (<expr> is NULL and x is NULL) or ((<expr> >= lower) and (<expr> < upper))
+        // but since x is always not NULL => (<expr> is not NULL) and (<expr> >= lower) and (<expr> < upper)
+        Operator::IsNotDistinctFrom => expr
+            .clone()
+            .is_not_null()
+            .and(expr.clone().gt_eq(lower))
+            .and(expr.lt(upper)),
         // <expr> is distinct from x ==> (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL and x is not NULL) or (<expr> is not NULL and x is NULL)
         // but given that x is always not NULL => (<expr> < lower) or (<expr> >= upper) or (<expr> is NULL)
         Operator::IsDistinctFrom => expr
@@ -294,10 +287,14 @@ mod test {
 
     #[test]
     fn test_preimage_is_not_distinct_from_rewrite() {
-        // IS NOT DISTINCT FROM is treated like equality for non-null literal RHS.
+        // IS NOT DISTINCT FROM rewrites to equality plus expression not-null check
+        // for non-null literal RHS.
         let schema = test_schema();
         let expr = is_not_distinct_from(preimage_udf_expr(), lit(500));
-        let expected = and(col("x").gt_eq(lit(100)), col("x").lt(lit(200)));
+        let expected = col("x")
+            .is_not_null()
+            .and(col("x").gt_eq(lit(100)))
+            .and(col("x").lt(lit(200)));
 
         assert_eq!(optimize_test(expr, &schema), expected);
     }

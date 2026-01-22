@@ -1979,15 +1979,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // For case:
             // date_part('YEAR', expr) op literal
             //
-            // Background:
-            // Datasources such as Parquet can prune partitions using simple predicates,
-            // but they cannot do so for complex expressions.
-            // For a complex predicate like `date_part('YEAR', c1) < 2000`, pruning is not possible.
-            // After rewriting it to `c1 < 2000-01-01`, pruning becomes feasible.
-            // Rewrites use inclusive lower and exclusive upper bounds when
-            // translating an equality into a range.
-            // NOTE: we only consider immutable UDFs with non Null literal RHS values and
-            // UDFs that provide both `preimage` and `column_expr`.
+            // For details see datafusion_expr::ScalarUDFImpl::preimage
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 use datafusion_expr::Operator::*;
                 let is_preimage_op = matches!(
