@@ -292,6 +292,12 @@ impl DynamicFilterPhysicalExpr {
     ///
     /// Unlike [`Self::wait_update`], this method guarantees that when it returns,
     /// the filter is fully complete with no more updates expected.
+    ///
+    /// # Note
+    ///
+    /// This method should only be called on filters that have consumers. If you don't
+    /// know whether the filter is being used, call [`Self::is_used`] first to avoid
+    /// waiting indefinitely.
     pub async fn wait_complete(&self) {
         if self.inner.read().is_complete {
             return;
