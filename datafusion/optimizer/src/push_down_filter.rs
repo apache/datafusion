@@ -38,7 +38,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown, and, or,
+    BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator, Projection,
+    TableProviderFilterPushDown, and, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -1128,7 +1129,7 @@ impl OptimizerRule for PushDownFilter {
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates: Vec<_> = split_conjunction(&filter.predicate)
                     .into_iter()
-                    // Add already pushed filters.
+                    // Add already pushed filters to ensure that the rule is idempotent.
                     .chain(scan.filters.iter())
                     .unique()
                     .collect();
@@ -1162,26 +1163,106 @@ impl OptimizerRule for PushDownFilter {
                 let new_scan_filters: Vec<Expr> =
                     new_scan_filters.unique().cloned().collect();
 
+                let source_schema = scan.source.schema();
+                let mut additional_projection = HashSet::new();
+
                 // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
                 let new_predicate: Vec<Expr> = zip
-                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
+                    .filter(|(expr, res)| {
+                        if *res == TableProviderFilterPushDown::Exact {
+                            return false;
+                        }
+                        // For each not exactly supported filter we must ensure that all columns are projected,
+                        // so we collect all columns which are not currently projected.
+                        expr.apply(|expr| {
+                            if let Expr::Column(column) = expr
+                                && let Ok(idx) = source_schema.index_of(column.name())
+                                && scan
+                                    .projection
+                                    .as_ref()
+                                    .is_some_and(|p| !p.contains(&idx))
+                            {
+                                additional_projection.insert(idx);
+                            }
+                            Ok(TreeNodeRecursion::Continue)
+                        })
+                        .unwrap();
+                        true
+                    })
                     .map(|(pred, _)| pred)
                     .chain(volatile_filters)
                     .cloned()
                     .collect();
 
-                let new_scan = LogicalPlan::TableScan(TableScan {
-                    filters: new_scan_filters,
-                    ..scan
-                });
-
-                Transformed::yes(new_scan).transform_data(|new_scan| {
-                    if let Some(predicate) = conjunction(new_predicate) {
-                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
+                // Wraps with a filter if some filters are not supported exactly.
+                let filtered = move |plan| {
+                    if let Some(new_predicate) = conjunction(new_predicate) {
+                        Filter::try_new(new_predicate, Arc::new(plan))
+                            .map(LogicalPlan::Filter)
                     } else {
-                        Ok(Transformed::no(new_scan))
+                        Ok(plan)
                     }
-                })
+                };
+
+                if additional_projection.is_empty() {
+                    // No additional projection is required.
+                    let new_scan = LogicalPlan::TableScan(TableScan {
+                        filters: new_scan_filters,
+                        ..scan
+                    });
+                    return filtered(new_scan).map(Transformed::yes);
+                }
+
+                let scan_table_name = &scan.table_name;
+                let new_scan = filtered(
+                    LogicalPlanBuilder::scan_with_filters_fetch(
+                        scan_table_name.clone(),
+                        Arc::clone(&scan.source),
+                        scan.projection.clone().map(|mut projection| {
+                            // Extend a projection.
+                            projection.extend(additional_projection);
+                            projection
+                        }),
+                        new_scan_filters,
+                        scan.fetch,
+                    )?
+                    .build()?,
+                )?;
+
+                // Project fields required by the initial projection.
+                let new_plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+                    scan.projection
+                        .as_ref()
+                        .map(|projection| {
+                            projection
+                                .iter()
+                                .cloned()
+                                .map(|idx| {
+                                    Expr::Column(Column::new(
+                                        Some(scan_table_name.clone()),
+                                        source_schema.field(idx).name(),
+                                    ))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_else(|| {
+                            source_schema
+                                .fields()
+                                .iter()
+                                .map(|field| {
+                                    Expr::Column(Column::new(
+                                        Some(scan_table_name.clone()),
+                                        field.name(),
+                                    ))
+                                })
+                                .collect()
+                        }),
+                    Arc::new(new_scan),
+                    // Preserve a projected schema metadata.
+                    scan.projected_schema,
+                )?);
+
+                Ok(Transformed::yes(new_plan))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -3205,7 +3286,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Inexact,
             vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
-            Some(vec![0]),
+            Some(vec![0, 1]),
         )?
         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
         .project(vec![col("a"), col("b")])?
@@ -3216,7 +3297,7 @@ mod tests {
             @r"
         Projection: a, b
           Filter: a = Int64(10) AND b > Int64(11)
-            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+            TableScan: test projection=[a, b], partial_filters=[a = Int64(10), b > Int64(11)]
         "
         )
     }
@@ -3226,7 +3307,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider_builder(
             TableProviderFilterPushDown::Exact,
             vec![],
-            Some(vec![0]),
+            Some(vec![0, 1]),
         )?
         .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
         .project(vec![col("a"), col("b")])?
@@ -3236,7 +3317,7 @@ mod tests {
             plan,
             @r"
         Projection: a, b
-          TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+          TableScan: test projection=[a, b], full_filters=[a = Int64(10), b > Int64(11)]
         "
         )
     }
@@ -4290,6 +4371,36 @@ mod tests {
         Filter: t.b = Int32(4)
           TableScan: t, full_filters=[t.a = Int32(1)]
         "
+        )
+    }
+
+    #[test]
+    fn test_projection_is_updated_when_filter_becomes_unsupported() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Unsupported,
+        };
+
+        let projected_schema = test_provider.schema().project(&[0])?;
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".into(),
+            // Emulate that there were pushed filters but now
+            // provider cannot support it.
+            filters: vec![col("b").eq(lit(1i64))],
+            projected_schema: Arc::new(DFSchema::try_from(projected_schema)?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            fetch: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").eq(lit(1i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan,
+            @r"
+        Projection: test.a
+          Filter: a = Int64(1) AND b = Int64(1)
+            TableScan: test projection=[a, b]"
         )
     }
 }
