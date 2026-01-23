@@ -92,6 +92,30 @@ physical_plan
 01)SortExec: TopK(fetch=3), expr=[value@1 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ]
 
+statement ok
+set datafusion.explain.analyze_level = summary;
+
+query TT
+EXPLAIN ANALYZE SELECT id, value AS v, value + id as name FROM test_parquet where value > 3 ORDER BY v DESC LIMIT 3;
+----
+Plan with Metrics
+01)SortPreservingMergeExec: [v@1 DESC], fetch=3, metrics=[output_rows=3, <slt:ignore>]
+02)--SortExec: TopK(fetch=3), expr=[v@1 DESC], preserve_partitioning=[true], filter=[v@1 IS NULL OR v@1 > 800], metrics=[output_rows=3, <slt:ignore>]
+03)----ProjectionExec: expr=[id@0 as id, value@1 as v, value@1 + id@0 as name], metrics=[output_rows=10, <slt:ignore>]
+04)------FilterExec: value@1 > 3, metrics=[output_rows=10, <slt:ignore>, selectivity=100% (10/10)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, metrics=[output_rows=10, <slt:ignore>]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value], file_type=parquet, predicate=value@1 > 3 AND DynamicFilter [ value@1 IS NULL OR value@1 > 800 ], pruning_predicate=value_null_count@1 != row_count@2 AND value_max@0 > 3 AND (value_null_count@1 > 0 OR value_null_count@1 != row_count@2 AND value_max@0 > 800), required_guarantees=[], metrics=[output_rows=10, <slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched -> 1 fully matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_rows_pruned=10 total → 10 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_scanned=210, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=18% (210/1.16 K)]
+
+statement ok
+set datafusion.explain.analyze_level = dev;
+
+query III
+SELECT id, value AS v, value + id as name FROM test_parquet where value > 3 ORDER BY v DESC LIMIT 3;
+----
+10 1000 1010
+9 900 909
+8 800 808
+
 # Disable TopK dynamic filter pushdown
 statement ok
 SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
@@ -105,6 +129,13 @@ logical_plan
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[value@1 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_filter_pushdown_config/test_data.parquet]]}, projection=[id, value, name], file_type=parquet
+
+query IIT
+SELECT id, value AS v, name FROM (SELECT * FROM test_parquet UNION ALL SELECT * FROM test_parquet) ORDER BY v DESC LIMIT 3;
+----
+10 1000 j
+10 1000 j
+9 900 i
 
 # Re-enable for next tests
 statement ok
