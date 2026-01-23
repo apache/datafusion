@@ -812,10 +812,14 @@ mod tests {
     mod ndv_tests {
         use super::*;
         use arrow::datatypes::Field;
+        use parquet::arrow::parquet_to_arrow_schema;
         use parquet::basic::Type as PhysicalType;
         use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+        use parquet::file::reader::{FileReader, SerializedFileReader};
         use parquet::file::statistics::Statistics as ParquetStatistics;
         use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
+        use std::fs::File;
+        use std::path::PathBuf;
 
         fn create_schema_descr(num_columns: usize) -> Arc<SchemaDescriptor> {
             let fields: Vec<Arc<SchemaType>> = (0..num_columns)
@@ -1108,11 +1112,6 @@ mod tests {
         /// - name: 5 distinct values
         #[test]
         fn test_distinct_count_from_real_parquet_file() {
-            use parquet::arrow::parquet_to_arrow_schema;
-            use parquet::file::reader::{FileReader, SerializedFileReader};
-            use std::fs::File;
-            use std::path::PathBuf;
-
             // Path to test file created by DuckDB with distinct_count statistics
             let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             path.push("src/test_data/ndv_test.parquet");
