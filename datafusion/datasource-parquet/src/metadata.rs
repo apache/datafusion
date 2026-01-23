@@ -333,16 +333,16 @@ impl<'a> DFParquetMetadata<'a> {
                     },
                 );
 
-                get_col_stats(
-                    logical_file_schema,
-                    &null_counts_array,
-                    &mut max_accs,
-                    &mut min_accs,
-                    &mut is_max_value_exact,
-                    &mut is_min_value_exact,
-                    &column_byte_sizes,
-                    &distinct_counts_array,
-                )
+                let mut accumulators = StatisticsAccumulators {
+                    min_accs: &mut min_accs,
+                    max_accs: &mut max_accs,
+                    null_counts_array: &mut null_counts_array,
+                    is_min_value_exact: &mut is_min_value_exact,
+                    is_max_value_exact: &mut is_max_value_exact,
+                    column_byte_sizes: &mut column_byte_sizes,
+                    distinct_counts_array: &mut distinct_counts_array,
+                };
+                accumulators.build_column_statistics(logical_file_schema)
             } else {
                 // Record column sizes
                 logical_file_schema
@@ -415,55 +415,6 @@ fn create_max_min_accs(
     (max_values, min_values)
 }
 
-#[expect(clippy::too_many_arguments)]
-fn get_col_stats(
-    schema: &Schema,
-    null_counts: &[Precision<usize>],
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-    is_max_value_exact: &mut [Option<bool>],
-    is_min_value_exact: &mut [Option<bool>],
-    column_byte_sizes: &[Precision<usize>],
-    distinct_counts: &[Precision<usize>],
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match (
-                max_values.get_mut(i).unwrap(),
-                is_max_value_exact.get(i).unwrap(),
-            ) {
-                (Some(max_value), Some(true)) => {
-                    max_value.evaluate().ok().map(Precision::Exact)
-                }
-                (Some(max_value), Some(false)) | (Some(max_value), None) => {
-                    max_value.evaluate().ok().map(Precision::Inexact)
-                }
-                (None, _) => None,
-            };
-            let min_value = match (
-                min_values.get_mut(i).unwrap(),
-                is_min_value_exact.get(i).unwrap(),
-            ) {
-                (Some(min_value), Some(true)) => {
-                    min_value.evaluate().ok().map(Precision::Exact)
-                }
-                (Some(min_value), Some(false)) | (Some(min_value), None) => {
-                    min_value.evaluate().ok().map(Precision::Inexact)
-                }
-                (None, _) => None,
-            };
-            ColumnStatistics {
-                null_count: null_counts[i],
-                max_value: max_value.unwrap_or(Precision::Absent),
-                min_value: min_value.unwrap_or(Precision::Absent),
-                sum_value: Precision::Absent,
-                distinct_count: distinct_counts[i],
-                byte_size: column_byte_sizes[i],
-            }
-        })
-        .collect()
-}
-
 /// Holds the accumulator state for collecting statistics from row groups
 struct StatisticsAccumulators<'a> {
     min_accs: &'a mut [Option<MinAccumulator>],
@@ -473,6 +424,48 @@ struct StatisticsAccumulators<'a> {
     is_max_value_exact: &'a mut [Option<bool>],
     column_byte_sizes: &'a mut [Precision<usize>],
     distinct_counts_array: &'a mut [Precision<usize>],
+}
+
+impl StatisticsAccumulators<'_> {
+    /// Converts the accumulated statistics into a vector of `ColumnStatistics`
+    fn build_column_statistics(&mut self, schema: &Schema) -> Vec<ColumnStatistics> {
+        (0..schema.fields().len())
+            .map(|i| {
+                let max_value = match (
+                    self.max_accs.get_mut(i).unwrap(),
+                    self.is_max_value_exact.get(i).unwrap(),
+                ) {
+                    (Some(max_value), Some(true)) => {
+                        max_value.evaluate().ok().map(Precision::Exact)
+                    }
+                    (Some(max_value), Some(false)) | (Some(max_value), None) => {
+                        max_value.evaluate().ok().map(Precision::Inexact)
+                    }
+                    (None, _) => None,
+                };
+                let min_value = match (
+                    self.min_accs.get_mut(i).unwrap(),
+                    self.is_min_value_exact.get(i).unwrap(),
+                ) {
+                    (Some(min_value), Some(true)) => {
+                        min_value.evaluate().ok().map(Precision::Exact)
+                    }
+                    (Some(min_value), Some(false)) | (Some(min_value), None) => {
+                        min_value.evaluate().ok().map(Precision::Inexact)
+                    }
+                    (None, _) => None,
+                };
+                ColumnStatistics {
+                    null_count: self.null_counts_array[i],
+                    max_value: max_value.unwrap_or(Precision::Absent),
+                    min_value: min_value.unwrap_or(Precision::Absent),
+                    sum_value: Precision::Absent,
+                    distinct_count: self.distinct_counts_array[i],
+                    byte_size: self.column_byte_sizes[i],
+                }
+            })
+            .collect()
+    }
 }
 
 fn summarize_column_statistics(
