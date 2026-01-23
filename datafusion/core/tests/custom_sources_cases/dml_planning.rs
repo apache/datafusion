@@ -725,8 +725,8 @@ async fn test_delete_target_table_scoping() -> Result<()> {
 
 #[tokio::test]
 async fn test_update_from_drops_non_target_predicates() -> Result<()> {
-    // UPDATE ... FROM is currently unsupported due to design limitations
-    // See FIX_UPDATE.md and FIX_UPDATE_2.md for details
+    // UPDATE ... FROM is currently not working
+    // TODO fix https://github.com/apache/datafusion/issues/19950
     let target_provider = Arc::new(CaptureUpdateProvider::new_with_filter_pushdown(
         test_schema(),
         TableProviderFilterPushDown::Exact,

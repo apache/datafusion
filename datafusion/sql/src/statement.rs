@@ -1071,9 +1071,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 let update_from = from_clauses.and_then(|mut f| f.pop());
 
-                // UPDATE ... FROM is currently unsupported due to design limitations
-                // See FIX_UPDATE.md and FIX_UPDATE_2.md for details
-                // Qualifier stripping breaks source column references, causing incorrect behavior
+                // UPDATE ... FROM is currently not working
+                // TODO fix https://github.com/apache/datafusion/issues/19950
                 if update_from.is_some() {
                     return not_impl_err!("UPDATE ... FROM is not supported");
                 }
