@@ -1070,6 +1070,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
                 }
                 let update_from = from_clauses.and_then(|mut f| f.pop());
+
+                // UPDATE ... FROM is currently unsupported due to design limitations
+                // See FIX_UPDATE.md and FIX_UPDATE_2.md for details
+                // Qualifier stripping breaks source column references, causing incorrect behavior
+                if update_from.is_some() {
+                    return not_impl_err!("UPDATE ... FROM is not supported");
+                }
+
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
