@@ -756,8 +756,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
     let err = result.unwrap_err();
     assert!(
         err.to_string().contains("UPDATE ... FROM is not supported"),
-        "Expected 'UPDATE ... FROM is not supported' error, got: {}",
-        err
+        "Expected 'UPDATE ... FROM is not supported' error, got: {err}"
     );
     Ok(())
 }
