@@ -534,7 +534,8 @@ async fn drop_columns_with_nonexistent_columns() -> Result<()> {
 async fn drop_columns_with_empty_array() -> Result<()> {
     // build plan using Table API
     let t = test_table().await?;
-    let t2 = t.drop_columns(&[])?;
+    let drop_columns = vec![] as Vec<&str>;
+    let t2 = t.drop_columns(&drop_columns)?;
     let plan = t2.logical_plan().clone();
 
     // build query using SQL
@@ -545,6 +546,107 @@ async fn drop_columns_with_empty_array() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_qualified() -> Result<()> {
+    // build plan using Table API
+    let mut t = test_table().await?;
+    t = t.select_columns(&["c1", "c2", "c11"])?;
+    let mut t2 = test_table_with_name("another_table").await?;
+    t2 = t2.select_columns(&["c1", "c2", "c11"])?;
+    let mut t3 = t.join_on(
+        t2,
+        JoinType::Inner,
+        [col("aggregate_test_100.c1").eq(col("another_table.c1"))],
+    )?;
+    t3 = t3.drop_columns(&["another_table.c2", "another_table.c11"])?;
+
+    let plan = t3.logical_plan().clone();
+
+    let sql = "SELECT aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c11, another_table.c1 FROM (SELECT c1, c2, c11 FROM aggregate_test_100) INNER JOIN (SELECT c1, c2, c11 FROM another_table) ON aggregate_test_100.c1 = another_table.c1";
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, "aggregate_test_100").await?;
+    register_aggregate_csv(&ctx, "another_table").await?;
+    let sql_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+
+    // the two plans should be identical
+    assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn drop_columns_qualified_find_qualified() -> Result<()> {
+    // build plan using Table API
+    let mut t = test_table().await?;
+    t = t.select_columns(&["c1", "c2", "c11"])?;
+    let mut t2 = test_table_with_name("another_table").await?;
+    t2 = t2.select_columns(&["c1", "c2", "c11"])?;
+    let mut t3 = t.join_on(
+        t2.clone(),
+        JoinType::Inner,
+        [col("aggregate_test_100.c1").eq(col("another_table.c1"))],
+    )?;
+    t3 = t3.drop_columns(&t2.find_qualified_columns(&["c2", "c11"])?)?;
+
+    let plan = t3.logical_plan().clone();
+
+    let sql = "SELECT aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c11, another_table.c1 FROM (SELECT c1, c2, c11 FROM aggregate_test_100) INNER JOIN (SELECT c1, c2, c11 FROM another_table) ON aggregate_test_100.c1 = another_table.c1";
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx, "aggregate_test_100").await?;
+    register_aggregate_csv(&ctx, "another_table").await?;
+    let sql_plan = ctx.sql(sql).await?.into_unoptimized_plan();
+
+    // the two plans should be identical
+    assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_find_qualified_names() -> Result<()> {
+    let t = test_table().await?;
+    let column_names = ["c1", "c2", "c3"];
+    let columns = t.find_qualified_columns(&column_names)?;
+
+    // Expected results for each column
+    let binding = TableReference::bare("aggregate_test_100");
+    let expected = [
+        (Some(&binding), "c1"),
+        (Some(&binding), "c2"),
+        (Some(&binding), "c3"),
+    ];
+
+    // Verify we got the expected number of results
+    assert_eq!(
+        columns.len(),
+        expected.len(),
+        "Expected {} columns, got {}",
+        expected.len(),
+        columns.len()
+    );
+
+    // Iterate over the results and check each one individually
+    for (i, (actual, expected)) in columns.iter().zip(expected.iter()).enumerate() {
+        let (actual_table_ref, actual_field_ref) = actual;
+        let (expected_table_ref, expected_field_name) = expected;
+
+        // Check table reference
+        assert_eq!(
+            actual_table_ref, expected_table_ref,
+            "Column {i}: expected table reference {expected_table_ref:?}, got {actual_table_ref:?}"
+        );
+
+        // Check field name
+        assert_eq!(
+            actual_field_ref.name(),
+            *expected_field_name,
+            "Column {i}: expected field name '{expected_field_name}', got '{actual_field_ref}'"
+        );
+    }
 
     Ok(())
 }
@@ -594,7 +696,7 @@ async fn drop_with_periods() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.register_batch("t", batch)?;
 
-    let df = ctx.table("t").await?.drop_columns(&["f.c1"])?;
+    let df = ctx.table("t").await?.drop_columns(&["\"f.c1\""])?;
 
     let df_results = df.collect().await?;
 

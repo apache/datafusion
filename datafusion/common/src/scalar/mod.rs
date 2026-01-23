@@ -61,16 +61,15 @@ use arrow::array::{
     Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeBinaryBuilder, FixedSizeListArray, Float16Array, Float32Array, Float64Array,
-    GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray,
-    MutableArrayData, OffsetSizeTrait, PrimitiveArray, Scalar, StringArray,
-    StringViewArray, StringViewBuilder, StructArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    new_empty_array, new_null_array,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
+    Int8Array, Int16Array, Int32Array, Int64Array, IntervalDayTimeArray,
+    IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeBinaryArray, LargeListArray,
+    LargeStringArray, ListArray, MapArray, MutableArrayData, OffsetSizeTrait,
+    PrimitiveArray, Scalar, StringArray, StringViewArray, StringViewBuilder, StructArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array, UnionArray, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -2989,13 +2988,8 @@ impl ScalarValue {
             },
             ScalarValue::Utf8View(e) => match e {
                 Some(value) => {
-                    let mut builder =
-                        StringViewBuilder::with_capacity(size).with_deduplicate_strings();
-                    // Replace with upstream arrow-rs code when available:
-                    // https://github.com/apache/arrow-rs/issues/9034
-                    for _ in 0..size {
-                        builder.append_value(value);
-                    }
+                    let mut builder = StringViewBuilder::with_capacity(size);
+                    builder.try_append_value_n(value, size)?;
                     let array = builder.finish();
                     Arc::new(array)
                 }
@@ -3013,11 +3007,8 @@ impl ScalarValue {
             },
             ScalarValue::BinaryView(e) => match e {
                 Some(value) => {
-                    let mut builder =
-                        BinaryViewBuilder::with_capacity(size).with_deduplicate_strings();
-                    for _ in 0..size {
-                        builder.append_value(value);
-                    }
+                    let mut builder = BinaryViewBuilder::with_capacity(size);
+                    builder.try_append_value_n(value, size)?;
                     let array = builder.finish();
                     Arc::new(array)
                 }
@@ -3031,14 +3022,7 @@ impl ScalarValue {
                     )
                     .unwrap(),
                 ),
-                None => {
-                    // TODO: Replace with FixedSizeBinaryArray::new_null once a fix for
-                    // https://github.com/apache/arrow-rs/issues/8900 is in the used arrow-rs
-                    // version.
-                    let mut builder = FixedSizeBinaryBuilder::new(*s);
-                    builder.append_nulls(size);
-                    Arc::new(builder.finish())
-                }
+                None => Arc::new(FixedSizeBinaryArray::new_null(*s, size)),
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => {
@@ -3704,7 +3688,23 @@ impl ScalarValue {
         }
 
         let scalar_array = self.to_array()?;
-        let cast_arr = cast_with_options(&scalar_array, target_type, cast_options)?;
+
+        // For struct types, use name-based casting logic that matches fields by name
+        // and recursively casts nested structs. The field name wrapper is arbitrary
+        // since cast_column only uses the DataType::Struct field definitions inside.
+        let cast_arr = match target_type {
+            DataType::Struct(_) => {
+                // Field name is unused; only the struct's inner field names matter
+                let target_field = Field::new("_", target_type.clone(), true);
+                crate::nested_struct::cast_column(
+                    &scalar_array,
+                    &target_field,
+                    cast_options,
+                )?
+            }
+            _ => cast_with_options(&scalar_array, target_type, cast_options)?,
+        };
+
         ScalarValue::try_from_array(&cast_arr, 0)
     }
 

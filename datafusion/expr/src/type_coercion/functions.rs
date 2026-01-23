@@ -635,8 +635,13 @@ fn get_valid_types(
                         default_casted_type.default_cast_for(current_type)?;
                     new_types.push(casted_type);
                 } else {
-                    return internal_err!(
-                        "Expect {} but received NativeType::{}, DataType: {}",
+                    let hint = if matches!(current_native_type, NativeType::Binary) {
+                        "\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String."
+                    } else {
+                        ""
+                    };
+                    return plan_err!(
+                        "Function '{function_name}' requires {}, but received {} (DataType: {}).{hint}",
                         param.desired_type(),
                         current_native_type,
                         current_type

@@ -379,6 +379,59 @@ select array_sort(c1), array_sort(c2) from (
 statement ok
 drop table array_agg_distinct_list_table;
 
+# Test array_agg with DISTINCT and IGNORE NULLS (regression test for issue #19735)
+query ?
+SELECT array_sort(ARRAY_AGG(DISTINCT x IGNORE NULLS)) as result
+FROM (VALUES (1), (2), (NULL), (2), (NULL), (1)) AS t(x);
+----
+[1, 2]
+
+# Test that non-DISTINCT aggregates also preserve IGNORE NULLS when mixed with DISTINCT
+# This tests the two-phase aggregation rewrite in SingleDistinctToGroupBy
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  array_sort(ARRAY_AGG(y IGNORE NULLS)) as y_agg
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 30),
+  (3, NULL),
+  (3, 40),
+  (NULL, 50)
+) AS t(x, y)
+----
+3 [10, 20, 30, 40, 50]
+
+# Test that FILTER clause is preserved in two-phase aggregation rewrite
+query II
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  SUM(y) FILTER (WHERE y > 15) as filtered_sum
+FROM (VALUES
+  (1, 10),
+  (1, 20),
+  (2, 5),
+  (2, 30),
+  (3, 25)
+) AS t(x, y)
+----
+3 75
+
+# Test that ORDER BY is preserved in two-phase aggregation rewrite
+query I?
+SELECT
+  COUNT(DISTINCT x) as distinct_count,
+  ARRAY_AGG(y ORDER BY y DESC) as ordered_agg
+FROM (VALUES
+  (1, 10),
+  (1, 30),
+  (2, 20),
+  (2, 40)
+) AS t(x, y)
+----
+2 [40, 30, 20, 10]
+
 statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
@@ -1225,6 +1278,32 @@ ORDER BY tags, timestamp;
 3 tag2 80 65 75
 4 tag2 90 67.5 82.5
 5 tag2 100 70 90
+
+
+# Test distinct median non-sliding window
+query ITRR
+SELECT
+    timestamp,
+    tags,
+    value,
+    median(DISTINCT value) OVER (
+        PARTITION BY tags
+        ORDER BY timestamp
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+    ) AS distinct_median
+FROM median_window_test
+ORDER BY tags, timestamp;
+----
+1 tag1 10 10
+2 tag1 20 15
+3 tag1 30 20
+4 tag1 40 25
+5 tag1 50 30
+1 tag2 60 60
+2 tag2 70 65
+3 tag2 80 70
+4 tag2 90 75
+5 tag2 100 80
 
 statement ok
 DROP TABLE median_window_test;

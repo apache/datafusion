@@ -5197,3 +5197,73 @@ DROP TABLE t1_c;
 
 statement ok
 DROP TABLE t2_c;
+
+# Reproducer of https://github.com/apache/datafusion/issues/19067
+statement count 0
+set datafusion.explain.physical_plan_only = true;
+
+# Setup Left Table with FixedSizeBinary(4)
+statement count 0
+CREATE TABLE issue_19067_left AS
+SELECT
+  column1 as id,
+  arrow_cast(decode(column2, 'hex'), 'FixedSizeBinary(4)') as join_key
+FROM (VALUES
+  (1, 'AAAAAAAA'),
+  (2, 'BBBBBBBB'),
+  (3, 'CCCCCCCC')
+);
+
+# Setup Right Table with FixedSizeBinary(4)
+statement count 0
+CREATE TABLE issue_19067_right AS
+SELECT
+  arrow_cast(decode(column1, 'hex'), 'FixedSizeBinary(4)') as join_key,
+  column2 as value
+FROM (VALUES
+  ('AAAAAAAA', 1000),
+  ('BBBBBBBB', 2000)
+);
+
+# Perform Left Join. Third row should contain NULL in `right_key`.
+query I??I
+SELECT
+  l.id,
+  l.join_key as left_key,
+  r.join_key as right_key,
+  r.value
+FROM issue_19067_left l
+LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
+ORDER BY l.id;
+----
+1 aaaaaaaa aaaaaaaa 1000
+2 bbbbbbbb bbbbbbbb 2000
+3 cccccccc NULL NULL
+
+# Ensure usage of HashJoinExec
+query TT
+EXPLAIN
+SELECT
+  l.id,
+  l.join_key as left_key,
+  r.join_key as right_key,
+  r.value
+FROM issue_19067_left l
+LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
+ORDER BY l.id;
+----
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement count 0
+set datafusion.explain.physical_plan_only = false;
+
+statement count 0
+DROP TABLE issue_19067_left;
+
+statement count 0
+DROP TABLE issue_19067_right;

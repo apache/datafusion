@@ -1165,7 +1165,7 @@ from small_floats;
 ----
 0.447 0.4 0.447
 0.707 0.7 0.707
-0.837 0.8 0.837
+0.836 0.8 0.836
 1 1 1
 
 ## bitwise and
@@ -2069,7 +2069,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
+query error DataFusion error: Error during planning: Function 'strpos' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Int64 \(DataType: Int64\)
 select position(1 in 1)
 
 query I

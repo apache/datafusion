@@ -176,6 +176,7 @@ initial_logical_plan
 logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
@@ -197,6 +198,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
@@ -535,6 +537,7 @@ initial_logical_plan
 logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
@@ -556,6 +559,7 @@ logical_plan after single_distinct_aggregation_to_group_by SAME TEXT AS ABOVE
 logical_plan after eliminate_group_by_constant SAME TEXT AS ABOVE
 logical_plan after common_sub_expression_eliminate SAME TEXT AS ABOVE
 logical_plan after optimize_projections TableScan: simple_explain_test projection=[a, b, c]
+logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
 logical_plan after optimize_unions SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
 logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
