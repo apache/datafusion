@@ -466,11 +466,12 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             }
         }
 
-        let cast_expr = Arc::new(CastColumnExpr::new(
+        let cast_expr = Arc::new(CastColumnExpr::new_with_schema(
             Arc::new(column),
             Arc::new(physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
+            Arc::clone(&self.physical_file_schema),
         )?);
 
         Ok(Transformed::yes(cast_expr))
@@ -659,8 +660,11 @@ mod tests {
     #[test]
     fn test_rewrite_multi_column_expr_with_type_cast() {
         let (physical_schema, logical_schema) = create_test_schema();
+        let physical_schema = Arc::new(physical_schema);
+        let logical_schema = Arc::new(logical_schema);
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter =
+            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
 
         // Create a complex expression: (a + 5) OR (c > 0.0) that tests the recursive case of the rewriter
         let column_a = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
@@ -685,11 +689,12 @@ mod tests {
 
         let expected = expressions::BinaryExpr::new(
             Arc::new(
-                CastColumnExpr::new(
+                CastColumnExpr::new_with_schema(
                     Arc::new(Column::new("a", 0)),
                     Arc::new(Field::new("a", DataType::Int32, false)),
                     Arc::new(Field::new("a", DataType::Int64, false)),
                     None,
+                    Arc::clone(&physical_schema),
                 )
                 .expect("cast column expr"),
             ),
@@ -765,15 +770,18 @@ mod tests {
             false,
         )]);
 
+        let physical_schema = Arc::new(physical_schema);
+        let logical_schema = Arc::new(logical_schema);
         let factory = DefaultPhysicalExprAdapterFactory;
-        let adapter = factory.create(Arc::new(logical_schema), Arc::new(physical_schema));
+        let adapter =
+            factory.create(Arc::clone(&logical_schema), Arc::clone(&physical_schema));
         let column_expr = Arc::new(Column::new("data", 0));
 
         let result = adapter.rewrite(column_expr).unwrap();
 
         let expected = Arc::new(
-            CastColumnExpr::new(
-                Arc::new(Column::new("data", 0)),
+                CastColumnExpr::new_with_schema(
+                    Arc::new(Column::new("data", 0)),
                 Arc::new(Field::new(
                     "data",
                     DataType::Struct(
@@ -797,6 +805,7 @@ mod tests {
                     false,
                 )),
                 None,
+                Arc::clone(&physical_schema),
             )
             .expect("cast column expr"),
         ) as Arc<dyn PhysicalExpr>;

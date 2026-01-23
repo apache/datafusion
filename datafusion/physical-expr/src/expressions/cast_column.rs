@@ -58,6 +58,8 @@ pub struct CastColumnExpr {
     target_field: FieldRef,
     /// Options forwarded to [`cast_column`].
     cast_options: CastOptions<'static>,
+    /// Schema used to resolve expression data types during construction.
+    input_schema: Arc<Schema>,
 }
 
 // Manually derive `PartialEq`/`Hash` as `Arc<dyn PhysicalExpr>` does not
@@ -82,14 +84,36 @@ impl Hash for CastColumnExpr {
 
 impl CastColumnExpr {
     /// Create a new [`CastColumnExpr`].
+    ///
+    /// This constructor assumes `expr` is a column expression and validates it
+    /// against a single-field schema derived from `input_field`. If the
+    /// expression depends on a broader schema (for example, computed
+    /// expressions), use [`Self::new_with_schema`] instead.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Result<Self> {
-        let input_schema = Schema::new(vec![input_field.as_ref().clone()]);
-        let expr_data_type = expr.data_type(&input_schema)?;
+        let input_schema = Arc::new(Schema::new(vec![input_field.as_ref().clone()]));
+        Self::new_with_schema(
+            expr,
+            input_field,
+            target_field,
+            cast_options,
+            input_schema,
+        )
+    }
+
+    /// Create a new [`CastColumnExpr`] using the full input schema.
+    pub fn new_with_schema(
+        expr: Arc<dyn PhysicalExpr>,
+        input_field: FieldRef,
+        target_field: FieldRef,
+        cast_options: Option<CastOptions<'static>>,
+        input_schema: Arc<Schema>,
+    ) -> Result<Self> {
+        let expr_data_type = expr.data_type(input_schema.as_ref())?;
         if input_field.data_type() != &expr_data_type {
             return plan_err!(
                 "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
@@ -125,6 +149,7 @@ impl CastColumnExpr {
             input_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            input_schema,
         })
     }
 
@@ -208,11 +233,12 @@ impl PhysicalExpr for CastColumnExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().expect("CastColumnExpr child");
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self::new_with_schema(
             child,
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
+            Arc::clone(&self.input_schema),
         )?))
     }
 
@@ -253,11 +279,12 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![values])?;
 
         let column = Arc::new(Column::new_with_schema("a", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
+            Arc::clone(&schema),
         )?;
 
         let result = expr.evaluate(&batch)?;
@@ -307,11 +334,12 @@ mod tests {
         )?;
 
         let column = Arc::new(Column::new_with_schema("s", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
+            Arc::clone(&schema),
         )?;
 
         let result = expr.evaluate(&batch)?;
@@ -377,11 +405,12 @@ mod tests {
         )?;
 
         let column = Arc::new(Column::new_with_schema("root", schema.as_ref())?);
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(outer_field.clone()),
             Arc::new(target_field.clone()),
             None,
+            Arc::clone(&schema),
         )?;
 
         let result = expr.evaluate(&batch)?;
@@ -428,11 +457,12 @@ mod tests {
         );
         let literal =
             Arc::new(Literal::new(ScalarValue::Struct(Arc::new(scalar_struct))));
-        let expr = CastColumnExpr::new(
+        let expr = CastColumnExpr::new_with_schema(
             literal,
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
+            Arc::clone(&schema),
         )?;
 
         let batch = RecordBatch::new_empty(Arc::clone(&schema));

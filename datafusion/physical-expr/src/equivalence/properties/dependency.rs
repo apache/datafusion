@@ -516,11 +516,12 @@ mod tests {
 
         let input_field = Arc::new(input_schema.field(0).clone());
         let target_field = Arc::new(Field::new("a_cast", DataType::Int64, true));
-        let cast_col = Arc::new(CastColumnExpr::new(
+        let cast_col = Arc::new(CastColumnExpr::new_with_schema(
             Arc::clone(&col_a),
             input_field,
             target_field,
             None,
+            Arc::clone(&input_schema),
         )?) as Arc<dyn PhysicalExpr>;
 
         let proj_exprs = vec![

@@ -214,8 +214,14 @@ mod tests {
 
         let column_expr = col("a", &schema).unwrap();
         let cast_expr = Arc::new(
-            CastColumnExpr::new(column_expr, input_field, target_field, None)
-                .expect("cast column expr"),
+            CastColumnExpr::new_with_schema(
+                column_expr,
+                input_field,
+                target_field,
+                None,
+                Arc::clone(&schema),
+            )
+            .expect("cast column expr"),
         ) as Arc<dyn PhysicalExpr>;
 
         assert!(check_support(&cast_expr, &schema));

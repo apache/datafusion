@@ -364,7 +364,7 @@ pub fn parse_physical_expr(
                 e.safe,
                 e.format_options.as_ref(),
             )?;
-            Arc::new(CastColumnExpr::new(
+            Arc::new(CastColumnExpr::new_with_schema(
                 parse_required_physical_expr(
                     e.expr.as_deref(),
                     ctx,
@@ -375,6 +375,7 @@ pub fn parse_physical_expr(
                 Arc::new(Field::try_from(input_field)?),
                 Arc::new(Field::try_from(target_field)?),
                 cast_options,
+                Arc::new(input_schema.clone()),
             )?)
         }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(

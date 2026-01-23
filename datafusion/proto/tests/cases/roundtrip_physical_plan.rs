@@ -219,11 +219,13 @@ fn roundtrip_cast_column_expr() -> Result<()> {
         safe: true,
         format_options,
     };
-    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
+    let input_schema = Schema::new(vec![input_field.clone()]);
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new_with_schema(
         Arc::new(Column::new("a", 0)),
         Arc::new(input_field.clone()),
         Arc::new(target_field.clone()),
         Some(cast_options.clone()),
+        Arc::new(input_schema.clone()),
     )?);
 
     let ctx = SessionContext::new();
@@ -231,7 +233,6 @@ fn roundtrip_cast_column_expr() -> Result<()> {
     let proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
         &expr, &codec,
     )?;
-    let input_schema = Schema::new(vec![input_field.clone()]);
     let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
         &proto,
         &ctx.task_ctx(),
@@ -244,11 +245,12 @@ fn roundtrip_cast_column_expr() -> Result<()> {
         .downcast_ref::<CastColumnExpr>()
         .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))?;
 
-    let expected = CastColumnExpr::new(
+    let expected = CastColumnExpr::new_with_schema(
         Arc::new(Column::new("a", 0)),
         Arc::new(input_field.clone()),
         Arc::new(target_field.clone()),
         Some(cast_options),
+        Arc::new(input_schema.clone()),
     )?;
 
     assert_eq!(cast_expr, &expected);
@@ -274,11 +276,13 @@ fn roundtrip_cast_column_expr_with_target_field_change() -> Result<()> {
     let target_field =
         Field::new("payload_cast", DataType::Utf8, false).with_metadata(target_metadata);
 
-    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
+    let input_schema = Schema::new(vec![input_field.clone()]);
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new_with_schema(
         Arc::new(Column::new("payload", 0)),
         Arc::new(input_field.clone()),
         Arc::new(target_field.clone()),
         None,
+        Arc::new(input_schema.clone()),
     )?);
 
     let ctx = SessionContext::new();
@@ -286,7 +290,6 @@ fn roundtrip_cast_column_expr_with_target_field_change() -> Result<()> {
     let proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
         &expr, &codec,
     )?;
-    let input_schema = Schema::new(vec![input_field.clone()]);
     let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
         &proto,
         &ctx.task_ctx(),
