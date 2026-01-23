@@ -875,6 +875,8 @@ message PhysicalExprNode {
     UnknownColumn unknown_column = 20;
 
     PhysicalHashExprNode hash_expr = 21;
+
+    PhysicalCastColumnNode cast_column = 22;
   }
 }
 
@@ -982,6 +984,40 @@ message PhysicalTryCastNode {
 message PhysicalCastNode {
   PhysicalExprNode expr = 1;
   datafusion_common.ArrowType arrow_type = 2;
+  PhysicalCastOptions cast_options = 3;
+}
+
+message PhysicalCastColumnNode {
+  PhysicalExprNode expr = 1;
+  datafusion_common.Field input_field = 2;
+  datafusion_common.Field target_field = 3;
+  // Legacy fields retained for backward compatibility.
+  bool safe = 4;
+  FormatOptions format_options = 5;
+  PhysicalCastOptions cast_options = 6;
+}
+
+message PhysicalCastOptions {
+  bool safe = 1;
+  FormatOptions format_options = 2;
+}
+
+enum DurationFormat {
+  DURATION_FORMAT_UNSPECIFIED = 0;
+  DURATION_FORMAT_ISO8601 = 1;
+  DURATION_FORMAT_PRETTY = 2;
+}
+
+message FormatOptions {
+  bool safe = 1;
+  string null = 2;
+  optional string date_format = 3;
+  optional string datetime_format = 4;
+  optional string timestamp_format = 5;
+  optional string timestamp_tz_format = 6;
+  optional string time_format = 7;
+  DurationFormat duration_format = 8;
+  bool types_info = 9;
 }
 
 message PhysicalNegativeNode {
