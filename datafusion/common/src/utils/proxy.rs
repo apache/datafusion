@@ -121,7 +121,8 @@ pub trait HashTableAllocExt {
     ///
     /// Returns the bucket where the element was inserted.
     /// Note that allocation counts capacity, not size.
-    /// This method assumes that the element is not already present
+    /// Panics:
+    ///     Assumes the element is not already present, and may panic if it does
     ///
     /// # Example:
     /// ```
@@ -179,7 +180,7 @@ where
             self.reserve(bump_elements, &hasher);
         }
 
-        // still need to insert the element since first try failed
+        // We assume the element is not already present
         self.insert_unique(hash, x, hasher);
     }
 }
