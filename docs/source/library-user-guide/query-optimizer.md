@@ -514,3 +514,5 @@ fn analyze_filter_example() -> Result<()> {
     Ok(())
 }
 ```
+
+[TreeNode API]: https://docs.rs/datafusion/latest/datafusion/common/tree_node/trait.TreeNode.html
