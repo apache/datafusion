@@ -108,6 +108,11 @@ impl CastColumnExpr {
     pub fn target_field(&self) -> &FieldRef {
         &self.target_field
     }
+
+    /// Options forwarded to [`cast_column`].
+    pub fn cast_options(&self) -> &CastOptions<'static> {
+        &self.cast_options
+    }
 }
 
 impl Display for CastColumnExpr {

@@ -22,7 +22,6 @@ use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
 use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
@@ -375,7 +374,7 @@ pub fn serialize_physical_expr(
             ))),
         })
     } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
-        let cast_options = serialize_cast_options(&DEFAULT_CAST_OPTIONS)?;
+        let cast_options = serialize_cast_options(cast_column.cast_options())?;
         let format_options = cast_options
             .format_options
             .clone()
@@ -391,7 +390,7 @@ pub fn serialize_physical_expr(
                     )?)),
                     input_field: Some(cast_column.input_field().as_ref().try_into()?),
                     target_field: Some(cast_column.target_field().as_ref().try_into()?),
-                    safe: DEFAULT_CAST_OPTIONS.safe,
+                    safe: cast_column.cast_options().safe,
                     format_options: Some(format_options),
                     cast_options: Some(cast_options),
                 }),
