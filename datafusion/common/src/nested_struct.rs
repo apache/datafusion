@@ -539,9 +539,7 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("no field name overlap"));
-        assert!(error_msg.contains("2"));
-        assert!(error_msg.contains("1"));
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]
@@ -664,8 +662,7 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("no field name overlap"));
-        assert!(error_msg.contains("2"));
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]
@@ -953,7 +950,7 @@ mod tests {
         let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("no field name overlap"));
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]

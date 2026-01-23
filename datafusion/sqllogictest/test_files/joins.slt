@@ -57,15 +57,15 @@ statement ok
 CREATE TABLE join_t3(s3 struct<id INT>)
   AS VALUES
   (NULL),
-  (struct(1)),
-  (struct(2));
+    ({id: 1}),
+    ({id: 2});
 
 statement ok
 CREATE TABLE join_t4(s4 struct<id INT>)
   AS VALUES
   (NULL),
-  (struct(2)),
-  (struct(3));
+    ({id: 2}),
+    ({id: 3});
 
 # Left semi anti join
 
