@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, FieldRef};
 use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, exec_err, plan_err};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -134,18 +134,7 @@ impl ScalarUDFImpl for ArraySort {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match &arg_types[0] {
-            DataType::Null => Ok(DataType::Null),
-            DataType::List(field) => {
-                Ok(DataType::new_list(field.data_type().clone(), true))
-            }
-            DataType::LargeList(field) => {
-                Ok(DataType::new_large_list(field.data_type().clone(), true))
-            }
-            arg_type => {
-                plan_err!("{} does not support type {arg_type}", self.name())
-            }
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
