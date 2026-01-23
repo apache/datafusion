@@ -17,6 +17,19 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Generates documentation for DataFusion examples using the Rust-based
+# documentation generator and verifies that the committed README.md
+# is up to date.
+#
+# The README is generated from documentation comments in:
+#   datafusion-examples/examples/<group>/main.rs
+#
+# This script is intended to be run in CI to ensure that example
+# documentation stays in sync with the code.
+#
+# To update the README locally, run this script and replace README.md
+# with the generated output.
+
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
@@ -24,8 +37,11 @@ EXAMPLES_DIR="$ROOT_DIR/datafusion-examples"
 README="$EXAMPLES_DIR/README.md"
 README_NEW="$EXAMPLES_DIR/README-NEW.md"
 
-echo "▶ Generating examples README…"
-bash "$ROOT_DIR/ci/scripts/generate_examples_docs.sh" > "$README_NEW"
+echo "▶ Generating examples README (Rust generator)…"
+cargo run --quiet \
+  --manifest-path "$EXAMPLES_DIR/Cargo.toml" \
+  --bin examples-docs \
+  > "$README_NEW"
 
 echo "▶ Formatting generated README with Prettier…"
 npx prettier@2.7.1 \
@@ -38,16 +54,13 @@ if ! diff -u "$README" "$README_NEW" > /tmp/examples-readme.diff; then
   echo ""
   echo "❌ Examples README is out of date."
   echo ""
-  echo "The documentation for examples is generated automatically from:"
-  echo "  - examples/<group>/*.rs"
-  echo "  - datafusion-examples/examples.toml"
+  echo "The examples documentation is generated automatically from:"
+  echo "  - datafusion-examples/examples/<group>/main.rs"
   echo ""
-  echo "💡 Note: If the README is out of date, please make sure examples.toml is up-to-date first, then regenerate the README."
+  echo "To update the README locally, run:"
   echo ""
-  echo "To update locally (after fixing examples.toml):"
-  echo ""
-  echo "  bash ci/scripts/generate_examples_docs.sh \\"
-  echo "    | bash ci/scripts/doc_prettier_check.sh --write \\"
+  echo "  cargo run --bin examples-docs \\"
+  echo "    | npx prettier@2.7.1 --parser markdown --write \\"
   echo "    > datafusion-examples/README.md"
   echo ""
   echo "Diff:"
