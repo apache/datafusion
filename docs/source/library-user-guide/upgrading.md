@@ -21,7 +21,37 @@
 
 ## DataFusion `53.0.0`
 
-**Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+**Note:** DataFusion `53.0.0` has not been released yet. The information provided
+*in this section pertains to features and changes that have already been merged
+*to the main branch and are awaiting release in this version. See [#19692] for
+\*more details.
+
+[#19692]: https://github.com/apache/datafusion/issues/19692
+
+### `FileSinkConfig` adds `single_file_output`
+
+`FileSinkConfig` now includes a `single_file_output: Option<bool>` field to override the
+single-file vs directory output behavior. Any code constructing `FileSinkConfig` via struct
+literals must initialize this field.
+
+**Before:**
+
+```rust,ignore
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+}
+```
+
+**After:**
+
+```rust,ignore
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+    single_file_output: None,
+}
+```
 
 ### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
 
