@@ -29,8 +29,8 @@ use datafusion::logical_expr::{
     Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
 };
 use datafusion_catalog::Session;
+use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{ScalarValue, TableReference};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
