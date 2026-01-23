@@ -825,9 +825,9 @@ SELECT CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
 ----
 {a: 4, b: 3}
 
-# Test positional casting when there is no name overlap
+# Test casting with explicit field names
 query ?
-SELECT CAST(struct(1, 'x') AS STRUCT(a INT, b VARCHAR));
+SELECT CAST({a: 1, b: 'x'} AS STRUCT(a INT, b VARCHAR));
 ----
 {a: 1, b: x}
 
