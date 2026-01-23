@@ -1125,7 +1125,8 @@ mod tests {
             path.push("src/test_data/ndv_test.parquet");
 
             let file = File::open(&path).expect("Failed to open test parquet file");
-            let reader = SerializedFileReader::new(file).expect("Failed to create reader");
+            let reader =
+                SerializedFileReader::new(file).expect("Failed to create reader");
             let parquet_metadata = reader.metadata();
 
             // Derive Arrow schema from parquet file metadata
