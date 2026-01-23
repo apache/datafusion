@@ -123,10 +123,10 @@ SELECT
   arrow_typeof(arrow_cast('foo', 'Utf8View')) as col_utf8_view,
   arrow_typeof(arrow_cast('foo', 'Binary')) as col_binary,
   arrow_typeof(arrow_cast('foo', 'LargeBinary')) as col_large_binary,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)')) as col_ts_s,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)')) as col_ts_ms,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)')) as col_ts_us,
-  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)')) as col_ts_ns,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)')) as col_ts_s,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ms)')) as col_ts_ms,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(µs)')) as col_ts_us,
+  arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ns)')) as col_ts_ns,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, Some("+08:00"))')) as col_tstz_s,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, Some("+08:00"))')) as col_tstz_ms,
   arrow_typeof(arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, Some("+08:00"))')) as col_tstz_us,
@@ -242,10 +242,10 @@ drop table foo
 
 statement ok
 create table foo as select
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') as col_ts_s,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Millisecond, None)') as col_ts_ms,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Microsecond, None)') as col_ts_us,
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Nanosecond, None)') as col_ts_ns
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)') as col_ts_s,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ms)') as col_ts_ms,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(µs)') as col_ts_us,
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(ns)') as col_ts_ns
 ;
 
 ## Ensure each column in the table has the expected type

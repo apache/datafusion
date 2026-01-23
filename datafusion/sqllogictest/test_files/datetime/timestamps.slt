@@ -19,10 +19,10 @@
 ## Common timestamp data
 #
 # ts_data:        Int64 nanoseconds
-# ts_data_nanos:  Timestamp(Nanosecond, None)
-# ts_data_micros: Timestamp(Microsecond, None)
-# ts_data_millis: Timestamp(Millisecond, None)
-# ts_data_secs:   Timestamp(Second, None)
+# ts_data_nanos:  Timestamp(ns)
+# ts_data_micros: Timestamp(µs)
+# ts_data_millis: Timestamp(ms)
+# ts_data_secs:   Timestamp(s)
 ##########
 
 # Create timestamp tables with different precisions but the same logical values
@@ -34,16 +34,16 @@ create table ts_data(ts bigint, value int) as values
   (1599565349190855123, 3);
 
 statement ok
-create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(Nanosecond, None)') as ts, value from ts_data;
+create table ts_data_nanos as select arrow_cast(ts, 'Timestamp(ns)') as ts, value from ts_data;
 
 statement ok
-create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, None)') as ts, value from ts_data;
+create table ts_data_micros as select arrow_cast(ts / 1000, 'Timestamp(µs)') as ts, value from ts_data;
 
 statement ok
-create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(Millisecond, None)') as ts, value from ts_data;
+create table ts_data_millis as select arrow_cast(ts / 1000000, 'Timestamp(ms)') as ts, value from ts_data;
 
 statement ok
-create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(Second, None)') as ts, value from ts_data;
+create table ts_data_secs as select arrow_cast(ts / 1000000000, 'Timestamp(s)') as ts, value from ts_data;
 
 statement ok
 create table ts_data_micros_kolkata as select arrow_cast(ts / 1000, 'Timestamp(Microsecond, Some("Asia/Kolkata"))') as ts, value from ts_data;
@@ -1579,13 +1579,13 @@ second 2020-09-08T13:42:29
 
 # test date trunc on different timestamp scalar types and ensure they are consistent
 query P rowsort
-SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)')) as ts
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(s)')) as ts
   UNION ALL
-SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Nanosecond, None)')) as ts
+SELECT DATE_TRUNC('second', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(ns)')) as ts
   UNION ALL
-SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Microsecond, None)')) as ts
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(µs)')) as ts
   UNION ALL
-SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Millisecond, None)')) as ts
+SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(ms)')) as ts
 ----
 2023-08-03T00:00:00
 2023-08-03T00:00:00
@@ -2706,7 +2706,7 @@ drop table ts_utf8_data
 ##########
 
 query B
-select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(Nanosecond, None)');
+select arrow_cast(now(), 'Date64') < arrow_cast('2022-02-02 02:02:02', 'Timestamp(ns)');
 ----
 false
 
@@ -3640,7 +3640,7 @@ select to_char(arrow_cast(12344567890000, 'Time64(Nanosecond)'), '%H-%M-%S %f')
 03-25-44 567890000
 
 query T
-select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(Second, None)'), '%d-%m-%Y %H-%M-%S')
+select to_char(arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp(s)'), '%d-%m-%Y %H-%M-%S')
 ----
 03-08-2023 14-38-50
 
@@ -3732,7 +3732,7 @@ select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Se
 1673638290
 
 query I
-select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(Millisecond, None)'));
+select to_unixtime(arrow_cast(to_timestamp('2023-01-14T01:01:30'), 'Timestamp(ms)'));
 ----
 1673658090
 
@@ -4307,58 +4307,58 @@ SELECT CAST(CAST(one AS decimal(17,2)) AS timestamp(3)) AS a FROM (VALUES (1)) t
 1970-01-01T00:00:00.001
 
 query P
-SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Nanosecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Nanosecond, None)') AS a FROM (VALUES (1)) t(one);
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(ns)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(ns)') AS a FROM (VALUES (1)) t(one);
 ----
 1970-01-01T00:00:00.000000001
 1970-01-01T00:00:00.000000001
 
 query P
-SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Microsecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Microsecond, None)') AS a FROM (VALUES (1)) t(one);
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(µs)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(µs)') AS a FROM (VALUES (1)) t(one);
 ----
 1970-01-01T00:00:00.000001
 1970-01-01T00:00:00.000001
 
 query P
-SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Millisecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Millisecond, None)') AS a FROM (VALUES (1)) t(one);
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(ms)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(ms)') AS a FROM (VALUES (1)) t(one);
 ----
 1970-01-01T00:00:00.001
 1970-01-01T00:00:00.001
 
 query P
-SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(Second, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(Second, None)') AS a FROM (VALUES (1)) t(one);
+SELECT arrow_cast(CAST(1   AS decimal(17,2)), 'Timestamp(s)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,2)), 'Timestamp(s)') AS a FROM (VALUES (1)) t(one);
 ----
 1970-01-01T00:00:01
 1970-01-01T00:00:01
 
 
 query P
-SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Nanosecond, None)') AS a FROM (VALUES (1.123)) t(one);
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(ns)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(ns)') AS a FROM (VALUES (1.123)) t(one);
 ----
 1970-01-01T00:00:00.000000001
 1970-01-01T00:00:00.000000001
 
 query P
-SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Microsecond, None)') AS a FROM (VALUES (1.123)) t(one);
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(µs)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(µs)') AS a FROM (VALUES (1.123)) t(one);
 ----
 1970-01-01T00:00:00.000001
 1970-01-01T00:00:00.000001
 
 query P
-SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Millisecond, None)') AS a FROM (VALUES (1.123)) t(one);
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(ms)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(ms)') AS a FROM (VALUES (1.123)) t(one);
 ----
 1970-01-01T00:00:00.001
 1970-01-01T00:00:00.001
 
 query P
-SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(Second, None)') AS a UNION ALL
-SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(Second, None)') AS a FROM (VALUES (1.123)) t(one);
+SELECT arrow_cast(CAST(1.123 AS decimal(17,3)), 'Timestamp(s)') AS a UNION ALL
+SELECT arrow_cast(CAST(one AS decimal(17,3)), 'Timestamp(s)') AS a FROM (VALUES (1.123)) t(one);
 ----
 1970-01-01T00:00:01
 1970-01-01T00:00:01
@@ -4410,7 +4410,7 @@ FROM ts_data_micros_kolkata
 ## Casting between timestamp with and without timezone
 ##########
 
-# Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(Nanosecond, None)
+# Test casting from Timestamp(Nanosecond, Some("UTC")) to Timestamp(ns)
 # Verifies that the underlying nanosecond values are preserved when removing timezone
 
 # Verify input type
@@ -4421,13 +4421,13 @@ Timestamp(ns, "UTC")
 
 # Verify output type after casting
 query T
-SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(Nanosecond, None)'));
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))'), 'Timestamp(ns)'));
 ----
 Timestamp(ns)
 
 # Verify values are preserved when casting from timestamp with timezone to timestamp without timezone
 query P rowsort
-SELECT arrow_cast(column1, 'Timestamp(Nanosecond, None)')
+SELECT arrow_cast(column1, 'Timestamp(ns)')
 FROM (VALUES
   (arrow_cast(1, 'Timestamp(Nanosecond, Some("UTC"))')),
   (arrow_cast(2, 'Timestamp(Nanosecond, Some("UTC"))')),
@@ -4442,18 +4442,18 @@ FROM (VALUES
 1970-01-01T00:00:00.000000004
 1970-01-01T00:00:00.000000005
 
-# Test casting from Timestamp(Nanosecond, None) to Timestamp(Nanosecond, Some("UTC"))
+# Test casting from Timestamp(ns) to Timestamp(Nanosecond, Some("UTC"))
 # Verifies that the underlying nanosecond values are preserved when adding timezone
 
 # Verify input type
 query T
-SELECT arrow_typeof(arrow_cast(1, 'Timestamp(Nanosecond, None)'));
+SELECT arrow_typeof(arrow_cast(1, 'Timestamp(ns)'));
 ----
 Timestamp(ns)
 
 # Verify output type after casting
 query T
-SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(Nanosecond, None)'), 'Timestamp(Nanosecond, Some("UTC"))'));
+SELECT arrow_typeof(arrow_cast(arrow_cast(1, 'Timestamp(ns)'), 'Timestamp(Nanosecond, Some("UTC"))'));
 ----
 Timestamp(ns, "UTC")
 
@@ -4461,11 +4461,11 @@ Timestamp(ns, "UTC")
 query P rowsort
 SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))')
 FROM (VALUES
-  (arrow_cast(1, 'Timestamp(Nanosecond, None)')),
-  (arrow_cast(2, 'Timestamp(Nanosecond, None)')),
-  (arrow_cast(3, 'Timestamp(Nanosecond, None)')),
-  (arrow_cast(4, 'Timestamp(Nanosecond, None)')),
-  (arrow_cast(5, 'Timestamp(Nanosecond, None)'))
+  (arrow_cast(1, 'Timestamp(ns)')),
+  (arrow_cast(2, 'Timestamp(ns)')),
+  (arrow_cast(3, 'Timestamp(ns)')),
+  (arrow_cast(4, 'Timestamp(ns)')),
+  (arrow_cast(5, 'Timestamp(ns)'))
 ) t;
 ----
 1970-01-01T00:00:00.000000001Z

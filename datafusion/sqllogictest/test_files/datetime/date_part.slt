@@ -40,11 +40,11 @@ with t as (values
 )
 SELECT
   -- nanoseconds, with no, utc, and local timezone
-  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as ts_nano_no_tz,
+  arrow_cast(column1, 'Timestamp(ns)') as ts_nano_no_tz,
   arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as ts_nano_utc,
   arrow_cast(column1, 'Timestamp(Nanosecond, Some("America/New_York"))') as ts_nano_eastern,
   -- milliseconds, with no, utc, and local timezone
-  arrow_cast(column1, 'Timestamp(Millisecond, None)') as ts_milli_no_tz,
+  arrow_cast(column1, 'Timestamp(ms)') as ts_milli_no_tz,
   arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as ts_milli_utc,
   arrow_cast(column1, 'Timestamp(Millisecond, Some("America/New_York"))') as ts_milli_eastern
 FROM t;

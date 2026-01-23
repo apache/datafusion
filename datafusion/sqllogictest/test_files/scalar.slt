@@ -2010,8 +2010,8 @@ D false
 # test string_temporal_coercion
 query BBBBBBBBBB
 select
-  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
+  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(s)') == '2020-01-01T01:01:11',
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',
   arrow_cast(to_timestamp('2020-01-04 01:01:11.1234567890Z'), 'Time32(Second)') == arrow_cast('01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-05 01:01:11.1234567890Z'), 'Time64(Microsecond)') == '01:01:11.123456',

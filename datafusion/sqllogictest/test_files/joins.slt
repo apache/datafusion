@@ -146,10 +146,10 @@ AS VALUES
 statement ok
 CREATE TABLE test_timestamps_table as
 SELECT
-  arrow_cast(ts::timestamp::bigint, 'Timestamp(Nanosecond, None)') as nanos,
-  arrow_cast(ts::timestamp::bigint / 1000, 'Timestamp(Microsecond, None)') as micros,
-  arrow_cast(ts::timestamp::bigint / 1000000, 'Timestamp(Millisecond, None)') as millis,
-  arrow_cast(ts::timestamp::bigint / 1000000000, 'Timestamp(Second, None)') as secs,
+  arrow_cast(ts::timestamp::bigint, 'Timestamp(ns)') as nanos,
+  arrow_cast(ts::timestamp::bigint / 1000, 'Timestamp(µs)') as micros,
+  arrow_cast(ts::timestamp::bigint / 1000000, 'Timestamp(ms)') as millis,
+  arrow_cast(ts::timestamp::bigint / 1000000000, 'Timestamp(s)') as secs,
   names
 FROM
   test_timestamps_table_source;
