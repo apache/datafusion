@@ -659,7 +659,7 @@ impl ConstEvaluator {
                     }
 
                     // Skip const-folding when there is no field name overlap
-                    if !has_one_of_more_common_fields(&source_fields, &target_fields) {
+                    if !has_one_of_more_common_fields(&source_fields, target_fields) {
                         return false;
                     }
 
