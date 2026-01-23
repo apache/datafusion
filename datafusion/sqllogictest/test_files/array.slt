@@ -2579,16 +2579,16 @@ NULL NULL
 
 # maintains inner nullability
 query ?T
-select column1, arrow_typeof(column1)
-from values (array_sort(arrow_cast([1, 3, 5, -5], 'List(non-null Int32)')));
-----
-[-5, 1, 3, 5] List(non-null Int32)
-
-query ?T
-select column1, arrow_typeof(column1)
-from values (array_sort(arrow_cast([], 'List(non-null Int32)')));
+select array_sort(column1), arrow_typeof(array_sort(column1))
+from values
+  (arrow_cast([], 'List(non-null Int32)')),
+  (arrow_cast(NULL, 'List(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'List(non-null Int32)'))
+;
 ----
 [] List(non-null Int32)
+NULL List(non-null Int32)
+[-5, 1, 3, 5] List(non-null Int32)
 
 query ?T
 select column1, arrow_typeof(column1)
