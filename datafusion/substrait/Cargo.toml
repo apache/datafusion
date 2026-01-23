@@ -41,7 +41,8 @@ datafusion = { workspace = true, features = ["sql"] }
 half = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
-pbjson-types = { workspace = true }
+# We need to match the version in substrait, so we don't use the workspace version here
+pbjson-types = { version = "0.8.0" }
 prost = { workspace = true }
 substrait = { version = "0.62", features = ["serde"] }
 url = { workspace = true }

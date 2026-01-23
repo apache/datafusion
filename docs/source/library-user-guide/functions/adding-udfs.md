@@ -684,6 +684,10 @@ No function matches the given name and argument types substr(Utf8).
 Scalar UDFs are functions that take a row of data and return a single value. Window UDFs are similar, but they also have
 access to the rows around them. Access to the proximal rows is helpful, but adds some complexity to the implementation.
 
+For background and other considerations, see the [User defined Window Functions in DataFusion] blog.
+
+[user defined window functions in datafusion]: https://datafusion.apache.org/blog/2025/04/19/user-defined-window-functions
+
 For example, we will declare a user defined window function that computes a moving average.
 
 ```rust

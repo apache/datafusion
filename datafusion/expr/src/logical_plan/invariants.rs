@@ -22,7 +22,7 @@ use datafusion_common::{
 
 use crate::{
     Aggregate, Expr, Filter, Join, JoinType, LogicalPlan, Window,
-    expr::{Exists, InSubquery},
+    expr::{Exists, InSubquery, SetComparison},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
 };
@@ -81,6 +81,7 @@ fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Re
                 match expr {
                     Expr::Exists(Exists { subquery, .. })
                     | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::SetComparison(SetComparison { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         assert_valid_extension_nodes(&subquery.subquery, check)?;
                     }
@@ -133,6 +134,7 @@ fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
                 match expr {
                     Expr::Exists(Exists { subquery, .. })
                     | Expr::InSubquery(InSubquery { subquery, .. })
+                    | Expr::SetComparison(SetComparison { subquery, .. })
                     | Expr::ScalarSubquery(subquery) => {
                         check_subquery_expr(plan, &subquery.subquery, expr)?;
                     }
@@ -229,6 +231,20 @@ pub fn check_subquery_expr(
                 );
             }
         }
+        if let Expr::SetComparison(set_comparison) = expr
+            && set_comparison.subquery.subquery.schema().fields().len() > 1
+        {
+            return plan_err!(
+                "Set comparison subquery should only return one column, but found {}: {}",
+                set_comparison.subquery.subquery.schema().fields().len(),
+                set_comparison
+                    .subquery
+                    .subquery
+                    .schema()
+                    .field_names()
+                    .join(", ")
+            );
+        }
         match outer_plan {
             LogicalPlan::Projection(_)
             | LogicalPlan::Filter(_)
@@ -237,7 +253,7 @@ pub fn check_subquery_expr(
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Join(_) => Ok(()),
             _ => plan_err!(
-                "In/Exist subquery can only be used in \
+                "In/Exist/SetComparison subquery can only be used in \
                 Projection, Filter, TableScan, Window functions, Aggregate and Join plan nodes, \
                 but was used in [{}]",
                 outer_plan.display()

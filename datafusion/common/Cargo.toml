@@ -72,6 +72,7 @@ half = { workspace = true }
 hashbrown = { workspace = true }
 hex = { workspace = true, optional = true }
 indexmap = { workspace = true }
+itertools = { workspace = true }
 libc = "0.2.180"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }

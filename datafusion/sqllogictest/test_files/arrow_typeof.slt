@@ -95,7 +95,7 @@ SELECT arrow_cast('1', 'Int16')
 query error
 SELECT arrow_cast('1')
 
-query error Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
+query error DataFusion error: Error during planning: Function 'arrow_cast' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Int64 \(DataType: Int64\)
 SELECT arrow_cast('1', 43)
 
 query error DataFusion error: Execution error: arrow_cast requires its second argument to be a non\-empty constant string

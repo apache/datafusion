@@ -578,6 +578,7 @@ pub fn serialize_expr(
         Expr::ScalarSubquery(_)
         | Expr::InSubquery(_)
         | Expr::Exists { .. }
+        | Expr::SetComparison(_)
         | Expr::OuterReferenceColumn { .. } => {
             // we would need to add logical plan operators to datafusion.proto to support this
             // see discussion in https://github.com/apache/datafusion/issues/2565
@@ -728,6 +729,7 @@ impl From<&WriteOp> for protobuf::dml_node::Type {
             WriteOp::Delete => protobuf::dml_node::Type::Delete,
             WriteOp::Update => protobuf::dml_node::Type::Update,
             WriteOp::Ctas => protobuf::dml_node::Type::Ctas,
+            WriteOp::Truncate => protobuf::dml_node::Type::Truncate,
         }
     }
 }
