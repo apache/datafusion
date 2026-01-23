@@ -308,19 +308,6 @@ fn test_schema() -> SchemaRef {
     ]))
 }
 
-fn expr_has_table_reference(expr: &Expr, table: &str) -> Result<bool> {
-    let reference = TableReference::bare(table);
-    expr.exists(|node| {
-        Ok(matches!(
-            node,
-            Expr::Column(column)
-                if column.relation.as_ref().is_some_and(|relation| {
-                    relation.resolved_eq(&reference)
-                })
-        ))
-    })
-}
-
 #[tokio::test]
 async fn test_delete_single_filter() -> Result<()> {
     let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
