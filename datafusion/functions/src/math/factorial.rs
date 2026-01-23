@@ -144,7 +144,7 @@ const FACTORIALS: [i64; 21] = [
     6402373705728000,
     121645100408832000,
     2432902008176640000,
-];
+]; // if return type changes, this constant needs to be updated accordingly
 
 fn compute_factorial(n: i64) -> Result<i64> {
     if n < 0 {
