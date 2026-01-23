@@ -1008,16 +1008,12 @@ async fn test_parquet_opener_without_page_index() {
     // Query the table
     // If the bug exists, this might fail because Opener tries to load PageIndex forcefully
     let df = ctx.sql("SELECT * FROM t").await.unwrap();
-    let batches = df.collect().await;
+    let batches = df
+        .collect()
+        .await
+        .expect("Failed to read parquet file without page index");
 
     // We expect this to succeed, but currently it might fail
-    match batches {
-        Ok(b) => {
-            assert_eq!(b.len(), 1);
-            assert_eq!(b[0].num_rows(), 3);
-        }
-        Err(e) => {
-            panic!("Failed to read parquet file without page index: {}", e);
-        }
-    }
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
 }
