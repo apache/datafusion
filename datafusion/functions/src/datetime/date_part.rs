@@ -152,6 +152,7 @@ impl ScalarUDFImpl for DatePartFunc {
 
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
+        let nullable = args.arg_fields[1].is_nullable();
 
         field
             .and_then(|sv| {
@@ -160,9 +161,9 @@ impl ScalarUDFImpl for DatePartFunc {
                     .filter(|s| !s.is_empty())
                     .map(|part| {
                         if is_epoch(part) {
-                            Field::new(self.name(), DataType::Float64, true)
+                            Field::new(self.name(), DataType::Float64, nullable)
                         } else {
-                            Field::new(self.name(), DataType::Int32, true)
+                            Field::new(self.name(), DataType::Int32, nullable)
                         }
                     })
             })
