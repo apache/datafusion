@@ -390,7 +390,7 @@ mod tests {
         convert_to_sort_reqs, create_test_params, create_test_schema, parse_sort_expr,
     };
     use crate::equivalence::{ProjectionMapping, convert_to_sort_exprs};
-    use crate::expressions::{BinaryExpr, CastExpr, Column, col};
+    use crate::expressions::{BinaryExpr, CastColumnExpr, CastExpr, Column, col};
     use crate::projection::tests::output_schema;
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
@@ -441,7 +441,8 @@ mod tests {
         let col_a2 = &col("a2", &out_schema)?;
         let col_a3 = &col("a3", &out_schema)?;
         let col_a4 = &col("a4", &out_schema)?;
-        let out_properties = input_properties.project(&projection_mapping, out_schema);
+        let out_properties =
+            input_properties.project(&projection_mapping, Arc::clone(&out_schema));
 
         // At the output a1=a2=a3=a4
         assert_eq!(out_properties.eq_group().len(), 1);
@@ -496,6 +497,43 @@ mod tests {
             out_properties.to_string(),
             "order: [[a@0 ASC, c@2 ASC, b@1 ASC, d@3 ASC], [a@0 ASC, b@1 ASC, c@2 ASC, d@3 ASC]]"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_ordering_with_cast_column_expr() -> Result<()> {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            true,
+        )]));
+        let col_a = col("a", &input_schema)?;
+        let mut input_properties = EquivalenceProperties::new(Arc::clone(&input_schema));
+        input_properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(
+            &col_a,
+        ))]);
+
+        let input_field = Arc::new(input_schema.field(0).clone());
+        let target_field = Arc::new(Field::new("a_cast", DataType::Int64, true));
+        let cast_col = Arc::new(CastColumnExpr::new(
+            Arc::clone(&col_a),
+            input_field,
+            target_field,
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let proj_exprs = vec![
+            (Arc::clone(&col_a), "a".to_string()),
+            (Arc::clone(&cast_col), "a_cast".to_string()),
+        ];
+        let projection_mapping = ProjectionMapping::try_new(proj_exprs, &input_schema)?;
+        let out_schema = output_schema(&projection_mapping, &input_schema)?;
+        let out_properties =
+            input_properties.project(&projection_mapping, Arc::clone(&out_schema));
+
+        let cast_sort_expr = PhysicalSortExpr::new_default(col("a_cast", &out_schema)?);
+        assert!(out_properties.ordering_satisfy([cast_sort_expr])?);
 
         Ok(())
     }
