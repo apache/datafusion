@@ -306,7 +306,11 @@ fn validate_field_compatibility(
     Ok(())
 }
 
-fn has_one_of_more_common_fields(
+/// Check if two field lists have at least one common field by name.
+///
+/// This is useful for validating struct compatibility when casting between structs,
+/// ensuring that source and target fields have overlapping names.
+pub fn has_one_of_more_common_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> bool {

@@ -28,6 +28,7 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::nested_struct::has_one_of_more_common_fields;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -658,13 +659,7 @@ impl ConstEvaluator {
                     }
 
                     // Skip const-folding when there is no field name overlap
-                    let has_overlap = source_fields.iter().any(|source_field| {
-                        target_fields.iter().any(|target_field| {
-                            source_field.name() == target_field.name()
-                        })
-                    });
-
-                    if !has_overlap {
+                    if !has_one_of_more_common_fields(source_fields, target_fields) {
                         return false;
                     }
 
