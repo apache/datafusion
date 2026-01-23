@@ -83,7 +83,12 @@ CREATE EXTERNAL TABLE parquet_table
 double_field double,
 float_field float
 )
-STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/'
+STORED AS PARQUET LOCATION 'test_files/scratch/encrypted_parquet/' OPTIONS (
+    -- Decryption properties
+    'format.crypto.file_decryption.footer_key_as_hex' '30313233343536373839303132333435', -- b"0123456789012345"
+    'format.crypto.file_decryption.column_key_as_hex::double_field' '31323334353637383930313233343530', -- b"1234567890123450"
+    'format.crypto.file_decryption.column_key_as_hex::float_field' '31323334353637383930313233343531' -- b"1234567890123451"
+)
 
 query RR
 SELECT * FROM parquet_table ORDER BY double_field
