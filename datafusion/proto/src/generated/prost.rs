@@ -1186,6 +1186,12 @@ pub struct FileSinkConfig {
     pub insert_op: i32,
     #[prost(string, tag = "11")]
     pub file_extension: ::prost::alloc::string::String,
+    /// Optional override for single file output behavior.
+    /// When not set, uses extension heuristic (path with extension = single file).
+    /// When set to true, forces single file output at exact path.
+    /// When set to false, forces directory output with generated filenames.
+    #[prost(bool, optional, tag = "12")]
+    pub single_file_output: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JsonSink {

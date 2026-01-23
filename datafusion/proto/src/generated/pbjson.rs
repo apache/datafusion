@@ -6382,6 +6382,9 @@ impl serde::Serialize for FileSinkConfig {
         if !self.file_extension.is_empty() {
             len += 1;
         }
+        if self.single_file_output.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.FileSinkConfig", len)?;
         if !self.object_store_url.is_empty() {
             struct_ser.serialize_field("objectStoreUrl", &self.object_store_url)?;
@@ -6409,6 +6412,9 @@ impl serde::Serialize for FileSinkConfig {
         if !self.file_extension.is_empty() {
             struct_ser.serialize_field("fileExtension", &self.file_extension)?;
         }
+        if let Some(v) = self.single_file_output.as_ref() {
+            struct_ser.serialize_field("singleFileOutput", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -6435,6 +6441,8 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             "insertOp",
             "file_extension",
             "fileExtension",
+            "single_file_output",
+            "singleFileOutput",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -6447,6 +6455,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
             KeepPartitionByColumns,
             InsertOp,
             FileExtension,
+            SingleFileOutput,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -6476,6 +6485,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             "keepPartitionByColumns" | "keep_partition_by_columns" => Ok(GeneratedField::KeepPartitionByColumns),
                             "insertOp" | "insert_op" => Ok(GeneratedField::InsertOp),
                             "fileExtension" | "file_extension" => Ok(GeneratedField::FileExtension),
+                            "singleFileOutput" | "single_file_output" => Ok(GeneratedField::SingleFileOutput),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -6503,6 +6513,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                 let mut keep_partition_by_columns__ = None;
                 let mut insert_op__ = None;
                 let mut file_extension__ = None;
+                let mut single_file_output__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::ObjectStoreUrl => {
@@ -6553,6 +6564,12 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                             }
                             file_extension__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::SingleFileOutput => {
+                            if single_file_output__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("singleFileOutput"));
+                            }
+                            single_file_output__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(FileSinkConfig {
@@ -6564,6 +6581,7 @@ impl<'de> serde::Deserialize<'de> for FileSinkConfig {
                     keep_partition_by_columns: keep_partition_by_columns__.unwrap_or_default(),
                     insert_op: insert_op__.unwrap_or_default(),
                     file_extension: file_extension__.unwrap_or_default(),
+                    single_file_output: single_file_output__,
                 })
             }
         }
