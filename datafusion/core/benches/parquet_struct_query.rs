@@ -20,7 +20,7 @@
 use arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::prelude::SessionContext;
 use datafusion_common::instant::Instant;
 use parquet::arrow::ArrowWriter;
@@ -98,11 +98,7 @@ fn generate_batch(batch_id: usize) -> RecordBatch {
         ),
     ]);
 
-    RecordBatch::try_new(
-        schema,
-        vec![id_array, Arc::new(struct_array)],
-    )
-    .unwrap()
+    RecordBatch::try_new(schema, vec![id_array, Arc::new(struct_array)]).unwrap()
 }
 
 fn generate_file() -> NamedTempFile {
@@ -210,11 +206,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("filter_struct_range", |b| {
-        b.iter(|| query(
-            &ctx,
-            &rt,
-            "select id from t where s['id'] > 100 and s['id'] < 200"
-        ))
+        b.iter(|| {
+            query(
+                &ctx,
+                &rt,
+                "select id from t where s['id'] > 100 and s['id'] < 200",
+            )
+        })
     });
 
     // Join queries (limited with WHERE id < 1000 for performance)
@@ -272,28 +270,34 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("group_by_struct_with_count", |b| {
-        b.iter(|| query(
-            &ctx,
-            &rt,
-            "select s['id'], count(*) from t group by s['id']"
-        ))
+        b.iter(|| {
+            query(
+                &ctx,
+                &rt,
+                "select s['id'], count(*) from t group by s['id']",
+            )
+        })
     });
 
     c.bench_function("group_by_multiple_with_count", |b| {
-        b.iter(|| query(
-            &ctx,
-            &rt,
-            "select id, s['id'], count(*) from t group by id, s['id']"
-        ))
+        b.iter(|| {
+            query(
+                &ctx,
+                &rt,
+                "select id, s['id'], count(*) from t group by id, s['id']",
+            )
+        })
     });
 
     // Additional queries
     c.bench_function("order_by_struct_limit", |b| {
-        b.iter(|| query(
-            &ctx,
-            &rt,
-            "select id, s['id'] from t order by s['id'] limit 1000"
-        ))
+        b.iter(|| {
+            query(
+                &ctx,
+                &rt,
+                "select id, s['id'] from t order by s['id'] limit 1000",
+            )
+        })
     });
 
     c.bench_function("distinct_struct_field", |b| {
