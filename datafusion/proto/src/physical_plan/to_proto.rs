@@ -23,7 +23,8 @@ use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
 use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
 use datafusion_common::{
-    DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, Result, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err,
+    internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::FileSink;
@@ -375,12 +376,10 @@ pub fn serialize_physical_expr(
         })
     } else if let Some(cast_column) = expr.downcast_ref::<CastColumnExpr>() {
         let cast_options = serialize_cast_options(cast_column.cast_options())?;
-        let format_options = cast_options
-            .format_options
-            .clone()
-            .ok_or_else(|| {
-                internal_datafusion_err!("Missing format options for cast column")
-            })?;
+        let format_options = match cast_options.format_options.clone() {
+            Some(format_options) => format_options,
+            None => serialize_format_options(&DEFAULT_CAST_OPTIONS.format_options)?,
+        };
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::CastColumn(
                 Box::new(protobuf::PhysicalCastColumnNode {

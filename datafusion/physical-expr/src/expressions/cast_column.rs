@@ -22,9 +22,11 @@ use arrow::{
     compute::{CastOptions, can_cast_types},
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
+    util::display::FormatOptions as ArrowFormatOptions,
 };
 use datafusion_common::{
-    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS,
+    Result, ScalarValue,
+    format::DEFAULT_CAST_OPTIONS,
     nested_struct::{cast_column, validate_struct_compatibility},
     plan_err,
 };
@@ -82,30 +84,83 @@ impl Hash for CastColumnExpr {
     }
 }
 
+trait FormatOptionsSlot {
+    fn ensure_present(&mut self, default: ArrowFormatOptions<'static>);
+}
+
+impl FormatOptionsSlot for ArrowFormatOptions<'static> {
+    fn ensure_present(&mut self, _default: ArrowFormatOptions<'static>) {}
+}
+
+impl FormatOptionsSlot for Option<ArrowFormatOptions<'static>> {
+    fn ensure_present(&mut self, default: ArrowFormatOptions<'static>) {
+        if self.is_none() {
+            *self = Some(default);
+        }
+    }
+}
+
 impl CastColumnExpr {
     /// Create a new [`CastColumnExpr`].
     ///
-    /// This constructor assumes `expr` is a column expression and validates it
-    /// against a single-field schema derived from `input_field`. If the
-    /// expression depends on a broader schema (for example, computed
-    /// expressions), use [`Self::new_with_schema`] instead.
+    /// This constructor ensures that format options are populated with defaults,
+    /// normalizing the CastOptions for consistent behavior during serialization
+    /// and evaluation.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
     ) -> Result<Self> {
-        let input_schema = Arc::new(Schema::new(vec![input_field.as_ref().clone()]));
-        Self::new_with_schema(
+        let mut cast_options = cast_options.unwrap_or(DEFAULT_CAST_OPTIONS);
+        cast_options
+            .format_options
+            .ensure_present(DEFAULT_CAST_OPTIONS.format_options.clone());
+        let input_schema = Schema::new(vec![input_field.as_ref().clone()]);
+        let expr_data_type = expr.data_type(&input_schema)?;
+        if input_field.data_type() != &expr_data_type {
+            return plan_err!(
+                "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
+                input_field.data_type(),
+                expr_data_type
+            );
+        }
+
+        match (input_field.data_type(), target_field.data_type()) {
+            (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                validate_struct_compatibility(source_fields, target_fields)?;
+            }
+            (_, DataType::Struct(_)) => {
+                return plan_err!(
+                    "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
+                    input_field.data_type(),
+                    target_field.data_type()
+                );
+            }
+            _ => {
+                if !can_cast_types(input_field.data_type(), target_field.data_type()) {
+                    return plan_err!(
+                        "CastColumnExpr cannot cast input type '{}' to target type '{}'",
+                        input_field.data_type(),
+                        target_field.data_type()
+                    );
+                }
+            }
+        }
+
+        Ok(Self {
             expr,
             input_field,
             target_field,
             cast_options,
-            input_schema,
-        )
+            input_schema: Arc::new(input_schema),
+        })
     }
 
-    /// Create a new [`CastColumnExpr`] using the full input schema.
+    /// Create a new [`CastColumnExpr`] with a specific input schema.
+    ///
+    /// This constructor is useful when the expression depends on multiple
+    /// fields from a broader schema.
     pub fn new_with_schema(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
@@ -113,6 +168,10 @@ impl CastColumnExpr {
         cast_options: Option<CastOptions<'static>>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
+        let mut cast_options = cast_options.unwrap_or(DEFAULT_CAST_OPTIONS);
+        cast_options
+            .format_options
+            .ensure_present(DEFAULT_CAST_OPTIONS.format_options.clone());
         let expr_data_type = expr.data_type(input_schema.as_ref())?;
         if input_field.data_type() != &expr_data_type {
             return plan_err!(
@@ -148,7 +207,7 @@ impl CastColumnExpr {
             expr,
             input_field,
             target_field,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options,
             input_schema,
         })
     }

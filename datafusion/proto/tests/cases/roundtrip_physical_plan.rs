@@ -108,8 +108,8 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    DataFusionError, NullEquality, Result, UnnestOptions, internal_datafusion_err,
-    internal_err, not_impl_err,
+    DataFusionError, NullEquality, Result, UnnestOptions, format::DEFAULT_CAST_OPTIONS,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
@@ -118,6 +118,20 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowUDF,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
+
+trait FormatOptionsSlot {
+    fn clear(&mut self);
+}
+
+impl FormatOptionsSlot for FormatOptions<'static> {
+    fn clear(&mut self) {}
+}
+
+impl FormatOptionsSlot for Option<FormatOptions<'static>> {
+    fn clear(&mut self) {
+        *self = None;
+    }
+}
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
@@ -259,6 +273,49 @@ fn roundtrip_cast_column_expr() -> Result<()> {
     assert_eq!(
         cast_expr.data_type(&input_schema)?,
         target_field.data_type().clone()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
+    let input_field = Field::new("a", DataType::Int32, true);
+    let target_field = Field::new("a", DataType::Int64, true);
+
+    let mut cast_options = CastOptions {
+        safe: true,
+        format_options: DEFAULT_CAST_OPTIONS.format_options.clone(),
+    };
+    cast_options.format_options.clear();
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
+        Arc::new(Column::new("a", 0)),
+        Arc::new(input_field.clone()),
+        Arc::new(target_field.clone()),
+        Some(cast_options),
+    )?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
+        &expr, &codec,
+    )?;
+    let input_schema = Schema::new(vec![input_field.clone()]);
+    let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
+        &proto,
+        &ctx.task_ctx(),
+        &input_schema,
+        &codec,
+    )?;
+
+    let cast_expr = round_trip
+        .as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))?;
+
+    assert_eq!(
+        cast_expr.cast_options().format_options,
+        DEFAULT_CAST_OPTIONS.format_options
     );
 
     Ok(())

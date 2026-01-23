@@ -471,7 +471,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             Arc::new(physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
-            Arc::clone(&self.physical_file_schema),
+            Arc::new(self.physical_file_schema.clone()),
         )?);
 
         Ok(Transformed::yes(cast_expr))
@@ -780,8 +780,8 @@ mod tests {
         let result = adapter.rewrite(column_expr).unwrap();
 
         let expected = Arc::new(
-                CastColumnExpr::new_with_schema(
-                    Arc::new(Column::new("data", 0)),
+            CastColumnExpr::new_with_schema(
+                Arc::new(Column::new("data", 0)),
                 Arc::new(Field::new(
                     "data",
                     DataType::Struct(
