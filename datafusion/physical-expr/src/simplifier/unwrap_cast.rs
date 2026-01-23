@@ -221,12 +221,10 @@ mod tests {
 
         // Create: cast_column(c1 as INT64) > INT64(10)
         let column_expr = col("c1", &schema).unwrap();
-        let cast_expr = Arc::new(CastColumnExpr::new(
-            column_expr,
-            input_field,
-            target_field,
-            None,
-        ));
+        let cast_expr = Arc::new(
+            CastColumnExpr::new(column_expr, input_field, target_field, None)
+                .expect("cast column expr"),
+        );
         let literal_expr = lit(10i64);
         let binary_expr =
             Arc::new(BinaryExpr::new(cast_expr, Operator::Gt, literal_expr));

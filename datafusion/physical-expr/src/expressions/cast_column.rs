@@ -19,12 +19,14 @@
 
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
-    compute::CastOptions,
+    compute::{CastOptions, can_cast_types},
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
-    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
+    Result, ScalarValue, format::DEFAULT_CAST_OPTIONS,
+    nested_struct::{cast_column, validate_struct_compatibility},
+    plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use std::{
@@ -85,13 +87,45 @@ impl CastColumnExpr {
         input_field: FieldRef,
         target_field: FieldRef,
         cast_options: Option<CastOptions<'static>>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let input_schema = Schema::new(vec![input_field.as_ref().clone()]);
+        let expr_data_type = expr.data_type(&input_schema)?;
+        if input_field.data_type() != &expr_data_type {
+            return plan_err!(
+                "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
+                input_field.data_type(),
+                expr_data_type
+            );
+        }
+
+        match (input_field.data_type(), target_field.data_type()) {
+            (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                validate_struct_compatibility(source_fields, target_fields)?;
+            }
+            (_, DataType::Struct(_)) => {
+                return plan_err!(
+                    "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
+                    input_field.data_type(),
+                    target_field.data_type()
+                );
+            }
+            _ => {
+                if !can_cast_types(input_field.data_type(), target_field.data_type()) {
+                    return plan_err!(
+                        "CastColumnExpr cannot cast input type '{}' to target type '{}'",
+                        input_field.data_type(),
+                        target_field.data_type()
+                    );
+                }
+            }
+        }
+
+        Ok(Self {
             expr,
             input_field,
             target_field,
             cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
-        }
+        })
     }
 
     /// The expression that produces the value to be cast.
@@ -179,7 +213,7 @@ impl PhysicalExpr for CastColumnExpr {
             Arc::clone(&self.input_field),
             Arc::clone(&self.target_field),
             Some(self.cast_options.clone()),
-        )))
+        )?))
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -224,7 +258,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -278,7 +312,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -348,7 +382,7 @@ mod tests {
             Arc::new(outer_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+        )?;
 
         let result = expr.evaluate(&batch)?;
         let ColumnarValue::Array(array) = result else {
@@ -399,7 +433,7 @@ mod tests {
             Arc::new(input_field.clone()),
             Arc::new(target_field.clone()),
             None,
-        );
+        )?;
 
         let batch = RecordBatch::new_empty(Arc::clone(&schema));
         let result = expr.evaluate(&batch)?;

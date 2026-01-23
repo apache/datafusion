@@ -375,7 +375,7 @@ pub fn parse_physical_expr(
                 Arc::new(Field::try_from(input_field)?),
                 Arc::new(Field::try_from(target_field)?),
                 cast_options,
-            ))
+            )?)
         }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(

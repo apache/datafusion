@@ -213,12 +213,10 @@ mod tests {
         let target_field = Arc::new(Field::new("a", DataType::Int64, true));
 
         let column_expr = col("a", &schema).unwrap();
-        let cast_expr = Arc::new(CastColumnExpr::new(
-            column_expr,
-            input_field,
-            target_field,
-            None,
-        )) as Arc<dyn PhysicalExpr>;
+        let cast_expr = Arc::new(
+            CastColumnExpr::new(column_expr, input_field, target_field, None)
+                .expect("cast column expr"),
+        ) as Arc<dyn PhysicalExpr>;
 
         assert!(check_support(&cast_expr, &schema));
     }

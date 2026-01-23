@@ -521,7 +521,7 @@ mod tests {
             input_field,
             target_field,
             None,
-        )) as Arc<dyn PhysicalExpr>;
+        )?) as Arc<dyn PhysicalExpr>;
 
         let proj_exprs = vec![
             (Arc::clone(&col_a), "a".to_string()),
