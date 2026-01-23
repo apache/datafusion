@@ -923,7 +923,7 @@ select round(a), round(b), round(c) from small_floats;
 
 # round with too large
 #  max Int32 is 2147483647
-query error Arrow error: Cast error: Can't cast value 2147483648 to type Int32
+query error round decimal_places 2147483648 is out of supported i32 range
 select round(3.14, 2147483648);
 
 # with array
@@ -954,6 +954,13 @@ select arrow_typeof(round('12345.55'::decimal(10,2), -1)),
 ----
 Decimal128(10, 0) 12350
 
+# round decimal scale 0 negative places (carry can require extra precision)
+query TR
+select arrow_typeof(round('99'::decimal(2,0), -1)),
+       round('99'::decimal(2,0), -1);
+----
+Decimal128(3, 0) 100
+
 # round decimal256 keeps decimals
 query TR
 select arrow_typeof(round('1234.5678'::decimal(50,4), 2)),
@@ -971,12 +978,25 @@ select arrow_typeof(round('999.9'::decimal(4,1))),
 ----
 Decimal128(4, 0) 1000 -1000 100
 
+# round decimal with carry-over and non-literal decimal_places (increase precision)
+# Scale can't be reduced when decimal_places isn't a constant, so precision increases.
+query TR
+select arrow_typeof(round(val, dp)), round(val, dp)
+from (values (cast('999.9' as decimal(4,1)), 0)) as t(val, dp);
+----
+Decimal128(5, 1) 1000
+
 # round decimal at max precision now works (scale reduction handles overflow)
 query TR
 select arrow_typeof(round('9999999999999999999999999999999999999.9'::decimal(38,1))),
        round('9999999999999999999999999999999999999.9'::decimal(38,1));
 ----
 Decimal128(38, 0) 10000000000000000000000000000000000000
+
+# round decimal at max precision with non-literal decimal_places can overflow
+query error Decimal overflow: rounded value exceeds precision 38
+select round(val, dp)
+from (values (cast('9999999999999999999999999999999999999.9' as decimal(38,1)), 0)) as t(val, dp);
 
 ## signum
 

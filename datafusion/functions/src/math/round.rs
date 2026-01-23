@@ -24,8 +24,13 @@ use arrow::datatypes::DataType::{
     Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
 };
 use arrow::datatypes::{
-    ArrowNativeTypeOp, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, Float32Type, Float64Type, Int32Type,
+    ArrowNativeTypeOp, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int32Type,
+    MAX_DECIMAL32_FOR_EACH_PRECISION, MAX_DECIMAL64_FOR_EACH_PRECISION,
+    MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
+    MIN_DECIMAL32_FOR_EACH_PRECISION, MIN_DECIMAL64_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION, i256,
 };
 use arrow::datatypes::{Field, FieldRef};
 use arrow::error::ArrowError;
@@ -40,6 +45,91 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
+
+fn output_scale_for_decimal(input_scale: i8, decimal_places: i32) -> Result<i8> {
+    let new_scale = i32::from(input_scale).min(decimal_places.max(0));
+    i8::try_from(new_scale).map_err(|_| {
+        datafusion_common::DataFusionError::Internal(format!(
+            "Computed decimal scale {new_scale} is out of range for i8"
+        ))
+    })
+}
+
+fn validate_decimal32_precision(value: i32, precision: u8) -> Result<i32, ArrowError> {
+    let max = MAX_DECIMAL32_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    let min = MIN_DECIMAL32_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    if value > *max || value < *min {
+        return Err(ArrowError::ComputeError(format!(
+            "Decimal overflow: rounded value exceeds precision {precision}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_decimal64_precision(value: i64, precision: u8) -> Result<i64, ArrowError> {
+    let max = MAX_DECIMAL64_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    let min = MIN_DECIMAL64_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    if value > *max || value < *min {
+        return Err(ArrowError::ComputeError(format!(
+            "Decimal overflow: rounded value exceeds precision {precision}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_decimal128_precision(value: i128, precision: u8) -> Result<i128, ArrowError> {
+    let max = MAX_DECIMAL128_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    let min = MIN_DECIMAL128_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    if value > *max || value < *min {
+        return Err(ArrowError::ComputeError(format!(
+            "Decimal overflow: rounded value exceeds precision {precision}"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_decimal256_precision(value: i256, precision: u8) -> Result<i256, ArrowError> {
+    let max = MAX_DECIMAL256_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    let min = MIN_DECIMAL256_FOR_EACH_PRECISION
+        .get(precision as usize)
+        .ok_or_else(|| {
+            ArrowError::ComputeError(format!("Invalid decimal precision {precision}"))
+        })?;
+    if value > *max || value < *min {
+        return Err(ArrowError::ComputeError(format!(
+            "Decimal overflow: rounded value exceeds precision {precision}"
+        )));
+    }
+    Ok(value)
+}
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -126,63 +216,124 @@ impl ScalarUDFImpl for RoundFunc {
         // Get decimal_places from scalar_arguments
         // If dp is not a constant scalar, we must keep the original scale because
         // we can't determine a single output scale for varying per-row dp values.
-        let (decimal_places, dp_is_scalar): (i32, bool) =
-            if args.scalar_arguments.len() > 1 {
-                match args.scalar_arguments[1] {
-                    Some(ScalarValue::Int32(Some(v))) => (*v, true),
-                    Some(ScalarValue::Int64(Some(v))) => (*v as i32, true),
-                    _ => (0, false), // dp is a column or null - can't determine scale
-                }
-            } else {
-                (0, true) // No dp argument means default to 0
-            };
+        let (decimal_places, dp_is_scalar) = match args.scalar_arguments.get(1) {
+            None => (0, true),        // No dp argument means default to 0
+            Some(None) => (0, false), // dp is a column
+            Some(Some(ScalarValue::Int32(Some(v)))) => (*v, true),
+            Some(Some(ScalarValue::Int64(Some(v)))) => {
+                let decimal_places = *v;
+                let v = i32::try_from(decimal_places).map_err(|_| {
+                    datafusion_common::DataFusionError::Execution(format!(
+                        "round decimal_places {decimal_places} is out of supported i32 range"
+                    ))
+                })?;
+                (v, true)
+            }
+            Some(Some(scalar)) if scalar.is_null() => (0, true), // null dp => output is null
+            Some(Some(other)) => {
+                return exec_err!(
+                    "Unexpected datatype for decimal_places: {}",
+                    other.data_type()
+                );
+            }
+        };
 
         // Calculate return type based on input type
         // For decimals: reduce scale to decimal_places (reclaims precision for integer part)
         // This matches Spark/DuckDB behavior where ROUND adjusts the scale
-        // BUT only if dp is a constant - otherwise keep original scale
+        // BUT only if dp is a constant - otherwise keep original scale and add
+        // extra precision to accommodate potential carry-over.
         let return_type = match input_type {
             Float32 => Float32,
             Decimal32(precision, scale) => {
                 if dp_is_scalar {
-                    let new_scale = (*scale).min(decimal_places.max(0) as i8);
-                    Decimal32(*precision, new_scale)
+                    let new_scale = output_scale_for_decimal(*scale, decimal_places)?;
+                    let new_precision = if *scale == 0
+                        && decimal_places < 0
+                        && decimal_places
+                            .checked_neg()
+                            .map(|abs| abs <= i32::from(*precision))
+                            .unwrap_or(false)
+                    {
+                        precision.saturating_add(1).min(DECIMAL32_MAX_PRECISION)
+                    } else {
+                        *precision
+                    };
+                    Decimal32(new_precision, new_scale)
                 } else {
-                    Decimal32(*precision, *scale)
+                    let new_precision =
+                        precision.saturating_add(1).min(DECIMAL32_MAX_PRECISION);
+                    Decimal32(new_precision, *scale)
                 }
             }
             Decimal64(precision, scale) => {
                 if dp_is_scalar {
-                    let new_scale = (*scale).min(decimal_places.max(0) as i8);
-                    Decimal64(*precision, new_scale)
+                    let new_scale = output_scale_for_decimal(*scale, decimal_places)?;
+                    let new_precision = if *scale == 0
+                        && decimal_places < 0
+                        && decimal_places
+                            .checked_neg()
+                            .map(|abs| abs <= i32::from(*precision))
+                            .unwrap_or(false)
+                    {
+                        precision.saturating_add(1).min(DECIMAL64_MAX_PRECISION)
+                    } else {
+                        *precision
+                    };
+                    Decimal64(new_precision, new_scale)
                 } else {
-                    Decimal64(*precision, *scale)
+                    let new_precision =
+                        precision.saturating_add(1).min(DECIMAL64_MAX_PRECISION);
+                    Decimal64(new_precision, *scale)
                 }
             }
             Decimal128(precision, scale) => {
                 if dp_is_scalar {
-                    let new_scale = (*scale).min(decimal_places.max(0) as i8);
-                    Decimal128(*precision, new_scale)
+                    let new_scale = output_scale_for_decimal(*scale, decimal_places)?;
+                    let new_precision = if *scale == 0
+                        && decimal_places < 0
+                        && decimal_places
+                            .checked_neg()
+                            .map(|abs| abs <= i32::from(*precision))
+                            .unwrap_or(false)
+                    {
+                        precision.saturating_add(1).min(DECIMAL128_MAX_PRECISION)
+                    } else {
+                        *precision
+                    };
+                    Decimal128(new_precision, new_scale)
                 } else {
-                    Decimal128(*precision, *scale)
+                    let new_precision =
+                        precision.saturating_add(1).min(DECIMAL128_MAX_PRECISION);
+                    Decimal128(new_precision, *scale)
                 }
             }
             Decimal256(precision, scale) => {
                 if dp_is_scalar {
-                    let new_scale = (*scale).min(decimal_places.max(0) as i8);
-                    Decimal256(*precision, new_scale)
+                    let new_scale = output_scale_for_decimal(*scale, decimal_places)?;
+                    let new_precision = if *scale == 0
+                        && decimal_places < 0
+                        && decimal_places
+                            .checked_neg()
+                            .map(|abs| abs <= i32::from(*precision))
+                            .unwrap_or(false)
+                    {
+                        precision.saturating_add(1).min(DECIMAL256_MAX_PRECISION)
+                    } else {
+                        *precision
+                    };
+                    Decimal256(new_precision, new_scale)
                 } else {
-                    Decimal256(*precision, *scale)
+                    let new_precision =
+                        precision.saturating_add(1).min(DECIMAL256_MAX_PRECISION);
+                    Decimal256(new_precision, *scale)
                 }
             }
             _ => Float64,
         };
 
-        Ok(Arc::new(Field::new(
-            self.name(),
-            return_type,
-            input_field.is_nullable(),
-        )))
+        let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
@@ -212,6 +363,13 @@ impl ScalarUDFImpl for RoundFunc {
 
             let dp = if let ScalarValue::Int32(Some(dp)) = dp_scalar {
                 *dp
+            } else if let ScalarValue::Int64(Some(dp)) = dp_scalar {
+                let decimal_places = *dp;
+                i32::try_from(decimal_places).map_err(|_| {
+                    datafusion_common::DataFusionError::Execution(format!(
+                        "round decimal_places {decimal_places} is out of supported i32 range"
+                    ))
+                })?
             } else {
                 return internal_err!(
                     "Unexpected datatype for decimal_places: {}",
@@ -228,33 +386,96 @@ impl ScalarUDFImpl for RoundFunc {
                     let rounded = round_float(*v, dp)?;
                     Ok(ColumnarValue::Scalar(ScalarValue::from(rounded)))
                 }
-                ScalarValue::Decimal128(Some(v), precision, scale) => {
-                    // Reduce scale to reclaim integer precision
-                    let new_scale = (*scale).min(dp.max(0) as i8);
-                    let rounded = round_decimal(*v, *scale, new_scale, dp)?;
+                ScalarValue::Decimal128(Some(v), _precision, scale) => {
+                    let (out_precision, out_scale) =
+                        if let Decimal128(p, s) = args.return_type() {
+                            (*p, *s)
+                        } else {
+                            return internal_err!(
+                                "Unexpected return type for decimal128 round: {}",
+                                args.return_type()
+                            );
+                        };
+                    let rounded = round_decimal(*v, *scale, out_scale, dp)?;
+                    let rounded = if out_precision == DECIMAL128_MAX_PRECISION
+                        && *scale == 0
+                        && dp < 0
+                    {
+                        validate_decimal128_precision(rounded, out_precision)
+                    } else {
+                        Ok(rounded)
+                    }?;
                     let scalar =
-                        ScalarValue::Decimal128(Some(rounded), *precision, new_scale);
+                        ScalarValue::Decimal128(Some(rounded), out_precision, out_scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
-                ScalarValue::Decimal256(Some(v), precision, scale) => {
-                    let new_scale = (*scale).min(dp.max(0) as i8);
-                    let rounded = round_decimal(*v, *scale, new_scale, dp)?;
+                ScalarValue::Decimal256(Some(v), _precision, scale) => {
+                    let (out_precision, out_scale) =
+                        if let Decimal256(p, s) = args.return_type() {
+                            (*p, *s)
+                        } else {
+                            return internal_err!(
+                                "Unexpected return type for decimal256 round: {}",
+                                args.return_type()
+                            );
+                        };
+                    let rounded = round_decimal(*v, *scale, out_scale, dp)?;
+                    let rounded = if out_precision == DECIMAL256_MAX_PRECISION
+                        && *scale == 0
+                        && dp < 0
+                    {
+                        validate_decimal256_precision(rounded, out_precision)
+                    } else {
+                        Ok(rounded)
+                    }?;
                     let scalar =
-                        ScalarValue::Decimal256(Some(rounded), *precision, new_scale);
+                        ScalarValue::Decimal256(Some(rounded), out_precision, out_scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
-                ScalarValue::Decimal64(Some(v), precision, scale) => {
-                    let new_scale = (*scale).min(dp.max(0) as i8);
-                    let rounded = round_decimal(*v, *scale, new_scale, dp)?;
+                ScalarValue::Decimal64(Some(v), _precision, scale) => {
+                    let (out_precision, out_scale) =
+                        if let Decimal64(p, s) = args.return_type() {
+                            (*p, *s)
+                        } else {
+                            return internal_err!(
+                                "Unexpected return type for decimal64 round: {}",
+                                args.return_type()
+                            );
+                        };
+                    let rounded = round_decimal(*v, *scale, out_scale, dp)?;
+                    let rounded = if out_precision == DECIMAL64_MAX_PRECISION
+                        && *scale == 0
+                        && dp < 0
+                    {
+                        validate_decimal64_precision(rounded, out_precision)
+                    } else {
+                        Ok(rounded)
+                    }?;
                     let scalar =
-                        ScalarValue::Decimal64(Some(rounded), *precision, new_scale);
+                        ScalarValue::Decimal64(Some(rounded), out_precision, out_scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
-                ScalarValue::Decimal32(Some(v), precision, scale) => {
-                    let new_scale = (*scale).min(dp.max(0) as i8);
-                    let rounded = round_decimal(*v, *scale, new_scale, dp)?;
+                ScalarValue::Decimal32(Some(v), _precision, scale) => {
+                    let (out_precision, out_scale) =
+                        if let Decimal32(p, s) = args.return_type() {
+                            (*p, *s)
+                        } else {
+                            return internal_err!(
+                                "Unexpected return type for decimal32 round: {}",
+                                args.return_type()
+                            );
+                        };
+                    let rounded = round_decimal(*v, *scale, out_scale, dp)?;
+                    let rounded = if out_precision == DECIMAL32_MAX_PRECISION
+                        && *scale == 0
+                        && dp < 0
+                    {
+                        validate_decimal32_precision(rounded, out_precision)
+                    } else {
+                        Ok(rounded)
+                    }?;
                     let scalar =
-                        ScalarValue::Decimal32(Some(rounded), *precision, new_scale);
+                        ScalarValue::Decimal32(Some(rounded), out_precision, out_scale);
                     Ok(ColumnarValue::Scalar(scalar))
                 }
                 _ => {
@@ -303,6 +524,7 @@ fn round_columnar(
     let value_array = value.to_array(number_rows)?;
     let both_scalars = matches!(value, ColumnarValue::Scalar(_))
         && matches!(decimal_places, ColumnarValue::Scalar(_));
+    let decimal_places_is_array = matches!(decimal_places, ColumnarValue::Array(_));
 
     let arr: ArrayRef = match (value_array.data_type(), return_type) {
         (Float64, _) => {
@@ -331,7 +553,16 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, *new_scale, dp),
+                |v, dp| {
+                    let rounded = round_decimal(v, *scale, *new_scale, dp)?;
+                    if *precision == DECIMAL32_MAX_PRECISION
+                        && (decimal_places_is_array || (*scale == 0 && dp < 0))
+                    {
+                        validate_decimal32_precision(rounded, *precision)
+                    } else {
+                        Ok(rounded)
+                    }
+                },
                 *precision,
                 *new_scale,
             )?;
@@ -346,7 +577,16 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, *new_scale, dp),
+                |v, dp| {
+                    let rounded = round_decimal(v, *scale, *new_scale, dp)?;
+                    if *precision == DECIMAL64_MAX_PRECISION
+                        && (decimal_places_is_array || (*scale == 0 && dp < 0))
+                    {
+                        validate_decimal64_precision(rounded, *precision)
+                    } else {
+                        Ok(rounded)
+                    }
+                },
                 *precision,
                 *new_scale,
             )?;
@@ -361,7 +601,16 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, *new_scale, dp),
+                |v, dp| {
+                    let rounded = round_decimal(v, *scale, *new_scale, dp)?;
+                    if *precision == DECIMAL128_MAX_PRECISION
+                        && (decimal_places_is_array || (*scale == 0 && dp < 0))
+                    {
+                        validate_decimal128_precision(rounded, *precision)
+                    } else {
+                        Ok(rounded)
+                    }
+                },
                 *precision,
                 *new_scale,
             )?;
@@ -376,7 +625,16 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, *new_scale, dp),
+                |v, dp| {
+                    let rounded = round_decimal(v, *scale, *new_scale, dp)?;
+                    if *precision == DECIMAL256_MAX_PRECISION
+                        && (decimal_places_is_array || (*scale == 0 && dp < 0))
+                    {
+                        validate_decimal256_precision(rounded, *precision)
+                    } else {
+                        Ok(rounded)
+                    }
+                },
                 *precision,
                 *new_scale,
             )?;
@@ -453,7 +711,12 @@ fn round_decimal<V: ArrowNativeTypeOp>(
     // Determine how to scale the result based on output_scale vs computed scale
     // computed_scale = max(0, min(input_scale, decimal_places))
     let computed_scale = if decimal_places >= 0 {
-        (input_scale as i32).min(decimal_places).max(0) as i8
+        let new_scale = i32::from(input_scale).min(decimal_places).max(0);
+        i8::try_from(new_scale).map_err(|_| {
+            ArrowError::ComputeError(format!(
+                "Computed decimal scale {new_scale} is out of range for i8"
+            ))
+        })?
     } else {
         0
     };
@@ -501,6 +764,9 @@ mod test {
         decimal_places: Option<ArrayRef>,
     ) -> Result<ArrayRef, DataFusionError> {
         let number_rows = value.len();
+        // NOTE: For decimal inputs, the actual ROUND return type can differ from the
+        // input type (scale reduction for literal `decimal_places`). These unit tests
+        // only exercise Float32/Float64 behavior.
         let return_type = value.data_type().clone();
         let value = ColumnarValue::Array(value);
         let decimal_places = decimal_places
