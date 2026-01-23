@@ -383,8 +383,10 @@ SELECT column2, column3, column4  FROM t;
 ----
 {foo: a, xxx: b} {xxx: c, foo: d} {xxx: e}
 
-# coerce structs with different field orders,
-# should keep the same field values
+# coerce structs with different field orders
+# With name-based struct coercion, matching fields by name:
+# column2={foo:a, xxx:b} unified with column3={xxx:c, foo:d}
+# Result uses the THEN branch's field order (when executed): {xxx: b, foo: a}
 query ?
 SELECT
   case
@@ -396,6 +398,7 @@ FROM t;
 {xxx: b, foo: a}
 
 # coerce structs with different field orders
+# When ELSE branch executes, uses its field order: {xxx: c, foo: d}
 query ?
 SELECT
   case
@@ -406,8 +409,9 @@ FROM t;
 ----
 {xxx: c, foo: d}
 
-# coerce structs with subset of fields
-query error Failed to coerce then
+# coerce structs with subset of fields - field count mismatch causes type coercion failure
+# column3 has 2 fields but column4 has only 1 field
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Failed to coerce then .* and else .* to common types in CASE WHEN expression
 SELECT
   case
     when column1 > 0 then column3
