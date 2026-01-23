@@ -4747,10 +4747,11 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 []
 
 # array_union scalar function #7
-query ?
-select array_union([[null]], []);
-----
-[[]]
+# re-enable when https://github.com/apache/arrow-rs/issues/9227 is fixed
+# query ?
+# select array_union([[null]], []);
+# ----
+# [[]]
 
 query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));

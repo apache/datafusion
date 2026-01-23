@@ -23,6 +23,7 @@ use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use itertools::Itertools;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
@@ -514,24 +515,41 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = array.values();
-    let offsets = array.value_offsets();
-    let nulls = array.nulls();
-    let mut values_hashes = vec![0u64; values.len()];
-    create_hashes([values], random_state, &mut values_hashes)?;
-    if let Some(nulls) = nulls {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            if nulls.is_valid(i) {
+    // In case values is sliced, hash only the bytes used by the offsets of this ListArray
+    let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
+    let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
+    let value_bytes_len = (last_offset - first_offset).as_usize();
+    let mut values_hashes = vec![0u64; value_bytes_len];
+    create_hashes(
+        [array
+            .values()
+            .slice(first_offset.as_usize(), value_bytes_len)],
+        random_state,
+        &mut values_hashes,
+    )?;
+
+    if array.null_count() > 0 {
+        for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
+        {
+            if array.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
             }
         }
     } else {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+        for ((start, stop), hash) in array
+            .value_offsets()
+            .iter()
+            .tuple_windows()
+            .zip(hashes_buffer.iter_mut())
+        {
+            for values_hash in &values_hashes
+                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
+            {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
@@ -1174,6 +1192,30 @@ mod tests {
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
         assert_eq!(hashes[1], hashes[6]); // null vs empty list
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_sliced_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            // Slice from here
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            // To here
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
+        ];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let list_array = list_array.slice(2, 3);
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[1], hashes[2]);
     }
 
     #[test]

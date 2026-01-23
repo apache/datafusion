@@ -2069,7 +2069,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
+query error DataFusion error: Error during planning: Function 'strpos' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Int64 \(DataType: Int64\)
 select position(1 in 1)
 
 query I
