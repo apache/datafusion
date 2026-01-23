@@ -68,6 +68,7 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # set from other table
 # UPDATE ... FROM is currently unsupported
+# TODO fix https://github.com/apache/datafusion/issues/19950
 query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 explain update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 

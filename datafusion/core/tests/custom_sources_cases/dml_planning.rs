@@ -751,6 +751,7 @@ async fn test_update_from_drops_non_target_predicates() -> Result<()> {
         .await;
 
     // Verify UPDATE ... FROM is rejected with appropriate error
+    // TODO fix https://github.com/apache/datafusion/issues/19950
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
