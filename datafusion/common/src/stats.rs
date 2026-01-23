@@ -634,22 +634,12 @@ impl Statistics {
             col_stats.sum_value = col_stats.sum_value.add(&item_col_stats.sum_value);
             // Use max as a conservative lower bound for distinct count
             // (can't accurately merge NDV since duplicates may exist across partitions)
-            col_stats.distinct_count =
-                match (&col_stats.distinct_count, &item_col_stats.distinct_count) {
-                    (Precision::Exact(a), Precision::Exact(b))
-                    | (Precision::Inexact(a), Precision::Exact(b))
-                    | (Precision::Exact(a), Precision::Inexact(b))
-                    | (Precision::Inexact(a), Precision::Inexact(b)) => {
-                        Precision::Inexact(if a >= b { *a } else { *b })
-                    }
-                    (Precision::Exact(v), Precision::Absent)
-                    | (Precision::Inexact(v), Precision::Absent)
-                    | (Precision::Absent, Precision::Exact(v))
-                    | (Precision::Absent, Precision::Inexact(v)) => {
-                        Precision::Inexact(*v)
-                    }
-                    (Precision::Absent, Precision::Absent) => Precision::Absent,
-                };
+            col_stats.distinct_count = col_stats
+                .distinct_count
+                .get_value()
+                .max(item_col_stats.distinct_count.get_value())
+                .map(|&v| Precision::Inexact(v))
+                .unwrap_or(Precision::Absent);
             col_stats.byte_size = col_stats.byte_size.add(&item_col_stats.byte_size);
         }
 
