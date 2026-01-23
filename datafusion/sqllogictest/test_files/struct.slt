@@ -444,9 +444,9 @@ CREATE TABLE struct_values (
     s1 struct(a int, b varchar),
     s2 struct(a int, b varchar)
 ) AS VALUES
-  (struct(1 AS a, 'red' AS b), struct(1 AS a, 'string1' AS b)),
-  (struct(2 AS a, 'blue' AS b), struct(2 AS a, 'string2' AS b)),
-  (struct(3 AS a, 'green' AS b), struct(3 AS a, 'string3' AS b))
+  ({a: 1, b: 'red'}, {a: 1, b: 'string1'}),
+  ({a: 2, b: 'blue'}, {a: 2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 3, b: 'string3'})
 ;
 
 statement ok
@@ -454,8 +454,8 @@ drop table struct_values;
 
 statement ok
 create table t (c1 struct(r varchar, b int), c2 struct(r varchar, b float)) as values (
-  struct('red' AS r, 2 AS b),
-  struct('blue' AS r, 2.3 AS b)
+    {r: 'red', b: 2},
+    {r: 'blue', b: 2.3}
 );
 
 query ??
@@ -503,9 +503,9 @@ CREATE TABLE t (
     s1 struct(a int, b varchar),
     s2 struct(a float, b varchar)
 ) AS VALUES
-  (struct(1 AS a, 'red' AS b), struct(1.1 AS a, 'string1' AS b)),
-  (struct(2 AS a, 'blue' AS b), struct(2.2 AS a, 'string2' AS b)),
-  (struct(3 AS a, 'green' AS b), struct(33.2 AS a, 'string3' AS b))
+  ({a: 1, b: 'red'}, {a: 1.1, b: 'string1'}),
+  ({a: 2, b: 'blue'}, {a: 2.2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 33.2, b: 'string3'})
 ;
 
 query ?
@@ -530,9 +530,9 @@ CREATE TABLE t (
     s1 struct(a int, b varchar),
     s2 struct(a float, b varchar)
 ) AS VALUES
-  (struct(1 AS a, 'red' AS b), struct(1.1 AS a, 'string1' AS b)),
-  (null, struct(2.2 AS a, 'string2' AS b)),
-  (struct(3 AS a, 'green' AS b), struct(33.2 AS a, 'string3' AS b))
+  ({a: 1, b: 'red'}, {a: 1.1, b: 'string1'}),
+  (null, {a: 2.2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 33.2, b: 'string3'})
 ;
 
 query ?
@@ -555,8 +555,8 @@ drop table t;
 # row() with incorrect order - row() is positional, not name-based
 statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values
-  (struct('red' AS r, 1 AS c), struct(2.3 AS r, 'blue' AS c)),
-  (struct('purple' AS r, 1 AS c), struct('green' AS r, 2.3 AS c));
+  ({r: 'red', c: 1}, {r: 2.3, c: 'blue'}),
+  ({r: 'purple', c: 1}, {r: 'green', c: 2.3});
 
 
 ##################################
@@ -570,7 +570,7 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 
 
 statement ok
-create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (struct('a' AS r, 1 AS c), struct('b' AS r, 2.3 AS c));
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values ({r: 'a', c: 1}, {r: 'b', c: 2.3});
 
 query T
 select arrow_typeof([a, b]) from t;
@@ -582,7 +582,7 @@ drop table t;
 
 
 statement ok
-create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (struct('a' AS r, 1 AS c, 2.3 AS g), struct('b' AS r, 2.3 AS c, 2 AS g));
+create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values ({r: 'a', c: 1, g: 2.3}, {r: 'b', c: 2.3, g: 2});
 
 # type of each column should not coerced but preserve as it is
 query T
@@ -604,7 +604,7 @@ drop table t;
 # This tests accessing struct fields using the subscript notation with string literals
 
 statement ok
-create table test (struct_field struct(substruct int)) as values (struct(1 AS substruct));
+create table test (struct_field struct(substruct int)) as values ({substruct: 1});
 
 query ??
 select *
@@ -617,7 +617,7 @@ statement ok
 DROP TABLE test;
 
 statement ok
-create table test (struct_field struct(substruct struct(subsubstruct int))) as values (struct(struct(1 AS subsubstruct) AS substruct));
+create table test (struct_field struct(substruct struct(subsubstruct int))) as values ({substruct: {subsubstruct: 1}});
 
 query ??
 select *
@@ -861,9 +861,9 @@ statement ok
 CREATE TABLE struct_reorder_test (
   data STRUCT(b INT, a VARCHAR)
 ) AS VALUES
-  (struct(100 AS b, 'first' AS a)),
-  (struct(200 AS b, 'second' AS a)),
-  (struct(300 AS b, 'third' AS a))
+  ({b: 100, a: 'first'}),
+  ({b: 200, a: 'second'}),
+  ({b: 300, a: 'third'})
 ;
 
 query ?
