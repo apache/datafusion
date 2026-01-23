@@ -1,0 +1,871 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Struct Type Coercion and Field Mapping &#8212; Apache DataFusion  documentation</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/theme_overrides.css?v=d08b24aa" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'user-guide/sql/struct_coercion';</script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="SELECT syntax" href="select.html" />
+    <link rel="prev" title="Data Types" href="data_types.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="" />
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/original.svg" class="logo__image only-light" alt="Apache DataFusion  documentation - Home"/>
+    <img src="../../_static/original_dark.svg" class="logo__image only-dark pst-js-only" alt="Apache DataFusion  documentation - Home"/>
+  
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item"><nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading"><span class="caption-text">ASF Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://apache.org">Apache Software Foundation</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/licenses/">License</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">Donate</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/foundation/thanks.html">Thanks</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://www.apache.org/security/">Security</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Links</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion">GitHub and Issue Tracker</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://crates.io/crates/datafusion">crates.io</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">API Docs</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/blog/">Blog</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">Code of conduct</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../download.html">Download</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">User Guide</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../example-usage.html">Example Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../features.html">Features</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../concepts-readings-events.html">Concepts, Readings, Events</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../crate-configuration.html">Crate Configuration</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../cli/index.html">DataFusion CLI</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../cli/overview.html">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/installation.html">Installation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/usage.html">Usage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../cli/datasources.html">Local Files / Directories</a></li>
+
+
+
+
+<li class="toctree-l2"><a class="reference internal" href="../cli/functions.html">CLI Specific Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../dataframe.html">DataFrame API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../arrow-introduction.html">Gentle Arrow Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../expressions.html">Expression API</a></li>
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">SQL Reference</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="data_types.html">Data Types</a></li>
+<li class="toctree-l2 current active"><a class="current reference internal" href="#">Struct Type Coercion and Field Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="select.html">SELECT syntax</a></li>
+<li class="toctree-l2"><a class="reference internal" href="subqueries.html">Subqueries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ddl.html">DDL</a></li>
+<li class="toctree-l2"><a class="reference internal" href="dml.html">DML</a></li>
+<li class="toctree-l2"><a class="reference internal" href="explain.html">EXPLAIN</a></li>
+<li class="toctree-l2"><a class="reference internal" href="information_schema.html">Information Schema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="operators.html">Operators and Literals</a></li>
+<li class="toctree-l2"><a class="reference internal" href="aggregate_functions.html">Aggregate Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="window_functions.html">Window Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="scalar_functions.html">Scalar Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="special_functions.html">Special Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="format_options.html">Format Options</a></li>
+
+<li class="toctree-l2"><a class="reference internal" href="prepared_statements.html">Prepared Statements</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../configs.html">Configuration Settings</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../explain-usage.html">Reading Explain Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../metrics.html">Metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../faq.html">Frequently Asked Questions</a></li>
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Library User Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/index.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/upgrading.html">Upgrade Guides</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extensions.html">Extensions List</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-sql-api.html">Using the SQL API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-sql.html">Extending SQL Syntax</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/working-with-exprs.html">Working with <code class="docutils literal notranslate"><span class="pre">Expr</span></code>s</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/using-the-dataframe-api.html">Using the DataFrame API</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/building-logical-plans.html">Building Logical Plans</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/catalogs.html">Catalogs, Schemas, and Tables</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../library-user-guide/functions/index.html">Functions</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/adding-udfs.html">Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../library-user-guide/functions/spark.html">Spark Compatible Functions</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/custom-table-providers.html">Custom Table Provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/table-constraints.html">Table Constraint Enforcement</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/extending-operators.html">Extending Operators</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/profiling.html">Profiling Cookbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../library-user-guide/query-optimizer.html">Query Optimizer</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Contributor Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/index.html">Introduction</a></li>
+
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/communication.html">Community Communication</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/development_environment.html">Development Environment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture.html">Architecture</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/testing.html">Testing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/api-health.html">API health policy</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/howtos.html">HOWTOs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/roadmap.html">Roadmap and Improvement Proposals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/governance.html">Governance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../contributor-guide/inviting.html">Inviting New Committers and PMC Members</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/specification/index.html">Specifications</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/invariants.html">Invariants</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/specification/output-field-name-semantic.html">Output field name semantics</a></li>
+</ul>
+</details></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../../contributor-guide/gsoc/index.html">Google Summer of Code (GSOC)</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_application_guidelines_2025.html">GSoC Application Guidelines (2025)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../contributor-guide/gsoc/gsoc_project_ideas_2025.html">GSoC Project Ideas (2025)</a></li>
+</ul>
+</details></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">DataFusion Subprojects</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/ballista/">DataFusion Ballista</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a></li>
+<li class="toctree-l1"><a class="reference external" href="https://datafusion.apache.org/python/">DataFusion Python</a></li>
+</ul>
+
+    
+  </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="../../index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    
+    <li class="breadcrumb-item"><a href="index.html" class="nav-link">SQL Reference</a></li>
+    
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Struct Type Coercion and Field Mapping</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+<section id="struct-type-coercion-and-field-mapping">
+<h1>Struct Type Coercion and Field Mapping<a class="headerlink" href="#struct-type-coercion-and-field-mapping" title="Link to this heading">#</a></h1>
+<p>DataFusion uses <strong>name-based field mapping</strong> when coercing struct types across different operations. This document explains how struct coercion works, when it applies, and how to handle NULL fields.</p>
+<section id="overview-name-based-vs-positional-mapping">
+<h2>Overview: Name-Based vs Positional Mapping<a class="headerlink" href="#overview-name-based-vs-positional-mapping" title="Link to this heading">#</a></h2>
+<p>When combining structs from different sources (e.g., in UNION, array construction, or JOINs), DataFusion matches struct fields by <strong>name</strong> rather than by <strong>position</strong>. This provides more robust and predictable behavior compared to positional matching.</p>
+<section id="example-field-reordering-is-handled-transparently">
+<h3>Example: Field Reordering is Handled Transparently<a class="headerlink" href="#example-field-reordering-is-handled-transparently" title="Link to this heading">#</a></h3>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- These two structs have the same fields in different order</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">];</span>
+
+<span class="c1">-- Result: Field names matched, values unified</span>
+<span class="c1">-- [{&quot;a&quot;: 1, &quot;b&quot;: 2}, {&quot;a&quot;: 4, &quot;b&quot;: 3}]</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="coercion-paths-using-name-based-matching">
+<h2>Coercion Paths Using Name-Based Matching<a class="headerlink" href="#coercion-paths-using-name-based-matching" title="Link to this heading">#</a></h2>
+<p>The following query operations use name-based field mapping for struct coercion:</p>
+<section id="array-literal-construction">
+<h3>1. Array Literal Construction<a class="headerlink" href="#array-literal-construction" title="Link to this heading">#</a></h3>
+<p>When creating array literals with struct elements that have different field orders:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Structs with reordered fields in array literal</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">];</span>
+
+<span class="c1">-- Unified type: List(Struct(&quot;x&quot;: Int32, &quot;y&quot;: Int32))</span>
+<span class="c1">-- Values: [{&quot;x&quot;: 1, &quot;y&quot;: 2}, {&quot;x&quot;: 4, &quot;y&quot;: 3}]</span>
+</pre></div>
+</div>
+<p><strong>When it applies:</strong></p>
+<ul class="simple">
+<li><p>Array literals with struct elements: <code class="docutils literal notranslate"><span class="pre">[{...},</span> <span class="pre">{...}]</span></code></p></li>
+<li><p>Nested arrays with structs: <code class="docutils literal notranslate"><span class="pre">[[{x:</span> <span class="pre">1},</span> <span class="pre">{x:</span> <span class="pre">2}]]</span></code></p></li>
+</ul>
+</section>
+<section id="array-construction-from-columns">
+<h3>2. Array Construction from Columns<a class="headerlink" href="#array-construction-from-columns" title="Link to this heading">#</a></h3>
+<p>When constructing arrays from table columns with different struct schemas:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t_left</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">int</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">);</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t_right</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">y</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="nb">int</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">);</span>
+
+<span class="c1">-- Dynamically constructs unified array schema</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="n">t_left</span><span class="p">.</span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="n">t_right</span><span class="p">.</span><span class="n">s</span><span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t_left</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">t_right</span><span class="p">;</span>
+
+<span class="c1">-- Result: [{&quot;x&quot;: 1, &quot;y&quot;: 2}, {&quot;x&quot;: 4, &quot;y&quot;: 3}]</span>
+</pre></div>
+</div>
+<p><strong>When it applies:</strong></p>
+<ul class="simple">
+<li><p>Array construction with column references: <code class="docutils literal notranslate"><span class="pre">[col1,</span> <span class="pre">col2]</span></code></p></li>
+<li><p>Array construction in joins with matching field names</p></li>
+</ul>
+</section>
+<section id="union-operations">
+<h3>3. UNION Operations<a class="headerlink" href="#union-operations" title="Link to this heading">#</a></h3>
+<p>When combining query results with different struct field orders:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span>
+<span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">;</span>
+
+<span class="c1">-- Result: {&quot;a&quot;: 1, &quot;b&quot;: 2} and {&quot;a&quot;: 4, &quot;b&quot;: 3}</span>
+</pre></div>
+</div>
+<p><strong>When it applies:</strong></p>
+<ul class="simple">
+<li><p>UNION ALL with structs: field names matched across branches</p></li>
+<li><p>UNION (deduplicated) with structs</p></li>
+</ul>
+</section>
+<section id="common-table-expressions-ctes">
+<h3>4. Common Table Expressions (CTEs)<a class="headerlink" href="#common-table-expressions-ctes" title="Link to this heading">#</a></h3>
+<p>When multiple CTEs produce structs with different field orders that are combined:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WITH</span>
+<span class="w">  </span><span class="n">t1</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">),</span>
+<span class="w">  </span><span class="n">t2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t1</span>
+<span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t2</span><span class="p">;</span>
+
+<span class="c1">-- Result: Field names matched across CTEs</span>
+</pre></div>
+</div>
+</section>
+<section id="values-clauses">
+<h3>5. VALUES Clauses<a class="headerlink" href="#values-clauses" title="Link to this heading">#</a></h3>
+<p>When creating tables or temporary results with struct values in different field orders:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">VALUES</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">);</span>
+
+<span class="c1">-- Table schema unified: struct(a: int, b: int)</span>
+<span class="c1">-- Values: {a: 1, b: 2} and {a: 4, b: 3}</span>
+</pre></div>
+</div>
+</section>
+<section id="join-operations">
+<h3>6. JOIN Operations<a class="headerlink" href="#join-operations" title="Link to this heading">#</a></h3>
+<p>When joining tables where the JOIN condition involves structs with different field orders:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="p">(</span><span class="n">customer</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">name</span><span class="w"> </span><span class="nb">varchar</span><span class="p">,</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="nb">int</span><span class="p">));</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="p">(</span><span class="n">info</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">int</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">varchar</span><span class="p">));</span>
+
+<span class="c1">-- Join matches struct fields by name</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">orders</span>
+<span class="k">JOIN</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">orders</span><span class="p">.</span><span class="n">customer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">customers</span><span class="p">.</span><span class="n">info</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="aggregate-functions">
+<h3>7. Aggregate Functions<a class="headerlink" href="#aggregate-functions" title="Link to this heading">#</a></h3>
+<p>When collecting structs with different field orders using aggregate functions like <code class="docutils literal notranslate"><span class="pre">array_agg</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="n">array_agg</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span>
+<span class="w">  </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span>
+<span class="p">)</span><span class="w"> </span><span class="n">t</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">category</span><span class="p">;</span>
+
+<span class="c1">-- Result: Array of structs with unified field order</span>
+</pre></div>
+</div>
+</section>
+<section id="window-functions">
+<h3>8. Window Functions<a class="headerlink" href="#window-functions" title="Link to this heading">#</a></h3>
+<p>When using window functions with struct expressions having different field orders:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span>
+<span class="w">  </span><span class="n">id</span><span class="p">,</span>
+<span class="w">  </span><span class="n">row_number</span><span class="p">()</span><span class="w"> </span><span class="n">over</span><span class="w"> </span><span class="p">(</span><span class="n">partition</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="k">order</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="n">id</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">rn</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">id</span>
+<span class="w">  </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">value</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="n">category</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">id</span>
+<span class="p">);</span>
+
+<span class="c1">-- Fields matched by name in PARTITION BY clause</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="null-handling-for-missing-fields">
+<h2>NULL Handling for Missing Fields<a class="headerlink" href="#null-handling-for-missing-fields" title="Link to this heading">#</a></h2>
+<p>When structs have different field sets, missing fields are filled with <strong>NULL</strong> values during coercion.</p>
+<section id="example-partial-field-overlap">
+<h3>Example: Partial Field Overlap<a class="headerlink" href="#example-partial-field-overlap" title="Link to this heading">#</a></h3>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Struct in first position has fields: a, b</span>
+<span class="c1">-- Struct in second position has fields: b, c</span>
+<span class="c1">-- Unified schema includes all fields: a, b, c</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="err">{</span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="nb">INT</span><span class="p">)),</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="nb">INT</span><span class="p">))</span>
+<span class="p">];</span>
+
+<span class="c1">-- Result:</span>
+<span class="c1">-- [</span>
+<span class="c1">--   {&quot;a&quot;: 1, &quot;b&quot;: 2, &quot;c&quot;: NULL},</span>
+<span class="c1">--   {&quot;a&quot;: NULL, &quot;b&quot;: 3, &quot;c&quot;: 4}</span>
+<span class="c1">-- ]</span>
+</pre></div>
+</div>
+</section>
+<section id="limitations">
+<h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">#</a></h3>
+<p><strong>Field count must match exactly.</strong> If structs have different numbers of fields and their field names don’t completely overlap, the query will fail:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- This fails because field sets don&#39;t match:</span>
+<span class="c1">-- t_left has {x, y} but t_right has {x, y, z}</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="n">t_left</span><span class="p">.</span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="n">t_right</span><span class="p">.</span><span class="n">s</span><span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t_left</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">t_right</span><span class="p">;</span>
+<span class="c1">-- Error: Cannot coerce struct with mismatched field counts</span>
+</pre></div>
+</div>
+<p><strong>Workaround: Use explicit CAST</strong></p>
+<p>To handle partial field overlap, explicitly cast structs to a unified schema:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">t_left</span><span class="p">.</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">z</span><span class="w"> </span><span class="nb">INT</span><span class="p">)),</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">t_right</span><span class="p">.</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">z</span><span class="w"> </span><span class="nb">INT</span><span class="p">))</span>
+<span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t_left</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">t_right</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="migration-guide-from-positional-to-name-based-matching">
+<h2>Migration Guide: From Positional to Name-Based Matching<a class="headerlink" href="#migration-guide-from-positional-to-name-based-matching" title="Link to this heading">#</a></h2>
+<p>If you have existing code that relied on <strong>positional</strong> struct field matching, you may need to update it.</p>
+<section id="example-query-that-changes-behavior">
+<h3>Example: Query That Changes Behavior<a class="headerlink" href="#example-query-that-changes-behavior" title="Link to this heading">#</a></h3>
+<p><strong>Old behavior (positional):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- These would have been positionally mapped (left-to-right)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">];</span>
+<span class="c1">-- Old result (positional): [{&quot;x&quot;: 1, &quot;y&quot;: 2}, {&quot;y&quot;: 3, &quot;x&quot;: 4}]</span>
+</pre></div>
+</div>
+<p><strong>New behavior (name-based):</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Now uses name-based matching</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">];</span>
+<span class="c1">-- New result (by name): [{&quot;x&quot;: 1, &quot;y&quot;: 2}, {&quot;x&quot;: 4, &quot;y&quot;: 3}]</span>
+</pre></div>
+</div>
+</section>
+<section id="migration-steps">
+<h3>Migration Steps<a class="headerlink" href="#migration-steps" title="Link to this heading">#</a></h3>
+<ol class="arabic simple">
+<li><p><strong>Review struct operations</strong> - Look for queries that combine structs from different sources</p></li>
+<li><p><strong>Check field names</strong> - Verify that field names match as expected (not positions)</p></li>
+<li><p><strong>Test with new coercion</strong> - Run queries and verify the results match your expectations</p></li>
+<li><p><strong>Handle field reordering</strong> - If you need specific field orders, use explicit CAST operations</p></li>
+</ol>
+</section>
+<section id="using-explicit-cast-for-compatibility">
+<h3>Using Explicit CAST for Compatibility<a class="headerlink" href="#using-explicit-cast-for-compatibility" title="Link to this heading">#</a></h3>
+<p>If you need precise control over struct field order and types, use explicit <code class="docutils literal notranslate"><span class="pre">CAST</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Guarantee specific field order and types</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="err">{</span><span class="n">b</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="p">));</span>
+<span class="c1">-- Result: {&quot;a&quot;: 4, &quot;b&quot;: 3}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="best-practices">
+<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading">#</a></h2>
+<section id="be-explicit-with-schema-definitions">
+<h3>1. Be Explicit with Schema Definitions<a class="headerlink" href="#be-explicit-with-schema-definitions" title="Link to this heading">#</a></h3>
+<p>When joining or combining structs, define target schemas explicitly:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Good: explicit schema definition</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="k">data</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">id</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="nb">VARCHAR</span><span class="p">,</span><span class="w"> </span><span class="n">active</span><span class="w"> </span><span class="nb">BOOLEAN</span><span class="p">))</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">external_source</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="use-named-struct-constructors">
+<h3>2. Use Named Struct Constructors<a class="headerlink" href="#use-named-struct-constructors" title="Link to this heading">#</a></h3>
+<p>Prefer named struct constructors for clarity:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Good: field names are explicit</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">named_struct</span><span class="p">(</span><span class="s1">&#39;id&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;name&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Alice&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;active&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">true</span><span class="p">);</span>
+
+<span class="c1">-- Or using struct literal syntax</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">id</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;Alice&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">active</span><span class="p">:</span><span class="w"> </span><span class="k">true</span><span class="err">}</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="test-field-mappings">
+<h3>3. Test Field Mappings<a class="headerlink" href="#test-field-mappings" title="Link to this heading">#</a></h3>
+<p>Always verify that field mappings work as expected:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Use arrow_typeof to verify unified schema</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">([</span><span class="err">{</span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="err">}</span><span class="p">,</span><span class="w"> </span><span class="err">{</span><span class="n">y</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="err">}</span><span class="p">]);</span>
+<span class="c1">-- Result: List(Struct(&quot;x&quot;: Int32, &quot;y&quot;: Int32))</span>
+</pre></div>
+</div>
+</section>
+<section id="handle-partial-field-overlap-explicitly">
+<h3>4. Handle Partial Field Overlap Explicitly<a class="headerlink" href="#handle-partial-field-overlap-explicitly" title="Link to this heading">#</a></h3>
+<p>When combining structs with partial field overlap, use explicit CAST:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Instead of relying on implicit coercion</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">left_struct</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">z</span><span class="w"> </span><span class="nb">INT</span><span class="p">)),</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">right_struct</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">y</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">z</span><span class="w"> </span><span class="nb">INT</span><span class="p">))</span>
+<span class="p">];</span>
+</pre></div>
+</div>
+</section>
+<section id="document-struct-schemas">
+<h3>5. Document Struct Schemas<a class="headerlink" href="#document-struct-schemas" title="Link to this heading">#</a></h3>
+<p>In complex queries, document the expected struct schemas:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Expected schema: {customer_id: INT, name: VARCHAR, age: INT}</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span>
+<span class="w">  </span><span class="n">customer_id</span><span class="p">:</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">id</span><span class="p">,</span>
+<span class="w">  </span><span class="n">name</span><span class="p">:</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">name</span><span class="p">,</span>
+<span class="w">  </span><span class="n">age</span><span class="p">:</span><span class="w"> </span><span class="k">c</span><span class="p">.</span><span class="n">age</span>
+<span class="err">}</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">customer_info</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">customers</span><span class="w"> </span><span class="k">c</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="error-messages-and-troubleshooting">
+<h2>Error Messages and Troubleshooting<a class="headerlink" href="#error-messages-and-troubleshooting" title="Link to this heading">#</a></h2>
+<section id="cannot-coerce-struct-with-different-field-counts">
+<h3>“Cannot coerce struct with different field counts”<a class="headerlink" href="#cannot-coerce-struct-with-different-field-counts" title="Link to this heading">#</a></h3>
+<p><strong>Cause:</strong> Trying to combine structs with different numbers of fields.</p>
+<p><strong>Solution:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Use explicit CAST to handle missing fields</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">struct1</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="nb">INT</span><span class="p">)),</span>
+<span class="w">  </span><span class="k">CAST</span><span class="p">(</span><span class="n">struct2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">STRUCT</span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nb">INT</span><span class="p">,</span><span class="w"> </span><span class="k">c</span><span class="w"> </span><span class="nb">INT</span><span class="p">))</span>
+<span class="p">];</span>
+</pre></div>
+</div>
+</section>
+<section id="field-x-not-found-in-struct">
+<h3>“Field X not found in struct”<a class="headerlink" href="#field-x-not-found-in-struct" title="Link to this heading">#</a></h3>
+<p><strong>Cause:</strong> Referencing a field name that doesn’t exist in the struct.</p>
+<p><strong>Solution:</strong></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Verify field names match exactly (case-sensitive)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">s</span><span class="p">[</span><span class="s1">&#39;field_name&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span><span class="w">  </span><span class="c1">-- Use bracket notation for access</span>
+<span class="c1">-- Or use get_field function</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">get_field</span><span class="p">(</span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;field_name&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="unexpected-null-values-after-coercion">
+<h3>Unexpected NULL values after coercion<a class="headerlink" href="#unexpected-null-values-after-coercion" title="Link to this heading">#</a></h3>
+<p><strong>Cause:</strong> Struct coercion added NULL for missing fields.</p>
+<p><strong>Solution:</strong> Check that all structs have the required fields, or explicitly handle NULLs:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">COALESCE</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="s1">&#39;field&#39;</span><span class="p">],</span><span class="w"> </span><span class="n">default_value</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">my_table</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="related-functions">
+<h2>Related Functions<a class="headerlink" href="#related-functions" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">arrow_typeof()</span></code> - Returns the Arrow type of an expression</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">struct()</span></code> / <code class="docutils literal notranslate"><span class="pre">named_struct()</span></code> - Creates struct values</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">get_field()</span></code> - Extracts field values from structs</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CAST()</span></code> - Explicitly casts structs to specific schemas</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="data_types.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Data Types</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="select.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">SELECT syntax</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview-name-based-vs-positional-mapping">Overview: Name-Based vs Positional Mapping</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-field-reordering-is-handled-transparently">Example: Field Reordering is Handled Transparently</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#coercion-paths-using-name-based-matching">Coercion Paths Using Name-Based Matching</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-literal-construction">1. Array Literal Construction</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#array-construction-from-columns">2. Array Construction from Columns</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#union-operations">3. UNION Operations</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#common-table-expressions-ctes">4. Common Table Expressions (CTEs)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#values-clauses">5. VALUES Clauses</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#join-operations">6. JOIN Operations</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-functions">7. Aggregate Functions</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#window-functions">8. Window Functions</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#null-handling-for-missing-fields">NULL Handling for Missing Fields</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-partial-field-overlap">Example: Partial Field Overlap</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#migration-guide-from-positional-to-name-based-matching">Migration Guide: From Positional to Name-Based Matching</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-query-that-changes-behavior">Example: Query That Changes Behavior</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#migration-steps">Migration Steps</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#using-explicit-cast-for-compatibility">Using Explicit CAST for Compatibility</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#best-practices">Best Practices</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#be-explicit-with-schema-definitions">1. Be Explicit with Schema Definitions</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#use-named-struct-constructors">2. Use Named Struct Constructors</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#test-field-mappings">3. Test Field Mappings</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#handle-partial-field-overlap-explicitly">4. Handle Partial Field Overlap Explicitly</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#document-struct-schemas">5. Document Struct Schemas</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#error-messages-and-troubleshooting">Error Messages and Troubleshooting</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cannot-coerce-struct-with-different-field-counts">“Cannot coerce struct with different field counts”</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#field-x-not-found-in-struct">“Field X not found in struct”</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#unexpected-null-values-after-coercion">Unexpected NULL values after coercion</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-functions">Related Functions</a></li>
+</ul>
+  </nav></div>
+
+  <div class="sidebar-secondary-item">
+
+  
+  <div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/user-guide/sql/struct_coercion.md">
+      <i class="fa-solid fa-pencil"></i>
+      
+      
+        
+          Edit on GitHub
+        
+      
+    </a>
+  </div>
+</div>
+
+  <div class="sidebar-secondary-item">
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/user-guide/sql/struct_coercion.md.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
