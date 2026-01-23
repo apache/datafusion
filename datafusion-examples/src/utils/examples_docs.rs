@@ -332,8 +332,7 @@ pub fn generate_examples_readme(
             let dir = examples_root.join(name);
             if !dir.is_dir() {
                 return Err(DataFusionError::Execution(format!(
-                    "Example group `{}` does not exist",
-                    name
+                    "Example group `{name}` does not exist"
                 )));
             }
             vec![dir]
