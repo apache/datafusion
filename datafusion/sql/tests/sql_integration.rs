@@ -4874,13 +4874,13 @@ fn test_2_nested_lateral_join_with_the_deepest_join_referencing_the_outer_most_r
          plan,
          @r#"
 Projection: j1_outer.j1_id, j1_outer.j1_string, j2.j1_id, j2.j1_string, j2.j2_id, j2.j2_string
-  Cross Join: 
+  Cross Join:
     SubqueryAlias: j1_outer
       TableScan: j1
     SubqueryAlias: j2
       Subquery:
         Projection: j1_inner.j1_id, j1_inner.j1_string, j2.j2_id, j2.j2_string
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: j1_inner
               TableScan: j1
             SubqueryAlias: j2
