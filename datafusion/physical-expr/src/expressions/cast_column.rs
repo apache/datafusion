@@ -572,7 +572,10 @@ mod tests {
         )
         .expect_err("expected out of range input schema error");
 
-        assert!(err.to_string().contains("index 2"));
-        assert!(err.to_string().contains("input schema only has 1 columns"));
+        assert!(err.to_string().contains("column index 2"));
+        assert!(
+            err.to_string()
+                .contains("out of bounds for input schema with 1 fields")
+        );
     }
 }
