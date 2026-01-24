@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
@@ -24,15 +24,11 @@ use datafusion_common::types::{NativeType, logical_string};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
-use datafusion_expr::{
-    Coercion, Expr, ExprSchemable, ReturnFieldArgs, TypeSignatureClass, lit,
-};
+use datafusion_expr::{Coercion, Expr, ReturnFieldArgs, TypeSignatureClass, lit};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::expr_fn::{decode, encode};
-
-const ENCODING: LazyLock<Expr> = LazyLock::new(|| lit("base64pad"));
 
 /// Apache Spark base64 uses padded base64 encoding.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#base64>
@@ -104,7 +100,7 @@ impl ScalarUDFImpl for SparkBase64 {
         let [bin] = take_function_args(self.name(), args)?;
         Ok(ExprSimplifyResult::Simplified(encode(
             bin,
-            ENCODING.clone(),
+            lit("base64pad"),
         )))
     }
 }
@@ -126,9 +122,9 @@ impl SparkUnBase64 {
         Self {
             signature: Signature::coercible(
                 vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_string()),
-                    vec![TypeSignatureClass::Binary],
-                    NativeType::String,
+                    TypeSignatureClass::Binary,
+                    vec![TypeSignatureClass::Native(logical_string())],
+                    NativeType::Binary,
                 )],
                 Volatility::Immutable,
             ),
@@ -173,13 +169,12 @@ impl ScalarUDFImpl for SparkUnBase64 {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &SimplifyContext,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let [str] = take_function_args(self.name(), args)?;
-        let bin = str.cast_to(&DataType::Binary, info.schema())?;
+        let [bin] = take_function_args(self.name(), args)?;
         Ok(ExprSimplifyResult::Simplified(decode(
             bin,
-            ENCODING.clone(),
+            lit("base64pad"),
         )))
     }
 }
