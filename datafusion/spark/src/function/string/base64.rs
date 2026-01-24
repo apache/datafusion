@@ -152,7 +152,7 @@ impl ScalarUDFImpl for SparkUnBase64 {
     fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
         let [str] = take_function_args(self.name(), args.arg_fields)?;
         let return_type = match str.data_type() {
-            DataType::LargeUtf8 => DataType::LargeBinary,
+            DataType::LargeBinary => DataType::LargeBinary,
             _ => DataType::Binary,
         };
         Ok(Arc::new(Field::new(
