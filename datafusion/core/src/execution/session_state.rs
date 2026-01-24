@@ -1843,9 +1843,14 @@ impl ContextProvider for SessionContextProvider<'_> {
                 self.state.execution_props().query_execution_start_time,
             );
         let simplifier = ExprSimplifier::new(simplify_context);
+        let schema = DFSchema::empty();
         let args = args
             .into_iter()
-            .map(|arg| simplifier.simplify(arg))
+            .map(|arg| {
+                simplifier
+                    .coerce(arg, &schema)
+                    .and_then(|e| simplifier.simplify(e))
+            })
             .collect::<datafusion_common::Result<Vec<_>>>()?;
         let provider = tbl_func.create_table_provider(&args)?;
 

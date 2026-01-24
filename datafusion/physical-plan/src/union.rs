@@ -593,8 +593,20 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+    let first_field_count = first_schema.fields().len();
 
-    let fields = (0..first_schema.fields().len())
+    // validate that all inputs have the same number of fields
+    for (idx, input) in inputs.iter().enumerate().skip(1) {
+        let field_count = input.schema().fields().len();
+        if field_count != first_field_count {
+            return exec_err!(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields. \
+                 Input 0 has {first_field_count} fields, but input {idx} has {field_count} fields"
+            );
+        }
+    }
+
+    let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
@@ -759,6 +771,18 @@ mod tests {
         let f = Field::new("f", DataType::Int32, true);
         let g = Field::new("g", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f, g]));
+
+        Ok(schema)
+    }
+
+    fn create_test_schema2() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let f = Field::new("f", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f]));
 
         Ok(schema)
     }
@@ -1051,5 +1075,24 @@ mod tests {
         assert_eq!(union.inputs().len(), 2);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_union_schema_mismatch() {
+        // Test that UnionExec properly rejects inputs with different field counts
+        let schema = create_test_schema().unwrap();
+        let schema2 = create_test_schema2().unwrap();
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None).unwrap());
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema2), None).unwrap());
+
+        let result = UnionExec::try_new(vec![memory_exec1, memory_exec2]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
+            )
+        );
     }
 }

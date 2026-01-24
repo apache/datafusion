@@ -114,11 +114,7 @@ pub struct BoolAnd {
 impl BoolAnd {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
@@ -251,11 +247,7 @@ pub struct BoolOr {
 impl BoolOr {
     fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![DataType::Boolean],
-                Volatility::Immutable,
-            ),
+            signature: Signature::exact(vec![DataType::Boolean], Volatility::Immutable),
         }
     }
 }
