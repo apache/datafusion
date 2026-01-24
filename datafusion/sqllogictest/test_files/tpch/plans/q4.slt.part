@@ -46,7 +46,7 @@ logical_plan
 04)------Projection: orders.o_orderpriority
 05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 06)----------Projection: orders.o_orderkey, orders.o_orderpriority
-07)------------Filter: orders.o_orderdate >= Date32("1993-07-01") AND orders.o_orderdate < Date32("1993-10-01")
+07)------------Filter: (orders.o_orderdate >= Date32("1993-07-01")) AND (orders.o_orderdate < Date32("1993-10-01"))
 08)--------------TableScan: orders projection=[o_orderkey, o_orderdate, o_orderpriority], partial_filters=[orders.o_orderdate >= Date32("1993-07-01"), orders.o_orderdate < Date32("1993-10-01")]
 09)----------SubqueryAlias: __correlated_sq_1
 10)------------Projection: lineitem.l_orderkey

@@ -79,7 +79,7 @@ logical_plan
 21)----------------------------------------TableScan: part projection=[p_partkey, p_type], partial_filters=[part.p_type = Utf8View("ECONOMY ANODIZED STEEL")]
 22)------------------------------------TableScan: lineitem projection=[l_orderkey, l_partkey, l_suppkey, l_extendedprice, l_discount]
 23)--------------------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
-24)----------------------------Filter: orders.o_orderdate >= Date32("1995-01-01") AND orders.o_orderdate <= Date32("1996-12-31")
+24)----------------------------Filter: (orders.o_orderdate >= Date32("1995-01-01")) AND (orders.o_orderdate <= Date32("1996-12-31"))
 25)------------------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1995-01-01"), orders.o_orderdate <= Date32("1996-12-31")]
 26)------------------------TableScan: customer projection=[c_custkey, c_nationkey]
 27)--------------------SubqueryAlias: n1
