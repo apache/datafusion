@@ -113,15 +113,17 @@ impl CastColumnExpr {
                     fields.len()
                 );
             };
-            if schema_field.name() != input_field.name()
-                || schema_field.data_type() != input_field.data_type()
-            {
+            if schema_field.as_ref() != input_field.as_ref() {
                 return plan_err!(
-                    "CastColumnExpr input field '{}' (type '{}') does not match schema field '{}' (type '{}') at index {}",
+                    "CastColumnExpr input field '{}' (type '{}', nullable {}, metadata {:?}) does not match schema field '{}' (type '{}', nullable {}, metadata {:?}) at index {}",
                     input_field.name(),
                     input_field.data_type(),
+                    input_field.is_nullable(),
+                    input_field.metadata(),
                     schema_field.name(),
                     schema_field.data_type(),
+                    schema_field.is_nullable(),
+                    schema_field.metadata(),
                     column.index()
                 );
             }
@@ -316,6 +318,7 @@ mod tests {
         Result as DFResult, ScalarValue,
         cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
+    use std::collections::HashMap;
 
     fn make_schema(field: &Field) -> SchemaRef {
         Arc::new(Schema::new(vec![field.clone()]))
@@ -554,6 +557,7 @@ mod tests {
         assert!(err
             .to_string()
             .contains("does not match schema field"));
+        assert!(err.to_string().contains("nullable"));
     }
 
     #[test]
@@ -577,5 +581,35 @@ mod tests {
             err.to_string()
                 .contains("out of bounds for input schema with 1 fields")
         );
+    }
+
+    #[test]
+    fn cast_column_schema_mismatch_nullability_metadata() {
+        let mut input_metadata = HashMap::new();
+        input_metadata.insert("origin".to_string(), "input".to_string());
+        let input_field =
+            Field::new("a", DataType::Int32, true).with_metadata(input_metadata);
+
+        let mut schema_metadata = HashMap::new();
+        schema_metadata.insert("origin".to_string(), "schema".to_string());
+        let schema_field =
+            Field::new("a", DataType::Int32, false).with_metadata(schema_metadata);
+
+        let target_field = Field::new("a", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![schema_field]));
+
+        let column = Arc::new(Column::new("a", 0));
+        let err = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .expect_err("expected mismatched metadata/nullability error");
+
+        let message = err.to_string();
+        assert!(message.contains("nullable"));
+        assert!(message.contains("metadata"));
     }
 }
