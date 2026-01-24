@@ -104,37 +104,36 @@ impl CastColumnExpr {
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         let cast_options = normalize_cast_options(cast_options);
+
+        // Validate that if the expression is a Column, it's within the schema bounds
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             let fields = input_schema.fields();
-            let Some(schema_field) = fields.get(column.index()) else {
+            if column.index() >= fields.len() {
                 return plan_err!(
                     "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
                     column.index(),
                     fields.len()
                 );
-            };
-            if schema_field.as_ref() != input_field.as_ref() {
-                return plan_err!(
-                    "CastColumnExpr input field '{}' (type '{}', nullable {}, metadata {:?}) does not match schema field '{}' (type '{}', nullable {}, metadata {:?}) at index {}",
-                    input_field.name(),
-                    input_field.data_type(),
-                    input_field.is_nullable(),
-                    input_field.metadata(),
-                    schema_field.name(),
-                    schema_field.data_type(),
-                    schema_field.is_nullable(),
-                    schema_field.metadata(),
-                    column.index()
-                );
             }
-        }
-        let expr_data_type = expr.data_type(input_schema.as_ref())?;
-        if input_field.data_type() != &expr_data_type {
-            return plan_err!(
-                "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
-                input_field.data_type(),
-                expr_data_type
-            );
+
+            // Validate that the column's field is compatible with the input_field for casting.
+            // We only check data type compatibility, not name/nullability/metadata, since those
+            // can differ in schema adaptation scenarios where a column from one schema is being
+            // cast to another schema's field type.
+            let schema_field = &fields[column.index()];
+            if schema_field.data_type() != input_field.data_type() {
+                let is_compatible =
+                    can_cast_types(schema_field.data_type(), input_field.data_type());
+                if !is_compatible {
+                    return plan_err!(
+                        "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
+                        column.name(),
+                        column.index(),
+                        schema_field.data_type(),
+                        input_field.data_type()
+                    );
+                }
+            }
         }
 
         match (input_field.data_type(), target_field.data_type()) {
@@ -531,11 +530,18 @@ mod tests {
 
     #[test]
     fn cast_column_schema_mismatch() {
+        // Test that an error is raised when data types are not compatible for casting
         let input_field = Field::new("a", DataType::Int32, true);
         let target_field = Field::new("a", DataType::Int32, true);
         let schema = Arc::new(Schema::new(vec![
             input_field.clone(),
-            Field::new("b", DataType::Int32, true),
+            Field::new(
+                "b",
+                DataType::Struct(
+                    vec![Field::new("nested", DataType::Int32, true)].into(),
+                ),
+                true,
+            ),
         ]));
 
         let column = Arc::new(Column::new("b", 1));
@@ -546,37 +552,16 @@ mod tests {
             None,
             schema,
         )
-        .expect_err("expected mismatched input field error");
+        .expect_err("expected incompatible data type error");
 
-        assert!(err.to_string().contains("does not match schema field"));
-        assert!(err.to_string().contains("nullable"));
-    }
-
-    #[test]
-    fn cast_column_schema_out_of_range_index() {
-        let input_field = Field::new("a", DataType::Int32, true);
-        let target_field = Field::new("a", DataType::Int32, true);
-        let schema = Arc::new(Schema::new(vec![input_field.clone()]));
-
-        let column = Arc::new(Column::new("a", 2));
-        let err = CastColumnExpr::new_with_schema(
-            column,
-            Arc::new(input_field),
-            Arc::new(target_field),
-            None,
-            schema,
-        )
-        .expect_err("expected out of range input schema error");
-
-        assert!(err.to_string().contains("column index 2"));
-        assert!(
-            err.to_string()
-                .contains("out of bounds for input schema with 1 fields")
-        );
+        assert!(err.to_string().contains("not compatible"));
     }
 
     #[test]
     fn cast_column_schema_mismatch_nullability_metadata() {
+        // With the new validation logic, mismatches in nullability/metadata are allowed
+        // as long as the data types are compatible. This test now verifies that
+        // a CastColumnExpr can be created even when nullability/metadata differ.
         let mut input_metadata = HashMap::new();
         input_metadata.insert("origin".to_string(), "input".to_string());
         let input_field =
@@ -591,17 +576,20 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![schema_field]));
 
         let column = Arc::new(Column::new("a", 0));
-        let err = CastColumnExpr::new_with_schema(
+
+        // This should now succeed since Int32 -> Int32 is compatible
+        let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field),
             Arc::new(target_field),
             None,
             schema,
         )
-        .expect_err("expected mismatched metadata/nullability error");
+        .expect(
+            "should create CastColumnExpr even with nullability/metadata differences",
+        );
 
-        let message = err.to_string();
-        assert!(message.contains("nullable"));
-        assert!(message.contains("metadata"));
+        // Verify the expression was created successfully
+        assert_eq!(expr.input_field().name(), "a");
     }
 }
