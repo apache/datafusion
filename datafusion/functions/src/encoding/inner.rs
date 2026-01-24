@@ -404,11 +404,27 @@ impl Encoding {
         InputBinaryArray: BinaryArrayType<'a>,
         OutputOffset: OffsetSizeTrait,
     {
-        let array: GenericStringArray<OutputOffset> = array
-            .iter()
-            .map(|x| x.map(|x| self.encode_bytes(x)))
-            .collect();
-        Ok(Arc::new(array))
+        match self {
+            Self::Base64 => {
+                let array: GenericStringArray<OutputOffset> = array
+                    .iter()
+                    .map(|x| x.map(|x| BASE64_ENGINE.encode(x)))
+                    .collect();
+                Ok(Arc::new(array))
+            }
+            Self::Base64Padded => {
+                let array: GenericStringArray<OutputOffset> = array
+                    .iter()
+                    .map(|x| x.map(|x| BASE64_ENGINE_PADDED.encode(x)))
+                    .collect();
+                Ok(Arc::new(array))
+            }
+            Self::Hex => {
+                let array: GenericStringArray<OutputOffset> =
+                    array.iter().map(|x| x.map(hex::encode)).collect();
+                Ok(Arc::new(array))
+            }
+        }
     }
 
     // OutputOffset important to ensure Large types output Large arrays
