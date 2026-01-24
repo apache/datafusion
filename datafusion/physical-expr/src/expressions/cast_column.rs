@@ -104,14 +104,6 @@ impl CastColumnExpr {
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         let cast_options = normalize_cast_options(cast_options);
-        let expr_data_type = expr.data_type(input_schema.as_ref())?;
-        if input_field.data_type() != &expr_data_type {
-            return plan_err!(
-                "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
-                input_field.data_type(),
-                expr_data_type
-            );
-        }
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             let fields = input_schema.fields();
             let Some(schema_field) = fields.get(column.index()) else {
@@ -133,6 +125,14 @@ impl CastColumnExpr {
                     column.index()
                 );
             }
+        }
+        let expr_data_type = expr.data_type(input_schema.as_ref())?;
+        if input_field.data_type() != &expr_data_type {
+            return plan_err!(
+                "CastColumnExpr input field data type '{}' does not match expression data type '{}'",
+                input_field.data_type(),
+                expr_data_type
+            );
         }
 
         match (input_field.data_type(), target_field.data_type()) {
