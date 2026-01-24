@@ -17,7 +17,8 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
@@ -780,12 +781,12 @@ fn format_options_from_proto(
     options: &protobuf::FormatOptions,
 ) -> Result<ArrowFormatOptions<'static>> {
     let duration_format = duration_format_from_proto(options.duration_format)?;
-    let null = leak_string(options.null.clone());
-    let date_format = options.date_format.as_deref().map(leak_str);
-    let datetime_format = options.datetime_format.as_deref().map(leak_str);
-    let timestamp_format = options.timestamp_format.as_deref().map(leak_str);
-    let timestamp_tz_format = options.timestamp_tz_format.as_deref().map(leak_str);
-    let time_format = options.time_format.as_deref().map(leak_str);
+    let null = intern_format_str(&options.null);
+    let date_format = options.date_format.as_deref().map(intern_format_str);
+    let datetime_format = options.datetime_format.as_deref().map(intern_format_str);
+    let timestamp_format = options.timestamp_format.as_deref().map(intern_format_str);
+    let timestamp_tz_format = options.timestamp_tz_format.as_deref().map(intern_format_str);
+    let time_format = options.time_format.as_deref().map(intern_format_str);
     Ok(ArrowFormatOptions::new()
         .with_display_error(options.safe)
         .with_null(null)
@@ -840,12 +841,30 @@ fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
     })
 }
 
-fn leak_str(value: &str) -> &'static str {
-    leak_string(value.to_string())
+static FORMAT_STRING_CACHE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+
+fn format_string_cache() -> &'static Mutex<HashSet<&'static str>> {
+    FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
-fn leak_string(value: String) -> &'static str {
-    Box::leak(value.into_boxed_str())
+fn intern_format_str(value: &str) -> &'static str {
+    let mut cache = format_string_cache()
+        .lock()
+        .expect("format string cache lock poisoned");
+    if let Some(existing) = cache.get(value).copied() {
+        return existing;
+    }
+    let leaked = Box::leak(value.to_owned().into_boxed_str());
+    cache.insert(leaked);
+    leaked
+}
+
+#[cfg(test)]
+fn format_string_cache_len() -> usize {
+    format_string_cache()
+        .lock()
+        .expect("format string cache lock poisoned")
+        .len()
 }
 
 #[cfg(test)]
@@ -875,6 +894,45 @@ mod tests {
         assert_eq!(pf2.object_meta.location, pf.object_meta.location);
         assert_eq!(pf2.object_meta.size, pf.object_meta.size);
         assert_eq!(pf2.object_meta.last_modified, pf.object_meta.last_modified);
+    }
+
+    #[test]
+    fn format_string_cache_reuses_strings() {
+        let before = format_string_cache_len();
+        let first = protobuf::FormatOptions {
+            safe: true,
+            null: "unit-test-null-1".to_string(),
+            date_format: Some("unit-test-date-1".to_string()),
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: protobuf::DurationFormat::Pretty as i32,
+            types_info: false,
+        };
+
+        format_options_from_proto(&first).unwrap();
+        let after_first = format_string_cache_len();
+        format_options_from_proto(&first).unwrap();
+        let after_second = format_string_cache_len();
+        assert_eq!(after_first, after_second);
+
+        let second = protobuf::FormatOptions {
+            safe: true,
+            null: "unit-test-null-2".to_string(),
+            date_format: Some("unit-test-date-2".to_string()),
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: protobuf::DurationFormat::Pretty as i32,
+            types_info: false,
+        };
+
+        format_options_from_proto(&second).unwrap();
+        let after_third = format_string_cache_len();
+        assert!(after_third > after_second);
+        assert!(after_first >= before);
     }
 
     #[test]
