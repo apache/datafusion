@@ -136,6 +136,57 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
 
+        // Check if ORDER BY references any columns not in the SELECT list
+        // If DISTINCT is used, we need to verify this is acceptable
+        // This is similar to how HAVING is handled
+        let select_exprs = if select.distinct.is_some() && !order_by_rex.is_empty() {
+            let mut missing_order_by_exprs = Vec::new();
+            let mut missing_cols = HashSet::new();
+
+            for sort_expr in &order_by_rex {
+                let order_by_expr = &sort_expr.expr;
+
+                // Extract columns referenced in the ORDER BY expression
+                let mut order_by_cols = HashSet::new();
+                if expr_to_columns(order_by_expr, &mut order_by_cols).is_ok() {
+                    for col in order_by_cols {
+                        // Check if this column is in the projected schema
+                        if !projected_plan.schema().has_column(&col) {
+                            // This column is not in the current projection
+                            // Check if we can resolve it from the base_plan schema
+                            if base_plan.schema().has_column(&col) {
+                                missing_cols.insert(col.clone());
+                                if !missing_order_by_exprs
+                                    .iter()
+                                    .any(|e: &Expr| e == order_by_expr)
+                                {
+                                    missing_order_by_exprs.push(order_by_expr.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If there are missing columns and DISTINCT is used, perform the ambiguous distinct check
+            if !missing_order_by_exprs.is_empty() {
+                // Perform the ambiguous distinct check - if it fails, we should return the error
+                // immediately, not add the columns to the select list
+                Self::ambiguous_distinct_check(
+                    &missing_order_by_exprs,
+                    &missing_cols,
+                    &select_exprs,
+                )?;
+                // If we get here, the check passed (expressions are aliases or already in select list)
+                // so we should NOT add them again
+                select_exprs.to_vec()
+            } else {
+                select_exprs.to_vec()
+            }
+        } else {
+            select_exprs.to_vec()
+        };
+
         // Optionally the HAVING expression.
         let having_expr_opt = select
             .having
@@ -410,6 +461,56 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = self.order_by(plan, order_by_rex)?;
         Ok(plan)
+    }
+
+    /// Check if ORDER BY expressions with DISTINCT are ambiguous
+    ///
+    /// This function verifies that ORDER BY expressions only reference
+    /// columns that are either:
+    /// 1. Already in the SELECT list, or
+    /// 2. Aliases for expressions in the SELECT list
+    ///
+    /// If neither condition is met, it returns an error since this would
+    /// make the DISTINCT operation ambiguous.
+    fn ambiguous_distinct_check(
+        missing_exprs: &[Expr],
+        missing_cols: &HashSet<Column>,
+        projection_exprs: &[Expr],
+    ) -> Result<()> {
+        if missing_exprs.is_empty() {
+            return Ok(());
+        }
+
+        // If the missing columns are all only aliases for things in
+        // the existing select list, it is ok
+        //
+        // This handles the special case for:
+        // SELECT col as <alias> ORDER BY <alias>
+        //
+        // As described in https://github.com/apache/datafusion/issues/5293
+        let all_aliases = missing_exprs.iter().all(|e| {
+            projection_exprs.iter().any(|proj_expr| {
+                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
+                    e == expr.as_ref()
+                } else {
+                    false
+                }
+            })
+        });
+        if all_aliases {
+            return Ok(());
+        }
+
+        let missing_col_names = missing_cols
+            .iter()
+            .map(|col| col.flat_name())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        plan_err!(
+            "For SELECT DISTINCT, ORDER BY expressions {} must appear in select list",
+            missing_col_names
+        )
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
