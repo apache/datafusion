@@ -17,7 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use arrow::array::RecordBatch;
@@ -790,12 +790,24 @@ fn intern_format_strings(
     options: &protobuf::FormatOptions,
 ) -> Result<InternedFormatStrings> {
     Ok(InternedFormatStrings {
-        null: intern_format_str(&options.null),
-        date_format: options.date_format.as_deref().map(intern_format_str),
-        datetime_format: options.datetime_format.as_deref().map(intern_format_str),
-        timestamp_format: options.timestamp_format.as_deref().map(intern_format_str),
-        timestamp_tz_format: options.timestamp_tz_format.as_deref().map(intern_format_str),
-        time_format: options.time_format.as_deref().map(intern_format_str),
+        null: intern_format_str(&options.null)?,
+        date_format: options.date_format.as_deref().map(intern_format_str).transpose()?,
+        datetime_format: options
+            .datetime_format
+            .as_deref()
+            .map(intern_format_str)
+            .transpose()?,
+        timestamp_format: options
+            .timestamp_format
+            .as_deref()
+            .map(intern_format_str)
+            .transpose()?,
+        timestamp_tz_format: options
+            .timestamp_tz_format
+            .as_deref()
+            .map(intern_format_str)
+            .transpose()?,
+        time_format: options.time_format.as_deref().map(intern_format_str).transpose()?,
     })
 }
 
@@ -871,51 +883,37 @@ const FORMAT_STRING_CACHE_LIMIT: usize = 1024;
 /// Cache for interned format strings.
 ///
 /// We leak strings to satisfy the `'static` lifetime required by
-/// `ArrowFormatOptions` in cast options. The cache retains those
-/// references to maximize reuse and bounds the number of retained
-/// entries to avoid unbounded growth.
+/// `ArrowFormatOptions` in cast options. To avoid unbounded growth,
+/// once the cache reaches the limit we only allow lookups for strings
+/// that are already interned.
 static FORMAT_STRING_CACHE: OnceLock<Mutex<FormatStringCache>> = OnceLock::new();
 
 #[derive(Default)]
 struct FormatStringCache {
     entries: HashMap<String, &'static str>,
-    order: VecDeque<String>,
 }
 
 impl FormatStringCache {
     fn get(&mut self, value: &str) -> Option<&'static str> {
-        let interned = self.entries.get(value).copied()?;
-        self.touch(value);
-        Some(interned)
+        self.entries.get(value).copied()
     }
 
-    fn insert(&mut self, value: &str) -> &'static str {
+    fn insert(&mut self, value: &str) -> Result<&'static str> {
         if let Some(existing) = self.get(value) {
-            return existing;
+            return Ok(existing);
+        }
+
+        if self.entries.len() >= FORMAT_STRING_CACHE_LIMIT {
+            return Err(internal_datafusion_err!(
+                "Format string cache limit ({}) reached; cannot intern new format string {value:?}",
+                FORMAT_STRING_CACHE_LIMIT
+            ));
         }
 
         let leaked = Box::leak(value.to_owned().into_boxed_str());
-        if self.entries.len() >= FORMAT_STRING_CACHE_LIMIT {
-            self.evict_oldest();
-        }
-
         let key = value.to_owned();
         self.entries.insert(key.clone(), leaked);
-        self.order.push_back(key);
-        leaked
-    }
-
-    fn touch(&mut self, value: &str) {
-        if let Some(position) = self.order.iter().position(|key| key == value) {
-            self.order.remove(position);
-        }
-        self.order.push_back(value.to_owned());
-    }
-
-    fn evict_oldest(&mut self) {
-        if let Some(oldest) = self.order.pop_front() {
-            self.entries.remove(&oldest);
-        }
+        Ok(leaked)
     }
 }
 
@@ -923,7 +921,7 @@ fn format_string_cache() -> &'static Mutex<FormatStringCache> {
     FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(FormatStringCache::default()))
 }
 
-fn intern_format_str(value: &str) -> &'static str {
+fn intern_format_str(value: &str) -> Result<&'static str> {
     let mut cache = format_string_cache()
         .lock()
         .expect("format string cache lock poisoned");
@@ -1028,7 +1026,7 @@ mod tests {
         let to_fill = FORMAT_STRING_CACHE_LIMIT.saturating_sub(current_len);
         for _ in 0..to_fill {
             let value = unique_value("unit-test-fill");
-            intern_format_str(&value);
+            intern_format_str(&value).unwrap();
         }
 
         let cache_len = format_string_cache()
@@ -1042,11 +1040,36 @@ mod tests {
         );
 
         let overflow_value = unique_value("unit-test-overflow");
-        let first = intern_format_str(&overflow_value);
-        let second = intern_format_str(&overflow_value);
+        let overflow_options = protobuf::FormatOptions {
+            safe: true,
+            null: overflow_value,
+            date_format: None,
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: protobuf::DurationFormat::Pretty as i32,
+            types_info: false,
+        };
+        let error = format_options_from_proto(&overflow_options).unwrap_err();
         assert!(
-            std::ptr::eq(first, second),
-            "cache should reuse overflow strings while they remain cached"
+            error.to_string().contains("Format string cache limit"),
+            "unexpected error: {error}"
+        );
+
+        let existing_value = format_string_cache()
+            .lock()
+            .expect("format string cache lock poisoned")
+            .entries
+            .keys()
+            .next()
+            .cloned()
+            .expect("cache should have entries after fill");
+        let existing = intern_format_str(&existing_value).unwrap();
+        let again = intern_format_str(&existing_value).unwrap();
+        assert!(
+            std::ptr::eq(existing, again),
+            "cache should reuse existing strings after the limit"
         );
     }
 
