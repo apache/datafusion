@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
@@ -428,9 +428,10 @@ impl DefaultPhysicalExprAdapterRewriter {
             (true, true) => return Ok(Transformed::no(expr)),
             // If the indexes or data types do not match, we need to create a new column expression
             (true, _) => column.clone(),
-            (false, _) => {
-                Column::new_with_schema(logical_field.name(), self.physical_file_schema)?
-            }
+            (false, _) => Column::new_with_schema(
+                logical_field.name(),
+                self.physical_file_schema.as_ref(),
+            )?,
         };
 
         if logical_field.data_type() == physical_field.data_type() {
@@ -1187,8 +1188,8 @@ mod tests {
         )]);
 
         let rewriter = DefaultPhysicalExprAdapterRewriter {
-            logical_file_schema: &logical_schema,
-            physical_file_schema: &physical_schema,
+            logical_file_schema: Arc::new(logical_schema),
+            physical_file_schema: Arc::new(physical_schema),
         };
 
         // Test that when a field exists in physical schema, it returns None
