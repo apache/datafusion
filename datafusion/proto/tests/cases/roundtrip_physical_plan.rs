@@ -119,19 +119,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::avg_udaf;
 
-trait FormatOptionsSlot {
-    fn clear(&mut self);
-}
-
-impl FormatOptionsSlot for FormatOptions<'static> {
-    fn clear(&mut self) {}
-}
-
-impl FormatOptionsSlot for Option<FormatOptions<'static>> {
-    fn clear(&mut self) {
-        *self = None;
-    }
-}
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
 use datafusion_proto::physical_plan::{
@@ -283,11 +270,10 @@ fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
     let input_field = Field::new("a", DataType::Int32, true);
     let target_field = Field::new("a", DataType::Int64, true);
 
-    let mut cast_options = CastOptions {
+    let cast_options = CastOptions {
         safe: true,
         format_options: DEFAULT_CAST_OPTIONS.format_options.clone(),
     };
-    cast_options.format_options.clear();
     let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
         Arc::new(Column::new("a", 0)),
         Arc::new(input_field.clone()),
@@ -297,9 +283,31 @@ fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
+    let mut proto = datafusion_proto::physical_plan::to_proto::serialize_physical_expr(
         &expr, &codec,
     )?;
+    let cast_column = match proto.expr_type.as_mut() {
+        Some(protobuf::physical_expr_node::ExprType::CastColumn(cast_column)) => {
+            cast_column.as_mut()
+        }
+        _ => {
+            return Err(internal_datafusion_err!(
+                "Expected PhysicalCastColumnNode in proto"
+            ));
+        }
+    };
+    cast_column.format_options = None;
+    match cast_column.cast_options.as_mut() {
+        Some(cast_options) => {
+            cast_options.format_options = None;
+        }
+        None => {
+            cast_column.cast_options = Some(protobuf::PhysicalCastOptions {
+                safe: DEFAULT_CAST_OPTIONS.safe,
+                format_options: None,
+            });
+        }
+    }
     let input_schema = Schema::new(vec![input_field.clone()]);
     let round_trip = datafusion_proto::physical_plan::from_proto::parse_physical_expr(
         &proto,
