@@ -777,24 +777,41 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     }
 }
 
+struct InternedFormatStrings {
+    null: &'static str,
+    date_format: Option<&'static str>,
+    datetime_format: Option<&'static str>,
+    timestamp_format: Option<&'static str>,
+    timestamp_tz_format: Option<&'static str>,
+    time_format: Option<&'static str>,
+}
+
+fn intern_format_strings(
+    options: &protobuf::FormatOptions,
+) -> Result<InternedFormatStrings> {
+    Ok(InternedFormatStrings {
+        null: intern_format_str(&options.null),
+        date_format: options.date_format.as_deref().map(intern_format_str),
+        datetime_format: options.datetime_format.as_deref().map(intern_format_str),
+        timestamp_format: options.timestamp_format.as_deref().map(intern_format_str),
+        timestamp_tz_format: options.timestamp_tz_format.as_deref().map(intern_format_str),
+        time_format: options.time_format.as_deref().map(intern_format_str),
+    })
+}
+
 fn format_options_from_proto(
     options: &protobuf::FormatOptions,
 ) -> Result<ArrowFormatOptions<'static>> {
     let duration_format = duration_format_from_proto(options.duration_format)?;
-    let null = intern_format_str(&options.null);
-    let date_format = options.date_format.as_deref().map(intern_format_str);
-    let datetime_format = options.datetime_format.as_deref().map(intern_format_str);
-    let timestamp_format = options.timestamp_format.as_deref().map(intern_format_str);
-    let timestamp_tz_format = options.timestamp_tz_format.as_deref().map(intern_format_str);
-    let time_format = options.time_format.as_deref().map(intern_format_str);
+    let interned = intern_format_strings(options)?;
     Ok(ArrowFormatOptions::new()
         .with_display_error(options.safe)
-        .with_null(null)
-        .with_date_format(date_format)
-        .with_datetime_format(datetime_format)
-        .with_timestamp_format(timestamp_format)
-        .with_timestamp_tz_format(timestamp_tz_format)
-        .with_time_format(time_format)
+        .with_null(interned.null)
+        .with_date_format(interned.date_format)
+        .with_datetime_format(interned.datetime_format)
+        .with_timestamp_format(interned.timestamp_format)
+        .with_timestamp_tz_format(interned.timestamp_tz_format)
+        .with_time_format(interned.time_format)
         .with_duration_format(duration_format)
         .with_types_info(options.types_info))
 }
@@ -860,14 +877,6 @@ fn intern_format_str(value: &str) -> &'static str {
 }
 
 #[cfg(test)]
-fn format_string_cache_len() -> usize {
-    format_string_cache()
-        .lock()
-        .expect("format string cache lock poisoned")
-        .len()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
@@ -898,7 +907,6 @@ mod tests {
 
     #[test]
     fn format_string_cache_reuses_strings() {
-        let before = format_string_cache_len();
         let first = protobuf::FormatOptions {
             safe: true,
             null: "unit-test-null-1".to_string(),
@@ -912,10 +920,14 @@ mod tests {
         };
 
         format_options_from_proto(&first).unwrap();
-        let after_first = format_string_cache_len();
         format_options_from_proto(&first).unwrap();
-        let after_second = format_string_cache_len();
-        assert_eq!(after_first, after_second);
+        let first_interned = intern_format_strings(&first).unwrap();
+        let second_interned = intern_format_strings(&first).unwrap();
+        assert!(std::ptr::eq(first_interned.null, second_interned.null));
+        assert!(std::ptr::eq(
+            first_interned.date_format.unwrap(),
+            second_interned.date_format.unwrap()
+        ));
 
         let second = protobuf::FormatOptions {
             safe: true,
@@ -930,9 +942,12 @@ mod tests {
         };
 
         format_options_from_proto(&second).unwrap();
-        let after_third = format_string_cache_len();
-        assert!(after_third > after_second);
-        assert!(after_first >= before);
+        let second_interned = intern_format_strings(&second).unwrap();
+        assert!(!std::ptr::eq(first_interned.null, second_interned.null));
+        assert!(!std::ptr::eq(
+            first_interned.date_format.unwrap(),
+            second_interned.date_format.unwrap()
+        ));
     }
 
     #[test]
