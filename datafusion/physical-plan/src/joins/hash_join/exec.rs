@@ -77,6 +77,7 @@ use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
@@ -438,6 +439,7 @@ impl JoinLeftData {
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
+#[metric_doc(BuildProbeJoinMetrics)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
     pub left: Arc<dyn ExecutionPlan>,

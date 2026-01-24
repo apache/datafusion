@@ -239,6 +239,6 @@ EOF
 
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@3.7.4 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

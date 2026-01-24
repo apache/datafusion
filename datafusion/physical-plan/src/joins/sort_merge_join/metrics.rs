@@ -21,8 +21,10 @@ use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, SpillMetrics,
     Time,
 };
+use datafusion_macros::metric_doc;
 
 /// Metrics for SortMergeJoinExec
+#[metric_doc]
 pub(super) struct SortMergeJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
     join_time: Time,

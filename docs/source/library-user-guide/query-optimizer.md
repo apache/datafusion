@@ -453,13 +453,11 @@ When analyzing expressions, DataFusion runs boundary analysis using interval ari
 Consider a simple predicate like age > 18 AND age <= 25. The analysis flows as follows:
 
 1. Context Initialization
-
    - Begin with known column statistics
    - Set up initial boundaries based on column constraints
    - Initialize the shared analysis context
 
 2. Expression Tree Walk
-
    - Analyze each node in the expression tree
    - Propagate boundary information upward
    - Allow child nodes to influence parent boundaries

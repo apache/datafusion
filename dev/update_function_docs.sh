@@ -20,12 +20,13 @@
 
 set -e
 
+PRETTIER_VERSION="3.7.4"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SOURCE_DIR}/../" && pwd
 
 
 TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
-PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- aggregate"
+PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -114,12 +115,12 @@ echo "Running CLI and inserting aggregate function docs table"
 $PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@${PRETTIER_VERSION} --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
-PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- scalar"
+PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -158,12 +159,12 @@ echo "Running CLI and inserting scalar function docs table"
 $PRINT_SCALAR_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@${PRETTIER_VERSION} --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
 TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
-PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- window"
+PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs --bin print_functions_docs -- window"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
@@ -336,6 +337,6 @@ echo "Running CLI and inserting window function docs table"
 $PRINT_WINDOW_FUNCTION_DOCS_COMMAND >> "$TARGET_FILE"
 
 echo "Running prettier"
-npx prettier@2.3.2 --write "$TARGET_FILE"
+npx prettier@${PRETTIER_VERSION} --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"

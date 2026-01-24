@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-PRETTIER_VERSION="2.7.1"
+PRETTIER_VERSION="3.7.4"
 PRETTIER_TARGETS=(
   '{datafusion,datafusion-cli,datafusion-examples,dev,docs}/**/*.md'
   '!datafusion/CHANGELOG.md'

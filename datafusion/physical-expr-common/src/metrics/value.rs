@@ -22,6 +22,7 @@ use chrono::{DateTime, Utc};
 use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, instant::Instant,
 };
+use datafusion_macros::metric_doc;
 use parking_lot::Mutex;
 use std::{
     borrow::{Borrow, Cow},
@@ -368,6 +369,7 @@ impl Drop for ScopedTimerGuard<'_> {
 /// 8 of them using statistics, the pruning metrics would look like: 10 total -> 2 matched
 ///
 /// Note `clone`ing update the same underlying metrics
+#[metric_doc(common)]
 #[derive(Debug, Clone)]
 pub struct PruningMetrics {
     pruned: Arc<AtomicUsize>,
@@ -463,6 +465,7 @@ impl PruningMetrics {
 /// Counters tracking ratio metrics (e.g. matched vs total)
 ///
 /// The counters are thread-safe and shared across clones.
+#[metric_doc(common)]
 #[derive(Debug, Clone, Default)]
 pub struct RatioMetrics {
     part: Arc<AtomicUsize>,

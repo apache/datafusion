@@ -73,6 +73,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
@@ -170,6 +171,7 @@ const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
 /// making the smallest value in 'left_sorted' 1231 and any rows below (since ascending)
 /// than that can be dropped from the inner buffer.
 /// ```
+#[metric_doc(StreamJoinMetrics)]
 #[derive(Debug, Clone)]
 pub struct SymmetricHashJoinExec {
     /// Left side stream

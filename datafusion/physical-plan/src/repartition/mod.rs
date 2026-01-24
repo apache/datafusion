@@ -55,6 +55,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -750,6 +751,7 @@ impl BatchPartitioner {
 /// For more background, please also see the [Optimizing Repartitions in DataFusion] blog.
 ///
 /// [Optimizing Repartitions in DataFusion]: https://datafusion.apache.org/blog/2025/12/15/avoid-consecutive-repartitions
+#[metric_doc(RepartitionMetrics)]
 #[derive(Debug, Clone)]
 pub struct RepartitionExec {
     /// Input execution plan
@@ -766,6 +768,7 @@ pub struct RepartitionExec {
     cache: PlanProperties,
 }
 
+#[metric_doc]
 #[derive(Debug, Clone)]
 struct RepartitionMetrics {
     /// Time in nanos to execute child operator and fetch batches

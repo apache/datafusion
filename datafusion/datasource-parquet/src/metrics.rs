@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion_macros::metric_doc;
 use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricType, PruningMetrics,
     RatioMergeStrategy, RatioMetrics, Time,
@@ -26,6 +27,7 @@ use datafusion_physical_plan::metrics::{
 /// through [`ParquetFileReaderFactory`].
 ///
 /// [`ParquetFileReaderFactory`]: super::ParquetFileReaderFactory
+#[metric_doc]
 #[derive(Debug, Clone)]
 pub struct ParquetFileMetrics {
     /// Number of file **ranges** pruned or matched by partition or file level statistics.

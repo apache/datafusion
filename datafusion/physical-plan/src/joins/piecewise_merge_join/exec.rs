@@ -29,6 +29,7 @@ use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
 };
 use datafusion_expr::{JoinType, Operator};
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::{
     Distribution, LexOrdering, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
@@ -248,6 +249,7 @@ use crate::{
 ///
 /// # Further Reference Material
 /// DuckDB blog on Range Joins: [Range Joins in DuckDB](https://duckdb.org/2022/05/27/iejoin.html)
+#[metric_doc(BuildProbeJoinMetrics)]
 #[derive(Debug)]
 pub struct PiecewiseMergeJoinExec {
     /// Left buffered execution plan

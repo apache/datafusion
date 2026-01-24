@@ -45,6 +45,7 @@ use crate::stream::RecordBatchStreamAdapter;
 use crate::stream::ReservationStream;
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
+use crate::topk::TopKMetrics;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
@@ -62,6 +63,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
@@ -69,6 +71,7 @@ use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+#[metric_doc]
 struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
@@ -935,6 +938,7 @@ pub fn sort_batch_chunked(
 ///
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
+#[metric_doc(ExternalSorterMetrics, TopKMetrics)]
 #[derive(Debug, Clone)]
 pub struct SortExec {
     /// Input schema

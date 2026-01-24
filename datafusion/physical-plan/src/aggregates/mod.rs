@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
-    no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
-    topk_stream::GroupedTopKAggregateStream,
+    group_values::GroupByMetrics, no_grouping::AggregateStream,
+    row_hash::GroupedHashAggregateStream, topk_stream::GroupedTopKAggregateStream,
 };
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::filter_pushdown::{
@@ -50,6 +50,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_macros::metric_doc;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -539,6 +540,7 @@ impl LimitOptions {
 }
 
 /// Hash aggregate execution plan
+#[metric_doc(GroupByMetrics)]
 #[derive(Debug, Clone)]
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)

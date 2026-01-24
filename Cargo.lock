@@ -1777,6 +1777,7 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
+ "toml",
  "url",
  "uuid",
  "zstd",
@@ -1933,8 +1934,10 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
@@ -2050,10 +2053,12 @@ dependencies = [
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate-common",
  "datafusion-functions-nested",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-adapter",
  "datafusion-physical-expr-common",
@@ -2073,6 +2078,9 @@ dependencies = [
 [[package]]
 name = "datafusion-doc"
 version = "52.0.0"
+dependencies = [
+ "inventory",
+]
 
 [[package]]
 name = "datafusion-examples"
@@ -2122,7 +2130,9 @@ dependencies = [
  "chrono",
  "dashmap",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr",
+ "datafusion-macros",
  "datafusion-physical-expr-common",
  "futures",
  "insta",
@@ -2338,6 +2348,7 @@ name = "datafusion-macros"
 version = "52.0.0"
 dependencies = [
  "datafusion-doc",
+ "proc-macro2",
  "quote",
  "syn 2.0.114",
 ]
@@ -2417,7 +2428,9 @@ dependencies = [
  "arrow",
  "chrono",
  "datafusion-common",
+ "datafusion-doc",
  "datafusion-expr-common",
+ "datafusion-macros",
  "hashbrown 0.16.1",
  "indexmap 2.13.0",
  "itertools 0.14.0",
@@ -2456,6 +2469,7 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
@@ -2463,6 +2477,7 @@ dependencies = [
  "datafusion-functions-aggregate-common",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "futures",
@@ -3699,6 +3714,15 @@ name = "integer-encoding"
 version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
+
+[[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
+]
 
 [[package]]
 name = "ipnet"
@@ -5477,6 +5501,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "serde_tokenstream"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6150,6 +6183,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "toml"
+version = "0.9.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00e5e5d9bf2475ac9d4f0d9edab68cc573dc2fd644b0dba36b0c30a92dd9eaa0"
+dependencies = [
+ "indexmap 2.13.0",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
 name = "toml_datetime"
 version = "0.7.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6178,6 +6226,12 @@ checksum = "a3198b4b0a8e11f09dd03e133c0280504d0801269e9afa46362ffde1cbeebf44"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.0.6+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 
 [[package]]
 name = "tonic"

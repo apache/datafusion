@@ -108,6 +108,7 @@ unicode_expressions = [
     "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+docs = []
 extended_tests = []
 
 [dependencies]
@@ -167,8 +168,8 @@ criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
-datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
+datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
@@ -185,6 +186,9 @@ serde_json = { workspace = true }
 sysinfo = "0.37.2"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
+
+[build-dependencies]
+toml = "0.9"
 
 [package.metadata.cargo-machete]
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]

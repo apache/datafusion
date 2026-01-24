@@ -47,6 +47,7 @@ use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
+use datafusion_macros::metric_doc;
 
 use arrow::array::{
     Array, BooleanArray, BooleanBufferBuilder, RecordBatchOptions, UInt32Array,
@@ -169,6 +170,7 @@ use parking_lot::Mutex;
 /// Note this structure includes a [`OnceAsync`] that is used to coordinate the
 /// loading of the left side with the processing in each output stream.
 /// Therefore it can not be [`Clone`]
+#[metric_doc(NestedLoopJoinMetrics)]
 #[derive(Debug)]
 pub struct NestedLoopJoinExec {
     /// left side
@@ -814,6 +816,7 @@ pub(crate) struct NestedLoopJoinStream {
     current_right_batch_matched: Option<BooleanArray>,
 }
 
+#[metric_doc]
 pub(crate) struct NestedLoopJoinMetrics {
     /// Join execution metrics
     pub(crate) join_metrics: BuildProbeJoinMetrics,
