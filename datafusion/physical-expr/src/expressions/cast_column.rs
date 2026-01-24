@@ -17,7 +17,7 @@
 
 //! Physical expression for struct-aware casting of columns.
 
-use crate::physical_expr::PhysicalExpr;
+use crate::{expressions::Column, physical_expr::PhysicalExpr};
 use arrow::{
     compute::{CastOptions, can_cast_types},
     datatypes::{DataType, FieldRef, Schema},
@@ -111,6 +111,21 @@ impl CastColumnExpr {
                 input_field.data_type(),
                 expr_data_type
             );
+        }
+        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+            let schema_field = input_schema.field(column.index());
+            if schema_field.name() != input_field.name()
+                || schema_field.data_type() != input_field.data_type()
+            {
+                return plan_err!(
+                    "CastColumnExpr input field '{}' (type '{}') does not match schema field '{}' (type '{}') at index {}",
+                    input_field.name(),
+                    input_field.data_type(),
+                    schema_field.name(),
+                    schema_field.data_type(),
+                    column.index()
+                );
+            }
         }
 
         match (input_field.data_type(), target_field.data_type()) {
@@ -508,5 +523,29 @@ mod tests {
         let casted = as_uint8_array(casted.as_ref())?;
         assert_eq!(casted.value(0), 9);
         Ok(())
+    }
+
+    #[test]
+    fn cast_column_schema_mismatch() {
+        let input_field = Field::new("a", DataType::Int32, true);
+        let target_field = Field::new("a", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![
+            input_field.clone(),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let column = Arc::new(Column::new("b", 1));
+        let err = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .expect_err("expected mismatched input field error");
+
+        assert!(err
+            .to_string()
+            .contains("does not match schema field"));
     }
 }
