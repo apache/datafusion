@@ -48,8 +48,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::transpose;
 use datafusion_common::{
-    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err,
-    internal_datafusion_err, internal_err,
+    ColumnStatistics, DataFusionError, HashMap, assert_or_internal_err, internal_err,
 };
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -82,6 +81,20 @@ use distributor_channels::{
 /// The decision to spill is made based on memory availability when sending a batch
 /// to an output partition.
 ///
+#[derive(Debug)]
+pub enum PartitionedBatch {
+    /// A fully-materialized [`RecordBatch`].
+    ///
+    /// This is used by [`Partitioning::RoundRobinBatch`]
+    Batch(RecordBatch),
+    /// A batch of indices into a shared [`RecordBatch`].
+    ///
+    /// This is used by [`Partitioning::Hash`] to avoid the overhead of `take`
+    /// in the producer, instead performing this in the consumer, allowing for
+    /// greater parallelism
+    Indexed(Arc<RecordBatch>, PrimitiveArray<UInt32Type>),
+}
+
 /// # Batch Flow with Spilling
 ///
 /// ```text
@@ -127,7 +140,7 @@ use distributor_channels::{
 #[derive(Debug)]
 enum RepartitionBatch {
     /// Batch held in memory (counts against memory reservation)
-    Memory(RecordBatch),
+    Batch(PartitionedBatch, usize),
     /// Marker indicating a batch was spilled to the partition's SpillPool.
     /// The actual batch can be retrieved by reading from the SpillPoolStream.
     /// This variant contains no data itself - it's just a signal to the reader
@@ -534,7 +547,7 @@ impl BatchPartitioner {
     /// to the [`metrics::Time`] provided on construction
     pub fn partition<F>(&mut self, batch: RecordBatch, mut f: F) -> Result<()>
     where
-        F: FnMut(usize, RecordBatch) -> Result<()>,
+        F: FnMut(usize, PartitionedBatch) -> Result<()>,
     {
         self.partition_iter(batch)?.try_for_each(|res| match res {
             Ok((partition, batch)) => f(partition, batch),
@@ -550,8 +563,8 @@ impl BatchPartitioner {
     fn partition_iter(
         &mut self,
         batch: RecordBatch,
-    ) -> Result<impl Iterator<Item = Result<(usize, RecordBatch)>> + Send + '_> {
-        let it: Box<dyn Iterator<Item = Result<(usize, RecordBatch)>> + Send> =
+    ) -> Result<impl Iterator<Item = Result<(usize, PartitionedBatch)>> + Send + '_> {
+        let it: Box<dyn Iterator<Item = Result<(usize, PartitionedBatch)>> + Send> =
             match &mut self.state {
                 BatchPartitionerState::RoundRobin {
                     num_partitions,
@@ -559,7 +572,7 @@ impl BatchPartitioner {
                 } => {
                     let idx = *next_idx;
                     *next_idx = (*next_idx + 1) % *num_partitions;
-                    Box::new(std::iter::once(Ok((idx, batch))))
+                    Box::new(std::iter::once(Ok((idx, PartitionedBatch::Batch(batch)))))
                 }
                 BatchPartitionerState::Hash {
                     exprs,
@@ -591,48 +604,33 @@ impl BatchPartitioner {
                     // Finished building index-arrays for output partitions
                     timer.done();
 
-                    // Borrowing partitioner timer to prevent moving `self` to closure
-                    let partitioner_timer = &self.timer;
+                    let batch = Arc::new(batch);
+                    let partitioned_batches =
+                        indices.iter_mut().enumerate().filter_map(move |(partition, p_indices)| {
+                                if p_indices.is_empty() {
+                                    return None;
+                                }
+                                let taken_indices = std::mem::take(p_indices);
+                                let indices_array: PrimitiveArray<UInt32Type> =
+                                    taken_indices.into();
 
-                    let mut partitioned_batches = vec![];
-                    for (partition, p_indices) in indices.iter_mut().enumerate() {
-                        if !p_indices.is_empty() {
-                            let taken_indices = std::mem::take(p_indices);
-                            let indices_array: PrimitiveArray<UInt32Type> =
-                                taken_indices.into();
-
-                            // Tracking time required for repartitioned batches construction
-                            let _timer = partitioner_timer.timer();
-
-                            // Produce batches based on indices
-                            let columns =
-                                take_arrays(batch.columns(), &indices_array, None)?;
-
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices_array.len()));
-                            let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
-                                columns,
-                                &options,
-                            )
-                            .unwrap();
-
-                            partitioned_batches.push(Ok((partition, batch)));
-
-                            // Return the taken vec
-                            let (_, buffer, _) = indices_array.into_parts();
-                            let mut vec =
-                                buffer.into_inner().into_vec::<u32>().map_err(|e| {
-                                    internal_datafusion_err!(
-                                        "Could not convert buffer to vec: {e:?}"
-                                    )
-                                })?;
-                            vec.clear();
-                            *p_indices = vec;
-                        }
-                    }
-
-                    Box::new(partitioned_batches.into_iter())
+                                // For now, we do not support recycling the vector backing the
+                                // PrimitiveArray. This is because the PartitionedBatch is sent
+                                // to another thread, and we would need a channel to receive
+                                // the recycled buffer back.
+                                //
+                                // The performance of this approach should be evaluated, and
+                                // if necessary, the buffer recycling could be implemented.
+                                Some(Ok((
+                                    partition,
+                                    PartitionedBatch::Indexed(
+                                        Arc::clone(&batch),
+                                        indices_array,
+                                    ),
+                                )))
+                            },
+                        );
+                    Box::new(partitioned_batches)
                 }
             };
 
@@ -1362,8 +1360,16 @@ impl RepartitionExec {
             }
 
             for res in partitioner.partition_iter(batch)? {
-                let (partition, batch) = res?;
-                let size = batch.get_array_memory_size();
+                let (partition, partitioned_batch) = res?;
+
+                let size = match &partitioned_batch {
+                    PartitionedBatch::Batch(batch) => batch.get_array_memory_size(),
+                    PartitionedBatch::Indexed(batch, indices) => {
+                        let batch_size_per_row = batch.get_array_memory_size() as f64
+                            / batch.num_rows() as f64;
+                        (batch_size_per_row * indices.len() as f64) as usize
+                    }
+                };
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
@@ -1372,11 +1378,29 @@ impl RepartitionExec {
                         match channel.reservation.lock().try_grow(size) {
                             Ok(_) => {
                                 // Memory available - send in-memory batch
-                                (RepartitionBatch::Memory(batch), true)
+                                (RepartitionBatch::Batch(partitioned_batch, size), true)
                             }
                             Err(_) => {
                                 // We're memory limited - spill to SpillPool
                                 // SpillPool handles file handle reuse and rotation
+                                let batch = match partitioned_batch {
+                                    PartitionedBatch::Batch(batch) => batch,
+                                    PartitionedBatch::Indexed(batch, indices) => {
+                                        let columns = take_arrays(
+                                            batch.columns(),
+                                            &indices,
+                                            None,
+                                        )?;
+                                        let mut options = RecordBatchOptions::new();
+                                        options = options
+                                            .with_row_count(Some(indices.len()));
+                                        RecordBatch::try_new_with_options(
+                                            batch.schema(),
+                                            columns,
+                                            &options,
+                                        )?
+                                    }
+                                };
                                 channel.spill_writer.push_batch(&batch)?;
                                 // Send marker indicating batch was spilled
                                 (RepartitionBatch::Spilled, false)
@@ -1604,11 +1628,28 @@ impl PerPartitionStream {
 
                     match value {
                         Some(Some(v)) => match v {
-                            Ok(RepartitionBatch::Memory(batch)) => {
+                            Ok(RepartitionBatch::Batch(partitioned_batch, size)) => {
+                                let batch = match partitioned_batch {
+                                    PartitionedBatch::Batch(batch) => batch,
+                                    PartitionedBatch::Indexed(batch, indices) => {
+                                        let columns = take_arrays(
+                                            batch.columns(),
+                                            &indices,
+                                            None,
+                                        )?;
+                                        let mut options = RecordBatchOptions::new();
+                                        options = options
+                                            .with_row_count(Some(indices.len()));
+                                        RecordBatch::try_new_with_options(
+                                            batch.schema(),
+                                            columns,
+                                            &options,
+                                        )?
+                                    }
+                                };
+
                                 // Release memory and return batch
-                                self.reservation
-                                    .lock()
-                                    .shrink(batch.get_array_memory_size());
+                                self.reservation.lock().shrink(size);
                                 return Poll::Ready(Some(Ok(batch)));
                             }
                             Ok(RepartitionBatch::Spilled) => {
