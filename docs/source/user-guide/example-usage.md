@@ -103,7 +103,7 @@ exported by DataFusion, for example:
 use datafusion::arrow::datatypes::Schema;
 ```
 
-For example, [DataFusion `25.0.0` dependencies] require `arrow`
+For example, [DataFusion `26.0.0` dependencies] require `arrow`
 `39.0.0`. If instead you used `arrow` `40.0.0` in your project you may
 see errors such as:
 
