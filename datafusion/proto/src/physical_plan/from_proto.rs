@@ -17,7 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use arrow::array::RecordBatch;
@@ -874,25 +874,60 @@ const FORMAT_STRING_CACHE_LIMIT: usize = 1024;
 /// `ArrowFormatOptions` in cast options. The cache retains those
 /// references to maximize reuse and bounds the number of retained
 /// entries to avoid unbounded growth.
-static FORMAT_STRING_CACHE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+static FORMAT_STRING_CACHE: OnceLock<Mutex<FormatStringCache>> = OnceLock::new();
 
-fn format_string_cache() -> &'static Mutex<HashSet<&'static str>> {
-    FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(HashSet::new()))
+#[derive(Default)]
+struct FormatStringCache {
+    entries: HashMap<String, &'static str>,
+    order: VecDeque<String>,
+}
+
+impl FormatStringCache {
+    fn get(&mut self, value: &str) -> Option<&'static str> {
+        let interned = self.entries.get(value).copied()?;
+        self.touch(value);
+        Some(interned)
+    }
+
+    fn insert(&mut self, value: &str) -> &'static str {
+        if let Some(existing) = self.get(value) {
+            return existing;
+        }
+
+        let leaked = Box::leak(value.to_owned().into_boxed_str());
+        if self.entries.len() >= FORMAT_STRING_CACHE_LIMIT {
+            self.evict_oldest();
+        }
+
+        let key = value.to_owned();
+        self.entries.insert(key.clone(), leaked);
+        self.order.push_back(key);
+        leaked
+    }
+
+    fn touch(&mut self, value: &str) {
+        if let Some(position) = self.order.iter().position(|key| key == value) {
+            self.order.remove(position);
+        }
+        self.order.push_back(value.to_owned());
+    }
+
+    fn evict_oldest(&mut self) {
+        if let Some(oldest) = self.order.pop_front() {
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
+fn format_string_cache() -> &'static Mutex<FormatStringCache> {
+    FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(FormatStringCache::default()))
 }
 
 fn intern_format_str(value: &str) -> &'static str {
     let mut cache = format_string_cache()
         .lock()
         .expect("format string cache lock poisoned");
-    if let Some(existing) = cache.get(value).copied() {
-        return existing;
-    }
-    if cache.len() >= FORMAT_STRING_CACHE_LIMIT {
-        return Box::leak(value.to_owned().into_boxed_str());
-    }
-    let leaked = Box::leak(value.to_owned().into_boxed_str());
-    cache.insert(leaked);
-    leaked
+    cache.insert(value)
 }
 
 #[cfg(test)]
@@ -978,7 +1013,7 @@ mod tests {
                 let cache = format_string_cache()
                     .lock()
                     .expect("format string cache lock poisoned");
-                if !cache.contains(candidate.as_str()) {
+                if !cache.entries.contains_key(candidate.as_str()) {
                     return candidate;
                 }
                 counter += 1;
@@ -988,6 +1023,7 @@ mod tests {
         let current_len = format_string_cache()
             .lock()
             .expect("format string cache lock poisoned")
+            .entries
             .len();
         let to_fill = FORMAT_STRING_CACHE_LIMIT.saturating_sub(current_len);
         for _ in 0..to_fill {
@@ -998,6 +1034,7 @@ mod tests {
         let cache_len = format_string_cache()
             .lock()
             .expect("format string cache lock poisoned")
+            .entries
             .len();
         assert!(
             cache_len >= FORMAT_STRING_CACHE_LIMIT,
@@ -1008,8 +1045,8 @@ mod tests {
         let first = intern_format_str(&overflow_value);
         let second = intern_format_str(&overflow_value);
         assert!(
-            !std::ptr::eq(first, second),
-            "cache should stop interning new strings once at limit"
+            std::ptr::eq(first, second),
+            "cache should reuse overflow strings while they remain cached"
         );
     }
 
