@@ -139,6 +139,11 @@ pub const DEFAULT_LIST_FILES_CACHE_MEMORY_LIMIT: usize = 1024 * 1024; // 1MiB
 /// The default cache TTL for the [`DefaultListFilesCache`]
 pub const DEFAULT_LIST_FILES_CACHE_TTL: Option<Duration> = None; // Infinite
 
+/// Key for [`DefaultListFilesCache`]
+///
+/// Each entry is scoped to its use within a specific table so that the cache
+/// can differentiate between identical paths in different tables, and
+/// table-level cache invalidation.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct TableScopedPath {
     pub table: Option<TableReference>,

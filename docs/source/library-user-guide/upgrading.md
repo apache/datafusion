@@ -118,6 +118,42 @@ let context = SimplifyContext::default()
 
 See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
 
+### `FilterExec` builder methods deprecated
+
+The following methods on `FilterExec` have been deprecated in favor of using `FilterExecBuilder`:
+
+- `with_projection()`
+- `with_batch_size()`
+
+**Who is affected:**
+
+- Users who create `FilterExec` instances and use these methods to configure them
+
+**Migration guide:**
+
+Use `FilterExecBuilder` instead of chaining method calls on `FilterExec`:
+
+**Before:**
+
+```rust,ignore
+let filter = FilterExec::try_new(predicate, input)?
+    .with_projection(Some(vec![0, 2]))?
+    .with_batch_size(8192)?;
+```
+
+**After:**
+
+```rust,ignore
+let filter = FilterExecBuilder::new(predicate, input)
+    .with_projection(Some(vec![0, 2]))
+    .with_batch_size(8192)
+    .build()?;
+```
+
+The builder pattern is more efficient as it computes properties once during `build()` rather than recomputing them for each method call.
+
+Note: `with_default_selectivity()` is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.
+
 ## DataFusion `52.0.0`
 
 ### Changes to DFSchema API

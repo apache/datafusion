@@ -186,7 +186,57 @@ pub enum NativeType {
 
 impl Display for NativeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}") // TODO: nicer formatting
+        // Match the format used by arrow::datatypes::DataType's Display impl
+        match self {
+            Self::Null => write!(f, "Null"),
+            Self::Boolean => write!(f, "Boolean"),
+            Self::Int8 => write!(f, "Int8"),
+            Self::Int16 => write!(f, "Int16"),
+            Self::Int32 => write!(f, "Int32"),
+            Self::Int64 => write!(f, "Int64"),
+            Self::UInt8 => write!(f, "UInt8"),
+            Self::UInt16 => write!(f, "UInt16"),
+            Self::UInt32 => write!(f, "UInt32"),
+            Self::UInt64 => write!(f, "UInt64"),
+            Self::Float16 => write!(f, "Float16"),
+            Self::Float32 => write!(f, "Float32"),
+            Self::Float64 => write!(f, "Float64"),
+            Self::Timestamp(unit, Some(tz)) => write!(f, "Timestamp({unit}, {tz:?})"),
+            Self::Timestamp(unit, None) => write!(f, "Timestamp({unit})"),
+            Self::Date => write!(f, "Date"),
+            Self::Time(unit) => write!(f, "Time({unit})"),
+            Self::Duration(unit) => write!(f, "Duration({unit})"),
+            Self::Interval(unit) => write!(f, "Interval({unit:?})"),
+            Self::Binary => write!(f, "Binary"),
+            Self::FixedSizeBinary(size) => write!(f, "FixedSizeBinary({size})"),
+            Self::String => write!(f, "String"),
+            Self::List(field) => write!(f, "List({})", field.logical_type),
+            Self::FixedSizeList(field, size) => {
+                write!(f, "FixedSizeList({size} x {})", field.logical_type)
+            }
+            Self::Struct(fields) => {
+                write!(f, "Struct(")?;
+                for (i, field) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}: {}", field.name, field.logical_type)?;
+                }
+                write!(f, ")")
+            }
+            Self::Union(fields) => {
+                write!(f, "Union(")?;
+                for (i, (type_id, field)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{type_id}: ({:?}: {})", field.name, field.logical_type)?;
+                }
+                write!(f, ")")
+            }
+            Self::Decimal(precision, scale) => write!(f, "Decimal({precision}, {scale})"),
+            Self::Map(field) => write!(f, "Map({})", field.logical_type),
+        }
     }
 }
 

@@ -18,20 +18,19 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, BooleanArray};
+use arrow::array::{ArrowNativeTypeOp, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float16, Float32, Float64};
 use arrow::datatypes::{DataType, Float16Type, Float32Type, Float64Type};
 
 use datafusion_common::types::NativeType;
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{Coercion, TypeSignatureClass};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
 use datafusion_macros::user_doc;
-
-use crate::utils::make_scalar_function;
 
 #[user_doc(
     doc_section(label = "Math Functions"),
@@ -90,79 +89,53 @@ impl ScalarUDFImpl for IsZeroFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        // Handle NULL input
-        if args.args[0].data_type().is_null() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+        let [arg] = take_function_args(self.name(), args.args)?;
+
+        match arg {
+            ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                }
+
+                match scalar {
+                    ScalarValue::Float64(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0.0))))
+                    }
+                    ScalarValue::Float32(Some(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(v == 0.0))))
+                    }
+                    ScalarValue::Float16(Some(v)) => Ok(ColumnarValue::Scalar(
+                        ScalarValue::Boolean(Some(v.is_zero())),
+                    )),
+                    _ => {
+                        internal_err!(
+                            "Unexpected scalar type for iszero: {:?}",
+                            scalar.data_type()
+                        )
+                    }
+                }
+            }
+            ColumnarValue::Array(array) => match array.data_type() {
+                Float64 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Float64Type>(),
+                    |x| x == 0.0,
+                )))),
+                Float32 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Float32Type>(),
+                    |x| x == 0.0,
+                )))),
+                Float16 => Ok(ColumnarValue::Array(Arc::new(BooleanArray::from_unary(
+                    array.as_primitive::<Float16Type>(),
+                    |x| x.is_zero(),
+                )))),
+                other => {
+                    internal_err!("Unexpected data type {other:?} for function iszero")
+                }
+            },
         }
-        make_scalar_function(iszero, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-/// Iszero SQL function
-fn iszero(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        Float64 => Ok(Arc::new(BooleanArray::from_unary(
-            args[0].as_primitive::<Float64Type>(),
-            |x| x == 0.0,
-        )) as ArrayRef),
-
-        Float32 => Ok(Arc::new(BooleanArray::from_unary(
-            args[0].as_primitive::<Float32Type>(),
-            |x| x == 0.0,
-        )) as ArrayRef),
-
-        Float16 => Ok(Arc::new(BooleanArray::from_unary(
-            args[0].as_primitive::<Float16Type>(),
-            |x| x.is_zero(),
-        )) as ArrayRef),
-
-        other => exec_err!("Unsupported data type {other:?} for function iszero"),
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use arrow::array::{ArrayRef, Float32Array, Float64Array};
-
-    use datafusion_common::cast::as_boolean_array;
-
-    use crate::math::iszero::iszero;
-
-    #[test]
-    fn test_iszero_f64() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float64Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
-
-        let result = iszero(&args).expect("failed to initialize function iszero");
-        let booleans =
-            as_boolean_array(&result).expect("failed to initialize function iszero");
-
-        assert_eq!(booleans.len(), 4);
-        assert!(!booleans.value(0));
-        assert!(booleans.value(1));
-        assert!(!booleans.value(2));
-        assert!(booleans.value(3));
-    }
-
-    #[test]
-    fn test_iszero_f32() {
-        let args: Vec<ArrayRef> =
-            vec![Arc::new(Float32Array::from(vec![1.0, 0.0, 3.0, -0.0]))];
-
-        let result = iszero(&args).expect("failed to initialize function iszero");
-        let booleans =
-            as_boolean_array(&result).expect("failed to initialize function iszero");
-
-        assert_eq!(booleans.len(), 4);
-        assert!(!booleans.value(0));
-        assert!(booleans.value(1));
-        assert!(!booleans.value(2));
-        assert!(booleans.value(3));
     }
 }

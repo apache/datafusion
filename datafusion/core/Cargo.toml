@@ -175,8 +175,10 @@ env_logger = { workspace = true }
 glob = { workspace = true }
 insta = { workspace = true }
 paste = { workspace = true }
+pretty_assertions = "1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.5"
+recursive = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
@@ -241,6 +243,11 @@ required-features = ["parquet"]
 
 [[bench]]
 harness = false
+name = "parquet_struct_query"
+required-features = ["parquet"]
+
+[[bench]]
+harness = false
 name = "range_and_generate_series"
 
 [[bench]]
@@ -280,3 +287,7 @@ name = "spm"
 harness = false
 name = "preserve_file_partitioning"
 required-features = ["parquet"]
+
+[[bench]]
+harness = false
+name = "reset_plan_states"

@@ -19,6 +19,7 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
+use crate::preimage::PreimageResult;
 use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
@@ -230,6 +231,18 @@ impl ScalarUDF {
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
+    }
+
+    /// Return a preimage
+    ///
+    /// See [`ScalarUDFImpl::preimage`] for more details.
+    pub fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -696,6 +709,32 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
+    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    ///
+    /// A preimage is a single contiguous [`Interval`] of values where the function
+    /// will always return `lit_value`
+    ///
+    /// Implementations should return intervals with an inclusive lower bound and
+    /// exclusive upper bound.
+    ///
+    /// This rewrite is described in the [ClickHouse Paper] and is particularly
+    /// useful for simplifying expressions `date_part` or equivalent functions. The
+    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
+    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
+    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    ///
+    /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+    fn preimage(
+        &self,
+        _args: &[Expr],
+        _lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        Ok(PreimageResult::None)
+    }
+
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
     /// and thus any side effects (like divide by zero) may not be encountered.
     ///
@@ -924,6 +963,15 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
     }
 
     fn conditional_arguments<'a>(
