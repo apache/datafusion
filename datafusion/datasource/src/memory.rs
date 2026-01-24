@@ -964,6 +964,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },],
             }
         );

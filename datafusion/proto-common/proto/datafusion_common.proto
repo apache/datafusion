@@ -622,4 +622,5 @@ message ColumnStats {
   Precision null_count = 3;
   Precision distinct_count = 4;
   Precision byte_size = 6;
+  Precision avg_byte_size = 7;
 }

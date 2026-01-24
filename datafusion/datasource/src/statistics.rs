@@ -329,6 +329,8 @@ pub async fn get_statistics_with_limit(
             col_stats_set[index].max_value = file_column.max_value;
             col_stats_set[index].min_value = file_column.min_value;
             col_stats_set[index].sum_value = file_column.sum_value;
+            col_stats_set[index].byte_size = file_column.byte_size;
+            col_stats_set[index].avg_byte_size = file_column.avg_byte_size;
         }
 
         // If the number of rows exceeds the limit, we can stop processing
@@ -352,6 +354,7 @@ pub async fn get_statistics_with_limit(
                 // counts across all the files in question. If any file does not
                 // provide any information or provides an inexact value, we demote
                 // the statistic precision to inexact.
+                let rows_before = num_rows;
                 num_rows = num_rows.add(&file_stats.num_rows);
 
                 total_byte_size = total_byte_size.add(&file_stats.total_byte_size);
@@ -368,8 +371,14 @@ pub async fn get_statistics_with_limit(
                         sum_value: file_sum,
                         distinct_count: _,
                         byte_size: file_sbs,
+                        avg_byte_size: _,
                     } = file_col_stats;
 
+                    col_stats.avg_byte_size = col_stats.merge_avg_byte_size(
+                        file_col_stats,
+                        rows_before,
+                        file_stats.num_rows,
+                    );
                     col_stats.null_count = col_stats.null_count.add(file_nc);
                     col_stats.max_value = col_stats.max_value.max(file_max);
                     col_stats.min_value = col_stats.min_value.min(file_min);

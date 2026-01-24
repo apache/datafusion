@@ -1094,6 +1094,9 @@ impl serde::Serialize for ColumnStats {
         if self.byte_size.is_some() {
             len += 1;
         }
+        if self.avg_byte_size.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ColumnStats", len)?;
         if let Some(v) = self.min_value.as_ref() {
             struct_ser.serialize_field("minValue", v)?;
@@ -1112,6 +1115,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.byte_size.as_ref() {
             struct_ser.serialize_field("byteSize", v)?;
+        }
+        if let Some(v) = self.avg_byte_size.as_ref() {
+            struct_ser.serialize_field("avgByteSize", v)?;
         }
         struct_ser.end()
     }
@@ -1135,6 +1141,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "distinctCount",
             "byte_size",
             "byteSize",
+            "avg_byte_size",
+            "avgByteSize",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1145,6 +1153,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             NullCount,
             DistinctCount,
             ByteSize,
+            AvgByteSize,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1172,6 +1181,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
                             "byteSize" | "byte_size" => Ok(GeneratedField::ByteSize),
+                            "avgByteSize" | "avg_byte_size" => Ok(GeneratedField::AvgByteSize),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1197,6 +1207,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
                 let mut byte_size__ = None;
+                let mut avg_byte_size__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::MinValue => {
@@ -1235,6 +1246,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                             }
                             byte_size__ = map_.next_value()?;
                         }
+                        GeneratedField::AvgByteSize => {
+                            if avg_byte_size__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("avgByteSize"));
+                            }
+                            avg_byte_size__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(ColumnStats {
@@ -1244,6 +1261,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                     null_count: null_count__,
                     distinct_count: distinct_count__,
                     byte_size: byte_size__,
+                    avg_byte_size: avg_byte_size__,
                 })
             }
         }

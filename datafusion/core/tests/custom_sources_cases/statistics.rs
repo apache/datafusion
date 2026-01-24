@@ -215,6 +215,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(13),
@@ -223,6 +224,7 @@ fn fully_defined() -> (Statistics, Schema) {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10))),
                     null_count: Precision::Exact(5),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         },

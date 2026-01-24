@@ -628,19 +628,23 @@ impl ProjectionExprs {
                         null_count,
                         sum_value: Precision::Exact(literal.value().clone()),
                         byte_size: Precision::Exact(0),
+                        avg_byte_size: Precision::Exact(0),
                     }
                 } else {
                     let value = literal.value();
                     let distinct_count = Precision::Exact(1);
                     let null_count = Precision::Exact(0);
 
-                    let byte_size = if let Some(byte_width) = data_type.primitive_width()
-                    {
-                        stats.num_rows.multiply(&Precision::Exact(byte_width))
-                    } else {
-                        // Complex types depend on array encoding, so set to Absent
-                        Precision::Absent
-                    };
+                    let (byte_size, avg_byte_size) =
+                        if let Some(byte_width) = data_type.primitive_width() {
+                            (
+                                stats.num_rows.multiply(&Precision::Exact(byte_width)),
+                                Precision::Exact(byte_width),
+                            )
+                        } else {
+                            // Complex types depend on array encoding, so set to Absent
+                            (Precision::Absent, Precision::Absent)
+                        };
 
                     let sum_value = Precision::<ScalarValue>::from(stats.num_rows)
                         .cast_to(&value.data_type())
@@ -657,6 +661,7 @@ impl ProjectionExprs {
                         null_count,
                         sum_value,
                         byte_size,
+                        avg_byte_size,
                     }
                 }
             } else {
@@ -1963,6 +1968,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -1971,6 +1977,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -1979,6 +1986,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         }
@@ -2024,6 +2032,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -2032,6 +2041,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -2070,6 +2080,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(5.5))),
                     null_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(5),
@@ -2078,6 +2089,7 @@ pub(crate) mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -2739,6 +2751,10 @@ pub(crate) mod tests {
             output_stats.column_statistics[0].byte_size,
             Precision::Exact(40)
         );
+        assert_eq!(
+            output_stats.column_statistics[0].avg_byte_size,
+            Precision::Exact(8)
+        );
         // For a constant column, sum_value = value * num_rows = 42 * 5 = 210
         assert_eq!(
             output_stats.column_statistics[0].sum_value,
@@ -2806,6 +2822,10 @@ pub(crate) mod tests {
         );
         assert_eq!(
             output_stats.column_statistics[0].byte_size,
+            Precision::Exact(0)
+        );
+        assert_eq!(
+            output_stats.column_statistics[0].avg_byte_size,
             Precision::Exact(0)
         );
         assert_eq!(
@@ -2881,6 +2901,13 @@ pub(crate) mod tests {
             output_stats.column_statistics[0].byte_size,
             Precision::Absent
         );
+        // Complex types (Utf8, List, etc.) should have avg_byte_size = Absent
+        // because we can't calculate exact size without knowing the actual data
+        assert_eq!(
+            output_stats.column_statistics[0].avg_byte_size,
+            Precision::Absent
+        );
+
         // Non-numeric types (Utf8) should have sum_value = Absent
         // because sum is only meaningful for numeric types
         assert_eq!(
