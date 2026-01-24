@@ -148,7 +148,9 @@ impl CastColumnExpr {
     ///
     /// This constructor ensures that format options are populated with defaults,
     /// normalizing the CastOptions for consistent behavior during serialization
-    /// and evaluation.
+    /// and evaluation. It constructs a single-field schema from `input_field`,
+    /// so it should only be used for expressions that resolve their type from
+    /// that field alone.
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
@@ -167,8 +169,8 @@ impl CastColumnExpr {
 
     /// Create a new [`CastColumnExpr`] with a specific input schema.
     ///
-    /// This constructor is useful when the expression depends on multiple
-    /// fields from a broader schema.
+    /// Use this constructor when the expression depends on a broader schema,
+    /// such as multi-column expressions or columns with non-zero indexes.
     pub fn new_with_schema(
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
