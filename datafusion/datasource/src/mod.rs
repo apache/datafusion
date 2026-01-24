@@ -291,6 +291,11 @@ impl PartitionedFile {
                         .primitive_width()
                         .map(|w| stats.num_rows.multiply(&Precision::Exact(w)))
                         .unwrap_or_else(|| Precision::Absent),
+                    avg_byte_size: partition_value
+                        .data_type()
+                        .primitive_width()
+                        .map(Precision::Exact)
+                        .unwrap_or_else(|| Precision::Absent),
                 };
                 stats.column_statistics.push(col_stats);
             }
@@ -528,6 +533,7 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 }],
             })),
             ordering: None,
@@ -681,6 +687,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
+                avg_byte_size: Precision::Absent,
             }],
         });
 

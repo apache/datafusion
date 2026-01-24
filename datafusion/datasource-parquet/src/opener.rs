@@ -1214,6 +1214,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
             ],
@@ -1243,6 +1244,7 @@ mod test {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
+                avg_byte_size: Precision::Absent,
             }],
         };
 

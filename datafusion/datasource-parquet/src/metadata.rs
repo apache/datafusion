@@ -293,6 +293,8 @@ impl<'a> DFParquetMetadata<'a> {
                     vec![Precision::Absent; logical_file_schema.fields().len()];
                 let mut column_byte_sizes =
                     vec![Precision::Absent; logical_file_schema.fields().len()];
+                let mut column_avg_byte_sizes =
+                    vec![Precision::Absent; logical_file_schema.fields().len()];
                 let mut is_max_value_exact =
                     vec![Some(true); logical_file_schema.fields().len()];
                 let mut is_min_value_exact =
@@ -311,6 +313,7 @@ impl<'a> DFParquetMetadata<'a> {
                                 is_min_value_exact: &mut is_min_value_exact,
                                 is_max_value_exact: &mut is_max_value_exact,
                                 column_byte_sizes: &mut column_byte_sizes,
+                                column_avg_byte_sizes: &mut column_avg_byte_sizes,
                             };
                             summarize_min_max_null_counts(
                                 file_metadata.schema_descr(),
@@ -338,6 +341,7 @@ impl<'a> DFParquetMetadata<'a> {
                     &mut is_max_value_exact,
                     &mut is_min_value_exact,
                     &column_byte_sizes,
+                    &column_avg_byte_sizes,
                 )
             } else {
                 // Record column sizes
@@ -354,13 +358,16 @@ impl<'a> DFParquetMetadata<'a> {
                             arrow_field.name(),
                         )
                         .map(|(idx, _)| idx);
-                        let byte_size = compute_arrow_column_size(
-                            field.data_type(),
-                            row_groups_metadata,
-                            parquet_idx,
-                            num_rows,
-                        );
-                        ColumnStatistics::new_unknown().with_byte_size(byte_size)
+                        let (byte_size, avg_byte_size) =
+                            compute_arrow_column_and_avg_row_size(
+                                field.data_type(),
+                                row_groups_metadata,
+                                parquet_idx,
+                                num_rows,
+                            );
+                        ColumnStatistics::new_unknown()
+                            .with_byte_size(byte_size)
+                            .with_avg_byte_size(avg_byte_size)
                     })
                     .collect()
             };
@@ -419,6 +426,7 @@ fn get_col_stats(
     is_max_value_exact: &mut [Option<bool>],
     is_min_value_exact: &mut [Option<bool>],
     column_byte_sizes: &[Precision<usize>],
+    column_avg_byte_sizes: &[Precision<usize>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
@@ -453,6 +461,7 @@ fn get_col_stats(
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: column_byte_sizes[i],
+                avg_byte_size: column_avg_byte_sizes[i],
             }
         })
         .collect()
@@ -466,6 +475,7 @@ struct StatisticsAccumulators<'a> {
     is_min_value_exact: &'a mut [Option<bool>],
     is_max_value_exact: &'a mut [Option<bool>],
     column_byte_sizes: &'a mut [Precision<usize>],
+    column_avg_byte_sizes: &'a mut [Precision<usize>],
 }
 
 fn summarize_min_max_null_counts(
@@ -524,7 +534,7 @@ fn summarize_min_max_null_counts(
     .map(|(idx, _)| idx);
 
     let arrow_field = logical_file_schema.field(logical_schema_index);
-    accumulators.column_byte_sizes[logical_schema_index] = compute_arrow_column_size(
+    let (column_byte_size, column_avg_byte_size) = compute_arrow_column_and_avg_row_size(
         arrow_field.data_type(),
         row_groups_metadata,
         parquet_index,
@@ -533,20 +543,25 @@ fn summarize_min_max_null_counts(
             .map(|rg| rg.num_rows() as usize)
             .sum(),
     );
+    accumulators.column_byte_sizes[logical_schema_index] = column_byte_size;
+    accumulators.column_avg_byte_sizes[logical_schema_index] = column_avg_byte_size;
 
     Ok(())
 }
 
-/// Compute the Arrow in-memory size for a single column
-fn compute_arrow_column_size(
+/// Compute the Arrow in-memory total and avg row size for a single column
+fn compute_arrow_column_and_avg_row_size(
     data_type: &DataType,
     row_groups_metadata: &[RowGroupMetaData],
     parquet_idx: Option<usize>,
     num_rows: usize,
-) -> Precision<usize> {
+) -> (Precision<usize>, Precision<usize>) {
     // For primitive types with known fixed size, compute exact size
     if let Some(byte_width) = data_type.primitive_width() {
-        return Precision::Exact(byte_width * num_rows);
+        return (
+            Precision::Exact(byte_width * num_rows),
+            Precision::Exact(byte_width),
+        );
     }
 
     // Use the uncompressed Parquet size as an estimate for other types
@@ -556,11 +571,19 @@ fn compute_arrow_column_size(
             .filter_map(|rg| rg.columns().get(parquet_idx))
             .map(|col| col.uncompressed_size())
             .sum();
-        return Precision::Inexact(uncompressed_bytes as usize);
+        let avg_byte_size = if num_rows == 0 {
+            Precision::Absent
+        } else {
+            Precision::Inexact((uncompressed_bytes as usize) / num_rows)
+        };
+        return (
+            Precision::Inexact(uncompressed_bytes as usize),
+            avg_byte_size,
+        );
     }
 
     // Otherwise, we cannot determine the size
-    Precision::Absent
+    (Precision::Absent, Precision::Absent)
 }
 
 /// Checks if any occurrence of `value` in `array` corresponds to a `true`
@@ -729,8 +752,77 @@ fn sorting_columns_to_physical_exprs(
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, BooleanArray, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
+    use parquet::basic::Type as PhysicalType;
+    use parquet::file::metadata::{
+        ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+    };
+    use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
     use std::sync::Arc;
+
+    fn create_schema_descr(fields: &[(&str, PhysicalType)]) -> Arc<SchemaDescriptor> {
+        let fields: Vec<Arc<SchemaType>> = fields
+            .iter()
+            .map(|(name, physical_type)| {
+                Arc::new(
+                    SchemaType::primitive_type_builder(name, *physical_type)
+                        .build()
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(fields)
+            .build()
+            .unwrap();
+
+        Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    fn create_arrow_schema(fields: &[(&str, DataType)]) -> SchemaRef {
+        let fields: Vec<Field> = fields
+            .iter()
+            .map(|(name, data_type)| Field::new(*name, data_type.clone(), true))
+            .collect();
+        Arc::new(Schema::new(fields))
+    }
+
+    fn create_row_group(
+        schema_descr: &Arc<SchemaDescriptor>,
+        num_rows: i64,
+        uncompressed_sizes: &[i64],
+    ) -> RowGroupMetaData {
+        let columns: Vec<ColumnChunkMetaData> = uncompressed_sizes
+            .iter()
+            .enumerate()
+            .map(|(i, size)| {
+                ColumnChunkMetaData::builder(schema_descr.column(i))
+                    .set_num_values(num_rows)
+                    .set_total_uncompressed_size(*size)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+
+        RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(num_rows)
+            .set_total_byte_size(uncompressed_sizes.iter().sum())
+            .set_column_metadata(columns)
+            .build()
+            .unwrap()
+    }
+
+    fn create_parquet_metadata(
+        schema_descr: Arc<SchemaDescriptor>,
+        row_groups: Vec<RowGroupMetaData>,
+    ) -> ParquetMetaData {
+        let num_rows: i64 = row_groups.iter().map(|rg| rg.num_rows()).sum();
+        let file_meta = FileMetaData::new(1, num_rows, None, None, schema_descr, None);
+
+        ParquetMetaData::new(file_meta, row_groups)
+    }
 
     #[test]
     fn test_has_any_exact_match() {
@@ -777,5 +869,77 @@ mod tests {
             let result = has_any_exact_match(&computed_max, &row_group_maxes, &exactness);
             assert_eq!(result, Some(false));
         }
+    }
+
+    #[test]
+    fn test_avg_byte_size_primitive_column() {
+        let schema_descr = create_schema_descr(&[("col_0", PhysicalType::INT32)]);
+        let arrow_schema = create_arrow_schema(&[("col_0", DataType::Int32)]);
+        let row_group = create_row_group(&schema_descr, 100, &[999]);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert_eq!(result.column_statistics[0].byte_size, Precision::Exact(400));
+        assert_eq!(
+            result.column_statistics[0].avg_byte_size,
+            Precision::Exact(4)
+        );
+    }
+
+    #[test]
+    fn test_avg_byte_size_non_primitive_column() {
+        let schema_descr = create_schema_descr(&[("col_0", PhysicalType::BYTE_ARRAY)]);
+        let arrow_schema = create_arrow_schema(&[("col_0", DataType::Binary)]);
+        let row_group = create_row_group(&schema_descr, 100, &[1000]);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert_eq!(
+            result.column_statistics[0].byte_size,
+            Precision::Inexact(1000)
+        );
+        assert_eq!(
+            result.column_statistics[0].avg_byte_size,
+            Precision::Inexact(10)
+        );
+    }
+
+    #[test]
+    fn test_avg_byte_size_missing_parquet_column() {
+        let schema_descr = create_schema_descr(&[("col_0", PhysicalType::INT32)]);
+        let arrow_schema = create_arrow_schema(&[
+            ("col_0", DataType::Int32),
+            ("col_missing", DataType::Binary),
+        ]);
+        let row_group = create_row_group(&schema_descr, 100, &[400]);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert_eq!(result.column_statistics[1].byte_size, Precision::Absent);
+        assert_eq!(result.column_statistics[1].avg_byte_size, Precision::Absent);
+    }
+
+    #[test]
+    fn test_avg_byte_size_zero_rows() {
+        let schema_descr = create_schema_descr(&[("col_0", PhysicalType::BYTE_ARRAY)]);
+        let arrow_schema = create_arrow_schema(&[("col_0", DataType::Binary)]);
+        let row_group = create_row_group(&schema_descr, 0, &[0]);
+        let metadata = create_parquet_metadata(schema_descr, vec![row_group]);
+
+        let result =
+            DFParquetMetadata::statistics_from_parquet_metadata(&metadata, &arrow_schema)
+                .unwrap();
+
+        assert_eq!(result.column_statistics[0].byte_size, Precision::Inexact(0));
+        assert_eq!(result.column_statistics[0].avg_byte_size, Precision::Absent);
     }
 }

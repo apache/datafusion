@@ -763,6 +763,7 @@ fn collect_new_statistics(
                         sum_value: Precision::Exact(ScalarValue::Null),
                         distinct_count: Precision::Exact(0),
                         byte_size: input_column_stats[idx].byte_size,
+                        avg_byte_size: input_column_stats[idx].avg_byte_size,
                     };
                 };
                 let (lower, upper) = interval.into_bounds();
@@ -778,6 +779,7 @@ fn collect_new_statistics(
                     sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
                     byte_size: input_column_stats[idx].byte_size,
+                    avg_byte_size: input_column_stats[idx].avg_byte_size,
                 }
             },
         )
@@ -1051,6 +1053,7 @@ mod tests {
                 column_statistics: vec![ColumnStatistics {
                     min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
                     max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
+                    avg_byte_size: Precision::Exact(bytes_per_row),
                     ..Default::default()
                 }],
             },
@@ -1076,6 +1079,7 @@ mod tests {
             vec![ColumnStatistics {
                 min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(25))),
+                avg_byte_size: Precision::Exact(bytes_per_row),
                 ..Default::default()
             }]
         );
@@ -1459,6 +1463,7 @@ mod tests {
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     min_value: Precision::Exact(ScalarValue::Null),
@@ -1467,6 +1472,7 @@ mod tests {
                     distinct_count: Precision::Exact(0),
                     null_count: Precision::Exact(0),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ]
         );
@@ -1569,6 +1575,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
+                avg_byte_size: Precision::Absent,
             }],
         };
 

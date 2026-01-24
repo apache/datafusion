@@ -709,6 +709,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            avg_byte_size: if let Some(sbs) = &cs.avg_byte_size {
+                sbs.clone().into()
+            } else {
+                Precision::Absent
+            },
         }
     }
 }

@@ -938,6 +938,8 @@ pub struct ColumnStats {
     pub distinct_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "6")]
     pub byte_size: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "7")]
+    pub avg_byte_size: ::core::option::Option<Precision>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
