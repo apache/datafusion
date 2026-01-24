@@ -39,4 +39,4 @@ They are provided for informational purposes and can be used by custom
 
 [`tableconstraint`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html
 [`constraints`]: https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html
-[`field`]: https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html
+[`field`]: https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html
