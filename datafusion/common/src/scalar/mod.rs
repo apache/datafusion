@@ -9552,7 +9552,7 @@ mod tests {
             Box::new(ScalarValue::Float64(Some(1.0))),
         );
         let err = scalar.eq_array(&run_array, 1).unwrap_err();
-        let expected = "Internal error: could not cast array of type Float32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Float64Type>.";
+        let expected = "Internal error: could not cast array of type Float32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Float64Type>";
         assert!(err.to_string().starts_with(expected));
 
         // run ends type must match
@@ -9562,7 +9562,7 @@ mod tests {
             Box::new(ScalarValue::Float32(None)),
         );
         let err = scalar.eq_array(&run_array, 0).unwrap_err();
-        let expected = "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>.";
+        let expected = "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>";
         assert!(err.to_string().starts_with(expected));
     }
 
