@@ -113,7 +113,14 @@ impl CastColumnExpr {
             );
         }
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            let schema_field = input_schema.field(column.index());
+            let fields = input_schema.fields();
+            let Some(schema_field) = fields.get(column.index()) else {
+                return plan_err!(
+                    "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
+                    column.index(),
+                    fields.len()
+                );
+            };
             if schema_field.name() != input_field.name()
                 || schema_field.data_type() != input_field.data_type()
             {
@@ -547,5 +554,25 @@ mod tests {
         assert!(err
             .to_string()
             .contains("does not match schema field"));
+    }
+
+    #[test]
+    fn cast_column_schema_out_of_range_index() {
+        let input_field = Field::new("a", DataType::Int32, true);
+        let target_field = Field::new("a", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![input_field.clone()]));
+
+        let column = Arc::new(Column::new("a", 2));
+        let err = CastColumnExpr::new_with_schema(
+            column,
+            Arc::new(input_field),
+            Arc::new(target_field),
+            None,
+            schema,
+        )
+        .expect_err("expected out of range input schema error");
+
+        assert!(err.to_string().contains("index 2"));
+        assert!(err.to_string().contains("input schema only has 1 columns"));
     }
 }
