@@ -858,6 +858,22 @@ fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
     })
 }
 
+/// Maximum number of unique format strings to cache.
+///
+/// The cache owns leaked strings to provide `&'static str` values for
+/// `ArrowFormatOptions`, so keeping the cache bounded avoids unbounded
+/// growth in the common case.
+#[cfg(test)]
+const FORMAT_STRING_CACHE_LIMIT: usize = 8;
+#[cfg(not(test))]
+const FORMAT_STRING_CACHE_LIMIT: usize = 1024;
+
+/// Cache for interned format strings.
+///
+/// We leak strings to satisfy the `'static` lifetime required by
+/// `ArrowFormatOptions` in cast options. The cache retains those
+/// references to maximize reuse and bounds the number of retained
+/// entries to avoid unbounded growth.
 static FORMAT_STRING_CACHE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
 
 fn format_string_cache() -> &'static Mutex<HashSet<&'static str>> {
@@ -870,6 +886,9 @@ fn intern_format_str(value: &str) -> &'static str {
         .expect("format string cache lock poisoned");
     if let Some(existing) = cache.get(value).copied() {
         return existing;
+    }
+    if cache.len() >= FORMAT_STRING_CACHE_LIMIT {
+        return Box::leak(value.to_owned().into_boxed_str());
     }
     let leaked = Box::leak(value.to_owned().into_boxed_str());
     cache.insert(leaked);
@@ -948,6 +967,50 @@ mod tests {
             first_interned.date_format.unwrap(),
             second_interned.date_format.unwrap()
         ));
+    }
+
+    #[test]
+    fn format_string_cache_stops_interning_after_limit() {
+        let unique_value = |prefix: &str| {
+            let mut counter = 0;
+            loop {
+                let candidate = format!("{prefix}-{counter}");
+                let cache = format_string_cache()
+                    .lock()
+                    .expect("format string cache lock poisoned");
+                if !cache.contains(candidate.as_str()) {
+                    return candidate;
+                }
+                counter += 1;
+            }
+        };
+
+        let current_len = format_string_cache()
+            .lock()
+            .expect("format string cache lock poisoned")
+            .len();
+        let to_fill = FORMAT_STRING_CACHE_LIMIT.saturating_sub(current_len);
+        for _ in 0..to_fill {
+            let value = unique_value("unit-test-fill");
+            intern_format_str(&value);
+        }
+
+        let cache_len = format_string_cache()
+            .lock()
+            .expect("format string cache lock poisoned")
+            .len();
+        assert!(
+            cache_len >= FORMAT_STRING_CACHE_LIMIT,
+            "expected cache size to reach limit for test"
+        );
+
+        let overflow_value = unique_value("unit-test-overflow");
+        let first = intern_format_str(&overflow_value);
+        let second = intern_format_str(&overflow_value);
+        assert!(
+            !std::ptr::eq(first, second),
+            "cache should stop interning new strings once at limit"
+        );
     }
 
     #[test]
