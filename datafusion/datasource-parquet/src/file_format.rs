@@ -302,7 +302,7 @@ fn clear_metadata(
 
 #[cfg(feature = "parquet_encryption")]
 async fn get_file_decryption_properties(
-    state: &dyn Session,
+    runtime: &RuntimeEnv,
     options: &TableParquetOptions,
     file_path: &Path,
 ) -> Result<Option<Arc<FileDecryptionProperties>>> {
@@ -310,8 +310,7 @@ async fn get_file_decryption_properties(
         Some(cfd) => Some(Arc::new(FileDecryptionProperties::from(cfd.clone()))),
         None => match &options.crypto.factory_id {
             Some(factory_id) => {
-                let factory =
-                    state.runtime_env().parquet_encryption_factory(factory_id)?;
+                let factory = runtime.parquet_encryption_factory(factory_id)?;
                 factory
                     .get_file_decryption_properties(
                         &options.crypto.factory_options,
@@ -326,7 +325,7 @@ async fn get_file_decryption_properties(
 
 #[cfg(not(feature = "parquet_encryption"))]
 async fn get_file_decryption_properties(
-    _state: &dyn Session,
+    _runtime: &RuntimeEnv,
     _options: &TableParquetOptions,
     _file_path: &Path,
 ) -> Result<Option<Arc<FileDecryptionProperties>>> {
@@ -372,26 +371,43 @@ impl FileFormat for ParquetFormat {
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
 
+        let runtime = Arc::clone(state.runtime_env());
+        let meta_fetch_concurrency =
+            state.config_options().execution.meta_fetch_concurrency;
+
         let mut schemas: Vec<_> = futures::stream::iter(objects)
-            .map(|object| async {
-                let file_decryption_properties = get_file_decryption_properties(
-                    state,
-                    &self.options,
-                    &object.location,
-                )
-                .await?;
-                let result = DFParquetMetadata::new(store.as_ref(), object)
-                    .with_metadata_size_hint(self.metadata_size_hint())
-                    .with_decryption_properties(file_decryption_properties)
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
-                    .with_coerce_int96(coerce_int96)
-                    .fetch_schema_with_location()
+            .map(|object| {
+                let object = object.clone();
+                let store = Arc::clone(store);
+                let runtime = Arc::clone(&runtime);
+                let options = self.options.clone();
+                let file_metadata_cache = Arc::clone(&file_metadata_cache);
+                let metadata_size_hint = self.metadata_size_hint();
+                SpawnedTask::spawn(async move {
+                    let file_decryption_properties = get_file_decryption_properties(
+                        &runtime,
+                        &options,
+                        &object.location,
+                    )
                     .await?;
-                Ok::<_, DataFusionError>(result)
+                    let result = DFParquetMetadata::new(store.as_ref(), &object)
+                        .with_metadata_size_hint(metadata_size_hint)
+                        .with_decryption_properties(file_decryption_properties)
+                        .with_file_metadata_cache(Some(file_metadata_cache))
+                        .with_coerce_int96(coerce_int96)
+                        .fetch_schema_with_location()
+                        .await?;
+                    Ok::<_, DataFusionError>(result)
+                })
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
-            .buffered(state.config_options().execution.meta_fetch_concurrency)
+            // order does not matter for schema inference, it is handled below
+            .buffer_unordered(meta_fetch_concurrency)
+            .map(|result| match result {
+                Ok(res) => res,
+                Err(e) => Err(DataFusionError::External(Box::new(e))),
+            })
             .try_collect()
             .await?;
 
@@ -436,9 +452,12 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
-                .await?;
+        let file_decryption_properties = get_file_decryption_properties(
+            state.runtime_env(),
+            &self.options,
+            &object.location,
+        )
+        .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         DFParquetMetadata::new(store, object)
@@ -456,9 +475,12 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Option<LexOrdering>> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
-                .await?;
+        let file_decryption_properties = get_file_decryption_properties(
+            state.runtime_env(),
+            &self.options,
+            &object.location,
+        )
+        .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata = DFParquetMetadata::new(store, object)
@@ -477,9 +499,12 @@ impl FileFormat for ParquetFormat {
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<datafusion_datasource::file_format::FileMeta> {
-        let file_decryption_properties =
-            get_file_decryption_properties(state, &self.options, &object.location)
-                .await?;
+        let file_decryption_properties = get_file_decryption_properties(
+            state.runtime_env(),
+            &self.options,
+            &object.location,
+        )
+        .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
         let metadata = DFParquetMetadata::new(store, object)
