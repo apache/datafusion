@@ -122,6 +122,14 @@ pub struct RepoLayout {
     root: PathBuf,
 }
 
+impl From<&Path> for RepoLayout {
+    fn from(path: &Path) -> Self {
+        Self {
+            root: path.to_path_buf(),
+        }
+    }
+}
+
 impl RepoLayout {
     /// Creates a layout from an explicit repository root.
     pub fn from_root(root: PathBuf) -> Self {
@@ -392,12 +400,24 @@ pub fn parse_main_rs_docs(path: &Path) -> Result<Vec<ExampleEntry>> {
     Ok(entries)
 }
 
+/// Parses a subcommand declaration line from `main.rs` docs.
+///
+/// Expected format:
+/// ```text
+/// //! - `<subcommand>`
+/// ```
 fn parse_subcommand_line(line: &str) -> Option<String> {
     line.strip_prefix("//! - `")
         .and_then(|rest| rest.strip_suffix('`'))
         .map(|s| s.to_string())
 }
 
+/// Parses example metadata (file name and description) from `main.rs` docs.
+///
+/// Expected format:
+/// ```text
+/// //! (file: <file>.rs, desc: <description>)
+/// ```
 fn parse_metadata_line(line: &str) -> Option<(String, String)> {
     let line = line.strip_prefix("//!").map(str::trim)?;
     if !line.starts_with("(file:") || !line.ends_with(')') {
