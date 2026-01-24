@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::utf8_to_str_type;
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
@@ -27,7 +27,8 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{NativeType, logical_int64, logical_string};
-use datafusion_common::{DataFusionError, Result, exec_err};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
@@ -99,7 +100,61 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(repeat, vec![])(&args.args)
+        let [string_arg, count_arg] = take_function_args(self.name(), args.args)?;
+
+        match (&string_arg, &count_arg) {
+            (
+                ColumnarValue::Scalar(string_scalar),
+                ColumnarValue::Scalar(count_scalar),
+            ) => {
+                if string_scalar.is_null() || count_scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
+                }
+
+                let count = match count_scalar {
+                    ScalarValue::Int64(Some(n)) => *n,
+                    _ => {
+                        return internal_err!(
+                            "Unexpected data type {:?} for repeat count",
+                            count_scalar.data_type()
+                        );
+                    }
+                };
+
+                let repeated = match string_scalar {
+                    ScalarValue::Utf8(Some(s))
+                    | ScalarValue::LargeUtf8(Some(s))
+                    | ScalarValue::Utf8View(Some(s)) => {
+                        if count <= 0 {
+                            String::new()
+                        } else {
+                            let result_len = s.len().saturating_mul(count as usize);
+                            if result_len > i32::MAX as usize {
+                                return exec_err!(
+                                    "string size overflow on repeat, max size is {}, but got {}",
+                                    i32::MAX,
+                                    result_len
+                                );
+                            }
+                            s.repeat(count as usize)
+                        }
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unexpected data type {:?} for function repeat",
+                            string_scalar.data_type()
+                        );
+                    }
+                };
+
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(repeated))))
+            }
+            _ => {
+                let string_array = string_arg.to_array(args.number_rows)?;
+                let count_array = count_arg.to_array(args.number_rows)?;
+                Ok(ColumnarValue::Array(repeat(&[string_array, count_array])?))
+            }
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -150,8 +205,9 @@ fn repeat_impl<'a, T, S>(
 ) -> Result<ArrayRef>
 where
     T: OffsetSizeTrait,
-    S: StringArrayType<'a>,
+    S: StringArrayType<'a> + 'a,
 {
+    use arrow::array::Array;
     let mut total_capacity = 0;
     let mut max_item_capacity = 0;
     string_array.iter().zip(number_array.iter()).try_for_each(
@@ -181,37 +237,52 @@ where
     // Reusable buffer to avoid allocations in string.repeat()
     let mut buffer = Vec::<u8>::with_capacity(max_item_capacity);
 
-    string_array
-        .iter()
-        .zip(number_array.iter())
-        .for_each(|(string, number)| {
+    // Helper function to repeat a string into a buffer using doubling strategy
+    #[inline]
+    fn repeat_to_buffer(buffer: &mut Vec<u8>, string: &str, count: i64) {
+        buffer.clear();
+        if count > 0 && !string.is_empty() {
+            let count = count as usize;
+            let src = string.as_bytes();
+            buffer.extend_from_slice(src);
+            while buffer.len() < src.len() * count {
+                let copy_len = buffer.len().min(src.len() * count - buffer.len());
+                buffer.extend_from_within(..copy_len);
+            }
+        }
+    }
+
+    // no nulls in either array
+    if string_array.null_count() == 0 && number_array.null_count() == 0 {
+        for i in 0..string_array.len() {
+            // SAFETY: null_count() == 0 guarantees no nulls
+            let string = unsafe { string_array.value_unchecked(i) };
+            let count = number_array.value(i);
+            if count >= 0 {
+                repeat_to_buffer(&mut buffer, string, count);
+                // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
+                builder.append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
+            } else {
+                builder.append_value("");
+            }
+        }
+    } else {
+        //  handle nulls
+        for (string, number) in string_array.iter().zip(number_array.iter()) {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    buffer.clear();
-                    let count = number as usize;
-                    if count > 0 && !string.is_empty() {
-                        let src = string.as_bytes();
-                        // Initial copy
-                        buffer.extend_from_slice(src);
-                        // Doubling strategy: copy what we have so far until we reach the target
-                        while buffer.len() < src.len() * count {
-                            let copy_len =
-                                buffer.len().min(src.len() * count - buffer.len());
-                            // SAFETY: we're copying valid UTF-8 bytes that we already verified
-                            buffer.extend_from_within(..copy_len);
-                        }
-                    }
-                    // SAFETY: buffer contains valid UTF-8 since we only ever copy from a valid &str
+                    repeat_to_buffer(&mut buffer, string, number);
+                    // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
                     builder
                         .append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
                 }
                 (Some(_), Some(_)) => builder.append_value(""),
                 _ => builder.append_null(),
             }
-        });
-    let array = builder.finish();
+        }
+    }
 
-    Ok(Arc::new(array) as ArrayRef)
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 #[cfg(test)]
