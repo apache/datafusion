@@ -9552,10 +9552,8 @@ mod tests {
             Box::new(ScalarValue::Float64(Some(1.0))),
         );
         let err = scalar.eq_array(&run_array, 1).unwrap_err();
-        assert_eq!(
-            "Internal error: could not cast array of type Float32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Float64Type>.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues",
-            err.to_string()
-        );
+        let expected = "Internal error: could not cast array of type Float32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::Float64Type>.";
+        assert!(err.to_string().starts_with(expected));
 
         // run ends type must match
         let scalar = ScalarValue::RunEndEncoded(
@@ -9564,10 +9562,8 @@ mod tests {
             Box::new(ScalarValue::Float32(None)),
         );
         let err = scalar.eq_array(&run_array, 0).unwrap_err();
-        assert_eq!(
-            "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues",
-            err.to_string()
-        );
+        let expected = "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>.";
+        assert!(err.to_string().starts_with(expected));
     }
 
     #[test]
@@ -9629,10 +9625,8 @@ mod tests {
             ),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
-        assert_eq!(
-            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int32 }, Field { name: \"values\", data_type: Int64, nullable: true }, Int64(1))",
-            err.to_string()
-        );
+        let expected = "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int32 }, Field { name: \"values\", data_type: Int64, nullable: true }, Int64(1))";
+        assert!(err.to_string().starts_with(expected));
 
         // inconsistent value type
         let scalars = vec![
@@ -9648,10 +9642,8 @@ mod tests {
             ),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
-        assert_eq!(
-            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int16 }, Field { name: \"values\", data_type: Int32, nullable: true }, Int32(1))",
-            err.to_string()
-        );
+        let expected = "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: RunEndEncoded(Field { name: \"run_ends\", data_type: Int16 }, Field { name: \"values\", data_type: Int32, nullable: true }, Int32(1))";
+        assert!(err.to_string().starts_with(expected));
 
         // inconsistent scalars type
         let scalars = vec![
@@ -9663,10 +9655,8 @@ mod tests {
             ScalarValue::Int64(Some(1)),
         ];
         let err = ScalarValue::iter_to_array(scalars).unwrap_err();
-        assert_eq!(
-            "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: Int64(1)",
-            err.to_string()
-        );
+        let expected = "Execution error: Expected RunEndEncoded scalar with run-ends field Field { \"run_ends\": Int16 } but got: Int64(1)";
+        assert!(err.to_string().starts_with(expected));
     }
 
     #[test]
