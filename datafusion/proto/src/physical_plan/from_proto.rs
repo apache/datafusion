@@ -1070,20 +1070,20 @@ mod tests {
             };
 
             // Try to test different strings, but skip if cache fills up
-            if format_options_from_proto(&second).is_ok() {
-                if let Ok(second_interned) = intern_format_strings(&second) {
-                    assert!(
-                        !std::ptr::eq(first_interned.null, second_interned.null),
-                        "Different null strings should return different pointers"
-                    );
-                    assert!(
-                        !std::ptr::eq(
-                            first_interned.date_format.unwrap(),
-                            second_interned.date_format.unwrap()
-                        ),
-                        "Different date_format strings should return different pointers"
-                    );
-                }
+            if format_options_from_proto(&second).is_ok()
+                && let Ok(second_interned) = intern_format_strings(&second)
+            {
+                assert!(
+                    !std::ptr::eq(first_interned.null, second_interned.null),
+                    "Different null strings should return different pointers"
+                );
+                assert!(
+                    !std::ptr::eq(
+                        first_interned.date_format.unwrap(),
+                        second_interned.date_format.unwrap()
+                    ),
+                    "Different date_format strings should return different pointers"
+                );
             }
         }
     }
