@@ -68,6 +68,7 @@ pub mod async_func;
 pub mod coalesce;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
+pub mod column_rewriter;
 pub mod common;
 pub mod coop;
 pub mod display;

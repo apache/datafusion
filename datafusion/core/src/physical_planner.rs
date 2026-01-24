@@ -655,6 +655,30 @@ impl DefaultPhysicalPlanner {
                     );
                 }
             }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Truncate,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    provider
+                        .table_provider
+                        .truncate(session_state)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!(
+                                "TRUNCATE operation on table '{table_name}'"
+                            ))
+                        })?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_or_internal_err!(
                     !window_expr.is_empty(),
@@ -2729,7 +2753,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
             && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
         {
             internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()

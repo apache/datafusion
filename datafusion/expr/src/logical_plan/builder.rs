@@ -2779,12 +2779,12 @@ mod tests {
 
         assert_snapshot!(plan, @r"
         Union
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right
               Values: (Int32(1))
-          Cross Join: 
+          Cross Join:
             SubqueryAlias: left
               Values: (Int32(1))
             SubqueryAlias: right

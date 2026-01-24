@@ -79,3 +79,7 @@ name = "slice"
 [[bench]]
 harness = false
 name = "substring"
+
+[[bench]]
+harness = false
+name = "unhex"

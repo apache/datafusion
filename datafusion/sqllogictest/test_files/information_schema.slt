@@ -799,9 +799,9 @@ select * from information_schema.routines where routine_name = 'date_trunc' OR r
 ----
 datafusion public date_trunc datafusion public date_trunc FUNCTION true Date SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public date_trunc datafusion public date_trunc FUNCTION true String SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Time(Nanosecond) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, None) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(Nanosecond, Some("+TZ")) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Time(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns) SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+datafusion public date_trunc datafusion public date_trunc FUNCTION true Timestamp(ns, "+TZ") SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 datafusion public rank datafusion public rank FUNCTION true NULL WINDOW Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values. rank()
 datafusion public string_agg datafusion public string_agg FUNCTION true String AGGREGATE Concatenates the values of string expressions and places separator values between them. If ordering is required, strings are concatenated in the specified order. This aggregation function can only mix DISTINCT and ORDER BY if the ordering expression is exactly the same as the first argument expression. string_agg([DISTINCT] expression, delimiter [ORDER BY expression])
 
@@ -821,14 +821,14 @@ datafusion public date_trunc 1 IN precision String NULL false 1
 datafusion public date_trunc 2 IN expression String NULL false 1
 datafusion public date_trunc 1 OUT NULL String NULL false 1
 datafusion public date_trunc 1 IN precision String NULL false 2
-datafusion public date_trunc 2 IN expression Time(Nanosecond) NULL false 2
-datafusion public date_trunc 1 OUT NULL Time(Nanosecond) NULL false 2
+datafusion public date_trunc 2 IN expression Time(ns) NULL false 2
+datafusion public date_trunc 1 OUT NULL Time(ns) NULL false 2
 datafusion public date_trunc 1 IN precision String NULL false 3
-datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, None) NULL false 3
-datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, None) NULL false 3
+datafusion public date_trunc 2 IN expression Timestamp(ns) NULL false 3
+datafusion public date_trunc 1 OUT NULL Timestamp(ns) NULL false 3
 datafusion public date_trunc 1 IN precision String NULL false 4
-datafusion public date_trunc 2 IN expression Timestamp(Nanosecond, Some("+TZ")) NULL false 4
-datafusion public date_trunc 1 OUT NULL Timestamp(Nanosecond, Some("+TZ")) NULL false 4
+datafusion public date_trunc 2 IN expression Timestamp(ns, "+TZ") NULL false 4
+datafusion public date_trunc 1 OUT NULL Timestamp(ns, "+TZ") NULL false 4
 datafusion public string_agg 2 IN delimiter Null NULL false 0
 datafusion public string_agg 1 IN expression String NULL false 0
 datafusion public string_agg 1 OUT NULL String NULL false 0
@@ -856,9 +856,9 @@ show functions like 'date_trunc';
 ----
 date_trunc Date [precision, expression] [String, Date] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 date_trunc String [precision, expression] [String, String] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-date_trunc Time(Nanosecond) [precision, expression] [String, Time(Nanosecond)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Nanosecond, None) [precision, expression] [String, Timestamp(Nanosecond, None)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
-date_trunc Timestamp(Nanosecond, Some("+TZ")) [precision, expression] [String, Timestamp(Nanosecond, Some("+TZ"))] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Time(ns) [precision, expression] [String, Time(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns) [precision, expression] [String, Timestamp(ns)] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
+date_trunc Timestamp(ns, "+TZ") [precision, expression] [String, Timestamp(ns, "+TZ")] SCALAR Truncates a timestamp or time value to a specified precision. date_trunc(precision, expression)
 
 statement ok
 show functions
