@@ -2041,7 +2041,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [arr:Int32;N]
               Unnest: lists[sq.arr|depth=1] structs[] [arr:Int32;N]
-                TableScan: sq [arr:List(Field { data_type: Int32, nullable: true });N]
+                TableScan: sq [arr:List(Int32);N]
         "
         )
     }
@@ -2076,7 +2076,7 @@ mod tests {
             TableScan: test [a:UInt32, b:UInt32, c:UInt32]
             SubqueryAlias: __correlated_sq_1 [a:UInt32;N]
               Unnest: lists[sq.a|depth=1] structs[] [a:UInt32;N]
-                TableScan: sq [a:List(Field { data_type: UInt32, nullable: true });N]
+                TableScan: sq [a:List(UInt32);N]
         "
         )
     }

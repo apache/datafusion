@@ -5501,10 +5501,10 @@ as values
 statement ok
 create table t as
 select
-  arrow_cast(column1, 'Timestamp(Nanosecond, None)') as nanos,
-  arrow_cast(column1, 'Timestamp(Microsecond, None)') as micros,
-  arrow_cast(column1, 'Timestamp(Millisecond, None)') as millis,
-  arrow_cast(column1, 'Timestamp(Second, None)') as secs,
+  arrow_cast(column1, 'Timestamp(ns)') as nanos,
+  arrow_cast(column1, 'Timestamp(µs)') as micros,
+  arrow_cast(column1, 'Timestamp(ms)') as millis,
+  arrow_cast(column1, 'Timestamp(s)') as secs,
   arrow_cast(column1, 'Timestamp(Nanosecond, Some("UTC"))') as nanos_utc,
   arrow_cast(column1, 'Timestamp(Microsecond, Some("UTC"))') as micros_utc,
   arrow_cast(column1, 'Timestamp(Millisecond, Some("UTC"))') as millis_utc,
@@ -5587,7 +5587,7 @@ SELECT tag, avg(nanos), avg(micros), avg(millis), avg(secs) FROM t GROUP BY tag 
 
 # aggregate_duration_array_agg
 query T?
-SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(Millisecond, None)')) FROM t GROUP BY tag ORDER BY tag;
+SELECT tag, array_agg(millis - arrow_cast(secs, 'Timestamp(ms)')) FROM t GROUP BY tag ORDER BY tag;
 ----
 X [0 days 0 hours 0 mins 0.011 secs, 0 days 0 hours 0 mins 0.123 secs]
 Y [NULL, 0 days 0 hours 0 mins 0.432 secs]
