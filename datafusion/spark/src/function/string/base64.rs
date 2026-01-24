@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::{Field, FieldRef};
@@ -31,6 +31,10 @@ use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions::expr_fn::{decode, encode};
+
+const ENCODING: LazyLock<Expr> = LazyLock::new(|| {
+    Expr::Literal(ScalarValue::Utf8(Some(String::from("base64pad"))), None)
+});
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#base64>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -101,7 +105,7 @@ impl ScalarUDFImpl for SparkBase64 {
         let [bin] = take_function_args(self.name(), args)?;
         Ok(ExprSimplifyResult::Simplified(encode(
             bin,
-            Expr::Literal(ScalarValue::Utf8(Some(String::from("base64pad"))), None),
+            ENCODING.clone(),
         )))
     }
 }
@@ -175,7 +179,7 @@ impl ScalarUDFImpl for SparkUnBase64 {
         let [str] = take_function_args(self.name(), args)?;
         Ok(ExprSimplifyResult::Simplified(decode(
             str.cast_to(&DataType::Binary, info.schema())?,
-            Expr::Literal(ScalarValue::Utf8(Some(String::from("base64pad"))), None),
+            ENCODING.clone(),
         )))
     }
 }
