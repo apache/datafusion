@@ -307,6 +307,7 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
         sum_value: Precision::Absent,
         distinct_count: Precision::Absent,
         byte_size: Precision::Absent,
+        avg_byte_size: Precision::Absent,
     };
 
     // We can then build our expression boundaries from the column statistics
@@ -377,6 +378,7 @@ fn boundary_analysis_in_conjunctions_demo() -> Result<()> {
         sum_value: Precision::Absent,
         distinct_count: Precision::Absent,
         byte_size: Precision::Absent,
+        avg_byte_size: Precision::Absent,
     };
 
     let initial_boundaries =

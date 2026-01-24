@@ -2131,6 +2131,7 @@ mod tests {
             sum_value: Absent,
             null_count,
             byte_size: Absent,
+            avg_byte_size: Absent,
         }
     }
 

@@ -147,6 +147,7 @@ mod test {
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
             byte_size: Precision::Exact(int32_byte_size),
+            avg_byte_size: Precision::Exact(4),
         }];
 
         if let Some((min_date, max_date)) = date_range {
@@ -164,6 +165,7 @@ mod test {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Inexact(1),
                 byte_size: Precision::Exact(date32_byte_size),
+                avg_byte_size: Precision::Exact(4),
             });
         }
 
@@ -397,6 +399,7 @@ mod test {
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -405,6 +408,7 @@ mod test {
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(16), // 4 rows * 4 bytes (Date32)
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -426,6 +430,7 @@ mod test {
                     sum_value: Precision::Exact(ScalarValue::Int32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -434,6 +439,7 @@ mod test {
                     sum_value: Precision::Exact(ScalarValue::Date32(None)),
                     distinct_count: Precision::Exact(0),
                     byte_size: Precision::Exact(8), // 2 rows * 4 bytes (Date32)
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -575,6 +581,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 // column 1: left.date (Date32, partition column from t1)
                 // Partition column statistics are exact because all rows in a partition share the same value.
@@ -585,6 +592,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 0: ids [3,4]
                 ColumnStatistics {
@@ -594,6 +602,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -609,6 +618,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 // column 1: left.date (Date32, partition column from t1)
                 // Partition column statistics are exact because all rows in a partition share the same value.
@@ -619,6 +629,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 // column 2: right.id (Int32, file column from t2) - right partition 1: ids [1,2]
                 ColumnStatistics {
@@ -628,6 +639,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -849,6 +861,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
@@ -868,6 +881,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics::new_unknown(),
                 ColumnStatistics::new_unknown(),
@@ -1243,6 +1257,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -1255,6 +1270,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
@@ -1271,6 +1287,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(0),
@@ -1283,6 +1300,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics::new_unknown(), // window column
             ],
@@ -1416,6 +1434,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Left date column: all partitions (2025-03-01..2025-03-04)
                 // NDV is Inexact(1) because each Hive partition has exactly 1 distinct date value,
@@ -1431,6 +1450,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right id column: partition 0 only (id 3..4)
                 ColumnStatistics {
@@ -1440,6 +1460,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right date column: partition 0 only (2025-03-01..2025-03-02)
                 // NDV is Inexact(1) from the single Hive partition's date value
@@ -1454,6 +1475,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -1493,6 +1515,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Left date column: partition 0 only (2025-03-01..2025-03-02)
                 ColumnStatistics {
@@ -1506,6 +1529,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right id column: partition 0 only (id 3..4)
                 ColumnStatistics {
@@ -1515,6 +1539,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right date column: partition 0 only (2025-03-01..2025-03-02)
                 ColumnStatistics {
@@ -1528,6 +1553,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(8),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -1567,6 +1593,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Left date column: all partitions (2025-03-01..2025-03-04)
                 ColumnStatistics {
@@ -1580,6 +1607,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right id column: all partitions (id 1..4)
                 ColumnStatistics {
@@ -1589,6 +1617,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 // Right date column: all partitions (2025-03-01..2025-03-04)
                 ColumnStatistics {
@@ -1602,6 +1631,7 @@ mod test {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Inexact(1),
                     byte_size: Precision::Exact(16),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };

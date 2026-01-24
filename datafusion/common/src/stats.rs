@@ -377,6 +377,17 @@ impl Statistics {
         }
     }
 
+    /// Estimates total byte size from `num_rows` and per-column `avg_byte_size`.
+    /// Returns `Absent` if any needed input is unavailable.
+    pub fn estimate_total_byte_size_from_avg(&self) -> Precision<usize> {
+        self.column_statistics
+            .iter()
+            .fold(Precision::Exact(0), |acc, cs| {
+                let col_total = cs.avg_byte_size.multiply(&self.num_rows);
+                acc.add(&col_total)
+            })
+    }
+
     /// Returns an unbounded `ColumnStatistics` for each field in the schema.
     pub fn unknown_column(schema: &Schema) -> Vec<ColumnStatistics> {
         schema
@@ -667,6 +678,7 @@ impl Statistics {
                 sum_value: cs.sum_value.clone(),
                 distinct_count: cs.distinct_count,
                 byte_size: cs.byte_size,
+                avg_byte_size: cs.avg_byte_size,
             })
             .collect();
 
@@ -674,9 +686,14 @@ impl Statistics {
         // Uses precision_add for sum (avoids the expensive
         // ScalarValue::add round-trip through Arrow arrays), and
         // Precision::min/max which use cheap PartialOrd comparison.
+        let mut merged_rows = first.num_rows;
         for stat in items.iter().skip(1) {
+            let left_rows = merged_rows;
+            let right_rows = stat.num_rows;
             for (col_idx, col_stats) in column_statistics.iter_mut().enumerate() {
                 let item_cs = &stat.column_statistics[col_idx];
+                let merged_avg =
+                    col_stats.merge_avg_byte_size(item_cs, left_rows, right_rows);
 
                 col_stats.null_count = col_stats.null_count.add(&item_cs.null_count);
 
@@ -697,7 +714,10 @@ impl Statistics {
                 col_stats.sum_value =
                     precision_add(&col_stats.sum_value, &item_cs.sum_value);
                 col_stats.byte_size = col_stats.byte_size.add(&item_cs.byte_size);
+                col_stats.avg_byte_size = merged_avg;
             }
+
+            merged_rows = left_rows.add(&right_rows);
         }
 
         Ok(Statistics {
@@ -854,7 +874,11 @@ impl Display for Statistics {
                 } else {
                     s
                 };
-
+                let s = if cs.avg_byte_size != Precision::Absent {
+                    format!("{} AvgRowBytes={}", s, cs.avg_byte_size)
+                } else {
+                    s
+                };
                 s + ")"
             })
             .collect::<Vec<_>>()
@@ -898,6 +922,19 @@ pub struct ColumnStatistics {
     /// This value is automatically scaled when operations like limits or
     /// filters reduce the number of rows (see [`Statistics::with_fetch`]).
     pub byte_size: Precision<usize>,
+    /// The average bytes a single row of a column.
+    ///
+    /// Note that this is useful when statistics like `byte_size` become less reliable.
+    ///
+    /// E.g. we know our column initially has 1 million rows with `byte_size` = 1 billion bytes
+    /// (1GB) and `avg_byte_size` = 1K bytes. After a filter we are left with 10 rows. Without
+    /// `avg_byte_size` all that is known is the `byte_size` is 1GB, with it we know that the
+    /// amount of data ~10K bytes.
+    ///
+    /// Currently this is accurately calculated for primitive types only.
+    /// For complex types (like Utf8, List, Struct, etc), this value may be
+    /// absent or inexact (e.g. estimated from the size of the data in the source Parquet files).
+    pub avg_byte_size: Precision<usize>,
 }
 
 impl ColumnStatistics {
@@ -921,6 +958,7 @@ impl ColumnStatistics {
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
             byte_size: Precision::Absent,
+            avg_byte_size: Precision::Absent,
         }
     }
 
@@ -961,6 +999,50 @@ impl ColumnStatistics {
         self
     }
 
+    /// Set the avg byte size
+    /// This should initially be set to the total size of the column / number of rows in column.
+    pub fn with_avg_byte_size(mut self, avg_byte_size: Precision<usize>) -> Self {
+        self.avg_byte_size = avg_byte_size;
+        self
+    }
+
+    /// Merge avg byte sizes using per-side row counts and total sizes when available.
+    pub fn merge_avg_byte_size(
+        &self,
+        other: &ColumnStatistics,
+        left_rows: Precision<usize>,
+        right_rows: Precision<usize>,
+    ) -> Precision<usize> {
+        let merged_rows = left_rows.add(&right_rows);
+        let left_total = Self::total_bytes_from_avg_or_byte_size(
+            self.avg_byte_size,
+            left_rows,
+            self.byte_size,
+        );
+        let right_total = Self::total_bytes_from_avg_or_byte_size(
+            other.avg_byte_size,
+            right_rows,
+            other.byte_size,
+        );
+        let merged_total = left_total.add(&right_total);
+
+        let avg_from_total = Self::avg_from_total_bytes(merged_total, merged_rows);
+        if avg_from_total != Precision::Absent {
+            return avg_from_total;
+        }
+
+        if self.avg_byte_size.get_value().is_some()
+            && self.avg_byte_size.get_value() == other.avg_byte_size.get_value()
+        {
+            return Self::merge_equal_avg_precision(
+                self.avg_byte_size,
+                other.avg_byte_size,
+            );
+        }
+
+        Precision::Absent
+    }
+
     /// If the exactness of a [`ColumnStatistics`] instance is lost, this
     /// function relaxes the exactness of all information by converting them
     /// [`Precision::Inexact`].
@@ -971,7 +1053,68 @@ impl ColumnStatistics {
         self.sum_value = self.sum_value.to_inexact();
         self.distinct_count = self.distinct_count.to_inexact();
         self.byte_size = self.byte_size.to_inexact();
+        self.avg_byte_size = self.avg_byte_size.to_inexact();
         self
+    }
+
+    fn total_bytes_from_avg_or_byte_size(
+        avg: Precision<usize>,
+        rows: Precision<usize>,
+        byte_size: Precision<usize>,
+    ) -> Precision<usize> {
+        if matches!(rows, Precision::Exact(0)) {
+            return Precision::Exact(0);
+        }
+
+        let from_avg = avg.multiply(&rows);
+        match (byte_size, from_avg) {
+            (Precision::Exact(_), _) => byte_size,
+            (_, Precision::Exact(_)) => from_avg,
+            (Precision::Inexact(_), Precision::Absent) => byte_size,
+            (Precision::Absent, Precision::Inexact(_)) => from_avg,
+            (Precision::Inexact(_), Precision::Inexact(_)) => byte_size,
+            _ => Precision::Absent,
+        }
+    }
+
+    fn avg_from_total_bytes(
+        total_bytes: Precision<usize>,
+        num_rows: Precision<usize>,
+    ) -> Precision<usize> {
+        match (total_bytes, num_rows) {
+            (Precision::Exact(bytes), Precision::Exact(rows)) => {
+                if rows == 0 {
+                    Precision::Absent
+                } else {
+                    Precision::Exact(bytes / rows)
+                }
+            }
+            (Precision::Inexact(bytes), Precision::Exact(rows))
+            | (Precision::Exact(bytes), Precision::Inexact(rows))
+            | (Precision::Inexact(bytes), Precision::Inexact(rows)) => {
+                if rows == 0 {
+                    Precision::Absent
+                } else {
+                    Precision::Inexact(bytes / rows)
+                }
+            }
+            _ => Precision::Absent,
+        }
+    }
+
+    fn merge_equal_avg_precision(
+        left: Precision<usize>,
+        right: Precision<usize>,
+    ) -> Precision<usize> {
+        match (left, right) {
+            (Precision::Exact(value), Precision::Exact(_)) => Precision::Exact(value),
+            (Precision::Inexact(value), Precision::Exact(_))
+            | (Precision::Exact(value), Precision::Inexact(_))
+            | (Precision::Inexact(value), Precision::Inexact(_)) => {
+                Precision::Inexact(value)
+            }
+            _ => Precision::Absent,
+        }
     }
 }
 
@@ -1263,6 +1406,7 @@ mod tests {
             sum_value: Precision::Exact(ScalarValue::Int64(Some(4600))),
             distinct_count: Precision::Exact(100),
             byte_size: Precision::Exact(800),
+            avg_byte_size: Precision::Exact(8),
         }
     }
 
@@ -1286,6 +1430,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(40),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(2),
@@ -1294,6 +1439,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1000))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(40),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -1309,6 +1455,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(600))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(60),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(3),
@@ -1317,6 +1464,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1200))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(60),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -1381,6 +1529,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(40),
+                avg_byte_size: Precision::Exact(4),
             }],
         };
 
@@ -1394,6 +1543,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
+                avg_byte_size: Precision::Exact(4),
             }],
         };
 
@@ -1725,6 +1875,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(5050))),
                     distinct_count: Precision::Exact(50),
                     byte_size: Precision::Exact(4000),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(20),
@@ -1733,6 +1884,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(10100))),
                     distinct_count: Precision::Exact(75),
                     byte_size: Precision::Exact(8000),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -1808,6 +1960,7 @@ mod tests {
                 sum_value: Precision::Inexact(ScalarValue::Int32(Some(5050))),
                 distinct_count: Precision::Inexact(50),
                 byte_size: Precision::Inexact(4000),
+                avg_byte_size: Precision::Exact(4),
             }],
         };
 
@@ -1909,6 +2062,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Absent,
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -1948,6 +2102,7 @@ mod tests {
             sum_value: Precision::Exact(ScalarValue::Int32(Some(123456))),
             distinct_count: Precision::Exact(789),
             byte_size: Precision::Exact(4000),
+            avg_byte_size: Precision::Exact(4),
         };
 
         let original_stats = Statistics {
@@ -1975,6 +2130,133 @@ mod tests {
             Precision::Inexact(ScalarValue::Int32(Some(123456)))
         );
         assert_eq!(result_col_stats.distinct_count, Precision::Inexact(789));
+        assert_eq!(result_col_stats.avg_byte_size, Precision::Inexact(4));
+    }
+
+    #[test]
+    fn test_merge_avg_byte_size() {
+        let base = ColumnStatistics {
+            null_count: Precision::Absent,
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
+            avg_byte_size: Precision::Absent,
+        };
+
+        let cases = [
+            (
+                "exact_bytes_over_inexact_avg",
+                ColumnStatistics {
+                    byte_size: Precision::Exact(1000),
+                    avg_byte_size: Precision::Inexact(9),
+                    ..base.clone()
+                },
+                ColumnStatistics {
+                    byte_size: Precision::Exact(1000),
+                    avg_byte_size: Precision::Inexact(9),
+                    ..base.clone()
+                },
+                Precision::Exact(100),
+                Precision::Exact(100),
+                Precision::Exact(10),
+            ),
+            (
+                "avg_only_exact",
+                ColumnStatistics {
+                    byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Exact(5),
+                    ..base.clone()
+                },
+                ColumnStatistics {
+                    byte_size: Precision::Absent,
+                    avg_byte_size: Precision::Exact(5),
+                    ..base.clone()
+                },
+                Precision::Exact(10),
+                Precision::Exact(10),
+                Precision::Exact(5),
+            ),
+            (
+                "zero_rows_on_left",
+                ColumnStatistics {
+                    byte_size: Precision::Exact(0),
+                    avg_byte_size: Precision::Absent,
+                    ..base.clone()
+                },
+                ColumnStatistics {
+                    byte_size: Precision::Exact(100),
+                    avg_byte_size: Precision::Exact(10),
+                    ..base.clone()
+                },
+                Precision::Exact(0),
+                Precision::Exact(10),
+                Precision::Exact(10),
+            ),
+            (
+                "both_inexact",
+                ColumnStatistics {
+                    byte_size: Precision::Inexact(100),
+                    avg_byte_size: Precision::Absent,
+                    ..base.clone()
+                },
+                ColumnStatistics {
+                    byte_size: Precision::Inexact(200),
+                    avg_byte_size: Precision::Absent,
+                    ..base
+                },
+                Precision::Exact(10),
+                Precision::Exact(10),
+                Precision::Inexact(15),
+            ),
+        ];
+
+        for (name, left, right, left_rows, right_rows, expected) in cases {
+            let merged = left.merge_avg_byte_size(&right, left_rows, right_rows);
+            assert_eq!(merged, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_byte_size_try_merge() {
+        let schema = Schema::new(vec![Field::new("col1", DataType::Int32, false)]);
+        let col_stats1 = ColumnStatistics {
+            null_count: Precision::Exact(10),
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Exact(200),
+            avg_byte_size: Precision::Exact(4),
+        };
+        let col_stats2 = ColumnStatistics {
+            null_count: Precision::Exact(20),
+            max_value: Precision::Absent,
+            min_value: Precision::Absent,
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Exact(400),
+            avg_byte_size: Precision::Exact(4),
+        };
+
+        let stats1 = Statistics {
+            num_rows: Precision::Exact(50),
+            total_byte_size: Precision::Exact(200),
+            column_statistics: vec![col_stats1],
+        };
+        let stats2 = Statistics {
+            num_rows: Precision::Exact(100),
+            total_byte_size: Precision::Exact(400),
+            column_statistics: vec![col_stats2],
+        };
+
+        let merged = Statistics::try_merge_iter([&stats1, &stats2], &schema).unwrap();
+        assert_eq!(merged.column_statistics[0].byte_size, Precision::Exact(600));
+        assert_eq!(
+            merged.column_statistics[0].avg_byte_size,
+            Precision::Exact(4)
+        );
     }
 
     #[test]
@@ -1986,6 +2268,7 @@ mod tests {
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
             byte_size: Precision::Exact(5000),
+            avg_byte_size: Precision::Exact(4),
         };
 
         let inexact = col_stats.to_inexact();
@@ -2013,6 +2296,7 @@ mod tests {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(4000),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(20),
@@ -2021,6 +2305,7 @@ mod tests {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(8000),
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -2056,6 +2341,7 @@ mod tests {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(4000),
+                    avg_byte_size: Precision::Exact(4),
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(20),
@@ -2064,6 +2350,7 @@ mod tests {
                     sum_value: Precision::Absent,
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Absent, // One column has no byte_size
+                    avg_byte_size: Precision::Exact(4),
                 },
             ],
         };
@@ -2093,6 +2380,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(40),
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(2),
@@ -2101,6 +2389,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1000))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(40),
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -2116,6 +2405,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(600))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(60),
+                    avg_byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     null_count: Precision::Exact(3),
@@ -2124,6 +2414,7 @@ mod tests {
                     sum_value: Precision::Exact(ScalarValue::Int32(Some(1200))),
                     distinct_count: Precision::Absent,
                     byte_size: Precision::Exact(60),
+                    avg_byte_size: Precision::Absent,
                 },
             ],
         };
@@ -2183,6 +2474,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(40),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2196,6 +2488,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2257,6 +2550,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int32(Some(500))),
                 distinct_count: Precision::Exact(10),
                 byte_size: Precision::Exact(40),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2305,6 +2599,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(500))),
                 distinct_count: Precision::Exact(8),
                 byte_size: Precision::Exact(80),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2318,6 +2613,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(1000))),
                 distinct_count: Precision::Exact(15),
                 byte_size: Precision::Exact(160),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2331,6 +2627,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Int64(Some(2000))),
                 distinct_count: Precision::Exact(25),
                 byte_size: Precision::Exact(240),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2378,6 +2675,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Float64(Some(500.5))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(80),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2391,6 +2689,7 @@ mod tests {
                 sum_value: Precision::Exact(ScalarValue::Float64(Some(1000.0))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(80),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2427,6 +2726,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(100),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2440,6 +2740,7 @@ mod tests {
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Exact(100),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2476,6 +2777,7 @@ mod tests {
                 sum_value: Precision::Inexact(ScalarValue::Int32(Some(500))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(40),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
@@ -2489,6 +2791,7 @@ mod tests {
                 sum_value: Precision::Inexact(ScalarValue::Int32(Some(1000))),
                 distinct_count: Precision::Absent,
                 byte_size: Precision::Inexact(60),
+                avg_byte_size: Precision::Absent,
             }],
         };
 
