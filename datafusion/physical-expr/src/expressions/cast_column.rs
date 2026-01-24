@@ -202,13 +202,7 @@ impl CastColumnExpr {
         cast_options: Option<CastOptions<'static>>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
-        Self::build(
-            expr,
-            input_field,
-            target_field,
-            cast_options,
-            input_schema,
-        )
+        Self::build(expr, input_field, target_field, cast_options, input_schema)
     }
 
     /// The expression that produces the value to be cast.
@@ -554,9 +548,7 @@ mod tests {
         )
         .expect_err("expected mismatched input field error");
 
-        assert!(err
-            .to_string()
-            .contains("does not match schema field"));
+        assert!(err.to_string().contains("does not match schema field"));
         assert!(err.to_string().contains("nullable"));
     }
 

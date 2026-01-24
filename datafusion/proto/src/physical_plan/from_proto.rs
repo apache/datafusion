@@ -791,7 +791,11 @@ fn intern_format_strings(
 ) -> Result<InternedFormatStrings> {
     Ok(InternedFormatStrings {
         null: intern_format_str(&options.null)?,
-        date_format: options.date_format.as_deref().map(intern_format_str).transpose()?,
+        date_format: options
+            .date_format
+            .as_deref()
+            .map(intern_format_str)
+            .transpose()?,
         datetime_format: options
             .datetime_format
             .as_deref()
@@ -807,7 +811,11 @@ fn intern_format_strings(
             .as_deref()
             .map(intern_format_str)
             .transpose()?,
-        time_format: options.time_format.as_deref().map(intern_format_str).transpose()?,
+        time_format: options
+            .time_format
+            .as_deref()
+            .map(intern_format_str)
+            .transpose()?,
     })
 }
 
