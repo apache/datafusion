@@ -250,12 +250,18 @@ where
         // step 2: insert each value into the set, if not already present
         let values = values.as_byte_view::<B>();
 
+        // Get raw views buffer for direct comparison - this is the key optimization
+        // Instead of using values.iter() which dereferences each view to bytes,
+        // we access the raw u128 views directly for fast comparison
+        let views = values.views();
+
         // Ensure lengths are equivalent
         assert_eq!(values.len(), batch_hashes.len());
 
-        for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
-            // handle null value
-            let Some(value) = value else {
+        for (i, (&view_u128, &hash)) in views.iter().zip(batch_hashes.iter()).enumerate()
+        {
+            // handle null value via validity bitmap check
+            if !values.is_valid(i) {
                 let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
                     payload
                 } else {
@@ -267,28 +273,49 @@ where
                 };
                 observe_payload_fn(payload);
                 continue;
-            };
+            }
 
-            // get the value as bytes
-            let value: &[u8] = value.as_ref();
+            // Extract length from the view (first 4 bytes of u128 in little-endian)
+            let len = (view_u128 & 0xFFFFFFFF) as u32;
 
             let entry = self.map.find_mut(hash, |header| {
                 if header.hash != hash {
                     return false;
                 }
-                let v = self.builder.get_value(header.view_idx);
 
-                v == value
+                // Fast path: for inline strings (<=12 bytes), the entire value
+                // is stored in the u128 view, so we can compare directly
+                // This avoids the expensive conversion back to bytes
+                if len <= 12 {
+                    return header.view == view_u128;
+                }
+
+                // For larger strings: first compare the 4-byte prefix (bytes 4-7 of u128)
+                // The prefix is stored in the next 4 bytes after length
+                // Only dereference full bytes if prefixes match
+                let stored_prefix = ((header.view >> 32) & 0xFFFFFFFF) as u32;
+                let input_prefix = ((view_u128 >> 32) & 0xFFFFFFFF) as u32;
+                if stored_prefix != input_prefix {
+                    return false;
+                }
+
+                // Prefix matched - must compare full bytes
+                let stored_value = self.builder.get_value(header.view_idx);
+                let input_value: &[u8] = values.value(i).as_ref();
+                stored_value == input_value
             });
 
             let payload = if let Some(entry) = entry {
                 entry.payload
             } else {
                 // no existing value, make a new one.
+                // Only dereference bytes here when we actually need to insert
+                let value: &[u8] = values.value(i).as_ref();
                 let payload = make_payload_fn(Some(value));
 
                 let inner_view_idx = self.builder.len();
                 let new_header = Entry {
+                    view: view_u128,
                     view_idx: inner_view_idx,
                     hash,
                     payload,
@@ -378,6 +405,10 @@ struct Entry<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
+    /// The original u128 view for fast comparison of inline strings (<=12 bytes)
+    /// and prefix comparison for larger strings
+    view: u128,
+
     /// The idx into the views array
     view_idx: usize,
 
