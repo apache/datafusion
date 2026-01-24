@@ -137,9 +137,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let alias_map = extract_aliases(&select_exprs);
 
         // Check if ORDER BY references any columns not in the SELECT list
-        // If DISTINCT is used, we need to verify this is acceptable
+        // Only do this for plain DISTINCT, not DISTINCT ON
         // This is similar to how HAVING is handled
-        let select_exprs = if select.distinct.is_some() && !order_by_rex.is_empty() {
+        let select_exprs = if matches!(select.distinct, Some(Distinct::Distinct))
+            && !order_by_rex.is_empty()
+        {
             let mut missing_order_by_exprs = Vec::new();
             let mut missing_cols = HashSet::new();
 
@@ -170,7 +172,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // If there are missing columns and DISTINCT is used, perform the ambiguous distinct check
             if !missing_order_by_exprs.is_empty() {
-                // Perform the ambiguous distinct check - if it fails, we should return the error
+                // Perform the ambiguous distinct check - if it fails, we should return error
                 // immediately, not add the columns to the select list
                 Self::ambiguous_distinct_check(
                     &missing_order_by_exprs,
