@@ -294,7 +294,7 @@ impl PartitionedFile {
                     avg_byte_size: partition_value
                         .data_type()
                         .primitive_width()
-                        .map(|w| Precision::Exact(w))
+                        .map(Precision::Exact)
                         .unwrap_or_else(|| Precision::Absent),
                 };
                 stats.column_statistics.push(col_stats);
