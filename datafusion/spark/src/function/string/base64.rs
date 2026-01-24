@@ -36,6 +36,7 @@ const ENCODING: LazyLock<Expr> = LazyLock::new(|| {
     Expr::Literal(ScalarValue::Utf8(Some(String::from("base64pad"))), None)
 });
 
+/// Apache Spark base64 uses padded base64 encoding.
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#base64>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkBase64 {
