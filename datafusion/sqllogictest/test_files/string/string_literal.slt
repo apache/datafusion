@@ -132,10 +132,10 @@ SELECT substr('Hello🌏世界', 5, 3)
 ----
 o🌏世
 
-statement error The first argument of the substr function can only be a string, but got Int64
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3)
 
-statement error The first argument of the substr function can only be a string, but got Int64
+statement error Function 'substr' failed to match any signature
 SELECT substr(1, 3, 4)
 
 statement error Execution error: negative substring length not allowed
@@ -206,6 +206,25 @@ query B
 SELECT ends_with('foobar', 'foo')
 ----
 false
+
+query B
+SELECT ends_with(a, '%bar') from (values ('foobar'), ('foo%bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT ends_with(a, '_bar') from (values ('foobar'), ('foo_bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT ends_with(a, '\_bar') from (values ('foobar'), ('foo\\bar'), ('foo\_bar')) as t(a);
+----
+false
+false
+true
 
 query I
 SELECT levenshtein('kitten', 'sitting')
@@ -845,6 +864,26 @@ query B
 SELECT starts_with('foobar', 'bar')
 ----
 false
+
+
+query B
+SELECT starts_with(a, 'foo%') from (values ('foobar'), ('foo%bar')) as t(a);
+----
+false
+true
+
+query B
+SELECT starts_with(a, 'foo\_') from (values ('foobar'), ('foo\\_bar'), ('foo\_bar')) as t(a);
+----
+false
+false
+true
+
+query B
+SELECT starts_with(a, 'foo_') from (values ('foobar'), ('foo_bar')) as t(a);
+----
+false
+true
 
 query TT
 select '   ', '|'

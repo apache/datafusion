@@ -18,9 +18,9 @@
 //! This module provides the in-memory table for more realistic benchmarking.
 
 use arrow::array::{
-    builder::{Int64Builder, StringBuilder},
     ArrayRef, Float32Array, Float64Array, RecordBatch, StringArray, StringViewBuilder,
     UInt64Array,
+    builder::{Int64Builder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
@@ -139,6 +139,7 @@ fn create_record_batch(
 
 /// Create record batches of `partitions_len` partitions and `batch_size` for each batch,
 /// with a total number of `array_len` records
+#[expect(clippy::needless_pass_by_value)]
 pub fn create_record_batches(
     schema: SchemaRef,
     array_len: usize,

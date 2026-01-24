@@ -370,7 +370,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") AS c3, test.column1_utf8 LIKE Utf8("f_o%") AS c4, test.column1_large_utf8 LIKE LargeUtf8("f_o%") AS c5, test.column1_utf8view LIKE Utf8View("f_o%") AS c6
+01)Projection: test.column1_utf8 LIKE Utf8("foo\%%") AS c1, test.column1_large_utf8 LIKE LargeUtf8("foo\%%") AS c2, test.column1_utf8view LIKE Utf8View("foo\%%") AS c3, test.column1_utf8 LIKE Utf8("f\_o%") AS c4, test.column1_large_utf8 LIKE LargeUtf8("f\_o%") AS c5, test.column1_utf8view LIKE Utf8View("f\_o%") AS c6
 02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
 
 ## Test STARTS_WITH works with column arguments

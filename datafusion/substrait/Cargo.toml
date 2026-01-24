@@ -41,17 +41,18 @@ datafusion = { workspace = true, features = ["sql"] }
 half = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
-pbjson-types = { workspace = true }
+# We need to match the version in substrait, so we don't use the workspace version here
+pbjson-types = { version = "0.8.0" }
 prost = { workspace = true }
 substrait = { version = "0.62", features = ["serde"] }
 url = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
-uuid = { version = "1.17.0", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions", "unicode_expressions"] }
 datafusion-functions-aggregate = { workspace = true }
-serde_json = "1.0"
+serde_json = { workspace = true }
 tokio = { workspace = true }
 insta = { workspace = true }
 

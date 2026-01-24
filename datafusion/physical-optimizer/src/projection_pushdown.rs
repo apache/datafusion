@@ -33,12 +33,12 @@ use datafusion_common::tree_node::{
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
-use datafusion_physical_plan::joins::NestedLoopJoinExec;
-use datafusion_physical_plan::projection::{
-    remove_unnecessary_projections, ProjectionExec,
-};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::joins::NestedLoopJoinExec;
+use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::projection::{
+    ProjectionExec, remove_unnecessary_projections,
+};
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
 /// remove or swap with its child.
@@ -50,7 +50,7 @@ use datafusion_physical_plan::ExecutionPlan;
 pub struct ProjectionPushdown {}
 
 impl ProjectionPushdown {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -129,7 +129,7 @@ fn try_push_down_join_filter(
 
     let join_filter = minimize_join_filter(
         Arc::clone(rhs_rewrite.data.1.expression()),
-        rhs_rewrite.data.1.column_indices().to_vec(),
+        rhs_rewrite.data.1.column_indices(),
         lhs_rewrite.data.0.schema().as_ref(),
         rhs_rewrite.data.0.schema().as_ref(),
     );
@@ -238,7 +238,7 @@ fn try_push_down_projection(
 /// columns are not needed anymore.
 fn minimize_join_filter(
     expr: Arc<dyn PhysicalExpr>,
-    old_column_indices: Vec<ColumnIndex>,
+    old_column_indices: &[ColumnIndex],
     lhs_schema: &Schema,
     rhs_schema: &Schema,
 ) -> JoinFilter {
@@ -449,8 +449,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_expr_common::operator::Operator;
     use datafusion_functions::math::random;
-    use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_expr::expressions::{binary, lit};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::displayable;
     use datafusion_physical_plan::empty::EmptyExec;

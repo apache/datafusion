@@ -569,6 +569,6 @@ More abstractly, see the following traits for more information on how to impleme
 - `FileFormat` - a trait for reading a file format
 - `ListingTableProvider` - a useful trait for implementing a `TableProvider` that lists files in a directory
 
-[ex]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion-examples/examples/custom_datasource.rs#L214C1-L276
+[ex]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/custom_datasource.rs
 [csv]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/csv.rs#L57-L70
 [parquet]: https://github.com/apache/datafusion/blob/a5e86fae3baadbd99f8fd0df83f45fde22f7b0c6/datafusion/core/src/datasource/physical_plan/parquet.rs#L77-L104

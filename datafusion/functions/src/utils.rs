@@ -17,11 +17,11 @@
 
 use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray};
 use arrow::compute::try_binary;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DecimalType};
 use arrow::error::ArrowError;
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+use datafusion_expr::function::Hint;
 use std::sync::Arc;
 
 /// Creates a function to identify the optimal return type of a string function given
@@ -134,8 +134,8 @@ pub fn calculate_binary_math<L, R, O, F>(
     fun: F,
 ) -> Result<Arc<PrimitiveArray<O>>>
 where
-    R: ArrowPrimitiveType,
     L: ArrowPrimitiveType,
+    R: ArrowPrimitiveType,
     O: ArrowPrimitiveType,
     F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
     R::Native: TryFrom<ScalarValue>,
@@ -144,14 +144,20 @@ where
     let right = right.cast_to(&R::DATA_TYPE, None)?;
     let result = match right {
         ColumnarValue::Scalar(scalar) => {
-            let right = R::Native::try_from(scalar.clone()).map_err(|_| {
-                DataFusionError::NotImplemented(format!(
-                    "Cannot convert scalar value {} to {}",
-                    &scalar,
-                    R::DATA_TYPE
-                ))
-            })?;
-            left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            if scalar.is_null() {
+                // Null scalar is castable to any numeric, creating a non-null expression.
+                // Provide null array explicitly to make result null
+                PrimitiveArray::<O>::new_null(1)
+            } else {
+                let right = R::Native::try_from(scalar.clone()).map_err(|_| {
+                    DataFusionError::NotImplemented(format!(
+                        "Cannot convert scalar value {} to {}",
+                        &scalar,
+                        R::DATA_TYPE
+                    ))
+                })?;
+                left.try_unary::<_, O, _>(|lvalue| fun(lvalue, right))?
+            }
         }
         ColumnarValue::Array(right) => {
             let right = right.as_primitive::<R>();
@@ -159,6 +165,36 @@ where
         }
     };
     Ok(Arc::new(result) as _)
+}
+
+/// Computes a binary math function for input arrays using a specified function
+/// and apply rescaling to given precision and scale.
+/// Generic types:
+/// - `L`: Left array decimal type
+/// - `R`: Right array primitive type
+/// - `O`: Output array decimal type
+/// - `F`: Functor computing `fun(l: L, r: R) -> Result<OutputType>`
+pub fn calculate_binary_decimal_math<L, R, O, F>(
+    left: &dyn Array,
+    right: &ColumnarValue,
+    fun: F,
+    precision: u8,
+    scale: i8,
+) -> Result<Arc<PrimitiveArray<O>>>
+where
+    L: DecimalType,
+    R: ArrowPrimitiveType,
+    O: DecimalType,
+    F: Fn(L::Native, R::Native) -> Result<O::Native, ArrowError>,
+    R::Native: TryFrom<ScalarValue>,
+{
+    let result_array = calculate_binary_math::<L, R, O, F>(left, right, fun)?;
+    Ok(Arc::new(
+        result_array
+            .as_ref()
+            .clone()
+            .with_precision_and_scale(precision, scale)?,
+    ))
 }
 
 /// Converts Decimal128 components (value and scale) to an unscaled i128
@@ -171,6 +207,40 @@ pub fn decimal128_to_i128(value: i128, scale: i8) -> Result<i128, ArrowError> {
         Ok(value)
     } else {
         match i128::from(10).checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
+pub fn decimal32_to_i32(value: i32, scale: i8) -> Result<i32, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match 10_i32.checked_pow(scale as u32) {
+            Some(divisor) => Ok(value / divisor),
+            None => Err(ArrowError::ComputeError(format!(
+                "Cannot get a power of {scale}"
+            ))),
+        }
+    }
+}
+
+pub fn decimal64_to_i64(value: i64, scale: i8) -> Result<i64, ArrowError> {
+    if scale < 0 {
+        Err(ArrowError::ComputeError(
+            "Negative scale is not supported".into(),
+        ))
+    } else if scale == 0 {
+        Ok(value)
+    } else {
+        match i64::from(10).checked_pow(scale as u32) {
             Some(divisor) => Ok(value / divisor),
             None => Err(ArrowError::ComputeError(format!(
                 "Cannot get a power of {scale}"
@@ -294,7 +364,7 @@ pub mod test {
     }
 
     use arrow::datatypes::DataType;
-    #[allow(unused_imports)]
+    use itertools::Either;
     pub(crate) use test_function;
 
     use super::*;
@@ -334,6 +404,108 @@ pub mod test {
                     );
                 }
                 Err(_) => assert!(expected.is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal32_to_i32() {
+        let cases: [(i32, i8, Either<i32, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1230, 1, Either::Left(123)),
+            (123000, 3, Either::Left(123)),
+            (1234567, 2, Either::Left(12345)),
+            (-1234567, 2, Either::Left(-12345)),
+            (1, 0, Either::Left(1)),
+            (
+                123,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                i8::MAX,
+                Either::Right("Cannot get a power of 127".into()),
+            ),
+            (999999999, 0, Either::Left(999999999)),
+            (999999999, 3, Either::Left(999999)),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal32_to_i32(value, scale) {
+                Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
+                    assert_eq!(
+                        actual, expected_value,
+                        "{value} and {scale} vs {expected_value:?}"
+                    );
+                }
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_decimal64_to_i64() {
+        let cases: [(i64, i8, Either<i64, String>); _] = [
+            (123, 0, Either::Left(123)),
+            (1234567890, 2, Either::Left(12345678)),
+            (-1234567890, 2, Either::Left(-12345678)),
+            (
+                123,
+                -3,
+                Either::Right("Negative scale is not supported".into()),
+            ),
+            (
+                123,
+                i8::MAX,
+                Either::Right("Cannot get a power of 127".into()),
+            ),
+            (
+                999999999999999999i64,
+                0,
+                Either::Left(999999999999999999i64),
+            ),
+            (
+                999999999999999999i64,
+                3,
+                Either::Left(999999999999999999i64 / 1000),
+            ),
+            (
+                -999999999999999999i64,
+                3,
+                Either::Left(-999999999999999999i64 / 1000),
+            ),
+        ];
+
+        for (value, scale, expected) in cases {
+            match decimal64_to_i64(value, scale) {
+                Ok(actual) => {
+                    let expected_value =
+                        expected.left().expect("Got value but expected none");
+                    assert_eq!(
+                        actual, expected_value,
+                        "{value} and {scale} vs {expected_value:?}"
+                    );
+                }
+                Err(ArrowError::ComputeError(msg)) => {
+                    assert_eq!(
+                        msg,
+                        expected.right().expect("Got error but expected value")
+                    );
+                }
+                Err(_) => {
+                    assert!(expected.is_right())
+                }
             }
         }
     }

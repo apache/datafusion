@@ -23,19 +23,19 @@ use core::num::FpCategory;
 
 use arrow::{
     array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray},
-    datatypes::DataType,
+    datatypes::{DataType, Field, FieldRef},
 };
 use bigdecimal::{
-    num_bigint::{BigInt, Sign},
     BigDecimal, ToPrimitive,
+    num_bigint::{BigInt, Sign},
 };
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, plan_err, DataFusionError, Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
 };
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 
 /// Spark-compatible `format_string` expression
@@ -78,11 +78,24 @@ impl ScalarUDFImpl for FormatStringFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        match arg_types[0] {
-            DataType::Null => Ok(DataType::Utf8),
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(arg_types[0].clone()),
-            _ => plan_err!("The format_string function expects the first argument to be Utf8, LargeUtf8 or Utf8View")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion_common::internal_err!(
+            "return_type should not be called, use return_field_from_args instead"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        match args.arg_fields[0].data_type() {
+            DataType::Null => {
+                Ok(Arc::new(Field::new("format_string", DataType::Utf8, true)))
+            }
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(Arc::clone(&args.arg_fields[0]))
+            }
+            _ => exec_err!(
+                "format_string expects the first argument to be Utf8, LargeUtf8 or Utf8View, got {} instead",
+                args.arg_fields[0].data_type()
+            ),
         }
     }
 
@@ -304,7 +317,7 @@ impl<'a> Formatter<'a> {
                         return exec_err!("No previous argument to reference");
                     };
                     let (spec, rest) =
-                        take_conversion_specifier(rest, p, arg_types[p - 1].clone())?;
+                        take_conversion_specifier(rest, p, &arg_types[p - 1])?;
                     res.push(FormatElement::Format(spec));
                     rem = rest;
                     continue;
@@ -317,7 +330,7 @@ impl<'a> Formatter<'a> {
                             (index as usize, &rest2[1..])
                         }
                         (NumericParam::FromArgument, true) => {
-                            return exec_err!("Invalid numeric parameter")
+                            return exec_err!("Invalid numeric parameter");
                         }
                         (_, false) => {
                             argument_index += 1;
@@ -335,7 +348,7 @@ impl<'a> Formatter<'a> {
                 let (spec, rest) = take_conversion_specifier(
                     rest,
                     current_argument_index,
-                    arg_types[current_argument_index - 1].clone(),
+                    &arg_types[current_argument_index - 1],
                 )
                 .map_err(|e| exec_datafusion_err!("{:?}, format string: {:?}", e, fmt))?;
                 res.push(FormatElement::Format(spec));
@@ -582,7 +595,7 @@ impl TryFrom<char> for TimeFormat {
 }
 
 impl ConversionType {
-    pub fn validate(&self, arg_type: DataType) -> Result<()> {
+    pub fn validate(&self, arg_type: &DataType) -> Result<()> {
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper => {
                 if !matches!(arg_type, DataType::Boolean) {
@@ -716,11 +729,11 @@ impl ConversionType {
     }
 }
 
-fn take_conversion_specifier(
-    mut s: &str,
+fn take_conversion_specifier<'a>(
+    mut s: &'a str,
     argument_index: usize,
-    arg_type: DataType,
-) -> Result<(ConversionSpecifier, &str)> {
+    arg_type: &DataType,
+) -> Result<(ConversionSpecifier, &'a str)> {
     let mut spec = ConversionSpecifier {
         argument_index,
         alt_form: false,
@@ -1186,7 +1199,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1212,7 +1225,7 @@ impl ConversionSpecifier {
                         | ConversionType::CompactFloatLower
                         | ConversionType::CompactFloatUpper,
                         Some(value),
-                    ) => self.format_decimal(string, value.to_string(), *scale as i64),
+                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
                     (
                         ConversionType::StringLower | ConversionType::StringUpper,
                         Some(value),
@@ -1418,7 +1431,7 @@ impl ConversionSpecifier {
                 let value = "null".to_string();
                 self.format_string(string, &value)
             }
-            _ => exec_err!("Invalid scalar value: {:?}", value),
+            _ => exec_err!("Invalid scalar value: {value}"),
         }
     }
 
@@ -1675,7 +1688,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for boolean array",
                     self.conversion_type
-                )
+                );
             }
         };
         self.format_str(writer, formatted)
@@ -1744,7 +1757,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
 
@@ -1789,7 +1802,7 @@ impl ConversionSpecifier {
                     return exec_err!(
                         "Invalid conversion type: {:?} for float",
                         self.conversion_type
-                    )
+                    );
                 }
             }
         }
@@ -1908,7 +1921,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for u64",
                     self.conversion_type
-                )
+                );
             }
         }
         let mut prefix = if self.alt_form {
@@ -1991,12 +2004,7 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_decimal(
-        &self,
-        writer: &mut String,
-        value: String,
-        scale: i64,
-    ) -> Result<()> {
+    fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
         let mut prefix = String::new();
         let upper = self.conversion_type.is_upper();
 
@@ -2070,7 +2078,7 @@ impl ConversionSpecifier {
                 return exec_err!(
                     "Invalid conversion type: {:?} for decimal",
                     self.conversion_type
-                )
+                );
             }
         };
 
@@ -2347,4 +2355,40 @@ fn trim_trailing_0s_hex(number: &str) -> &str {
         }
     }
     number
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::DataType::Utf8;
+    use datafusion_common::Result;
+
+    #[test]
+    fn test_format_string_nullability() -> Result<()> {
+        let func = FormatStringFunc::new();
+        let nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, true));
+
+        let out_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[nullable_format],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            out_nullable.is_nullable(),
+            "format_string(fmt, ...) should be nullable when fmt is nullable"
+        );
+        let non_nullable_format: FieldRef = Arc::new(Field::new("fmt", Utf8, false));
+
+        let out_non_nullable = func.return_field_from_args(ReturnFieldArgs {
+            arg_fields: &[non_nullable_format],
+            scalar_arguments: &[None],
+        })?;
+
+        assert!(
+            !out_non_nullable.is_nullable(),
+            "format_string(fmt, ...) should NOT be nullable when fmt is NOT nullable"
+        );
+
+        Ok(())
+    }
 }

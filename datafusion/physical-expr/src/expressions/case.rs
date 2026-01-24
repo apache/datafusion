@@ -15,33 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod literal_lookup_table;
+
 use super::{Column, Literal};
-use crate::expressions::case::ResultState::{Complete, Empty, Partial};
-use crate::expressions::try_cast;
 use crate::PhysicalExpr;
+use crate::expressions::{lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
-    is_not_null, not, nullif, prep_null_mask_filter, FilterBuilder, FilterPredicate,
-    SlicesIterator,
+    FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
 use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, DataFusionError, HashMap, HashSet,
-    Result, ScalarValue,
+    DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::datum::compare_with_eq;
-use itertools::Itertools;
+use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
-use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
-type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
+use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
+use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_physical_expr_common::datum::compare_with_eq;
+use itertools::Itertools;
+use std::fmt::{Debug, Formatter};
+
+pub(super) type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum EvalMethod {
@@ -72,7 +76,36 @@ enum EvalMethod {
     ///
     /// CASE WHEN condition THEN expression ELSE expression END
     ExpressionOrExpression(ProjectedCaseBody),
+
+    /// This is a specialization for [`EvalMethod::WithExpression`] when the value and results are literals
+    ///
+    /// See [`LiteralLookupTable`] for more details
+    WithExprScalarLookupTable(LiteralLookupTable),
 }
+
+/// Implementing hash so we can use `derive` on [`EvalMethod`].
+///
+/// not implementing actual [`Hash`] as it is not dyn compatible so we cannot implement it for
+/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
+///
+/// So implementing empty hash is still valid as the data is derived from `PhysicalExpr` s which are already hashed
+impl Hash for LiteralLookupTable {
+    fn hash<H: std::hash::Hasher>(&self, _state: &mut H) {}
+}
+
+/// Implementing Equal so we can use `derive` on [`EvalMethod`].
+///
+/// not implementing actual [`PartialEq`] as it is not dyn compatible so we cannot implement it for
+/// `dyn` [`literal_lookup_table::WhenLiteralIndexMap`].
+///
+/// So we always return true as the data is derived from `PhysicalExpr` s which are already compared
+impl PartialEq for LiteralLookupTable {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LiteralLookupTable {}
 
 /// The body of a CASE expression which consists of an optional base expression, the "when/then"
 /// branches and an optional "else" branch.
@@ -90,7 +123,7 @@ impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
     fn project(&self) -> Result<ProjectedCaseBody> {
         // Determine the set of columns that are used in all the expressions of the case body.
-        let mut used_column_indices = HashSet::<usize>::new();
+        let mut used_column_indices = IndexSet::<usize>::new();
         let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
             expr.apply(|expr| {
                 if let Some(column) = expr.as_any().downcast_ref::<Column>() {
@@ -117,7 +150,7 @@ impl CaseBody {
             .iter()
             .enumerate()
             .map(|(projected, original)| (*original, projected))
-            .collect::<HashMap<usize, usize>>();
+            .collect::<IndexMap<usize, usize>>();
 
         // Construct the projected body by rewriting each expression from the original body
         // using the column index mapping.
@@ -304,189 +337,6 @@ fn filter_array(
     filter.filter(array)
 }
 
-fn merge(
-    mask: &BooleanArray,
-    truthy: ColumnarValue,
-    falsy: ColumnarValue,
-) -> std::result::Result<ArrayRef, ArrowError> {
-    let (truthy, truthy_is_scalar) = match truthy {
-        ColumnarValue::Array(a) => (a, false),
-        ColumnarValue::Scalar(s) => (s.to_array()?, true),
-    };
-    let (falsy, falsy_is_scalar) = match falsy {
-        ColumnarValue::Array(a) => (a, false),
-        ColumnarValue::Scalar(s) => (s.to_array()?, true),
-    };
-
-    if truthy_is_scalar && falsy_is_scalar {
-        return zip(mask, &Scalar::new(truthy), &Scalar::new(falsy));
-    }
-
-    let falsy = falsy.to_data();
-    let truthy = truthy.to_data();
-
-    let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
-
-    // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
-    // fill with falsy values
-
-    // keep track of how much is filled
-    let mut filled = 0;
-    let mut falsy_offset = 0;
-    let mut truthy_offset = 0;
-
-    SlicesIterator::new(mask).for_each(|(start, end)| {
-        // the gap needs to be filled with falsy values
-        if start > filled {
-            if falsy_is_scalar {
-                for _ in filled..start {
-                    // Copy the first item from the 'falsy' array into the output buffer.
-                    mutable.extend(1, 0, 1);
-                }
-            } else {
-                let falsy_length = start - filled;
-                let falsy_end = falsy_offset + falsy_length;
-                mutable.extend(1, falsy_offset, falsy_end);
-                falsy_offset = falsy_end;
-            }
-        }
-        // fill with truthy values
-        if truthy_is_scalar {
-            for _ in start..end {
-                // Copy the first item from the 'truthy' array into the output buffer.
-                mutable.extend(0, 0, 1);
-            }
-        } else {
-            let truthy_length = end - start;
-            let truthy_end = truthy_offset + truthy_length;
-            mutable.extend(0, truthy_offset, truthy_end);
-            truthy_offset = truthy_end;
-        }
-        filled = end;
-    });
-    // the remaining part is falsy
-    if filled < mask.len() {
-        if falsy_is_scalar {
-            for _ in filled..mask.len() {
-                // Copy the first item from the 'falsy' array into the output buffer.
-                mutable.extend(1, 0, 1);
-            }
-        } else {
-            let falsy_length = mask.len() - filled;
-            let falsy_end = falsy_offset + falsy_length;
-            mutable.extend(1, falsy_offset, falsy_end);
-        }
-    }
-
-    let data = mutable.freeze();
-    Ok(make_array(data))
-}
-
-/// Merges elements by index from a list of [`ArrayData`], creating a new [`ColumnarValue`] from
-/// those values.
-///
-/// Each element in `indices` is the index of an array in `values`. The `indices` array is processed
-/// sequentially. The first occurrence of index value `n` will be mapped to the first
-/// value of the array at index `n`. The second occurrence to the second value, and so on.
-/// An index value where `PartialResultIndex::is_none` is `true` is used to indicate null values.
-///
-/// # Implementation notes
-///
-/// This algorithm is similar in nature to both `zip` and `interleave`, but there are some important
-/// differences.
-///
-/// In contrast to `zip`, this function supports multiple input arrays. Instead of a boolean
-/// selection vector, an index array is to take values from the input arrays, and a special marker
-/// value is used to indicate null values.
-///
-/// In contrast to `interleave`, this function does not use pairs of indices. The values in
-/// `indices` serve the same purpose as the first value in the pairs passed to `interleave`.
-/// The index in the array is implicit and is derived from the number of times a particular array
-/// index occurs.
-/// The more constrained indexing mechanism used by this algorithm makes it easier to copy values
-/// in contiguous slices. In the example below, the two subsequent elements from array `2` can be
-/// copied in a single operation from the source array instead of copying them one by one.
-/// Long spans of null values are also especially cheap because they do not need to be represented
-/// in an input array.
-///
-/// # Safety
-///
-/// This function does not check that the number of occurrences of any particular array index matches
-/// the length of the corresponding input array. If an array contains more values than required, the
-/// spurious values will be ignored. If an array contains fewer values than necessary, this function
-/// will panic.
-///
-/// # Example
-///
-/// ```text
-/// ┌───────────┐  ┌─────────┐                             ┌─────────┐
-/// │┌─────────┐│  │   None  │                             │   NULL  │
-/// ││    A    ││  ├─────────┤                             ├─────────┤
-/// │└─────────┘│  │    1    │                             │    B    │
-/// │┌─────────┐│  ├─────────┤                             ├─────────┤
-/// ││    B    ││  │    0    │    merge(values, indices)   │    A    │
-/// │└─────────┘│  ├─────────┤  ─────────────────────────▶ ├─────────┤
-/// │┌─────────┐│  │   None  │                             │   NULL  │
-/// ││    C    ││  ├─────────┤                             ├─────────┤
-/// │├─────────┤│  │    2    │                             │    C    │
-/// ││    D    ││  ├─────────┤                             ├─────────┤
-/// │└─────────┘│  │    2    │                             │    D    │
-/// └───────────┘  └─────────┘                             └─────────┘
-///    values        indices                                  result
-/// ```
-fn merge_n(values: &[ArrayData], indices: &[PartialResultIndex]) -> Result<ArrayRef> {
-    #[cfg(debug_assertions)]
-    for ix in indices {
-        if let Some(index) = ix.index() {
-            assert!(
-                index < values.len(),
-                "Index out of bounds: {} >= {}",
-                index,
-                values.len()
-            );
-        }
-    }
-
-    let data_refs = values.iter().collect();
-    let mut mutable = MutableArrayData::new(data_refs, true, indices.len());
-
-    // This loop extends the mutable array by taking slices from the partial results.
-    //
-    // take_offsets keeps track of how many values have been taken from each array.
-    let mut take_offsets = vec![0; values.len() + 1];
-    let mut start_row_ix = 0;
-    loop {
-        let array_ix = indices[start_row_ix];
-
-        // Determine the length of the slice to take.
-        let mut end_row_ix = start_row_ix + 1;
-        while end_row_ix < indices.len() && indices[end_row_ix] == array_ix {
-            end_row_ix += 1;
-        }
-        let slice_length = end_row_ix - start_row_ix;
-
-        // Extend mutable with either nulls or with values from the array.
-        match array_ix.index() {
-            None => mutable.extend_nulls(slice_length),
-            Some(index) => {
-                let start_offset = take_offsets[index];
-                let end_offset = start_offset + slice_length;
-                mutable.extend(index, start_offset, end_offset);
-                take_offsets[index] = end_offset;
-            }
-        }
-
-        if end_row_ix == indices.len() {
-            break;
-        } else {
-            // Set the start_row_ix for the next slice.
-            start_row_ix = end_row_ix;
-        }
-    }
-
-    Ok(make_array(mutable.freeze()))
-}
-
 /// An index into the partial results array that's more compact than `usize`.
 ///
 /// `u32::MAX` is reserved as a special 'none' value. This is used instead of
@@ -517,9 +367,10 @@ impl PartialResultIndex {
             return internal_err!("Partial result index exceeds limit");
         };
 
-        if index == NONE_VALUE {
-            return internal_err!("Partial result index exceeds limit");
-        }
+        assert_or_internal_err!(
+            index != NONE_VALUE,
+            "Partial result index exceeds limit"
+        );
 
         Ok(Self { index })
     }
@@ -528,7 +379,9 @@ impl PartialResultIndex {
     fn is_none(&self) -> bool {
         self.index == NONE_VALUE
     }
+}
 
+impl MergeIndex for PartialResultIndex {
     /// Returns `Some(index)` if this value is not the 'none' placeholder, `None` otherwise.
     fn index(&self) -> Option<usize> {
         if self.is_none() {
@@ -556,7 +409,7 @@ enum ResultState {
     Partial {
         // A `Vec` of partial results that should be merged.
         // `partial_result_indices` contains indexes into this vec.
-        arrays: Vec<ArrayData>,
+        arrays: Vec<ArrayRef>,
         // Indicates per result row from which array in `partial_results` a value should be taken.
         indices: Vec<PartialResultIndex>,
     },
@@ -589,7 +442,7 @@ impl ResultBuilder {
         Self {
             data_type: data_type.clone(),
             row_count,
-            state: Empty,
+            state: ResultState::Empty,
         }
     }
 
@@ -637,7 +490,7 @@ impl ResultBuilder {
                 } else if row_indices.len() == self.row_count {
                     self.set_complete_result(ColumnarValue::Array(a))
                 } else {
-                    self.add_partial_result(row_indices, a.to_data())
+                    self.add_partial_result(row_indices, a)
                 }
             }
             ColumnarValue::Scalar(s) => {
@@ -646,7 +499,7 @@ impl ResultBuilder {
                 } else {
                     self.add_partial_result(
                         row_indices,
-                        s.to_array_of_size(row_indices.len())?.to_data(),
+                        s.to_array_of_size(row_indices.len())?,
                     )
                 }
             }
@@ -661,28 +514,29 @@ impl ResultBuilder {
     fn add_partial_result(
         &mut self,
         row_indices: &ArrayRef,
-        row_values: ArrayData,
+        row_values: ArrayRef,
     ) -> Result<()> {
-        if row_indices.null_count() != 0 {
-            return internal_err!("Row indices must not contain nulls");
-        }
+        assert_or_internal_err!(
+            row_indices.null_count() == 0,
+            "Row indices must not contain nulls"
+        );
 
         match &mut self.state {
-            Empty => {
+            ResultState::Empty => {
                 let array_index = PartialResultIndex::zero();
                 let mut indices = vec![PartialResultIndex::none(); self.row_count];
                 for row_ix in row_indices.as_primitive::<UInt32Type>().values().iter() {
                     indices[*row_ix as usize] = array_index;
                 }
 
-                self.state = Partial {
+                self.state = ResultState::Partial {
                     arrays: vec![row_values],
                     indices,
                 };
 
                 Ok(())
             }
-            Partial { arrays, indices } => {
+            ResultState::Partial { arrays, indices } => {
                 let array_index = PartialResultIndex::try_new(arrays.len())?;
 
                 arrays.push(row_values);
@@ -692,15 +546,17 @@ impl ResultBuilder {
                     // `case_when_with_expr` and `case_when_no_expr`, already ensure that
                     // they only calculate a value for each row at most once.
                     #[cfg(debug_assertions)]
-                    if !indices[*row_ix as usize].is_none() {
-                        return internal_err!("Duplicate value for row {}", *row_ix);
-                    }
+                    assert_or_internal_err!(
+                        indices[*row_ix as usize].is_none(),
+                        "Duplicate value for row {}",
+                        *row_ix
+                    );
 
                     indices[*row_ix as usize] = array_index;
                 }
                 Ok(())
             }
-            Complete(_) => internal_err!(
+            ResultState::Complete(_) => internal_err!(
                 "Cannot add a partial result when complete result is already set"
             ),
         }
@@ -713,23 +569,23 @@ impl ResultBuilder {
     /// without any merging overhead.
     fn set_complete_result(&mut self, value: ColumnarValue) -> Result<()> {
         match &self.state {
-            Empty => {
-                self.state = Complete(value);
+            ResultState::Empty => {
+                self.state = ResultState::Complete(value);
                 Ok(())
             }
-            Partial { .. } => {
+            ResultState::Partial { .. } => {
                 internal_err!(
                     "Cannot set a complete result when there are already partial results"
                 )
             }
-            Complete(_) => internal_err!("Complete result already set"),
+            ResultState::Complete(_) => internal_err!("Complete result already set"),
         }
     }
 
     /// Finishes building the result and returns the final array.
     fn finish(self) -> Result<ColumnarValue> {
         match self.state {
-            Empty => {
+            ResultState::Empty => {
                 // No complete result and no partial results.
                 // This can happen for case expressions with no else branch where no rows
                 // matched.
@@ -737,11 +593,12 @@ impl ResultBuilder {
                     &self.data_type,
                 )?))
             }
-            Partial { arrays, indices } => {
+            ResultState::Partial { arrays, indices } => {
                 // Merge partial results into a single array.
-                Ok(ColumnarValue::Array(merge_n(&arrays, &indices)?))
+                let array_refs = arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+                Ok(ColumnarValue::Array(merge_n(&array_refs, &indices)?))
             }
-            Complete(v) => {
+            ResultState::Complete(v) => {
                 // If we have a complete result, we can just return it.
                 Ok(v)
             }
@@ -776,26 +633,38 @@ impl CaseExpr {
             else_expr,
         };
 
-        let eval_method = if body.expr.is_some() {
-            EvalMethod::WithExpression(body.project()?)
-        } else if body.when_then_expr.len() == 1
-            && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-            && body.else_expr.is_none()
-        {
-            EvalMethod::InfallibleExprOrNull
-        } else if body.when_then_expr.len() == 1
-            && body.when_then_expr[0].1.as_any().is::<Literal>()
-            && body.else_expr.is_some()
-            && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
-        {
-            EvalMethod::ScalarOrScalar
-        } else if body.when_then_expr.len() == 1 && body.else_expr.is_some() {
-            EvalMethod::ExpressionOrExpression(body.project()?)
-        } else {
-            EvalMethod::NoExpression(body.project()?)
-        };
+        let eval_method = Self::find_best_eval_method(&body)?;
 
         Ok(Self { body, eval_method })
+    }
+
+    fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
+        if body.expr.is_some() {
+            if let Some(mapping) = LiteralLookupTable::maybe_new(body) {
+                return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
+            }
+
+            return Ok(EvalMethod::WithExpression(body.project()?));
+        }
+
+        Ok(
+            if body.when_then_expr.len() == 1
+                && is_cheap_and_infallible(&(body.when_then_expr[0].1))
+                && body.else_expr.is_none()
+            {
+                EvalMethod::InfallibleExprOrNull
+            } else if body.when_then_expr.len() == 1
+                && body.when_then_expr[0].1.as_any().is::<Literal>()
+                && body.else_expr.is_some()
+                && body.else_expr.as_ref().unwrap().as_any().is::<Literal>()
+            {
+                EvalMethod::ScalarOrScalar
+            } else if body.when_then_expr.len() == 1 && body.else_expr.is_some() {
+                EvalMethod::ExpressionOrExpression(body.project()?)
+            } else {
+                EvalMethod::NoExpression(body.project()?)
+            },
+        )
     }
 
     /// Optional base expression that can be compared to literal values in the "when" expressions
@@ -826,10 +695,10 @@ impl CaseBody {
             }
         }
         // if all then results are null, we use data type of else expr instead if possible.
-        if data_type.equals_datatype(&DataType::Null) {
-            if let Some(e) = &self.else_expr {
-                data_type = e.data_type(input_schema)?;
-            }
+        if data_type.equals_datatype(&DataType::Null)
+            && let Some(e) = &self.else_expr
+        {
+            data_type = e.data_type(input_schema)?;
         }
 
         Ok(data_type)
@@ -861,12 +730,13 @@ impl CaseBody {
         // Since each when expression is tested against the base expression using the equality
         // operator, null base values can never match any when expression. `x = NULL` is falsy,
         // for all possible values of `x`.
-        if base_values.null_count() > 0 {
+        let base_null_count = base_values.logical_null_count();
+        if base_null_count > 0 {
             // Use `is_not_null` since this is a cheap clone of the null buffer from 'base_value'.
             // We already checked there are nulls, so we can be sure a new buffer will not be
             // created.
             let base_not_nulls = is_not_null(base_values.as_ref())?;
-            let base_all_null = base_values.null_count() == remainder_batch.num_rows();
+            let base_all_null = base_null_count == remainder_batch.num_rows();
 
             // If there is an else expression, use that as the default value for the null rows
             // Otherwise the default `null` value from the result builder will be used.
@@ -1103,11 +973,20 @@ impl CaseBody {
 
         let else_value = else_expr.evaluate(&else_batch)?;
 
-        Ok(ColumnarValue::Array(merge(
-            &when_value,
-            then_value,
-            else_value,
-        )?))
+        Ok(ColumnarValue::Array(match (then_value, else_value) {
+            (ColumnarValue::Array(t), ColumnarValue::Array(e)) => {
+                merge(&when_value, &t, &e)
+            }
+            (ColumnarValue::Scalar(t), ColumnarValue::Array(e)) => {
+                merge(&when_value, &t.to_scalar()?, &e)
+            }
+            (ColumnarValue::Array(t), ColumnarValue::Scalar(e)) => {
+                merge(&when_value, &t, &e.to_scalar()?)
+            }
+            (ColumnarValue::Scalar(t), ColumnarValue::Scalar(e)) => {
+                merge(&when_value, &t.to_scalar()?, &e.to_scalar()?)
+            }
+        }?))
     }
 }
 
@@ -1269,6 +1148,28 @@ impl CaseExpr {
             self.body.expr_or_expr(batch, when_value)
         }
     }
+
+    fn with_lookup_table(
+        &self,
+        batch: &RecordBatch,
+        lookup_table: &LiteralLookupTable,
+    ) -> Result<ColumnarValue> {
+        let expr = self.body.expr.as_ref().unwrap();
+        let evaluated_expression = expr.evaluate(batch)?;
+
+        let is_scalar = matches!(evaluated_expression, ColumnarValue::Scalar(_));
+        let evaluated_expression = evaluated_expression.to_array(1)?;
+
+        let values = lookup_table.map_keys_to_values(&evaluated_expression)?;
+
+        let result = if is_scalar {
+            ColumnarValue::Scalar(ScalarValue::try_from_array(values.as_ref(), 0)?)
+        } else {
+            ColumnarValue::Array(values)
+        };
+
+        Ok(result)
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -1282,16 +1183,62 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        // this expression is nullable if any of the input expressions are nullable
-        let then_nullable = self
+        let nullable_then = self
             .body
             .when_then_expr
             .iter()
-            .map(|(_, t)| t.nullable(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if then_nullable.contains(&true) {
-            Ok(true)
+            .filter_map(|(w, t)| {
+                let is_nullable = match t.nullable(input_schema) {
+                    // Pass on error determining nullability verbatim
+                    Err(e) => return Some(Err(e)),
+                    Ok(n) => n,
+                };
+
+                // Branches with a then expression that is not nullable do not impact the
+                // nullability of the case expression.
+                if !is_nullable {
+                    return None;
+                }
+
+                // For case-with-expression assume all 'then' expressions are reachable
+                if self.body.expr.is_some() {
+                    return Some(Ok(()));
+                }
+
+                // For branches with a nullable 'then' expression, try to determine
+                // if the 'then' expression is ever reachable in the situation where
+                // it would evaluate to null.
+
+                // Replace the `then` expression with `NULL` in the `when` expression
+                let with_null = match replace_with_null(w, t.as_ref(), input_schema) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(e) => e,
+                };
+
+                // Try to const evaluate the modified `when` expression.
+                let predicate_result = match evaluate_predicate(&with_null) {
+                    Err(e) => return Some(Err(e)),
+                    Ok(b) => b,
+                };
+
+                match predicate_result {
+                    // Evaluation was inconclusive or true, so the 'then' expression is reachable
+                    None | Some(true) => Some(Ok(())),
+                    // Evaluation proves the branch will never be taken.
+                    // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
+                    Some(false) => None,
+                }
+            })
+            .next();
+
+        if let Some(nullable_then) = nullable_then {
+            // There is at least one reachable nullable 'then' expression, so the case
+            // expression itself is nullable.
+            // Use `Result::map` to propagate the error from `nullable_then` if there is one.
+            nullable_then.map(|_| true)
         } else if let Some(e) = &self.body.else_expr {
+            // There are no reachable nullable 'then' expressions, so all we still need to
+            // check is the 'else' expression's nullability.
             e.nullable(input_schema)
         } else {
             // CASE produces NULL if there is no `else` expr
@@ -1318,6 +1265,9 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression(p) => self.expr_or_expr(batch, p),
+            EvalMethod::WithExprScalarLookupTable(lookup_table) => {
+                self.with_lookup_table(batch, lookup_table)
+            }
         }
     }
 
@@ -1394,6 +1344,51 @@ impl PhysicalExpr for CaseExpr {
     }
 }
 
+/// Attempts to const evaluate the given `predicate`.
+/// Returns:
+/// - `Some(true)` if the predicate evaluates to a truthy value.
+/// - `Some(false)` if the predicate evaluates to a falsy value.
+/// - `None` if the predicate could not be evaluated.
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
+    // Create a dummy record with no columns and one row
+    let batch = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &RecordBatchOptions::new().with_row_count(Some(1)),
+    )?;
+
+    // Evaluate the predicate and interpret the result as a boolean
+    let result = match predicate.evaluate(&batch) {
+        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
+        Err(_) => None,
+        Ok(ColumnarValue::Array(array)) => Some(
+            ScalarValue::try_from_array(array.as_ref(), 0)?
+                .cast_to(&DataType::Boolean)?,
+        ),
+        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+    };
+    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+}
+
+fn replace_with_null(
+    expr: &Arc<dyn PhysicalExpr>,
+    expr_to_replace: &dyn PhysicalExpr,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>, DataFusionError> {
+    let with_null = Arc::clone(expr)
+        .transform_down(|e| {
+            if e.as_ref().dyn_eq(expr_to_replace) {
+                let data_type = e.data_type(input_schema)?;
+                let null_literal = lit(ScalarValue::try_new_null(&data_type)?);
+                Ok(Transformed::yes(null_literal))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })?
+        .data;
+    Ok(with_null)
+}
+
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
@@ -1407,7 +1402,8 @@ pub fn case(
 mod tests {
     use super::*;
 
-    use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::expressions;
+    use crate::expressions::{BinaryExpr, binary, cast, col, is_not_null, lit};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -1415,8 +1411,9 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    use datafusion_expr::Operator;
+    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
+    use half::f16;
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -1442,6 +1439,164 @@ mod tests {
         let result = as_int32_array(&result)?;
 
         let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    // Make sure we are not failing when got literal in case when but input is dictionary encoded
+    #[test]
+    fn case_with_expr_primitive_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt64)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = UInt64Array::from(vec![Some(10), Some(20), None, Some(30)]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 10 THEN 123 WHEN 30 THEN 456 END
+        let when1 = lit(10_u64);
+        let then1 = lit(123_i32);
+        let when2 = lit(30_u64);
+        let then2 = lit(456_i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    // Make sure we are not failing when got literal in case when but input is dictionary encoded
+    #[test]
+    fn case_with_expr_boolean_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Boolean)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![0u8, 1u8, 2u8, 3u8]);
+        let values = BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN true THEN 123 WHEN false THEN 456 END
+        let when1 = lit(true);
+        let then1 = lit(123i32);
+        let when2 = lit(false);
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![Some(123), Some(456), None, Some(123)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_expr_all_null_dictionary() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            true,
+        )]);
+        let keys = UInt8Array::from(vec![2u8, 2u8, 2u8, 2u8]);
+        let values = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let dictionary = DictionaryArray::new(keys, Arc::new(values));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dictionary)])?;
+
+        let schema = batch.schema();
+
+        // CASE a WHEN 'foo' THEN 123 WHEN 'bar' THEN 456 END
+        let when1 = lit("foo");
+        let then1 = lit(123i32);
+        let when2 = lit("bar");
+        let then2 = lit(456i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            Some(col("a", &schema)?),
+            vec![(when1, then1), (when2, then2)],
+            None,
+            schema.as_ref(),
+        )?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result = as_int32_array(&result)?;
+
+        let expected = &Int32Array::from(vec![None, None, None, None]);
 
         assert_eq!(expected, result);
 
@@ -2242,54 +2397,678 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_merge_n() {
-        let a1 = StringArray::from(vec![Some("A")]).to_data();
-        let a2 = StringArray::from(vec![Some("B")]).to_data();
-        let a3 = StringArray::from(vec![Some("C"), Some("D")]).to_data();
-
-        let indices = vec![
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(1).unwrap(),
-            PartialResultIndex::try_new(0).unwrap(),
-            PartialResultIndex::none(),
-            PartialResultIndex::try_new(2).unwrap(),
-            PartialResultIndex::try_new(2).unwrap(),
-        ];
-
-        let merged = merge_n(&[a1, a2, a3], &indices).unwrap();
-        let merged = merged.as_string::<i32>();
-
-        assert_eq!(merged.len(), indices.len());
-        assert!(!merged.is_valid(0));
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "A");
-        assert!(!merged.is_valid(3));
-        assert!(merged.is_valid(4));
-        assert_eq!(merged.value(4), "C");
-        assert!(merged.is_valid(5));
-        assert_eq!(merged.value(5), "D");
+    fn when_then_else(
+        when: &Arc<dyn PhysicalExpr>,
+        then: &Arc<dyn PhysicalExpr>,
+        els: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let case = CaseExpr::try_new(
+            None,
+            vec![(Arc::clone(when), Arc::clone(then))],
+            Some(Arc::clone(els)),
+        )?;
+        Ok(Arc::new(case))
     }
 
     #[test]
-    fn test_merge() {
-        let a1 = Arc::new(StringArray::from(vec![Some("A"), Some("C")]));
-        let a2 = Arc::new(StringArray::from(vec![Some("B")]));
+    fn test_case_expression_nullability_with_nullable_column() -> Result<()> {
+        case_expression_nullability(true)
+    }
 
-        let mask = BooleanArray::from(vec![true, false, true]);
+    #[test]
+    fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
+        case_expression_nullability(false)
+    }
 
-        let merged =
-            merge(&mask, ColumnarValue::Array(a1), ColumnarValue::Array(a2)).unwrap();
-        let merged = merged.as_string::<i32>();
+    fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
+        let schema =
+            Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
 
-        assert_eq!(merged.len(), mask.len());
-        assert!(merged.is_valid(0));
-        assert_eq!(merged.value(0), "A");
-        assert!(merged.is_valid(1));
-        assert_eq!(merged.value(1), "B");
-        assert!(merged.is_valid(2));
-        assert_eq!(merged.value(2), "C");
+        let foo = col("foo", &schema)?;
+        let foo_is_not_null = is_not_null(Arc::clone(&foo))?;
+        let foo_is_null = expressions::is_null(Arc::clone(&foo))?;
+        let not_foo_is_null = expressions::not(Arc::clone(&foo_is_null))?;
+        let zero = lit(0);
+        let foo_eq_zero =
+            binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?;
+
+        assert_not_nullable(when_then_else(&foo_is_not_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&not_foo_is_null, &foo, &zero)?, &schema);
+        assert_not_nullable(when_then_else(&foo_eq_zero, &foo, &zero)?, &schema);
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::And,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::And,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_not_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_eq_zero),
+                    Operator::Or,
+                    Arc::clone(&foo_is_not_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    Arc::clone(&foo_is_null),
+                    Operator::Or,
+                    Arc::clone(&foo_eq_zero),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_nullability(
+            when_then_else(
+                &binary(
+                    binary(Arc::clone(&foo), Operator::Eq, Arc::clone(&zero), &schema)?,
+                    Operator::Or,
+                    Arc::clone(&foo_is_null),
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+            col_is_nullable,
+        );
+
+        assert_not_nullable(
+            when_then_else(
+                &binary(
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&zero),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    Operator::Or,
+                    binary(
+                        binary(
+                            Arc::clone(&foo),
+                            Operator::Eq,
+                            Arc::clone(&foo),
+                            &schema,
+                        )?,
+                        Operator::And,
+                        Arc::clone(&foo_is_not_null),
+                        &schema,
+                    )?,
+                    &schema,
+                )?,
+                &foo,
+                &zero,
+            )?,
+            &schema,
+        );
+
+        Ok(())
+    }
+
+    fn assert_not_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(!expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullable(expr: Arc<dyn PhysicalExpr>, schema: &Schema) {
+        assert!(expr.nullable(schema).unwrap());
+    }
+
+    fn assert_nullability(expr: Arc<dyn PhysicalExpr>, schema: &Schema, nullable: bool) {
+        if nullable {
+            assert_nullable(expr, schema);
+        } else {
+            assert_not_nullable(expr, schema);
+        }
+    }
+
+    // Test Lookup evaluation
+
+    fn test_case_when_literal_lookup(
+        values: ArrayRef,
+        lookup_map: &[(ScalarValue, ScalarValue)],
+        else_value: Option<ScalarValue>,
+        expected: ArrayRef,
+    ) {
+        // Create lookup
+        // CASE <expr>
+        // WHEN <when_constant_1> THEN <then_constant_1>
+        // WHEN <when_constant_2> THEN <then_constant_2>
+        // [ ELSE <else_constant> ]
+
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            values.data_type().clone(),
+            values.is_nullable(),
+        )]);
+        let schema = Arc::new(schema);
+
+        let batch = RecordBatch::try_new(schema, vec![values])
+            .expect("failed to create RecordBatch");
+
+        let schema = batch.schema_ref();
+        let case = col("a", schema).expect("failed to create col");
+
+        let when_then = lookup_map
+            .iter()
+            .map(|(when, then)| {
+                (
+                    Arc::new(Literal::new(when.clone())) as _,
+                    Arc::new(Literal::new(then.clone())) as _,
+                )
+            })
+            .collect::<Vec<WhenThen>>();
+
+        let else_expr = else_value.map(|else_value| {
+            Arc::new(Literal::new(else_value)) as Arc<dyn PhysicalExpr>
+        });
+        let expr = CaseExpr::try_new(Some(case), when_then, else_expr)
+            .expect("failed to create case");
+
+        // Assert that we are testing what we intend to assert
+        assert!(
+            matches!(
+                expr.eval_method,
+                EvalMethod::WithExprScalarLookupTable { .. }
+            ),
+            "we should use the expected eval method"
+        );
+
+        let actual = expr
+            .evaluate(&batch)
+            .expect("failed to evaluate case")
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+
+        assert_eq!(
+            actual.data_type(),
+            expected.data_type(),
+            "Data type mismatch"
+        );
+
+        assert_eq!(
+            actual.as_ref(),
+            expected.as_ref(),
+            "actual (left) does not match expected (right)"
+        );
+    }
+
+    fn create_lookup<When, Then>(
+        when_then_pairs: impl IntoIterator<Item = (When, Then)>,
+    ) -> Vec<(ScalarValue, ScalarValue)>
+    where
+        ScalarValue: From<When>,
+        ScalarValue: From<Then>,
+    {
+        when_then_pairs
+            .into_iter()
+            .map(|(when, then)| (ScalarValue::from(when), ScalarValue::from(then)))
+            .collect()
+    }
+
+    fn create_input_and_expected<Input, Expected, InputFromItem, ExpectedFromItem>(
+        input_and_expected_pairs: impl IntoIterator<Item = (InputFromItem, ExpectedFromItem)>,
+    ) -> (Input, Expected)
+    where
+        Input: Array + From<Vec<InputFromItem>>,
+        Expected: Array + From<Vec<ExpectedFromItem>>,
+    {
+        let (input_items, expected_items): (Vec<InputFromItem>, Vec<ExpectedFromItem>) =
+            input_and_expected_pairs.into_iter().unzip();
+
+        (Input::from(input_items), Expected::from(expected_items))
+    }
+
+    fn test_lookup_eval_with_and_without_else(
+        lookup_map: &[(ScalarValue, ScalarValue)],
+        input_values: ArrayRef,
+        expected: StringArray,
+    ) {
+        // Testing without ELSE should fallback to None
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            lookup_map,
+            None,
+            Arc::new(expected.clone()),
+        );
+
+        // Testing with Else
+        let else_value = "___fallback___";
+
+        // Changing each expected None to be fallback
+        let expected_with_else = expected
+            .iter()
+            .map(|item| item.unwrap_or(else_value))
+            .map(Some)
+            .collect::<StringArray>();
+
+        // Test case
+        test_case_when_literal_lookup(
+            input_values,
+            lookup_map,
+            Some(ScalarValue::Utf8(Some(else_value.to_string()))),
+            Arc::new(expected_with_else),
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_int32_to_string() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (Some(2), Some("two")),
+            (Some(3), Some("three")),
+            (Some(1), Some("one")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Int32Array, StringArray, _, _>([
+                (1, Some("one")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (3, Some("three")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+                (5, None), // No match in WHEN
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_none_case_should_never_match() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (None, Some("none")),
+            (Some(2), Some("two")),
+            (Some(1), Some("one")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Int32Array, StringArray, _, _>([
+                (Some(1), Some("one")),
+                (Some(5), None), // No match in WHEN
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (Some(2), Some("two")),
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (Some(2), Some("two")),
+                (Some(5), None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_int32_to_string_with_duplicate_cases() {
+        let lookup_map = create_lookup([
+            (Some(4), Some("four")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("two")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("three")),
+            (Some(3), Some("no 3")),
+            (Some(2), Some("no 2")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("no 3")),
+            (Some(4), Some("no 4")),
+            (Some(2), Some("no 2")),
+            (Some(3), Some("no 3")),
+            (Some(3), Some("no 3")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Int32Array, StringArray, _, _>([
+                (1, None), // No match in WHEN
+                (2, Some("two")),
+                (3, Some("three")),
+                (3, Some("three")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+                (5, None), // No match in WHEN
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f32_to_string_with_special_values_and_duplicate_cases()
+     {
+        let lookup_map = create_lookup([
+            (Some(4.0), Some("four point zero")),
+            (Some(f32::NAN), Some("NaN")),
+            (Some(3.2), Some("three point two")),
+            // Duplicate case to make sure it is not used
+            (Some(f32::NAN), Some("should not use this NaN branch")),
+            (Some(f32::INFINITY), Some("Infinity")),
+            (Some(0.0), Some("zero")),
+            // Duplicate case to make sure it is not used
+            (
+                Some(f32::INFINITY),
+                Some("should not use this Infinity branch"),
+            ),
+            (Some(1.1), Some("one point one")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Float32Array, StringArray, _, _>([
+                (1.1, Some("one point one")),
+                (f32::NAN, Some("NaN")),
+                (3.2, Some("three point two")),
+                (3.2, Some("three point two")),
+                (0.0, Some("zero")),
+                (f32::INFINITY, Some("Infinity")),
+                (3.2, Some("three point two")),
+                (f32::NEG_INFINITY, None), // No match in WHEN
+                (f32::NEG_INFINITY, None), // No match in WHEN
+                (3.2, Some("three point two")),
+                (-0.0, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f16_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (
+                ScalarValue::Float16(Some(f16::from_f32(3.2))),
+                Some("3 dot 2"),
+            ),
+            (ScalarValue::Float16(Some(f16::NAN)), Some("NaN")),
+            (
+                ScalarValue::Float16(Some(f16::from_f32(17.4))),
+                Some("17 dot 4"),
+            ),
+            (ScalarValue::Float16(Some(f16::INFINITY)), Some("Infinity")),
+            (ScalarValue::Float16(Some(f16::ZERO)), Some("zero")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Float16Array, StringArray, _, _>([
+                (f16::from_f32(3.2), Some("3 dot 2")),
+                (f16::NAN, Some("NaN")),
+                (f16::from_f32(17.4), Some("17 dot 4")),
+                (f16::from_f32(17.4), Some("17 dot 4")),
+                (f16::INFINITY, Some("Infinity")),
+                (f16::from_f32(17.4), Some("17 dot 4")),
+                (f16::NEG_INFINITY, None), // No match in WHEN
+                (f16::NEG_INFINITY, None), // No match in WHEN
+                (f16::from_f32(17.4), Some("17 dot 4")),
+                (f16::NEG_ZERO, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f32_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (3.2, Some("3 dot 2")),
+            (f32::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (f32::INFINITY, Some("Infinity")),
+            (f32::ZERO, Some("zero")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Float32Array, StringArray, _, _>([
+                (3.2, Some("3 dot 2")),
+                (f32::NAN, Some("NaN")),
+                (17.4, Some("17 dot 4")),
+                (17.4, Some("17 dot 4")),
+                (f32::INFINITY, Some("Infinity")),
+                (17.4, Some("17 dot 4")),
+                (f32::NEG_INFINITY, None), // No match in WHEN
+                (f32::NEG_INFINITY, None), // No match in WHEN
+                (17.4, Some("17 dot 4")),
+                (-0.0, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_case_when_literal_lookup_f64_to_string_with_special_values() {
+        let lookup_map = create_lookup([
+            (3.2, Some("3 dot 2")),
+            (f64::NAN, Some("NaN")),
+            (17.4, Some("17 dot 4")),
+            (f64::INFINITY, Some("Infinity")),
+            (f64::ZERO, Some("zero")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Float64Array, StringArray, _, _>([
+                (3.2, Some("3 dot 2")),
+                (f64::NAN, Some("NaN")),
+                (17.4, Some("17 dot 4")),
+                (17.4, Some("17 dot 4")),
+                (f64::INFINITY, Some("Infinity")),
+                (17.4, Some("17 dot 4")),
+                (f64::NEG_INFINITY, None), // No match in WHEN
+                (f64::NEG_INFINITY, None), // No match in WHEN
+                (17.4, Some("17 dot 4")),
+                (-0.0, None), // No match in WHEN
+            ]);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    // Test that we don't lose the decimal precision and scale info
+    #[test]
+    fn test_decimal_with_non_default_precision_and_scale() {
+        let lookup_map = create_lookup([
+            (ScalarValue::Decimal32(Some(4), 3, 2), Some("four")),
+            (ScalarValue::Decimal32(Some(2), 3, 2), Some("two")),
+            (ScalarValue::Decimal32(Some(3), 3, 2), Some("three")),
+            (ScalarValue::Decimal32(Some(1), 3, 2), Some("one")),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<Decimal32Array, StringArray, _, _>([
+                (1, Some("one")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (3, Some("three")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+                (5, None), // No match in WHEN
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+            ]);
+
+        let input_values = input_values
+            .with_precision_and_scale(3, 2)
+            .expect("must be able to set precision and scale");
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    // Test that we don't lose the timezone info
+    #[test]
+    fn test_timestamp_with_non_default_timezone() {
+        let timezone: Option<Arc<str>> = Some("-10:00".into());
+        let lookup_map = create_lookup([
+            (
+                ScalarValue::TimestampMillisecond(Some(4), timezone.clone()),
+                Some("four"),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(2), timezone.clone()),
+                Some("two"),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(3), timezone.clone()),
+                Some("three"),
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1), timezone.clone()),
+                Some("one"),
+            ),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<TimestampMillisecondArray, StringArray, _, _>([
+                (1, Some("one")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (3, Some("three")),
+                (2, Some("two")),
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+                (5, None), // No match in WHEN
+                (3, Some("three")),
+                (5, None), // No match in WHEN
+            ]);
+
+        let input_values = input_values.with_timezone_opt(timezone);
+
+        test_lookup_eval_with_and_without_else(
+            &lookup_map,
+            Arc::new(input_values),
+            expected,
+        );
+    }
+
+    #[test]
+    fn test_with_strings_to_int32() {
+        let lookup_map = create_lookup([
+            (Some("why"), Some(42)),
+            (Some("what"), Some(22)),
+            (Some("when"), Some(17)),
+        ]);
+
+        let (input_values, expected) =
+            create_input_and_expected::<StringArray, Int32Array, _, _>([
+                (Some("why"), Some(42)),
+                (Some("5"), None), // No match in WHEN
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (Some("what"), Some(22)),
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (None, None), // None cases are never match in CASE <expr> WHEN <value> syntax
+                (Some("what"), Some(22)),
+                (Some("5"), None), // No match in WHEN
+            ]);
+
+        let input_values = Arc::new(input_values) as ArrayRef;
+
+        // Testing without ELSE should fallback to None
+        test_case_when_literal_lookup(
+            Arc::clone(&input_values),
+            &lookup_map,
+            None,
+            Arc::new(expected.clone()),
+        );
+
+        // Testing with Else
+        let else_value = 101;
+
+        // Changing each expected None to be fallback
+        let expected_with_else = expected
+            .iter()
+            .map(|item| item.unwrap_or(else_value))
+            .map(Some)
+            .collect::<Int32Array>();
+
+        // Test case
+        test_case_when_literal_lookup(
+            input_values,
+            &lookup_map,
+            Some(ScalarValue::Int32(Some(else_value))),
+            Arc::new(expected_with_else),
+        );
     }
 }

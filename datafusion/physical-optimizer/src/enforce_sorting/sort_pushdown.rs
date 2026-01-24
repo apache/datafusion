@@ -24,12 +24,12 @@ use crate::utils::{
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{internal_err, HashSet, JoinSide, Result};
+use datafusion_common::{HashSet, JoinSide, Result, internal_err};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    add_offset_to_physical_sort_exprs, EquivalenceProperties,
+    EquivalenceProperties, add_offset_to_physical_sort_exprs,
 };
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, OrderingRequirements, PhysicalSortExpr,
@@ -38,7 +38,7 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
-    calculate_join_output_ordering, ColumnIndex,
+    ColumnIndex, calculate_join_output_ordering,
 };
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -383,7 +383,7 @@ fn pushdown_requirement_to_children(
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
-        handle_custom_pushdown(plan, parent_required, maintains_input_order)
+        handle_custom_pushdown(plan, parent_required, &maintains_input_order)
     }
     // TODO: Add support for Projection push down
 }
@@ -604,7 +604,7 @@ fn expr_source_side(
 fn handle_custom_pushdown(
     plan: &Arc<dyn ExecutionPlan>,
     parent_required: OrderingRequirements,
-    maintains_input_order: Vec<bool>,
+    maintains_input_order: &[bool],
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
     // If the plan has no children, return early:
     if plan.children().is_empty() {

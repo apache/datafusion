@@ -26,11 +26,11 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::Result;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -122,7 +122,7 @@ impl ScalarUDFImpl for LeftFunc {
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
 /// left('abcde', 2) = 'ab'
 /// The implementation uses UTF-8 code points as characters
-pub fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
 
     if args[0].data_type() == &DataType::Utf8View {
@@ -139,14 +139,23 @@ fn left_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
     n_array: &Int64Array,
 ) -> Result<ArrayRef> {
     let iter = ArrayIter::new(string_array);
+    let mut chars_buf = Vec::new();
     let result = iter
         .zip(n_array.iter())
         .map(|(string, n)| match (string, n) {
             (Some(string), Some(n)) => match n.cmp(&0) {
                 Ordering::Less => {
-                    let len = string.chars().count() as i64;
-                    Some(if n.abs() < len {
-                        string.chars().take((len + n) as usize).collect::<String>()
+                    // Collect chars once and reuse for both count and take
+                    chars_buf.clear();
+                    chars_buf.extend(string.chars());
+                    let len = chars_buf.len() as i64;
+
+                    // For negative n, take (len + n) chars if n > -len (avoiding abs() which panics on i64::MIN)
+                    Some(if n > -len {
+                        chars_buf
+                            .iter()
+                            .take((len + n) as usize)
+                            .collect::<String>()
                     } else {
                         "".to_string()
                     })

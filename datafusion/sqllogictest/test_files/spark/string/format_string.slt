@@ -931,13 +931,13 @@ Char: NULL
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Hour: %tH', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+SELECT format_string('Hour: %tH', arrow_cast(NULL, 'Timestamp(ns)'));
 ----
 Hour: null
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(ns)'));
 ----
 Month: null
 
@@ -967,25 +967,25 @@ Month: null
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Second, None)'));
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(s)'));
 ----
 Month: null
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Millisecond, None)'));
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(ms)'));
 ----
 Month: null
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Microsecond, None)'));
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(µs)'));
 ----
 Month: null
 
 ## NULL with timestamp format using arrow_cast
 query T
-SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+SELECT format_string('Month: %tB', arrow_cast(NULL, 'Timestamp(ns)'));
 ----
 Month: null
 
@@ -1051,7 +1051,7 @@ Value: null
 
 ## NULL Timestamp with string format using arrow_cast
 query T
-SELECT format_string('Value: %s', arrow_cast(NULL, 'Timestamp(Nanosecond, None)'));
+SELECT format_string('Value: %s', arrow_cast(NULL, 'Timestamp(ns)'));
 ----
 Value: null
 
@@ -1717,49 +1717,49 @@ String: 52245000000000
 
 ## TimestampSecond with time formats
 query T
-SELECT format_string('Year: %tY', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+SELECT format_string('Year: %tY', arrow_cast(1703512245, 'Timestamp(s)'));
 ----
 Year: 2023
 
 query T
-SELECT format_string('Month: %tm', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+SELECT format_string('Month: %tm', arrow_cast(1703512245, 'Timestamp(s)'));
 ----
 Month: 12
 
 query T
-SELECT format_string('String: %s', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+SELECT format_string('String: %s', arrow_cast(1703512245, 'Timestamp(s)'));
 ----
 String: 1703512245
 
 query T
-SELECT format_string('String: %S', arrow_cast(1703512245, 'Timestamp(Second, None)'));
+SELECT format_string('String: %S', arrow_cast(1703512245, 'Timestamp(s)'));
 ----
 String: 1703512245
 
 ## TimestampMillisecond with time formats
 query T
-SELECT format_string('ISO Date: %tF', arrow_cast(1703512245000, 'Timestamp(Millisecond, None)'));
+SELECT format_string('ISO Date: %tF', arrow_cast(1703512245000, 'Timestamp(ms)'));
 ----
 ISO Date: 2023-12-25
 
 query T
-SELECT format_string('String: %s', arrow_cast(1703512245000, 'Timestamp(Millisecond, None)'));
+SELECT format_string('String: %s', arrow_cast(1703512245000, 'Timestamp(ms)'));
 ----
 String: 1703512245000
 
 ## TimestampMicrosecond with time formats
 query T
-SELECT format_string('Date: %tD', arrow_cast(1703512245000000, 'Timestamp(Microsecond, None)'));
+SELECT format_string('Date: %tD', arrow_cast(1703512245000000, 'Timestamp(µs)'));
 ----
 Date: 12/25/23
 
 query T
-SELECT format_string('String: %s', arrow_cast(1703512245000000, 'Timestamp(Microsecond, None)'));
+SELECT format_string('String: %s', arrow_cast(1703512245000000, 'Timestamp(µs)'));
 ----
 String: 1703512245000000
 
 query T
-SELECT format_string('String: %s', arrow_cast('2020-01-02 01:01:11.1234567890Z', 'Timestamp(Nanosecond, None)'));
+SELECT format_string('String: %s', arrow_cast('2020-01-02 01:01:11.1234567890Z', 'Timestamp(ns)'));
 ----
 String: 1577926871123456789
 

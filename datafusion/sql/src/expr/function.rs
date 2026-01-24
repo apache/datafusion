@@ -19,14 +19,16 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
-    DFSchema, Dependency, Diagnostic, Result, Span,
+    DFSchema, Dependency, Diagnostic, Result, Span, internal_datafusion_err,
+    internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::expr::{
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction,
+use datafusion_expr::{
+    Expr, ExprSchemable, SortExpr, WindowFrame, WindowFunctionDefinition,
+    arguments::ArgumentName,
+    expr,
+    expr::{NullTreatment, ScalarFunction, Unnest, WildcardOptions, WindowFunction},
+    planner::{PlannerResult, RawAggregateExpr, RawWindowExpr},
 };
-use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
-use datafusion_expr::{expr, Expr, ExprSchemable, WindowFrame, WindowFunctionDefinition};
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
     FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
@@ -151,42 +153,46 @@ impl FunctionArgs {
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
                         if !within_group.is_empty() {
-                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                            return plan_err!(
+                                "ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used"
+                            );
                         }
-                        return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
+                        return not_impl_err!(
+                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
+                        );
                     }
                     order_by = Some(oby);
                 }
                 FunctionArgumentClause::Limit(limit) => {
                     return not_impl_err!(
                         "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::OnOverflow(overflow) => {
                     return not_impl_err!(
                         "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Having(having) => {
                     return not_impl_err!(
                         "Calling {name}: HAVING not supported in function arguments: {having}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonNullClause(jn) => {
                     return not_impl_err!(
                         "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    )
+                    );
                 }
                 FunctionArgumentClause::JsonReturningClause(jr) => {
                     return not_impl_err!(
                         "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
-                    )
-                },
+                    );
+                }
             }
         }
 
@@ -212,6 +218,9 @@ impl FunctionArgs {
     }
 }
 
+// Helper type for extracting WITHIN GROUP ordering and prepended args
+type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_function_to_expr(
         &self,
@@ -233,12 +242,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } = function_args;
 
         if over.is_some() && !within_group.is_empty() {
-            return plan_err!("OVER and WITHIN GROUP clause cannot be used together. \
-                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions");
+            return plan_err!(
+                "OVER and WITHIN GROUP clause cannot be used together. \
+                OVER is for window functions, whereas WITHIN GROUP is for ordered set aggregate functions"
+            );
         }
 
         if !order_by.is_empty() && !within_group.is_empty() {
-            return plan_err!("ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function");
+            return plan_err!(
+                "ORDER BY and WITHIN GROUP clauses cannot be used together in the same aggregate function"
+            );
         }
 
         // If function is a window function (it has an OVER clause),
@@ -257,14 +270,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return plan_err!(
                         "Expected an identifier in function name, but found {:?}",
                         object_name.0[0]
-                    )
+                    );
                 }
             }
         };
 
-        if name.eq("make_map") {
+        // handle make_map and map functions
+        // make_map always uses plan_make_map: make_map(k1, v1, k2, v2, ...)
+        // map has 2 syntaxes:
+        //     1. map([keys], [values]) - two arrays that get zipped
+        //     2. map(k1, v1, k2, v2, ...) - variadic pairs (uses plan_make_map)
+        let use_plan_make_map = match name.as_str() {
+            "make_map" => true,
+            "map" => {
+                // for map, check if this is the first syntax variant (two-array)
+                let args =
+                    self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
+                let is_two_array_syntax = args.len() == 2
+                    && args.iter().all(|arg| {
+                        matches!(
+                            arg.get_type(schema),
+                            Ok(DataType::List(_))
+                                | Ok(DataType::LargeList(_))
+                                | Ok(DataType::FixedSizeList(_, _))
+                        )
+                    });
+
+                // map function with variadic syntax requires non-empty list of arguments
+                if !is_two_array_syntax && args.is_empty() {
+                    return plan_err!(
+                        "Function 'map' expected at least one argument but received 0"
+                    );
+                }
+
+                !is_two_array_syntax
+            }
+            _ => false,
+        };
+
+        if use_plan_make_map {
             let mut fn_args =
                 self.function_args_to_expr(args.clone(), schema, planner_context)?;
+
             for planner in self.context_provider.get_expr_planners().iter() {
                 match planner.plan_make_map(fn_args)? {
                     PlannerResult::Planned(expr) => return Ok(expr),
@@ -490,31 +538,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let (mut args, mut arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
-                let order_by = if fm.supports_within_group_clause() {
-                    let within_group = self.order_by_to_sort_expr(
-                        within_group,
-                        schema,
-                        planner_context,
-                        false,
-                        None,
-                    )?;
+                // UDAFs must opt-in via `supports_within_group_clause()` to
+                // accept a WITHIN GROUP clause.
+                let supports_within_group = fm.supports_within_group_clause();
 
-                    // Add the WITHIN GROUP ordering expressions to the front of the argument list
-                    // So function(arg) WITHIN GROUP (ORDER BY x) becomes function(x, arg)
-                    if !within_group.is_empty() {
-                        // Prepend None arg names for each WITHIN GROUP expression
-                        let within_group_count = within_group.len();
-                        arg_names = std::iter::repeat_n(None, within_group_count)
-                            .chain(arg_names)
-                            .collect();
+                if !within_group.is_empty() && !supports_within_group {
+                    return plan_err!(
+                        "WITHIN GROUP is only supported for ordered-set aggregate functions"
+                    );
+                }
 
-                        args = within_group
-                            .iter()
-                            .map(|sort| sort.expr.clone())
-                            .chain(args)
-                            .collect::<Vec<_>>();
-                    }
-                    within_group
+                // If the UDAF supports WITHIN GROUP, convert the ordering into
+                // sort expressions and prepend them as unnamed function args.
+                let order_by = if supports_within_group {
+                    let (within_group_sorts, new_args, new_arg_names) = self
+                        .extract_and_prepend_within_group_args(
+                            within_group,
+                            args,
+                            arg_names,
+                            schema,
+                            planner_context,
+                        )?;
+                    args = new_args;
+                    arg_names = new_arg_names;
+                    within_group_sorts
                 } else {
                     let order_by = if !order_by.is_empty() {
                         order_by
@@ -700,7 +747,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         sql: FunctionArg,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Expr, Option<String>)> {
+    ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
             FunctionArg::Named {
                 name,
@@ -708,7 +755,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Named {
@@ -721,7 +771,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
@@ -758,7 +811,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 operator: _,
             } => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             FunctionArg::ExprNamed {
@@ -771,7 +827,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualifier: None,
                     options: Box::new(WildcardOptions::default()),
                 };
-                let arg_name = crate::utils::normalize_ident(name);
+                let arg_name = ArgumentName {
+                    value: name.value,
+                    is_quoted: name.quote_style.is_some(),
+                };
                 Ok((expr, Some(arg_name)))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
@@ -794,8 +853,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         args: Vec<FunctionArg>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
-    ) -> Result<(Vec<Expr>, Vec<Option<String>>)> {
-        let results: Result<Vec<(Expr, Option<String>)>> = args
+    ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
+        let results: Result<Vec<(Expr, Option<ArgumentName>)>> = args
             .into_iter()
             .map(|a| {
                 self.sql_fn_arg_to_logical_expr_with_name(a, schema, planner_context)
@@ -803,8 +862,41 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect();
 
         let pairs = results?;
-        let (exprs, names): (Vec<Expr>, Vec<Option<String>>) = pairs.into_iter().unzip();
+        let (exprs, names): (Vec<Expr>, Vec<Option<ArgumentName>>) =
+            pairs.into_iter().unzip();
         Ok((exprs, names))
+    }
+
+    fn extract_and_prepend_within_group_args(
+        &self,
+        within_group: Vec<OrderByExpr>,
+        mut args: Vec<Expr>,
+        mut arg_names: Vec<Option<ArgumentName>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<WithinGroupExtraction> {
+        let within_group = self.order_by_to_sort_expr(
+            within_group,
+            schema,
+            planner_context,
+            false,
+            None,
+        )?;
+
+        if !within_group.is_empty() {
+            let within_group_count = within_group.len();
+            arg_names = std::iter::repeat_n(None, within_group_count)
+                .chain(arg_names)
+                .collect();
+
+            args = within_group
+                .iter()
+                .map(|sort| sort.expr.clone())
+                .chain(args)
+                .collect::<Vec<_>>();
+        }
+
+        Ok((within_group, args, arg_names))
     }
 
     pub(crate) fn check_unnest_arg(arg: &Expr, schema: &DFSchema) -> Result<()> {

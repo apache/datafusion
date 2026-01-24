@@ -58,6 +58,11 @@
 //! 8. Build the `RowFilter` with the sorted predicates followed by
 //!    the unsorted predicates. Within each partition, predicates are
 //!    still be sorted by size.
+//!
+//! List-aware predicates (for example, `array_has`, `array_has_all`, and
+//! `array_has_any`) can be evaluated directly during Parquet decoding. Struct
+//! columns and other nested projections that are not explicitly supported will
+//! continue to be evaluated after the batches are materialized.
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -67,21 +72,22 @@ use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::file::metadata::ParquetMetaData;
+use parquet::schema::types::SchemaDescriptor;
 
+use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion_common::Result;
-use datafusion_datasource::schema_adapter::{SchemaAdapterFactory, SchemaMapper};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
+use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
+use super::supported_predicates::supports_list_predicates;
 
 /// A "compiled" predicate passed to `ParquetRecordBatchStream` to perform
 /// row-level filtering during parquet decoding.
@@ -92,12 +98,14 @@ use super::ParquetFileMetrics;
 ///
 /// An expression can be evaluated as a `DatafusionArrowPredicate` if it:
 /// * Does not reference any projected columns
-/// * Does not reference columns with non-primitive types (e.g. structs / lists)
+/// * References either primitive columns or list columns used by
+///   supported predicates (such as `array_has_all` or NULL checks). Struct
+///   columns are still evaluated after decoding.
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
     /// the filter expression
     physical_expr: Arc<dyn PhysicalExpr>,
-    /// Path to the columns in the parquet schema required to evaluate the
+    /// Path to the leaf columns in the parquet schema required to evaluate the
     /// expression
     projection_mask: ProjectionMask,
     /// how many rows were filtered out by this predicate
@@ -106,8 +114,6 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
-    /// used to perform type coercion while filtering rows
-    schema_mapper: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -124,14 +130,16 @@ impl DatafusionArrowPredicate {
 
         Ok(Self {
             physical_expr,
-            projection_mask: ProjectionMask::roots(
+            // Use leaf indices: when nested columns are involved, we must specify
+            // leaf (primitive) column indices in the Parquet schema so the decoder
+            // can properly project and filter nested structures.
+            projection_mask: ProjectionMask::leaves(
                 metadata.file_metadata().schema_descr(),
-                candidate.projection,
+                candidate.projection.leaf_indices.iter().copied(),
             ),
             rows_pruned,
             rows_matched,
             time,
-            schema_mapper: candidate.schema_mapper,
         })
     }
 }
@@ -142,8 +150,6 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = self.schema_mapper.map_batch(batch)?;
-
         // scoped timer updates on drop
         let mut timer = self.time.timer();
 
@@ -182,73 +188,43 @@ pub(crate) struct FilterCandidate {
     required_bytes: usize,
     /// Can this filter use an index (e.g. a page index) to prune rows?
     can_use_index: bool,
-    /// The projection to read from the file schema to get the columns
-    /// required to pass through a `SchemaMapper` to the table schema
-    /// upon which we then evaluate the filter expression.
-    projection: Vec<usize>,
-    ///  A `SchemaMapper` used to map batches read from the file schema to
-    /// the filter's projection of the table schema.
-    schema_mapper: Arc<dyn SchemaMapper>,
-    /// The projected table schema that this filter references
+    /// Column indices into the parquet file schema required to evaluate this filter.
+    projection: LeafProjection,
+    /// The Arrow schema containing only the columns required by this filter,
+    /// projected from the file's Arrow schema.
     filter_schema: SchemaRef,
+}
+
+/// Projection specification for nested columns using Parquet leaf column indices.
+///
+/// For nested types like List and Struct, Parquet stores data in leaf columns
+/// (the primitive fields). This struct tracks which leaf columns are needed
+/// to evaluate a filter expression.
+#[derive(Debug, Clone)]
+struct LeafProjection {
+    /// Leaf column indices in the Parquet schema descriptor.
+    leaf_indices: Vec<usize>,
 }
 
 /// Helper to build a `FilterCandidate`.
 ///
-/// This will do several things
+/// This will do several things:
 /// 1. Determine the columns required to evaluate the expression
 /// 2. Calculate data required to estimate the cost of evaluating the filter
-/// 3. Rewrite column expressions in the predicate which reference columns not
-///    in the particular file schema.
 ///
-/// # Schema Rewrite
-///
-/// When parquet files are read in the context of "schema evolution" there are
-/// potentially wo schemas:
-///
-/// 1. The table schema (the columns of the table that the parquet file is part of)
-/// 2. The file schema (the columns actually in the parquet file)
-///
-/// There are times when the table schema contains columns that are not in the
-/// file schema, such as when new columns have been added in new parquet files
-/// but old files do not have the columns.
-///
-/// When a file is missing a column from the table schema, the value of the
-/// missing column is filled in by a `SchemaAdapter` (by default as `NULL`).
-///
-/// When a predicate is pushed down to the parquet reader, the predicate is
-/// evaluated in the context of the file schema.
-/// For each predicate we build a filter schema which is the projection of the table
-/// schema that contains only the columns that this filter references.
-/// If any columns from the file schema are missing from a particular file they are
-/// added by the `SchemaAdapter`, by default as `NULL`.
+/// Note: This does *not* handle any adaptation of the expression to the file schema.
+/// The expression must already be adapted before being passed in here, generally using
+/// [`PhysicalExprAdapter`](datafusion_physical_expr_adapter::PhysicalExprAdapter).
 struct FilterCandidateBuilder {
     expr: Arc<dyn PhysicalExpr>,
-    /// The schema of this parquet file.
-    /// Columns may have different types from the table schema and there may be
-    /// columns in the file schema that are not in the table schema or columns that
-    /// are in the table schema that are not in the file schema.
+    /// The Arrow schema of this parquet file (the result of converting the
+    /// parquet schema to Arrow, potentially with type coercions applied).
     file_schema: SchemaRef,
-    /// The schema of the table (merged schema) -- columns may be in different
-    /// order than in the file and have columns that are not in the file schema
-    table_schema: SchemaRef,
-    /// A `SchemaAdapterFactory` used to map the file schema to the table schema.
-    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
 }
 
 impl FilterCandidateBuilder {
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        file_schema: Arc<Schema>,
-        table_schema: Arc<Schema>,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Self {
-        Self {
-            expr,
-            file_schema,
-            table_schema,
-            schema_adapter_factory,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, file_schema: Arc<Schema>) -> Self {
+        Self { expr, file_schema }
     }
 
     /// Attempt to build a `FilterCandidate` from the expression
@@ -259,82 +235,141 @@ impl FilterCandidateBuilder {
     /// * `Ok(None)` if the expression cannot be used as an ArrowFilter
     /// * `Err(e)` if an error occurs while building the candidate
     pub fn build(self, metadata: &ParquetMetaData) -> Result<Option<FilterCandidate>> {
-        let Some(required_indices_into_table_schema) =
-            pushdown_columns(&self.expr, &self.table_schema)?
+        let Some(required_columns) = pushdown_columns(&self.expr, &self.file_schema)?
         else {
             return Ok(None);
         };
 
-        let projected_table_schema = Arc::new(
-            self.table_schema
-                .project(&required_indices_into_table_schema)?,
+        let root_indices: Vec<_> =
+            required_columns.required_columns.into_iter().collect();
+        let leaf_indices = leaf_indices_for_roots(
+            &root_indices,
+            metadata.file_metadata().schema_descr(),
+            required_columns.nested,
         );
 
-        let (schema_mapper, projection_into_file_schema) = self
-            .schema_adapter_factory
-            .create(Arc::clone(&projected_table_schema), self.table_schema)
-            .map_schema(&self.file_schema)?;
+        let projected_schema = Arc::new(self.file_schema.project(&root_indices)?);
 
-        let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
-        let can_use_index = columns_sorted(&projection_into_file_schema, metadata)?;
+        let required_bytes = size_of_columns(&leaf_indices, metadata)?;
+        let can_use_index = columns_sorted(&leaf_indices, metadata)?;
 
         Ok(Some(FilterCandidate {
             expr: self.expr,
             required_bytes,
             can_use_index,
-            projection: projection_into_file_schema,
-            schema_mapper: Arc::clone(&schema_mapper),
-            filter_schema: Arc::clone(&projected_table_schema),
+            projection: LeafProjection { leaf_indices },
+            filter_schema: projected_schema,
         }))
     }
 }
 
-// a struct that implements TreeNodeRewriter to traverse a PhysicalExpr tree structure to determine
-// if any column references in the expression would prevent it from being predicate-pushed-down.
-// if non_primitive_columns || projected_columns, it can't be pushed down.
-// can't be reused between calls to `rewrite`; each construction must be used only once.
+/// Traverses a `PhysicalExpr` tree to determine if any column references would
+/// prevent the expression from being pushed down to the parquet decoder.
+///
+/// An expression cannot be pushed down if it references:
+/// - Unsupported nested columns (structs or list fields that are not covered by
+///   the supported predicate set)
+/// - Columns that don't exist in the file schema
 struct PushdownChecker<'schema> {
     /// Does the expression require any non-primitive columns (like structs)?
     non_primitive_columns: bool,
-    /// Does the expression reference any columns that are in the table
-    /// schema but not in the file schema?
-    /// This includes partition columns and projected columns.
+    /// Does the expression reference any columns not present in the file schema?
     projected_columns: bool,
-    // Indices into the table schema of the columns required to evaluate the expression
-    required_columns: BTreeSet<usize>,
-    table_schema: &'schema Schema,
+    /// Indices into the file schema of columns required to evaluate the expression.
+    required_columns: Vec<usize>,
+    /// Tracks the nested column behavior found during traversal.
+    nested_behavior: NestedColumnSupport,
+    /// Whether nested list columns are supported by the predicate semantics.
+    allow_list_columns: bool,
+    /// The Arrow schema of the parquet file.
+    file_schema: &'schema Schema,
 }
 
 impl<'schema> PushdownChecker<'schema> {
-    fn new(table_schema: &'schema Schema) -> Self {
+    fn new(file_schema: &'schema Schema, allow_list_columns: bool) -> Self {
         Self {
             non_primitive_columns: false,
             projected_columns: false,
-            required_columns: BTreeSet::default(),
-            table_schema,
+            required_columns: Vec::new(),
+            nested_behavior: NestedColumnSupport::PrimitiveOnly,
+            allow_list_columns,
+            file_schema,
         }
     }
 
     fn check_single_column(&mut self, column_name: &str) -> Option<TreeNodeRecursion> {
-        if let Ok(idx) = self.table_schema.index_of(column_name) {
-            self.required_columns.insert(idx);
-            if DataType::is_nested(self.table_schema.field(idx).data_type()) {
-                self.non_primitive_columns = true;
+        let idx = match self.file_schema.index_of(column_name) {
+            Ok(idx) => idx,
+            Err(_) => {
+                // Column does not exist in the file schema, so we can't push this down.
+                self.projected_columns = true;
                 return Some(TreeNodeRecursion::Jump);
             }
-        } else {
-            // If the column does not exist in the (un-projected) table schema then
-            // it must be a projected column.
-            self.projected_columns = true;
-            return Some(TreeNodeRecursion::Jump);
-        }
+        };
 
-        None
+        // Duplicates are handled by dedup() in into_sorted_columns()
+        self.required_columns.push(idx);
+        let data_type = self.file_schema.field(idx).data_type();
+
+        if DataType::is_nested(data_type) {
+            self.handle_nested_type(data_type)
+        } else {
+            None
+        }
+    }
+
+    /// Determines whether a nested data type can be pushed down to Parquet decoding.
+    ///
+    /// Returns `Some(TreeNodeRecursion::Jump)` if the nested type prevents pushdown,
+    /// `None` if the type is supported and pushdown can continue.
+    fn handle_nested_type(&mut self, data_type: &DataType) -> Option<TreeNodeRecursion> {
+        if self.is_nested_type_supported(data_type) {
+            // Update to ListsSupported if we haven't encountered unsupported types yet
+            if self.nested_behavior == NestedColumnSupport::PrimitiveOnly {
+                self.nested_behavior = NestedColumnSupport::ListsSupported;
+            }
+            None
+        } else {
+            // Block pushdown for unsupported nested types:
+            // - Structs (regardless of predicate support)
+            // - Lists without supported predicates
+            self.nested_behavior = NestedColumnSupport::Unsupported;
+            self.non_primitive_columns = true;
+            Some(TreeNodeRecursion::Jump)
+        }
+    }
+
+    /// Checks if a nested data type is supported for list column pushdown.
+    ///
+    /// List columns are only supported if:
+    /// 1. The data type is a list variant (List, LargeList, or FixedSizeList)
+    /// 2. The expression contains supported list predicates (e.g., array_has_all)
+    fn is_nested_type_supported(&self, data_type: &DataType) -> bool {
+        let is_list = matches!(
+            data_type,
+            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+        );
+        self.allow_list_columns && is_list
     }
 
     #[inline]
     fn prevents_pushdown(&self) -> bool {
         self.non_primitive_columns || self.projected_columns
+    }
+
+    /// Consumes the checker and returns sorted, deduplicated column indices
+    /// wrapped in a `PushdownColumns` struct.
+    ///
+    /// This method sorts the column indices and removes duplicates. The sort
+    /// is required because downstream code relies on column indices being in
+    /// ascending order for correct schema projection.
+    fn into_sorted_columns(mut self) -> PushdownColumns {
+        self.required_columns.sort_unstable();
+        self.required_columns.dedup();
+        PushdownColumns {
+            required_columns: self.required_columns,
+            nested: self.nested_behavior,
+        }
     }
 }
 
@@ -342,35 +377,149 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(&mut self, node: &Self::Node) -> Result<TreeNodeRecursion> {
-        if let Some(column) = node.as_any().downcast_ref::<Column>() {
-            if let Some(recursion) = self.check_single_column(column.name()) {
-                return Ok(recursion);
-            }
+        if let Some(column) = node.as_any().downcast_ref::<Column>()
+            && let Some(recursion) = self.check_single_column(column.name())
+        {
+            return Ok(recursion);
         }
 
         Ok(TreeNodeRecursion::Continue)
     }
 }
 
-// Checks if a given expression can be pushed down into `DataSourceExec` as opposed to being evaluated
-// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns all the
-// columns in the given expression so that they can be used in the parquet scanning, along with the
-// expression rewritten as defined in [`PushdownChecker::f_up`]
-fn pushdown_columns(
-    expr: &Arc<dyn PhysicalExpr>,
-    table_schema: &Schema,
-) -> Result<Option<Vec<usize>>> {
-    let mut checker = PushdownChecker::new(table_schema);
-    expr.visit(&mut checker)?;
-    Ok((!checker.prevents_pushdown())
-        .then_some(checker.required_columns.into_iter().collect()))
+/// Describes the nested column behavior for filter pushdown.
+///
+/// This enum makes explicit the different states a predicate can be in
+/// with respect to nested column handling during Parquet decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NestedColumnSupport {
+    /// Expression references only primitive (non-nested) columns.
+    /// These can always be pushed down to the Parquet decoder.
+    PrimitiveOnly,
+    /// Expression references list columns with supported predicates
+    /// (e.g., array_has, array_has_all, IS NULL).
+    /// These can be pushed down to the Parquet decoder.
+    ListsSupported,
+    /// Expression references unsupported nested types (e.g., structs)
+    /// or list columns without supported predicates.
+    /// These cannot be pushed down and must be evaluated after decoding.
+    Unsupported,
 }
 
-/// Recurses through expr as a tree, finds all `column`s, and checks if any of them would prevent
-/// this expression from being predicate pushed down. If any of them would, this returns false.
-/// Otherwise, true.
-/// Note that the schema passed in here is *not* the physical file schema (as it is not available at that point in time);
-/// it is the schema of the table that this expression is being evaluated against minus any projected columns and partition columns.
+/// Result of checking which columns are required for filter pushdown.
+#[derive(Debug)]
+struct PushdownColumns {
+    /// Sorted, unique column indices into the file schema required to evaluate
+    /// the filter expression. Must be in ascending order for correct schema
+    /// projection matching.
+    required_columns: Vec<usize>,
+    nested: NestedColumnSupport,
+}
+
+/// Checks if a given expression can be pushed down to the parquet decoder.
+///
+/// Returns `Some(PushdownColumns)` if the expression can be pushed down,
+/// where the struct contains the indices into the file schema of all columns
+/// required to evaluate the expression.
+///
+/// Returns `None` if the expression cannot be pushed down (e.g., references
+/// unsupported nested types or columns not in the file).
+fn pushdown_columns(
+    expr: &Arc<dyn PhysicalExpr>,
+    file_schema: &Schema,
+) -> Result<Option<PushdownColumns>> {
+    let allow_list_columns = supports_list_predicates(expr);
+    let mut checker = PushdownChecker::new(file_schema, allow_list_columns);
+    expr.visit(&mut checker)?;
+    Ok((!checker.prevents_pushdown()).then(|| checker.into_sorted_columns()))
+}
+
+fn leaf_indices_for_roots(
+    root_indices: &[usize],
+    schema_descr: &SchemaDescriptor,
+    nested: NestedColumnSupport,
+) -> Vec<usize> {
+    // For primitive-only columns, root indices ARE the leaf indices
+    if nested == NestedColumnSupport::PrimitiveOnly {
+        return root_indices.to_vec();
+    }
+
+    // For List columns, expand to the single leaf column (item field)
+    // For Struct columns (unsupported), this would expand to multiple leaves
+    let root_set: BTreeSet<_> = root_indices.iter().copied().collect();
+
+    (0..schema_descr.num_columns())
+        .filter(|leaf_idx| {
+            root_set.contains(&schema_descr.get_column_root_idx(*leaf_idx))
+        })
+        .collect()
+}
+
+/// Checks if a predicate expression can be pushed down to the parquet decoder.
+///
+/// Returns `true` if all columns referenced by the expression:
+/// - Exist in the provided schema
+/// - Are primitive types OR list columns with supported predicates
+///   (e.g., `array_has`, `array_has_all`, `array_has_any`, IS NULL, IS NOT NULL)
+/// - Struct columns are not supported and will prevent pushdown
+///
+/// # Arguments
+/// * `expr` - The filter expression to check
+/// * `file_schema` - The Arrow schema of the parquet file (or table schema when
+///   the file schema is not yet available during planning)
+///
+/// # Examples
+///
+/// Primitive column filters can be pushed down:
+/// ```ignore
+/// use datafusion_expr::{col, Expr};
+/// use datafusion_common::ScalarValue;
+/// use arrow::datatypes::{DataType, Field, Schema};
+/// use std::sync::Arc;
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("age", DataType::Int32, false),
+/// ]));
+///
+/// // Primitive filter: can be pushed down
+/// let expr = col("age").gt(Expr::Literal(ScalarValue::Int32(Some(30)), None));
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
+///
+/// Struct column filters cannot be pushed down:
+/// ```ignore
+/// use arrow::datatypes::Fields;
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("person", DataType::Struct(
+///         Fields::from(vec![Field::new("name", DataType::Utf8, true)])
+///     ), true),
+/// ]));
+///
+/// // Struct filter: cannot be pushed down
+/// let expr = col("person").is_not_null();
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(!can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
+///
+/// List column filters with supported predicates can be pushed down:
+/// ```ignore
+/// use datafusion_functions_nested::expr_fn::{array_has_all, make_array};
+///
+/// let schema = Arc::new(Schema::new(vec![
+///     Field::new("tags", DataType::List(
+///         Arc::new(Field::new("item", DataType::Utf8, true))
+///     ), true),
+/// ]));
+///
+/// // Array filter with supported predicate: can be pushed down
+/// let expr = array_has_all(col("tags"), make_array(vec![
+///     Expr::Literal(ScalarValue::Utf8(Some("rust".to_string())), None)
+/// ]));
+/// let expr = logical2physical(&expr, &schema);
+/// assert!(can_expr_be_pushed_down_with_schemas(&expr, &schema));
+/// ```
 pub fn can_expr_be_pushed_down_with_schemas(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &Schema,
@@ -381,7 +530,7 @@ pub fn can_expr_be_pushed_down_with_schemas(
     }
 }
 
-/// Calculate the total compressed size of all `Column`'s required for
+/// Calculate the total compressed size of all leaf columns required for
 /// predicate `Expr`.
 ///
 /// This value represents the total amount of IO required to evaluate the
@@ -408,28 +557,33 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
     Ok(false)
 }
 
-/// Build a [`RowFilter`] from the given predicate `Expr` if possible
+/// Build a [`RowFilter`] from the given predicate expression if possible.
 ///
-/// # returns
-/// * `Ok(Some(row_filter))` if the expression can be used as RowFilter
-/// * `Ok(None)` if the expression cannot be used as an RowFilter
+/// # Arguments
+/// * `expr` - The filter predicate, already adapted to reference columns in `file_schema`
+/// * `file_schema` - The Arrow schema of the parquet file (the result of converting
+///   the parquet schema to Arrow, potentially with type coercions applied)
+/// * `metadata` - Parquet file metadata used for cost estimation
+/// * `reorder_predicates` - If true, reorder predicates to minimize I/O
+/// * `file_metrics` - Metrics for tracking filter performance
+///
+/// # Returns
+/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
+/// * `Ok(None)` if the expression cannot be used as a RowFilter
 /// * `Err(e)` if an error occurs while building the filter
 ///
-/// Note that the returned `RowFilter` may not contains all conjuncts in the
-/// original expression. This is because some conjuncts may not be able to be
-/// evaluated as an `ArrowPredicate` and will be ignored.
+/// Note: The returned `RowFilter` may not contain all conjuncts from the original
+/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
 ///
 /// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// can not be evaluated for some reason, the returned `RowFilter` will contain
-/// `a = 1` and `c = 3`.
+/// cannot be evaluated for some reason, the returned `RowFilter` will contain
+/// only `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
-    physical_file_schema: &SchemaRef,
-    predicate_file_schema: &SchemaRef,
+    file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    schema_adapter_factory: &Arc<dyn SchemaAdapterFactory>,
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -443,13 +597,8 @@ pub fn build_row_filter(
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
-            FilterCandidateBuilder::new(
-                Arc::clone(expr),
-                Arc::clone(physical_file_schema),
-                Arc::clone(predicate_file_schema),
-                Arc::clone(schema_adapter_factory),
-            )
-            .build(metadata)
+            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
+                .build(metadata)
         })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
@@ -470,14 +619,33 @@ pub fn build_row_filter(
         });
     }
 
+    // To avoid double-counting metrics when multiple predicates are used:
+    // - All predicates should count rows_pruned (cumulative pruned rows)
+    // - Only the last predicate should count rows_matched (final result)
+    // This ensures: rows_matched + rows_pruned = total rows processed
+    let total_candidates = candidates.len();
+
     candidates
         .into_iter()
-        .map(|candidate| {
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let is_last = idx == total_candidates - 1;
+
+            // All predicates share the pruned counter (cumulative)
+            let predicate_rows_pruned = rows_pruned.clone();
+
+            // Only the last predicate tracks matched rows (final result)
+            let predicate_rows_matched = if is_last {
+                rows_matched.clone()
+            } else {
+                metrics::Count::new()
+            };
+
             DatafusionArrowPredicate::try_new(
                 candidate,
                 metadata,
-                rows_pruned.clone(),
-                rows_matched.clone(),
+                predicate_rows_pruned,
+                predicate_rows_matched,
                 time.clone(),
             )
             .map(|pred| Box::new(pred) as _)
@@ -491,19 +659,30 @@ mod test {
     use super::*;
     use datafusion_common::ScalarValue;
 
+    use arrow::array::{ListBuilder, StringBuilder};
     use arrow::datatypes::{Field, TimeUnit::Nanosecond};
-    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
-    use datafusion_expr::{col, Expr};
+    use datafusion_expr::{Expr, col};
+    use datafusion_functions_nested::array_has::{
+        array_has_all_udf, array_has_any_udf, array_has_udf,
+    };
+    use datafusion_functions_nested::expr_fn::{
+        array_has, array_has_all, array_has_any, make_array,
+    };
     use datafusion_physical_expr::planner::logical2physical;
-    use datafusion_physical_plan::metrics::{Count, Time};
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
+    };
+    use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet, Time};
 
+    use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
+    use tempfile::NamedTempFile;
 
-    // We should ignore predicate that read non-primitive columns
+    // List predicates used by the decoder should be accepted for pushdown
     #[test]
-    fn test_filter_candidate_builder_ignore_complex_types() {
+    fn test_filter_candidate_builder_supports_list_types() {
         let testdata = datafusion_common::test_util::parquet_test_data();
         let file = std::fs::File::open(format!("{testdata}/list_columns.parquet"))
             .expect("opening file");
@@ -519,19 +698,18 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
 
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            table_schema.clone(),
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(metadata)
-        .expect("building candidate");
+        let list_index = table_schema
+            .index_of("int64_list")
+            .expect("list column should exist");
 
-        assert!(candidate.is_none());
+        let candidate = FilterCandidateBuilder::new(expr, table_schema)
+            .build(metadata)
+            .expect("building candidate")
+            .expect("list pushdown should be supported");
+
+        assert_eq!(candidate.projection.leaf_indices, vec![list_index]);
     }
 
     #[test]
@@ -559,17 +737,14 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
-        let table_schema = Arc::new(table_schema.clone());
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema.clone(),
-            table_schema.clone(),
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -600,16 +775,15 @@ mod test {
             None,
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
-        let candidate = FilterCandidateBuilder::new(
-            expr,
-            file_schema,
-            table_schema,
-            schema_adapter_factory,
-        )
-        .build(&metadata)
-        .expect("building candidate")
-        .expect("candidate expected");
+        // Rewrite the expression to add CastExpr for type coercion
+        let expr = DefaultPhysicalExprAdapterFactory {}
+            .create(Arc::new(table_schema), Arc::clone(&file_schema))
+            .rewrite(expr)
+            .expect("rewriting expression");
+        let candidate = FilterCandidateBuilder::new(expr, file_schema)
+            .build(&metadata)
+            .expect("building candidate")
+            .expect("candidate expected");
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
             candidate,
@@ -625,14 +799,233 @@ mod test {
     }
 
     #[test]
-    fn nested_data_structures_prevent_pushdown() {
+    fn struct_data_structures_prevent_pushdown() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+            ),
+            true,
+        )]));
+
+        let expr = col("struct_col").is_not_null();
+        let expr = logical2physical(&expr, &table_schema);
+
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn mixed_primitive_and_struct_prevents_pushdown() {
+        // Even when a predicate contains both primitive and unsupported nested columns,
+        // the entire predicate should not be pushed down because the struct column
+        // cannot be evaluated during Parquet decoding.
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "struct_col",
+                DataType::Struct(
+                    vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+                ),
+                true,
+            ),
+            Field::new("int_col", DataType::Int32, false),
+        ]));
+
+        // Expression: (struct_col IS NOT NULL) AND (int_col = 5)
+        // Even though int_col is primitive, the presence of struct_col in the
+        // conjunction should prevent pushdown of the entire expression.
+        let expr = col("struct_col")
+            .is_not_null()
+            .and(col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None)));
+        let expr = logical2physical(&expr, &table_schema);
+
+        // The entire expression should not be pushed down
+        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+
+        // However, just the int_col predicate alone should be pushable
+        let expr_int_only =
+            col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None));
+        let expr_int_only = logical2physical(&expr_int_only, &table_schema);
+        assert!(can_expr_be_pushed_down_with_schemas(
+            &expr_int_only,
+            &table_schema
+        ));
+    }
+
+    #[test]
+    fn nested_lists_allow_pushdown_checks() {
         let table_schema = Arc::new(get_lists_table_schema());
 
         let expr = col("utf8_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
         check_expression_can_evaluate_against_schema(&expr, &table_schema);
 
-        assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+        assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn array_has_all_pushdown_filters_rows() {
+        // Test array_has_all: checks if array contains all of ["c"]
+        // Rows with "c": row 1 and row 2
+        let expr = array_has_all(
+            col("letters"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        );
+        test_array_predicate_pushdown("array_has_all", expr, 1, 2, true);
+    }
+
+    /// Helper function to test array predicate pushdown functionality.
+    ///
+    /// Creates a Parquet file with a list column, applies the given predicate,
+    /// and verifies that rows are correctly filtered during decoding.
+    fn test_array_predicate_pushdown(
+        func_name: &str,
+        predicate_expr: Expr,
+        expected_pruned: usize,
+        expected_matched: usize,
+        expect_list_support: bool,
+    ) {
+        let item_field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "letters",
+            DataType::List(item_field),
+            true,
+        )]));
+
+        let mut builder = ListBuilder::new(StringBuilder::new());
+        // Row 0: ["a", "b"]
+        builder.values().append_value("a");
+        builder.values().append_value("b");
+        builder.append(true);
+
+        // Row 1: ["c"]
+        builder.values().append_value("c");
+        builder.append(true);
+
+        // Row 2: ["c", "d"]
+        builder.values().append_value("c");
+        builder.values().append_value("d");
+        builder.append(true);
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(builder.finish())])
+                .expect("record batch");
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), schema, None).expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(reader_file)
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        let expr = logical2physical(&predicate_expr, &file_schema);
+        if expect_list_support {
+            assert!(supports_list_predicates(&expr));
+        }
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
+
+        let row_filter =
+            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
+                .expect("building row filter")
+                .expect("row filter should exist");
+
+        let reader = parquet_reader_builder
+            .with_row_filter(row_filter)
+            .build()
+            .expect("build reader");
+
+        let mut total_rows = 0;
+        for batch in reader {
+            let batch = batch.expect("record batch");
+            total_rows += batch.num_rows();
+        }
+
+        assert_eq!(
+            file_metrics.pushdown_rows_pruned.value(),
+            expected_pruned,
+            "{func_name}: expected {expected_pruned} pruned rows"
+        );
+        assert_eq!(
+            file_metrics.pushdown_rows_matched.value(),
+            expected_matched,
+            "{func_name}: expected {expected_matched} matched rows"
+        );
+        assert_eq!(
+            total_rows, expected_matched,
+            "{func_name}: expected {expected_matched} total rows"
+        );
+    }
+
+    #[test]
+    fn array_has_pushdown_filters_rows() {
+        // Test array_has: checks if "c" is in the array
+        // Rows with "c": row 1 and row 2
+        let expr = array_has(
+            col("letters"),
+            Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
+        );
+        test_array_predicate_pushdown("array_has", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_any_pushdown_filters_rows() {
+        // Test array_has_any: checks if array contains any of ["a", "d"]
+        // Row 0 has "a", row 2 has "d" - both should match
+        let expr = array_has_any(
+            col("letters"),
+            make_array(vec![
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
+            ]),
+        );
+        test_array_predicate_pushdown("array_has_any", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_udf_pushdown_filters_rows() {
+        let expr = array_has_udf().call(vec![
+            col("letters"),
+            Expr::Literal(ScalarValue::Utf8(Some("c".to_string())), None),
+        ]);
+
+        test_array_predicate_pushdown("array_has_udf", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_all_udf_pushdown_filters_rows() {
+        let expr = array_has_all_udf().call(vec![
+            col("letters"),
+            make_array(vec![Expr::Literal(
+                ScalarValue::Utf8(Some("c".to_string())),
+                None,
+            )]),
+        ]);
+
+        test_array_predicate_pushdown("array_has_all_udf", expr, 1, 2, true);
+    }
+
+    #[test]
+    fn array_has_any_udf_pushdown_filters_rows() {
+        let expr = array_has_any_udf().call(vec![
+            col("letters"),
+            make_array(vec![
+                Expr::Literal(ScalarValue::Utf8(Some("a".to_string())), None),
+                Expr::Literal(ScalarValue::Utf8(Some("d".to_string())), None),
+            ]),
+        ]);
+
+        test_array_predicate_pushdown("array_has_any_udf", expr, 1, 2, true);
     }
 
     #[test]

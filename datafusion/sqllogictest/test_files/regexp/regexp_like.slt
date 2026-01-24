@@ -251,9 +251,8 @@ logical_plan
 01)Filter: dict_table.column1 LIKE Utf8("%oo%")
 02)--TableScan: dict_table projection=[column1]
 physical_plan
-01)CoalesceBatchesExec: target_batch_size=8192
-02)--FilterExec: column1@0 LIKE %oo%
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: column1@0 LIKE %oo%
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Ensure casting / coercion works for all operators
 # (there should be no casts to Utf8)

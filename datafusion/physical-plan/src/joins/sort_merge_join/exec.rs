@@ -23,19 +23,19 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::sort_merge_join::metrics::SortMergeJoinMetrics;
 use crate::joins::sort_merge_join::stream::SortMergeJoinStream;
 use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
-    JoinOnRef,
+    JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, reorder_output_after_swap,
+    symmetric_join_output_partitioning,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
-    join_allows_pushdown, join_table_borders, new_join_children,
-    physical_to_column_exprs, update_join_on, ProjectionExec,
+    ProjectionExec, join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_on,
 };
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -45,12 +45,13 @@ use crate::{
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    internal_err, plan_err, JoinSide, JoinType, NullEquality, Result,
+    JoinSide, JoinType, NullEquality, Result, assert_eq_or_internal_err, internal_err,
+    plan_err,
 };
-use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
-use datafusion_physical_expr_common::physical_expr::{fmt_sql, PhysicalExprRef};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, OrderingRequirements};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
@@ -359,7 +360,8 @@ impl DisplayAs for SortMergeJoinExec {
                     };
                 write!(
                     f,
-                    "SortMergeJoin: join_type={:?}, on=[{}]{}{}",
+                    "{}: join_type={:?}, on=[{}]{}{}",
+                    Self::static_name(),
                     self.join_type,
                     on,
                     self.filter.as_ref().map_or_else(
@@ -459,12 +461,12 @@ impl ExecutionPlan for SortMergeJoinExec {
     ) -> Result<SendableRecordBatchStream> {
         let left_partitions = self.left.output_partitioning().partition_count();
         let right_partitions = self.right.output_partitioning().partition_count();
-        if left_partitions != right_partitions {
-            return internal_err!(
-                "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
+        assert_eq_or_internal_err!(
+            left_partitions,
+            right_partitions,
+            "Invalid SortMergeJoinExec, partition count mismatch {left_partitions}!={right_partitions},\
                  consider using RepartitionExec"
-            );
-        }
+        );
         let (on_left, on_right) = self.on.iter().cloned().unzip();
         let (streamed, buffered, on_streamed, on_buffered) =
             if SortMergeJoinExec::probe_side(&self.join_type) == JoinSide::Left {
@@ -522,16 +524,21 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_some() {
-            return Ok(Statistics::new_unknown(&self.schema()));
-        }
+        // SortMergeJoinExec uses symmetric hash partitioning where both left and right
+        // inputs are hash-partitioned on the join keys. This means partition `i` of the
+        // left input is joined with partition `i` of the right input.
+        //
+        // Therefore, partition-specific statistics can be computed by getting the
+        // partition-specific statistics from both children and combining them via
+        // `estimate_join_statistics`.
+        //
         // TODO stats: it is not possible in general to know the output size of joins
         // There are some special cases though, for example:
         // - `A LEFT JOIN B ON A.col=B.col` with `COUNT_DISTINCT(B.col)=COUNT(B.col)`
         estimate_join_statistics(
-            self.left.partition_statistics(None)?,
-            self.right.partition_statistics(None)?,
-            self.on.clone(),
+            self.left.partition_statistics(partition)?,
+            self.right.partition_statistics(partition)?,
+            &self.on,
             &self.join_type,
             &self.schema,
         )

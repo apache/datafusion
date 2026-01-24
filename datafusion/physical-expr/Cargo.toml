@@ -40,6 +40,9 @@ workspace = true
 [lib]
 name = "datafusion_physical_expr"
 
+[features]
+recursive_protection = ["dep:recursive"]
+
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
@@ -48,13 +51,15 @@ datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
-half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true, features = ["use_std"] }
 parking_lot = { workspace = true }
-paste = "^1.0"
+paste = { workspace = true }
 petgraph = "0.8.3"
+recursive = { workspace = true, optional = true }
+tokio = { workspace = true }
+half = { workspace = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -79,3 +84,6 @@ name = "is_null"
 [[bench]]
 harness = false
 name = "binary_op"
+
+[package.metadata.cargo-machete]
+ignored = ["half"]

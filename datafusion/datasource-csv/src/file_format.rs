@@ -31,23 +31,24 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    exec_err, not_impl_err, DataFusionError, GetExt, Result, Statistics,
-    DEFAULT_CSV_EXTENSION,
+    DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics, exec_err,
+    not_impl_err,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::TableSchema;
 use datafusion_datasource::decoder::Decoder;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
-    FileFormat, FileFormatFactory, DEFAULT_SCHEMA_INFER_MAX_RECORD,
+    DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::{DataSink, DataSinkExec};
+use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -58,8 +59,8 @@ use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_datasource::source::DataSourceExec;
 use futures::stream::BoxStream;
-use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
-use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
+use futures::{Stream, StreamExt, TryStreamExt, pin_mut};
+use object_store::{ObjectMeta, ObjectStore, delimited::newline_delimited_stream};
 use regex::Regex;
 
 #[derive(Default)]
@@ -210,6 +211,11 @@ impl CsvFormat {
 
     /// Set a limit in terms of records to scan to infer the schema
     /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
+    ///
+    /// # Behavior when set to 0
+    ///
+    /// When `max_rec` is set to 0, schema inference is disabled and all fields
+    /// will be inferred as `Utf8` (string) type, regardless of their actual content.
     pub fn with_schema_infer_max_rec(mut self, max_rec: usize) -> Self {
         self.options.schema_infer_max_rec = Some(max_rec);
         self
@@ -434,20 +440,23 @@ impl FileFormat for CsvFormat {
             .newlines_in_values
             .unwrap_or_else(|| state.config_options().catalog.newlines_in_values);
 
-        let conf_builder = FileScanConfigBuilder::from(conf)
+        let mut csv_options = self.options.clone();
+        csv_options.has_header = Some(has_header);
+        csv_options.newlines_in_values = Some(newlines_in_values);
+
+        // Get the existing CsvSource and update its options
+        // We need to preserve the table_schema from the original source (which includes partition columns)
+        let csv_source = conf
+            .file_source
+            .as_any()
+            .downcast_ref::<CsvSource>()
+            .expect("file_source should be a CsvSource");
+        let source = Arc::new(csv_source.clone().with_csv_options(csv_options));
+
+        let config = FileScanConfigBuilder::from(conf)
             .with_file_compression_type(self.options.compression.into())
-            .with_newlines_in_values(newlines_in_values);
-
-        let truncated_rows = self.options.truncated_rows.unwrap_or(false);
-        let source = Arc::new(
-            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
-                .with_escape(self.options.escape)
-                .with_terminator(self.options.terminator)
-                .with_comment(self.options.comment)
-                .with_truncate_rows(truncated_rows),
-        );
-
-        let config = conf_builder.with_source(source).build();
+            .with_source(source)
+            .build();
 
         Ok(DataSourceExec::from_data_source(config))
     }
@@ -489,8 +498,12 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 
-    fn file_source(&self) -> Arc<dyn FileSource> {
-        Arc::new(CsvSource::default())
+    fn file_source(&self, table_schema: TableSchema) -> Arc<dyn FileSource> {
+        let mut csv_options = self.options.clone();
+        if csv_options.has_header.is_none() {
+            csv_options.has_header = Some(true);
+        }
+        Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options))
     }
 }
 
@@ -521,6 +534,7 @@ impl CsvFormat {
         let mut column_names = vec![];
         let mut column_type_possibilities = vec![];
         let mut record_number = -1;
+        let initial_records_to_read = records_to_read;
 
         pin_mut!(stream);
 
@@ -611,12 +625,31 @@ impl CsvFormat {
             }
         }
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(
+            column_names,
+            column_type_possibilities,
+            initial_records_to_read == 0,
+        );
         Ok((schema, total_records_read))
     }
 }
 
-fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Schema {
+/// Builds a schema from column names and their possible data types.
+///
+/// # Arguments
+///
+/// * `names` - Vector of column names
+/// * `types` - Vector of possible data types for each column (as HashSets)
+/// * `disable_inference` - When true, forces all columns with no inferred types to be Utf8.
+///   This should be set to true when `schema_infer_max_rec` is explicitly
+///   set to 0, indicating the user wants to skip type inference and treat
+///   all fields as strings. When false, columns with no inferred types
+///   will be set to Null, allowing schema merging to work properly.
+fn build_schema_helper(
+    names: Vec<String>,
+    types: Vec<HashSet<DataType>>,
+    disable_inference: bool,
+) -> Schema {
     let fields = names
         .into_iter()
         .zip(types)
@@ -629,10 +662,17 @@ fn build_schema_helper(names: Vec<String>, types: Vec<HashSet<DataType>>) -> Sch
             data_type_possibilities.remove(&DataType::Null);
 
             match data_type_possibilities.len() {
-                // Return Null for columns with only nulls / empty files
-                // This allows schema merging to work when reading folders
-                // such files along with normal files.
-                0 => Field::new(field_name, DataType::Null, true),
+                // When no types were inferred (empty HashSet):
+                // - If schema_infer_max_rec was explicitly set to 0, return Utf8
+                // - Otherwise return Null (whether from reading null values or empty files)
+                //   This allows schema merging to work when reading folders with empty files
+                0 => {
+                    if disable_inference {
+                        Field::new(field_name, DataType::Utf8, true)
+                    } else {
+                        Field::new(field_name, DataType::Null, true)
+                    }
+                }
                 1 => Field::new(
                     field_name,
                     data_type_possibilities.iter().next().unwrap().clone(),
@@ -772,6 +812,7 @@ impl FileSink for CsvSink {
             context,
             serializer,
             self.writer_options.compression.into(),
+            self.writer_options.compression_level,
             object_store,
             demux_task,
             file_stream_rx,
@@ -823,7 +864,7 @@ mod tests {
             HashSet::from([DataType::Utf8]), // col5
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // Verify schema has 5 columns
         assert_eq!(schema.fields().len(), 5);
@@ -853,7 +894,7 @@ mod tests {
             HashSet::from([DataType::Utf8]),                     // Should remain Utf8
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // col1 should be Float64 due to Int64 + Float64 = Float64
         assert_eq!(*schema.field(0).data_type(), DataType::Float64);
@@ -871,7 +912,7 @@ mod tests {
             HashSet::from([DataType::Boolean, DataType::Int64, DataType::Utf8]), // Should resolve to Utf8 due to conflicts
         ];
 
-        let schema = build_schema_helper(column_names, column_type_possibilities);
+        let schema = build_schema_helper(column_names, column_type_possibilities, false);
 
         // Should default to Utf8 for conflicting types
         assert_eq!(*schema.field(0).data_type(), DataType::Utf8);

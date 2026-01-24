@@ -148,19 +148,19 @@ use std::sync::Arc;
 use super::utils::{
     convert_duration_type_to_interval, convert_interval_type_to_duration, get_inverse_op,
 };
-use crate::expressions::{BinaryExpr, Literal};
-use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
+use crate::expressions::{BinaryExpr, Literal};
+use crate::utils::{ExprTreeNode, build_dag};
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
+use datafusion_common::{Result, internal_err, not_impl_err};
 use datafusion_expr::Operator;
+use datafusion_expr::interval_arithmetic::{Interval, apply_operator, satisfy_greater};
 
+use petgraph::Outgoing;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::{DefaultIx, StableGraph};
 use petgraph::visit::{Bfs, Dfs, DfsPostOrder, EdgeRef};
-use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
 /// is used to compute ranges for expressions through interval arithmetic.
@@ -345,7 +345,7 @@ pub fn propagate_comparison(
     left_child: &Interval,
     right_child: &Interval,
 ) -> Result<Option<(Interval, Interval)>> {
-    if parent == &Interval::CERTAINLY_TRUE {
+    if parent == &Interval::TRUE {
         match op {
             Operator::Eq => left_child.intersect(right_child).map(|result| {
                 result.map(|intersection| (intersection.clone(), intersection))
@@ -360,7 +360,7 @@ pub fn propagate_comparison(
                 "The operator must be a comparison operator to propagate intervals"
             ),
         }
-    } else if parent == &Interval::CERTAINLY_FALSE {
+    } else if parent == &Interval::FALSE {
         match op {
             Operator::Eq => {
                 // TODO: Propagation is not possible until we support interval sets.
@@ -518,10 +518,10 @@ impl ExprIntervalGraph {
         // (1) given_range ⊇ bounds => Nothing to propagate
         // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
         // (3) Disjoint sets => Infeasible
-        if given_range.contains(bounds)? == Interval::CERTAINLY_TRUE {
+        if given_range.contains(bounds)? == Interval::TRUE {
             // First case:
             Ok(PropagationResult::CannotPropagate)
-        } else if bounds.contains(&given_range)? != Interval::CERTAINLY_FALSE {
+        } else if bounds.contains(&given_range)? != Interval::FALSE {
             // Second case:
             let result = self.propagate_constraints(given_range);
             self.update_intervals(leaf_bounds);
@@ -643,7 +643,7 @@ impl ExprIntervalGraph {
             let node_interval = self.graph[node].interval();
             // Special case: true OR could in principle be propagated by 3 interval sets,
             // (i.e. left true, or right true, or both true) however we do not support this yet.
-            if node_interval == &Interval::CERTAINLY_TRUE
+            if node_interval == &Interval::TRUE
                 && self.graph[node]
                     .expr
                     .as_any()
@@ -780,7 +780,7 @@ mod tests {
     use rand::{Rng, SeedableRng};
     use rstest::*;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn experiment(
         expr: Arc<dyn PhysicalExpr>,
         exprs_with_interval: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
@@ -815,8 +815,7 @@ mod tests {
             .map(|((_, interval), (_, index))| (*index, interval.clone()))
             .collect_vec();
 
-        let exp_result =
-            graph.update_ranges(&mut col_stat_nodes[..], Interval::CERTAINLY_TRUE)?;
+        let exp_result = graph.update_ranges(&mut col_stat_nodes[..], Interval::TRUE)?;
         assert_eq!(exp_result, result);
         col_stat_nodes.iter().zip(expected_nodes.iter()).for_each(
             |((_, calculated_interval_node), (_, expected))| {
@@ -1575,12 +1574,7 @@ mod tests {
                 Interval::make(None, Some(999_i64))?,
                 Interval::make(Some(1000_i64), Some(1000_i64))?,
             ))),
-            propagate_comparison(
-                &Operator::Lt,
-                &Interval::CERTAINLY_TRUE,
-                &left,
-                &right
-            )?
+            propagate_comparison(&Operator::Lt, &Interval::TRUE, &left, &right)?
         );
 
         let left =
@@ -1604,12 +1598,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(1000), None),
                 )?
             ))),
-            propagate_comparison(
-                &Operator::Lt,
-                &Interval::CERTAINLY_TRUE,
-                &left,
-                &right
-            )?
+            propagate_comparison(&Operator::Lt, &Interval::TRUE, &left, &right)?
         );
 
         let left = Interval::make_unbounded(&DataType::Timestamp(
@@ -1635,12 +1624,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(1000), Some("+05:00".into())),
                 )?
             ))),
-            propagate_comparison(
-                &Operator::Lt,
-                &Interval::CERTAINLY_TRUE,
-                &left,
-                &right
-            )?
+            propagate_comparison(&Operator::Lt, &Interval::TRUE, &left, &right)?
         );
 
         Ok(())
@@ -1653,38 +1637,38 @@ mod tests {
             Operator::Or,
             Arc::new(Column::new("b", 1)),
         ));
-        let parent = Interval::CERTAINLY_FALSE;
+        let parent = Interval::FALSE;
         let children_set = vec![
-            vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN],
-            vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_FALSE],
-            vec![&Interval::CERTAINLY_FALSE, &Interval::CERTAINLY_FALSE],
-            vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN],
+            vec![&Interval::FALSE, &Interval::TRUE_OR_FALSE],
+            vec![&Interval::TRUE_OR_FALSE, &Interval::FALSE],
+            vec![&Interval::FALSE, &Interval::FALSE],
+            vec![&Interval::TRUE_OR_FALSE, &Interval::TRUE_OR_FALSE],
         ];
         for children in children_set {
             assert_eq!(
                 expr.propagate_constraints(&parent, &children)?.unwrap(),
-                vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE],
+                vec![Interval::FALSE, Interval::FALSE],
             );
         }
 
-        let parent = Interval::CERTAINLY_FALSE;
+        let parent = Interval::FALSE;
         let children_set = vec![
-            vec![&Interval::CERTAINLY_TRUE, &Interval::UNCERTAIN],
-            vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
+            vec![&Interval::TRUE, &Interval::TRUE_OR_FALSE],
+            vec![&Interval::TRUE_OR_FALSE, &Interval::TRUE],
         ];
         for children in children_set {
             assert_eq!(expr.propagate_constraints(&parent, &children)?, None,);
         }
 
-        let parent = Interval::CERTAINLY_TRUE;
-        let children = vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN];
+        let parent = Interval::TRUE;
+        let children = vec![&Interval::FALSE, &Interval::TRUE_OR_FALSE];
         assert_eq!(
             expr.propagate_constraints(&parent, &children)?.unwrap(),
-            vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE]
+            vec![Interval::FALSE, Interval::TRUE]
         );
 
-        let parent = Interval::CERTAINLY_TRUE;
-        let children = vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN];
+        let parent = Interval::TRUE;
+        let children = vec![&Interval::TRUE_OR_FALSE, &Interval::TRUE_OR_FALSE];
         assert_eq!(
             expr.propagate_constraints(&parent, &children)?.unwrap(),
             // Empty means unchanged intervals.
@@ -1701,25 +1685,22 @@ mod tests {
             Operator::And,
             Arc::new(Column::new("b", 1)),
         ));
-        let parent = Interval::CERTAINLY_FALSE;
+        let parent = Interval::FALSE;
         let children_and_results_set = vec![
             (
-                vec![&Interval::CERTAINLY_TRUE, &Interval::UNCERTAIN],
-                vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_FALSE],
+                vec![&Interval::TRUE, &Interval::TRUE_OR_FALSE],
+                vec![Interval::TRUE, Interval::FALSE],
             ),
             (
-                vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
-                vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE],
+                vec![&Interval::TRUE_OR_FALSE, &Interval::TRUE],
+                vec![Interval::FALSE, Interval::TRUE],
             ),
             (
-                vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN],
+                vec![&Interval::TRUE_OR_FALSE, &Interval::TRUE_OR_FALSE],
                 // Empty means unchanged intervals.
                 vec![],
             ),
-            (
-                vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN],
-                vec![],
-            ),
+            (vec![&Interval::FALSE, &Interval::TRUE_OR_FALSE], vec![]),
         ];
         for (children, result) in children_and_results_set {
             assert_eq!(

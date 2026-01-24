@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::parquet::utils::MetricsFinder;
-use crate::parquet::{create_data_batch, Scenario};
+use crate::parquet::{Scenario, create_data_batch};
 
 use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
@@ -29,17 +29,17 @@ use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{assert_contains, DFSchema};
+use datafusion_common::{DFSchema, assert_contains};
 use datafusion_datasource_parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_expr::{col, lit, Expr};
-use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use datafusion_datasource::source::DataSourceExec;
-use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::properties::WriterProperties;
 use tempfile::NamedTempFile;
 
@@ -257,7 +257,10 @@ async fn bad_selection() {
     .await
     .unwrap_err();
     let err_string = err.to_string();
-    assert_contains!(&err_string, "Internal error: Invalid ParquetAccessPlan Selection. Row group 0 has 5 rows but selection only specifies 4 rows");
+    assert_contains!(
+        &err_string,
+        "Row group 0 has 5 rows but selection only specifies 4 rows."
+    );
 }
 
 /// Return a RowSelection of 1 rows from a row group of 5 rows
@@ -355,11 +358,11 @@ impl TestFull {
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            Arc::new(ParquetSource::default().with_predicate(predicate))
+            Arc::new(ParquetSource::new(schema.clone()).with_predicate(predicate))
         } else {
-            Arc::new(ParquetSource::default())
+            Arc::new(ParquetSource::new(schema.clone()))
         };
-        let config = FileScanConfigBuilder::new(object_store_url, schema.clone(), source)
+        let config = FileScanConfigBuilder::new(object_store_url, source)
             .with_file(partitioned_file)
             .build();
 

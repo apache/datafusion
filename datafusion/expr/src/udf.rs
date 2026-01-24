@@ -19,13 +19,16 @@
 
 use crate::async_udf::AsyncScalarUDF;
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
-use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
+use crate::preimage::PreimageResult;
+use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::{DataType, Field, FieldRef};
+#[cfg(debug_assertions)]
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -54,8 +57,8 @@ use std::sync::Arc;
 /// compatibility with the older API.
 ///
 /// [`create_udf`]: crate::expr_fn::create_udf
-/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/simple_udf.rs
-/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`simple_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/simple_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 #[derive(Debug, Clone)]
 pub struct ScalarUDF {
     inner: Arc<dyn ScalarUDFImpl>,
@@ -89,7 +92,8 @@ impl PartialOrd for ScalarUDF {
             "Detected incorrect implementation of PartialEq when comparing functions: '{}' and '{}'. \
             The functions compare as equal, but they are not equal based on general properties that \
             the PartialOrd implementation observes,",
-            self.name(), other.name()
+            self.name(),
+            other.name()
         );
         Some(cmp)
     }
@@ -218,15 +222,27 @@ impl ScalarUDF {
     pub fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
     }
 
     #[deprecated(since = "50.0.0", note = "Use `return_field_from_args` instead.")]
     pub fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
+    }
+
+    /// Return a preimage
+    ///
+    /// See [`ScalarUDFImpl::preimage`] for more details.
+    pub fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
     }
 
     /// Invoke the function on `args`, returning the appropriate result.
@@ -240,13 +256,15 @@ impl ScalarUDF {
         // This doesn't use debug_assert!, but it's meant to run anywhere except on production. It's same in spirit, thus conditioning on debug_assertions.
         #[cfg(debug_assertions)]
         {
-            if &result.data_type() != return_field.data_type() {
-                return datafusion_common::internal_err!("Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
-                        self.name(),
-                        result.data_type(),
-                        return_field.data_type()
-                    );
-            }
+            let result_data_type = result.data_type();
+            let expected_type = return_field.data_type();
+            assert_or_internal_err!(
+                result_data_type == *expected_type,
+                "Function '{}' returned value of type '{:?}' while the following type was promised at planning time and expected: '{:?}'",
+                self.name(),
+                result_data_type,
+                expected_type
+            );
             // TODO verify return data is non-null when it was promised to be?
         }
         Ok(result)
@@ -408,7 +426,7 @@ pub struct ReturnFieldArgs<'a> {
 /// See [`advanced_udf.rs`] for a full example with complete implementation and
 /// [`ScalarUDF`] for other available options.
 ///
-/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
+/// [`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/udf/advanced_udf.rs
 ///
 /// # Basic Example
 /// ```
@@ -605,7 +623,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
     ///     // report output is only nullable if any one of the arguments are nullable
     ///     let nullable = args.arg_fields.iter().any(|f| f.is_nullable());
-    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, true));
+    ///     let field = Arc::new(Field::new("ignored_name", DataType::Int32, nullable));
     ///     Ok(field)
     /// }
     /// # }
@@ -686,9 +704,35 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        _info: &dyn SimplifyInfo,
+        _info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         Ok(ExprSimplifyResult::Original(args))
+    }
+
+    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    ///
+    /// A preimage is a single contiguous [`Interval`] of values where the function
+    /// will always return `lit_value`
+    ///
+    /// Implementations should return intervals with an inclusive lower bound and
+    /// exclusive upper bound.
+    ///
+    /// This rewrite is described in the [ClickHouse Paper] and is particularly
+    /// useful for simplifying expressions `date_part` or equivalent functions. The
+    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
+    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
+    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    ///
+    /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
+    fn preimage(
+        &self,
+        _args: &[Expr],
+        _lit_expr: &Expr,
+        _info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        Ok(PreimageResult::None)
     }
 
     /// Returns true if some of this `exprs` subexpressions may not be evaluated
@@ -897,7 +941,7 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     }
 
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.inner.is_nullable(args, schema)
     }
 
@@ -916,9 +960,18 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
     fn simplify(
         &self,
         args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         self.inner.simplify(args, info)
+    }
+
+    fn preimage(
+        &self,
+        args: &[Expr],
+        lit_expr: &Expr,
+        info: &SimplifyContext,
+    ) -> Result<PreimageResult> {
+        self.inner.preimage(args, lit_expr, info)
     }
 
     fn conditional_arguments<'a>(

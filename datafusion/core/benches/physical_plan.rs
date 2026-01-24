@@ -32,7 +32,7 @@ use tokio::runtime::Runtime;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
-    expressions::{col, PhysicalSortExpr},
+    expressions::{PhysicalSortExpr, col},
 };
 use datafusion::prelude::SessionContext;
 use datafusion_datasource::memory::MemorySourceConfig;
@@ -40,6 +40,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 // Initialize the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
+#[expect(clippy::needless_pass_by_value)]
 fn sort_preserving_merge_operator(
     session_ctx: Arc<SessionContext>,
     rt: &Runtime,

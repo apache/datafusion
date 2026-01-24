@@ -34,6 +34,7 @@ use std::time::Duration;
 use test_utils::AccessLogGenerator;
 use tokio::runtime::Runtime;
 
+#[expect(clippy::needless_pass_by_value)]
 fn load_csv(
     ctx: Arc<Mutex<SessionContext>>,
     rt: &Runtime,

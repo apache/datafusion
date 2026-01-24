@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
@@ -23,14 +24,12 @@
 
 extern crate wasm_bindgen;
 
-use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_common::ScalarValue;
 use datafusion_expr::lit;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
-use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -62,10 +61,7 @@ pub fn basic_exprs() {
     log(&format!("Expr: {expr:?}"));
 
     // Simplify Expr (using datafusion-phys-expr and datafusion-optimizer)
-    let schema = Arc::new(DFSchema::empty());
-    let execution_props = ExecutionProps::new();
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::new(&execution_props).with_schema(schema));
+    let simplifier = ExprSimplifier::new(SimplifyContext::default());
     let simplified_expr = simplifier.simplify(expr).unwrap();
     log(&format!("Simplified Expr: {simplified_expr:?}"));
 }
@@ -81,7 +77,11 @@ pub fn basic_parse() {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use super::*;
+    use bytes::Bytes;
+    use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::{
         arrow::{
             array::{ArrayRef, Int32Array, RecordBatch, StringArray},
@@ -89,8 +89,9 @@ mod test {
         },
         datasource::MemTable,
         execution::context::SessionContext,
+        prelude::CsvReadOptions,
     };
-    use datafusion_common::test_util::batches_to_string;
+    use datafusion_common::{DataFusionError, test_util::batches_to_string};
     use datafusion_execution::{
         config::SessionConfig,
         disk_manager::{DiskManagerBuilder, DiskManagerMode},
@@ -98,7 +99,8 @@ mod test {
     };
     use datafusion_physical_plan::collect;
     use datafusion_sql::parser::DFParser;
-    use object_store::{memory::InMemory, path::Path, ObjectStore};
+    use futures::{StreamExt, TryStreamExt, stream};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory, path::Path};
     use url::Url;
     use wasm_bindgen_test::wasm_bindgen_test;
 
@@ -249,6 +251,57 @@ mod test {
         let df = session_ctx.sql("SELECT * FROM a").await.unwrap();
 
         let result = df.collect().await.unwrap();
+
+        assert_eq!(
+            batches_to_string(&result),
+            "+----+-------+\n\
+             | id | value |\n\
+             +----+-------+\n\
+             | 1  | a     |\n\
+             | 2  | b     |\n\
+             | 3  | c     |\n\
+             +----+-------+"
+        );
+    }
+
+    #[wasm_bindgen_test(unsupported = tokio::test)]
+    async fn test_csv_read_xz_compressed() {
+        let csv_data = "id,value\n1,a\n2,b\n3,c\n";
+        let input = Bytes::from(csv_data.as_bytes().to_vec());
+        let input_stream =
+            stream::iter(vec![Ok::<Bytes, DataFusionError>(input)]).boxed();
+
+        let compressed_stream = FileCompressionType::XZ
+            .convert_to_compress_stream(input_stream)
+            .unwrap();
+        let compressed_data: Vec<Bytes> = compressed_stream.try_collect().await.unwrap();
+
+        let store = InMemory::new();
+        let path = Path::from("data.csv.xz");
+        store
+            .put(&path, PutPayload::from_iter(compressed_data))
+            .await
+            .unwrap();
+
+        let url = Url::parse("memory://").unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_object_store(&url, Arc::new(store));
+
+        let csv_options = CsvReadOptions::new()
+            .has_header(true)
+            .file_compression_type(FileCompressionType::XZ)
+            .file_extension("csv.xz");
+        ctx.register_csv("compressed", "memory:///data.csv.xz", csv_options)
+            .await
+            .unwrap();
+
+        let result = ctx
+            .sql("SELECT * FROM compressed")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
 
         assert_eq!(
             batches_to_string(&result),

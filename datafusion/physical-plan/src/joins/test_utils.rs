@@ -25,11 +25,11 @@ use crate::joins::{
 };
 use crate::repartition::RepartitionExec;
 use crate::test::TestMemoryExec;
-use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
+use crate::{ExecutionPlan, ExecutionPlanProperties, Partitioning, common};
 
 use arrow::array::{
-    types::IntervalDayTime, ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray,
-    RecordBatch, TimestampMillisecondArray,
+    ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
+    TimestampMillisecondArray, types::IntervalDayTime,
 };
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::pretty::pretty_format_batches;
@@ -152,6 +152,7 @@ pub async fn partitioned_hash_join_with_filter(
         None,
         PartitionMode::Partitioned,
         null_equality,
+        false, // null_aware
     )?);
 
     let mut batches = vec![];
@@ -534,9 +535,11 @@ pub fn create_memory_table(
     let right_schema = right_partition[0].schema();
     let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
+    let left = Arc::new(left);
+    let right = Arc::new(right);
     Ok((
-        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
-        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
+        Arc::new(TestMemoryExec::update_cache(&left)),
+        Arc::new(TestMemoryExec::update_cache(&right)),
     ))
 }
 

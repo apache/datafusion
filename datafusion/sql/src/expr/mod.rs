@@ -27,18 +27,20 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
-    ScalarValue,
+    DFSchema, Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::SetQuantifier;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
-    lit, Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
-    Operator, TryCast,
+    Between, BinaryExpr, Cast, Expr, ExprSchemable, GetFieldAccess, Like, Literal,
+    Operator, TryCast, lit,
 };
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_functions_nested::expr_fn::array_has;
 
 mod binary_op;
 mod function;
@@ -140,7 +142,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let RawBinaryExpr { op, left, right } = binary_expr;
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
-            self.parse_sql_binary_op(op)?,
+            self.parse_sql_binary_op(&op)?,
             Box::new(right),
         )))
     }
@@ -270,7 +272,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 expr,
                 data_type,
                 format,
-            } => self.sql_cast_to_expr(*expr, data_type, format, schema, planner_context),
+            } => {
+                self.sql_cast_to_expr(*expr, &data_type, format, schema, planner_context)
+            }
 
             SQLExpr::Cast {
                 kind: CastKind::TryCast | CastKind::SafeCast,
@@ -553,7 +557,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             SQLExpr::Struct { values, fields } => {
-                self.parse_struct(schema, planner_context, values, fields)
+                self.parse_struct(schema, planner_context, values, &fields)
             }
             SQLExpr::Position { expr, r#in } => {
                 self.sql_position_to_expr(*expr, *r#in, schema, planner_context)
@@ -575,7 +579,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     _ => {
                         return not_impl_err!(
                             "Unsupported ast node in sqltorel: {time_zone:?}"
-                        )
+                        );
                     }
                 },
             ))),
@@ -592,32 +596,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // ANY/SOME are equivalent, this field specifies which the user
                 // specified but it doesn't affect the plan so ignore the field
                 is_some: _,
-            } => {
-                let mut binary_expr = RawBinaryExpr {
-                    op: compare_op,
-                    left: self.sql_expr_to_logical_expr(
-                        *left,
-                        schema,
-                        planner_context,
-                    )?,
-                    right: self.sql_expr_to_logical_expr(
-                        *right,
-                        schema,
-                        planner_context,
-                    )?,
-                };
-                for planner in self.context_provider.get_expr_planners() {
-                    match planner.plan_any(binary_expr)? {
-                        PlannerResult::Planned(expr) => {
-                            return Ok(expr);
-                        }
-                        PlannerResult::Original(expr) => {
-                            binary_expr = expr;
-                        }
+            } => match *right {
+                SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
+                    *left,
+                    *subquery,
+                    &compare_op,
+                    SetQuantifier::Any,
+                    schema,
+                    planner_context,
+                ),
+                _ => {
+                    if compare_op != BinaryOperator::Eq {
+                        plan_err!(
+                            "Unsupported AnyOp: '{compare_op}', only '=' is supported"
+                        )
+                    } else {
+                        let left_expr =
+                            self.sql_to_expr(*left, schema, planner_context)?;
+                        let right_expr =
+                            self.sql_to_expr(*right, schema, planner_context)?;
+                        Ok(array_has(right_expr, left_expr))
                     }
                 }
-                not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
-            }
+            },
+            SQLExpr::AllOp {
+                left,
+                compare_op,
+                right,
+            } => match *right {
+                SQLExpr::Subquery(subquery) => self.parse_set_comparison_subquery(
+                    *left,
+                    *subquery,
+                    &compare_op,
+                    SetQuantifier::All,
+                    schema,
+                    planner_context,
+                ),
+                _ => not_impl_err!("ALL only supports subquery comparison currently"),
+            },
             #[expect(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
@@ -639,7 +655,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
         values: Vec<SQLExpr>,
-        fields: Vec<StructField>,
+        fields: &[StructField],
     ) -> Result<Expr> {
         if !fields.is_empty() {
             return not_impl_err!("Struct fields are not supported yet");
@@ -673,7 +689,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(SQLExpr::Identifier(_))
             | Some(SQLExpr::Value(_))
             | Some(SQLExpr::CompoundIdentifier(_)) => {
-                self.parse_struct(schema, planner_context, values, vec![])
+                self.parse_struct(schema, planner_context, values, &[])
             }
             None => not_impl_err!("Empty tuple not supported yet"),
             _ => {
@@ -833,7 +849,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn sql_like_to_expr(
         &self,
         negated: bool,
@@ -853,7 +869,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(value) => return plan_err!("Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"),
+            Some(value) => {
+                return plan_err!(
+                    "Invalid escape character in LIKE expression. Expected a single character wrapped with single quotes, got {value}"
+                );
+            }
             None => None,
         };
         Ok(Expr::Like(Like::new(
@@ -883,7 +903,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(Value::SingleQuotedString(char)) if char.len() == 1 => {
                 Some(char.chars().next().unwrap())
             }
-            Some(value) => return plan_err!("Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"),
+            Some(value) => {
+                return plan_err!(
+                    "Invalid escape character in SIMILAR TO expression. Expected a single character wrapped with single quotes, got {value}"
+                );
+            }
             None => None,
         };
         Ok(Expr::SimilarTo(Like::new(
@@ -979,7 +1003,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn sql_cast_to_expr(
         &self,
         expr: SQLExpr,
-        data_type: SQLDataType,
+        data_type: &SQLDataType,
         format: Option<CastFormat>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -988,7 +1012,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("CAST with format is not supported: {format}");
         }
 
-        let dt = self.convert_data_type_to_field(&data_type)?;
+        let dt = self.convert_data_type_to_field(data_type)?;
         let expr = self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
 
         // numeric constants are treated as seconds (rather as nanoseconds)
@@ -1204,8 +1228,8 @@ mod tests {
     use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 
-    use datafusion_common::config::ConfigOptions;
     use datafusion_common::TableReference;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
 

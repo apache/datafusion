@@ -17,12 +17,19 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::{Array, ArrayRef, NullArray};
-use arrow::compute::{kernels, CastOptions};
-use arrow::datatypes::DataType;
-use arrow::util::pretty::pretty_format_columns;
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use arrow::{
+    array::{Array, ArrayRef, Date32Array, Date64Array, NullArray},
+    compute::{CastOptions, kernels, max, min},
+    datatypes::{DataType, Field},
+    util::pretty::pretty_format_columns,
+};
+use datafusion_common::internal_datafusion_err;
+use datafusion_common::{
+    Result, ScalarValue,
+    format::DEFAULT_CAST_OPTIONS,
+    internal_err,
+    scalar::{date_to_timestamp_multiplier, ensure_timestamp_in_bounds},
+};
 use std::fmt;
 use std::sync::Arc;
 
@@ -113,10 +120,12 @@ impl ColumnarValue {
         }
     }
 
-    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
-    /// number of rows. [`Self::Scalar`] is converted by repeating the same
-    /// scalar multiple times which is not as efficient as handling the scalar
-    /// directly.
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::into_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -135,6 +144,38 @@ impl ColumnarValue {
     /// number of rows. [`Self::Scalar`] is converted by repeating the same
     /// scalar multiple times which is not as efficient as handling the scalar
     /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn into_array_of_size(self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(array)
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
+    }
+
+    /// Convert any [`Self::Scalar`] into an Arrow [`ArrayRef`] with the specified
+    /// number of rows  by repeating the same scalar multiple times,
+    /// which is not as efficient as handling the scalar directly.
+    /// [`Self::Array`] will just be returned as is.
+    ///
+    /// See [`Self::to_array_of_size`] if you need to validate the length of the output array.
     ///
     /// See [`Self::values_to_arrays`] to convert multiple columnar values into
     /// arrays of the same length.
@@ -147,6 +188,36 @@ impl ColumnarValue {
             ColumnarValue::Array(array) => Arc::clone(array),
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows)?,
         })
+    }
+
+    /// Convert a columnar value into an Arrow [`ArrayRef`] with the specified
+    /// number of rows. [`Self::Scalar`] is converted by repeating the same
+    /// scalar multiple times which is not as efficient as handling the scalar
+    /// directly.
+    /// This validates that if this is [`Self::Array`], it has the expected length.
+    ///
+    /// See [`Self::values_to_arrays`] to convert multiple columnar values into
+    /// arrays of the same length.
+    ///
+    /// # Errors
+    ///
+    /// Errors if `self` is a Scalar that fails to be converted into an array of size or
+    /// if the array length does not match the expected length
+    pub fn to_array_of_size(&self, num_rows: usize) -> Result<ArrayRef> {
+        match self {
+            ColumnarValue::Array(array) => {
+                if array.len() == num_rows {
+                    Ok(Arc::clone(array))
+                } else {
+                    internal_err!(
+                        "Array length {} does not match expected length {}",
+                        array.len(),
+                        num_rows
+                    )
+                }
+            }
+            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+        }
     }
 
     /// Null columnar values are implemented as a null array in order to pass batch
@@ -183,7 +254,8 @@ impl ColumnarValue {
                         Some(array_len)
                     } else {
                         return internal_err!(
-                            "Arguments has mixed length. Expected length: {array_len}, found length: {}", a.len()
+                            "Arguments has mixed length. Expected length: {array_len}, found length: {}",
+                            a.len()
                         );
                     }
                 }
@@ -202,7 +274,17 @@ impl ColumnarValue {
         Ok(args)
     }
 
-    /// Cast's this [ColumnarValue] to the specified `DataType`
+    /// Cast this [ColumnarValue] to the specified `DataType`
+    ///
+    /// # Struct Casting Behavior
+    ///
+    /// When casting struct types, fields are matched **by name** rather than position:
+    /// - Source fields are matched to target fields using case-sensitive name comparison
+    /// - Fields are reordered to match the target schema
+    /// - Missing target fields are filled with null arrays
+    /// - Extra source fields are ignored
+    ///
+    /// For non-struct types, uses Arrow's standard positional casting.
     pub fn cast_to(
         &self,
         cast_type: &DataType,
@@ -210,14 +292,99 @@ impl ColumnarValue {
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
-            ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                kernels::cast::cast_with_options(array, cast_type, &cast_options)?,
-            )),
+            ColumnarValue::Array(array) => {
+                let casted = cast_array_by_name(array, cast_type, &cast_options)?;
+                Ok(ColumnarValue::Array(casted))
+            }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 scalar.cast_to_with_options(cast_type, &cast_options)?,
             )),
         }
     }
+}
+
+fn cast_array_by_name(
+    array: &ArrayRef,
+    cast_type: &DataType,
+    cast_options: &CastOptions<'static>,
+) -> Result<ArrayRef> {
+    // If types are already equal, no cast needed
+    if array.data_type() == cast_type {
+        return Ok(Arc::clone(array));
+    }
+
+    match cast_type {
+        DataType::Struct(_) => {
+            // Field name is unused; only the struct's inner field names matter
+            let target_field = Field::new("_", cast_type.clone(), true);
+            datafusion_common::nested_struct::cast_column(
+                array,
+                &target_field,
+                cast_options,
+            )
+        }
+        _ => {
+            ensure_date_array_timestamp_bounds(array, cast_type)?;
+            Ok(kernels::cast::cast_with_options(
+                array,
+                cast_type,
+                cast_options,
+            )?)
+        }
+    }
+}
+
+fn ensure_date_array_timestamp_bounds(
+    array: &ArrayRef,
+    cast_type: &DataType,
+) -> Result<()> {
+    let source_type = array.data_type().clone();
+    let Some(multiplier) = date_to_timestamp_multiplier(&source_type, cast_type) else {
+        return Ok(());
+    };
+
+    if multiplier <= 1 {
+        return Ok(());
+    }
+
+    // Use compute kernels to find min/max instead of iterating all elements
+    let (min_val, max_val): (Option<i64>, Option<i64>) = match &source_type {
+        DataType::Date32 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date32Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr).map(|v| v as i64), max(arr).map(|v| v as i64))
+        }
+        DataType::Date64 => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<Date64Array>()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected Date64Array but found {}",
+                        array.data_type()
+                    )
+                })?;
+            (min(arr), max(arr))
+        }
+        _ => return Ok(()), // Not a date type, nothing to do
+    };
+
+    // Only validate the min and max values instead of all elements
+    if let Some(min) = min_val {
+        ensure_timestamp_in_bounds(min, multiplier, &source_type, cast_type)?;
+    }
+    if let Some(max) = max_val {
+        ensure_timestamp_in_bounds(max, multiplier, &source_type, cast_type)?;
+    }
+
+    Ok(())
 }
 
 // Implement Display trait for ColumnarValue
@@ -247,7 +414,38 @@ impl fmt::Display for ColumnarValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::{
+        array::{Date64Array, Int32Array, StructArray},
+        datatypes::{Field, Fields, TimeUnit},
+    };
+
+    #[test]
+    fn into_array_of_size() {
+        // Array case
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        assert_eq!(&arr_columnar_value.into_array_of_size(3).unwrap(), &arr);
+
+        // Scalar case
+        let scalar_columnar_value = ColumnarValue::Scalar(ScalarValue::Int32(Some(42)));
+        let expected_array = make_array(42, 100);
+        assert_eq!(
+            &scalar_columnar_value.into_array_of_size(100).unwrap(),
+            &expected_array
+        );
+
+        // Array case with wrong size
+        let arr = make_array(1, 3);
+        let arr_columnar_value = ColumnarValue::Array(Arc::clone(&arr));
+        let result = arr_columnar_value.into_array_of_size(5);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().starts_with(
+                "Internal error: Array length 3 does not match expected length 5"
+            ),
+            "Found: {err}"
+        );
+    }
 
     #[test]
     fn values_to_arrays() {
@@ -389,6 +587,117 @@ mod tests {
                 "| 3                       |\n",
                 "+-------------------------+"
             )
+        );
+    }
+
+    #[test]
+    fn cast_struct_by_field_name() {
+        let source_fields = Fields::from(vec![
+            Field::new("b", DataType::Int32, true),
+            Field::new("a", DataType::Int32, true),
+        ]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(Int32Array::from(vec![Some(4)])),
+            ],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_a = struct_array
+            .column_by_name("a")
+            .expect("expected field a in cast result");
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected field b in cast result");
+
+        assert_eq!(
+            field_a
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            4
+        );
+        assert_eq!(
+            field_b
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 array")
+                .value(0),
+            3
+        );
+    }
+
+    #[test]
+    fn cast_struct_missing_field_inserts_nulls() {
+        let source_fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+
+        let target_fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let struct_array = StructArray::new(
+            source_fields,
+            vec![Arc::new(Int32Array::from(vec![Some(5)]))],
+            None,
+        );
+
+        let value = ColumnarValue::Array(Arc::new(struct_array));
+        let casted = value
+            .cast_to(&DataType::Struct(target_fields.clone()), None)
+            .expect("struct cast should succeed");
+
+        let ColumnarValue::Array(arr) = casted else {
+            panic!("expected array after cast");
+        };
+
+        let struct_array = arr
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("expected StructArray");
+
+        let field_b = struct_array
+            .column_by_name("b")
+            .expect("expected missing field to be added");
+
+        assert!(field_b.is_null(0));
+    }
+
+    #[test]
+    fn cast_date64_array_to_timestamp_overflow() {
+        let overflow_value = i64::MAX / 1_000_000 + 1;
+        let array: ArrayRef = Arc::new(Date64Array::from(vec![Some(overflow_value)]));
+        let value = ColumnarValue::Array(array);
+        let result =
+            value.cast_to(&DataType::Timestamp(TimeUnit::Nanosecond, None), None);
+        let err = result.expect_err("expected overflow to be detected");
+        assert!(
+            err.to_string()
+                .contains("converted value exceeds the representable i64 range"),
+            "unexpected error: {err}"
         );
     }
 }

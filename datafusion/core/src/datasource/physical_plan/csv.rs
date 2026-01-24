@@ -29,18 +29,21 @@ mod tests {
     use std::io::Write;
     use std::sync::Arc;
 
+    use datafusion_datasource::TableSchema;
     use datafusion_datasource_csv::CsvFormat;
     use object_store::ObjectStore;
 
+    use crate::datasource::file_format::FileFormat;
     use crate::prelude::CsvReadOptions;
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
+    use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{assert_batches_eq, Result};
+    use datafusion_common::{Result, assert_batches_eq};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_physical_plan::metrics::MetricsSet;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::metrics::MetricsSet;
 
     #[cfg(feature = "compression")]
     use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -94,32 +97,39 @@ mod tests {
     async fn csv_exec_with_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_file_compression_type(file_compression_type)
-        .with_newlines_in_values(false)
-        .with_projection_indices(Some(vec![0, 2, 4]))
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type)
+                .with_projection_indices(Some(vec![0, 2, 4]))?
+                .build();
 
         assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
@@ -131,17 +141,17 @@ mod tests {
         assert_eq!(3, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
-            +----+-----+------------+
-            | c1 | c3  | c5         |
-            +----+-----+------------+
-            | c  | 1   | 2033001162 |
-            | d  | -40 | 706441268  |
-            | b  | 29  | 994303988  |
-            | a  | -85 | 1171968280 |
-            | b  | -82 | 1824882165 |
-            +----+-----+------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r"
+        +----+-----+------------+
+        | c1 | c3  | c5         |
+        +----+-----+------------+
+        | c  | 1   | 2033001162 |
+        | d  | -40 | 706441268  |
+        | b  | 29  | 994303988  |
+        | a  | -85 | 1171968280 |
+        | b  | -82 | 1824882165 |
+        +----+-----+------------+
+        ");}
         Ok(())
     }
 
@@ -158,6 +168,8 @@ mod tests {
     async fn csv_exec_with_mixed_order_projection(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
         let session_ctx = SessionContext::new_with_config(cfg);
         let task_ctx = session_ctx.task_ctx();
@@ -165,26 +177,31 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_newlines_in_values(false)
-        .with_file_compression_type(file_compression_type.to_owned())
-        .with_projection_indices(Some(vec![4, 0, 2]))
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type.to_owned())
+                .with_projection_indices(Some(vec![4, 0, 2]))?
+                .build();
         assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(3, csv.schema().fields().len());
@@ -194,17 +211,17 @@ mod tests {
         assert_eq!(3, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
-            +------------+----+-----+
-            | c5         | c1 | c3  |
-            +------------+----+-----+
-            | 2033001162 | c  | 1   |
-            | 706441268  | d  | -40 |
-            | 994303988  | b  | 29  |
-            | 1171968280 | a  | -85 |
-            | 1824882165 | b  | -82 |
-            +------------+----+-----+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r"
+        +------------+----+-----+
+        | c5         | c1 | c3  |
+        +------------+----+-----+
+        | 2033001162 | c  | 1   |
+        | 706441268  | d  | -40 |
+        | 994303988  | b  | 29  |
+        | 1171968280 | a  | -85 |
+        | 1824882165 | b  | -82 |
+        +------------+----+-----+
+        ");}
         Ok(())
     }
 
@@ -221,6 +238,7 @@ mod tests {
     async fn csv_exec_with_limit(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
         use futures::StreamExt;
 
         let cfg = SessionConfig::new().set_str("datafusion.catalog.has_header", "true");
@@ -230,26 +248,31 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_newlines_in_values(false)
-        .with_file_compression_type(file_compression_type.to_owned())
-        .with_limit(Some(5))
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type.to_owned())
+                .with_limit(Some(5))
+                .build();
         assert_eq!(13, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(13, csv.schema().fields().len());
@@ -259,17 +282,17 @@ mod tests {
         assert_eq!(13, batch.num_columns());
         assert_eq!(5, batch.num_rows());
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r###"
-            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
-            | c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |
-            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
-            | c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |
-            | d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |
-            | b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |
-            | a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |
-            | b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |
-            +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch]), @r"
+        +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+        | c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            |
+        +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+        | c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |
+        | d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |
+        | b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |
+        | a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |
+        | b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |
+        +----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+
+        ");}
 
         Ok(())
     }
@@ -287,32 +310,39 @@ mod tests {
     async fn csv_exec_with_missing_column(
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
+        use datafusion_datasource::TableSchema;
+
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let file_schema = aggr_test_schema_with_missing_col();
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_newlines_in_values(false)
-        .with_file_compression_type(file_compression_type.to_owned())
-        .with_limit(Some(5))
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type.to_owned())
+                .with_limit(Some(5))
+                .build();
         assert_eq!(14, config.file_schema().fields().len());
         let csv = DataSourceExec::from_data_source(config);
         assert_eq!(14, csv.schema().fields().len());
@@ -341,6 +371,7 @@ mod tests {
         file_compression_type: FileCompressionType,
     ) -> Result<()> {
         use datafusion_common::ScalarValue;
+        use datafusion_datasource::TableSchema;
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -348,12 +379,13 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let mut file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )?;
@@ -362,19 +394,25 @@ mod tests {
 
         let num_file_schema_fields = file_schema.fields().len();
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_newlines_in_values(false)
-        .with_file_compression_type(file_compression_type.to_owned())
-        .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)])
-        // We should be able to project on the partition column
-        // Which is supposed to be after the file fields
-        .with_projection_indices(Some(vec![0, num_file_schema_fields]))
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::new(
+            Arc::clone(&file_schema),
+            vec![Arc::new(Field::new("date", DataType::Utf8, false))],
+        );
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type.to_owned())
+                // We should be able to project on the partition column
+                // Which is supposed to be after the file fields
+                .with_projection_indices(Some(vec![0, num_file_schema_fields]))?
+                .build();
 
         // we don't have `/date=xx/` in the path but that is ok because
         // partitions are resolved during scan anyway
@@ -388,17 +426,17 @@ mod tests {
         assert_eq!(2, batch.num_columns());
         assert_eq!(100, batch.num_rows());
 
-        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r###"
-            +----+------------+
-            | c1 | date       |
-            +----+------------+
-            | c  | 2021-10-26 |
-            | d  | 2021-10-26 |
-            | b  | 2021-10-26 |
-            | a  | 2021-10-26 |
-            | b  | 2021-10-26 |
-            +----+------------+
-        "###);}
+        insta::allow_duplicates! {assert_snapshot!(batches_to_string(&[batch.slice(0, 5)]), @r"
+        +----+------------+
+        | c1 | date       |
+        +----+------------+
+        | c  | 2021-10-26 |
+        | d  | 2021-10-26 |
+        | b  | 2021-10-26 |
+        | a  | 2021-10-26 |
+        | b  | 2021-10-26 |
+        +----+------------+
+        ");}
 
         let metrics = csv.metrics().expect("doesn't found metrics");
         let time_elapsed_processing = get_value(&metrics, "time_elapsed_processing");
@@ -452,26 +490,31 @@ mod tests {
         let path = format!("{}/csv", arrow_test_data());
         let filename = "aggregate_test_100.csv";
         let tmp_dir = TempDir::new()?;
+        let csv_format: Arc<dyn FileFormat> = Arc::new(CsvFormat::default());
 
         let file_groups = partitioned_file_groups(
             path.as_str(),
             filename,
             1,
-            Arc::new(CsvFormat::default()),
+            &csv_format,
             file_compression_type.to_owned(),
             tmp_dir.path(),
         )
         .unwrap();
 
-        let source = Arc::new(CsvSource::new(true, b',', b'"'));
-        let config = FileScanConfigBuilder::from(partitioned_csv_config(
-            file_schema,
-            file_groups,
-            source,
-        ))
-        .with_newlines_in_values(false)
-        .with_file_compression_type(file_compression_type.to_owned())
-        .build();
+        let options = CsvOptions {
+            has_header: Some(true),
+            delimiter: b',',
+            quote: b'"',
+            ..Default::default()
+        };
+        let table_schema = TableSchema::from_file_schema(Arc::clone(&file_schema));
+        let source =
+            Arc::new(CsvSource::new(table_schema.clone()).with_csv_options(options));
+        let config =
+            FileScanConfigBuilder::from(partitioned_csv_config(file_groups, source)?)
+                .with_file_compression_type(file_compression_type.to_owned())
+                .build();
         let csv = DataSourceExec::from_data_source(config);
 
         let it = csv.execute(0, task_ctx).unwrap();
@@ -527,14 +570,14 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        assert_snapshot!(batches_to_string(&result), @r###"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | 2 |
-            | 3 | 4 |
-            +---+---+
-        "###);
+        assert_snapshot!(batches_to_string(&result), @r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | 2 |
+        | 3 | 4 |
+        +---+---+
+        ");
     }
 
     #[tokio::test]
@@ -556,14 +599,14 @@ mod tests {
 
         let result = df.collect().await.unwrap();
 
-        assert_snapshot!(batches_to_string(&result),@r###"
-            +---+---+
-            | a | b |
-            +---+---+
-            | 1 | 2 |
-            | 3 | 4 |
-            +---+---+
-        "###);
+        assert_snapshot!(batches_to_string(&result),@r"
+        +---+---+
+        | a | b |
+        +---+---+
+        | 1 | 2 |
+        | 3 | 4 |
+        +---+---+
+        ");
 
         let e = session_ctx
             .read_csv("memory:///", CsvReadOptions::new().terminator(Some(b'\n')))
@@ -572,7 +615,10 @@ mod tests {
             .collect()
             .await
             .unwrap_err();
-        assert_eq!(e.strip_backtrace(), "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2")
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Csv error: incorrect number of fields for line 1, expected 2 got more than 2"
+        )
     }
 
     #[tokio::test]
@@ -593,22 +639,22 @@ mod tests {
         .await?;
 
         let df = ctx.sql(r#"select * from t1"#).await?.collect().await?;
-        assert_snapshot!(batches_to_string(&df),@r###"
-            +------+--------+
-            | col1 | col2   |
-            +------+--------+
-            | id0  | value0 |
-            | id1  | value1 |
-            | id2  | value2 |
-            | id3  | value3 |
-            +------+--------+
-        "###);
+        assert_snapshot!(batches_to_string(&df),@r"
+        +------+--------+
+        | col1 | col2   |
+        +------+--------+
+        | id0  | value0 |
+        | id1  | value1 |
+        | id2  | value2 |
+        | id3  | value3 |
+        +------+--------+
+        ");
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_create_external_table_with_terminator_with_newlines_in_values(
-    ) -> Result<()> {
+    async fn test_create_external_table_with_terminator_with_newlines_in_values()
+    -> Result<()> {
         let ctx = SessionContext::new();
         ctx.sql(r#"
             CREATE EXTERNAL TABLE t1 (
@@ -658,7 +704,10 @@ mod tests {
             )
             .await
             .expect_err("should fail because input file does not match inferred schema");
-        assert_eq!(e.strip_backtrace(), "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'");
+        assert_eq!(
+            e.strip_backtrace(),
+            "Arrow error: Parser error: Error while parsing value 'd' as type 'Int64' for column 0 at line 4. Row data: '[d,4]'"
+        );
         Ok(())
     }
 

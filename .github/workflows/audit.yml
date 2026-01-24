@@ -40,10 +40,12 @@ jobs:
   security_audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Install cargo-audit
-        uses: taiki-e/install-action@6f9c7cc51aa54b13cbcbd12f8bbf69d8ba405b4b  # v2.62.47
+        uses: taiki-e/install-action@542cebaaed782771e619bd5609d97659d109c492  # v2.66.7
         with:
           tool: cargo-audit
       - name: Run audit check
+        # Note: you can ignore specific RUSTSEC issues using the `--ignore` flag ,for example:
+        # run: cargo audit --ignore RUSTSEC-2026-0001
         run: cargo audit

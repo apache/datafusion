@@ -22,19 +22,20 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
+use crate::assert_or_internal_err;
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err};
 use crate::{Result, ScalarValue};
 use arrow::array::{
-    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
+    cast::AsArray,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition, SortColumn, SortOptions};
+use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 #[cfg(feature = "sql")]
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::num::NonZero;
 use std::ops::Range;
@@ -265,10 +266,10 @@ fn needs_quotes(s: &str) -> bool {
     let mut chars = s.chars();
 
     // first char can not be a number unless escaped
-    if let Some(first_char) = chars.next() {
-        if !(first_char.is_ascii_lowercase() || first_char == '_') {
-            return true;
-        }
+    if let Some(first_char) = chars.next()
+        && !(first_char.is_ascii_lowercase() || first_char == '_')
+    {
+        return true;
     }
 
     !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
@@ -519,9 +520,7 @@ pub fn arrays_into_list_array(
     arr: impl IntoIterator<Item = ArrayRef>,
 ) -> Result<ListArray> {
     let arr = arr.into_iter().collect::<Vec<_>>();
-    if arr.is_empty() {
-        return _internal_err!("Cannot wrap empty array into list array");
-    }
+    assert_or_internal_err!(!arr.is_empty(), "Cannot wrap empty array into list array");
 
     let lens = arr.iter().map(|x| x.len()).collect::<Vec<_>>();
     // Assume data type is consistent
@@ -694,10 +693,14 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
-    /// required to change one sequence into the other.
-    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+    /// required to change one sequence into the other, using a reusable cache buffer.
+    ///
+    /// This is the generic implementation that works with any iterator types.
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    fn generic_levenshtein_with_buffer<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
         a: &'a Iter1,
         b: &'b Iter2,
+        cache: &mut Vec<usize>,
     ) -> usize
     where
         &'a Iter1: IntoIterator<Item = Elem1>,
@@ -710,7 +713,9 @@ pub mod datafusion_strsim {
             return b_len;
         }
 
-        let mut cache: Vec<usize> = (1..b_len + 1).collect();
+        // Resize cache to fit b_len elements
+        cache.clear();
+        cache.extend(1..=b_len);
 
         let mut result = 0;
 
@@ -731,6 +736,21 @@ pub mod datafusion_strsim {
     }
 
     /// Calculates the minimum number of insertions, deletions, and substitutions
+    /// required to change one sequence into the other.
+    fn generic_levenshtein<'a, 'b, Iter1, Iter2, Elem1, Elem2>(
+        a: &'a Iter1,
+        b: &'b Iter2,
+    ) -> usize
+    where
+        &'a Iter1: IntoIterator<Item = Elem1>,
+        &'b Iter2: IntoIterator<Item = Elem2>,
+        Elem1: PartialEq<Elem2>,
+    {
+        let mut cache = Vec::new();
+        generic_levenshtein_with_buffer(a, b, &mut cache)
+    }
+
+    /// Calculates the minimum number of insertions, deletions, and substitutions
     /// required to change one string into the other.
     ///
     /// ```
@@ -740,6 +760,15 @@ pub mod datafusion_strsim {
     /// ```
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
+    }
+
+    /// Calculates the Levenshtein distance using a reusable cache buffer.
+    /// This avoids allocating a new Vec for each call, improving performance
+    /// when computing many distances.
+    ///
+    /// The `cache` buffer will be resized as needed and reused across calls.
+    pub fn levenshtein_with_buffer(a: &str, b: &str, cache: &mut Vec<usize>) -> usize {
+        generic_levenshtein_with_buffer(&StringWrapper(a), &StringWrapper(b), cache)
     }
 
     /// Calculates the normalized Levenshtein distance between two strings.
@@ -944,8 +973,6 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::array::Float64Array;
-    use sqlparser::ast::Ident;
-    use sqlparser::tokenizer::Span;
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {
@@ -1174,7 +1201,7 @@ mod tests {
             let expected_parsed = vec![Ident {
                 value: identifier.to_string(),
                 quote_style,
-                span: Span::empty(),
+                span: sqlparser::tokenizer::Span::empty(),
             }];
 
             assert_eq!(

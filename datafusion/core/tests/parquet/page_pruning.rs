@@ -21,25 +21,25 @@ use crate::parquet::Unit::Page;
 use crate::parquet::{ContextWithParquet, Scenario};
 
 use arrow::array::RecordBatch;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::{col, lit, Expr};
+use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::create_physical_expr;
 
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
 use futures::StreamExt;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 async fn get_parquet_exec(
     state: &SessionState,
@@ -67,26 +67,19 @@ async fn get_parquet_exec(
         .await
         .unwrap();
 
-    let partitioned_file = PartitionedFile {
-        object_meta: meta,
-        partition_values: vec![],
-        range: None,
-        statistics: None,
-        extensions: None,
-        metadata_size_hint: None,
-    };
+    let partitioned_file = PartitionedFile::new_from_meta(meta);
 
     let df_schema = schema.clone().to_dfschema().unwrap();
     let execution_props = ExecutionProps::new();
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let source = Arc::new(
-        ParquetSource::default()
+        ParquetSource::new(schema.clone())
             .with_predicate(predicate)
             .with_enable_page_index(true)
             .with_pushdown_filters(pushdown_filters),
     );
-    let base_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+    let base_config = FileScanConfigBuilder::new(object_store_url, source)
         .with_file(partitioned_file)
         .build();
 
