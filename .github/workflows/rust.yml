@@ -435,6 +435,8 @@ jobs:
   linux-wasm-pack:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup for wasm32
@@ -575,6 +577,8 @@ jobs:
   macos-aarch64:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
