@@ -22,7 +22,6 @@ use arrow::{
     compute::{CastOptions, can_cast_types},
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
-    util::display::FormatOptions as ArrowFormatOptions,
 };
 use datafusion_common::{
     Result, ScalarValue,
@@ -84,19 +83,15 @@ impl Hash for CastColumnExpr {
     }
 }
 
-trait FormatOptionsSlot {
-    fn ensure_present(&mut self, default: ArrowFormatOptions<'static>);
-}
-
-impl FormatOptionsSlot for ArrowFormatOptions<'static> {
-    fn ensure_present(&mut self, _default: ArrowFormatOptions<'static>) {}
-}
-
-impl FormatOptionsSlot for Option<ArrowFormatOptions<'static>> {
-    fn ensure_present(&mut self, default: ArrowFormatOptions<'static>) {
-        if self.is_none() {
-            *self = Some(default);
-        }
+fn normalize_cast_options(
+    cast_options: Option<CastOptions<'static>>,
+) -> CastOptions<'static> {
+    match cast_options {
+        Some(cast_options) => cast_options,
+        None => CastOptions {
+            format_options: DEFAULT_CAST_OPTIONS.format_options.clone(),
+            ..DEFAULT_CAST_OPTIONS
+        },
     }
 }
 
@@ -108,10 +103,7 @@ impl CastColumnExpr {
         cast_options: Option<CastOptions<'static>>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
-        let mut cast_options = cast_options.unwrap_or(DEFAULT_CAST_OPTIONS);
-        cast_options
-            .format_options
-            .ensure_present(DEFAULT_CAST_OPTIONS.format_options.clone());
+        let cast_options = normalize_cast_options(cast_options);
         let expr_data_type = expr.data_type(input_schema.as_ref())?;
         if input_field.data_type() != &expr_data_type {
             return plan_err!(
