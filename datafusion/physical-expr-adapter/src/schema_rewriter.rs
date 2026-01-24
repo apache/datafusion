@@ -259,20 +259,20 @@ impl DefaultPhysicalExprAdapter {
 impl PhysicalExprAdapter for DefaultPhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         let rewriter = DefaultPhysicalExprAdapterRewriter {
-            logical_file_schema: &self.logical_file_schema,
-            physical_file_schema: &self.physical_file_schema,
+            logical_file_schema: Arc::clone(&self.logical_file_schema),
+            physical_file_schema: Arc::clone(&self.physical_file_schema),
         };
         expr.transform(|expr| rewriter.rewrite_expr(Arc::clone(&expr)))
             .data()
     }
 }
 
-struct DefaultPhysicalExprAdapterRewriter<'a> {
-    logical_file_schema: &'a Schema,
-    physical_file_schema: &'a Schema,
+struct DefaultPhysicalExprAdapterRewriter {
+    logical_file_schema: SchemaRef,
+    physical_file_schema: SchemaRef,
 }
 
-impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
+impl DefaultPhysicalExprAdapterRewriter {
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -471,7 +471,7 @@ impl<'a> DefaultPhysicalExprAdapterRewriter<'a> {
             Arc::new(physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
-            Arc::new(self.physical_file_schema.clone()),
+            Arc::clone(&self.physical_file_schema),
         )?);
 
         Ok(Transformed::yes(cast_expr))
