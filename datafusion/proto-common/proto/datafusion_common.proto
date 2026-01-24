@@ -185,7 +185,7 @@ message Map {
 
 message RunEndEncoded {
   Field run_ends_field = 1;
-  Field value_field = 2;
+  Field values_field = 2;
 }
 
 enum UnionMode{

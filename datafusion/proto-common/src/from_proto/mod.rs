@@ -334,9 +334,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     .required("run_ends_field")?;
                 let value_field: Field = run_end_encoded
                     .as_ref()
-                    .value_field
+                    .values_field
                     .as_deref()
-                    .required("value_field")?;
+                    .required("values_field")?;
                 DataType::RunEndEncoded(run_ends_field.into(), value_field.into())
             }
         })

@@ -7498,6 +7498,7 @@ mod tests {
     fn roundtrip_run_array() {
         // Comparison logic in round_trip_through_scalar doesn't work for RunArrays
         // so we have a custom test for them
+        // TODO: https://github.com/apache/arrow-rs/pull/9213 might fix this ^
         let run_ends = Int16Array::from(vec![2, 3]);
         let values = Int64Array::from(vec![Some(1), None]);
         let run_array = RunArray::try_new(&run_ends, &values).unwrap();

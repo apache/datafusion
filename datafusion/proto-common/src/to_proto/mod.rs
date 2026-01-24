@@ -221,10 +221,10 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 field_type: Some(Box::new(field.as_ref().try_into()?)),
                 keys_sorted: *sorted,
             })),
-            DataType::RunEndEncoded(run_ends_field, value_field) => {
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
                 Self::RunEndEncoded(Box::new(protobuf::RunEndEncoded {
                     run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
-                    value_field: Some(Box::new(value_field.as_ref().try_into()?)),
+                    values_field: Some(Box::new(values_field.as_ref().try_into()?)),
                 }))
             }
             DataType::ListView(_) | DataType::LargeListView(_) => {

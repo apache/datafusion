@@ -180,7 +180,7 @@ pub struct RunEndEncoded {
     #[prost(message, optional, boxed, tag = "1")]
     pub run_ends_field: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
     #[prost(message, optional, boxed, tag = "2")]
-    pub value_field: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
+    pub values_field: ::core::option::Option<::prost::alloc::boxed::Box<Field>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Union {
