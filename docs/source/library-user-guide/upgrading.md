@@ -154,6 +154,48 @@ The builder pattern is more efficient as it computes properties once during `bui
 
 Note: `with_default_selectivity()` is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.
 
+### Protobuf conversion trait added
+
+A new trait, `PhysicalProtoConverterExtension`, has been added to the `datafusion-proto`
+crate. This is used for controlling the process of conversion of physical plans and
+expressions to and from their protobuf equivalents. The methods for conversion now
+require an additional parameter. Most users can simply use the `DefaultPhysicalProtoConverter`
+implementation.
+
+For conversion from protobuf types to their physical types:
+
+**Before:**
+
+```rust,ignore
+let plan = proto_plan.try_into_physical_plan(ctx, codec)?;
+let expr = parse_physical_expr(proto_expr, ctx, input_schema, codec)?;
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let plan = proto_plan.try_into_physical_plan(ctx, codec, &converter)?;
+let expr = parse_physical_expr(proto_expr, ctx, input_schema, codec, &converter)?;
+```
+
+For conversion from physical types to their equivalent protobuf types:
+
+**Before:**
+
+```rust,ignore
+let proto_plan = protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec)?;
+let proto_expr = serialize_physical_expr(expr, codec)?;
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let proto_plan = protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec, &converter)?;
+let proto_expr = serialize_physical_expr(expr, codec, &converter)?;
+```
+
 ## DataFusion `52.0.0`
 
 ### Changes to DFSchema API
