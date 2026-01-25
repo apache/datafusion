@@ -83,17 +83,17 @@ use prost::Message;
 use prost::bytes::BufMut;
 
 use self::from_proto::parse_protobuf_partitioning;
-use self::to_proto::{serialize_partitioning, serialize_physical_expr};
+use self::to_proto::serialize_partitioning;
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_expr, parse_physical_sort_exprs,
-    parse_physical_window_expr, parse_protobuf_file_scan_config, parse_record_batches,
-    parse_table_schema_from_proto,
+    parse_physical_expr_with_converter, parse_physical_sort_expr,
+    parse_physical_sort_exprs, parse_physical_window_expr,
+    parse_protobuf_file_scan_config, parse_record_batches, parse_table_schema_from_proto,
 };
 use crate::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_maybe_filter, serialize_physical_aggr_expr,
-    serialize_physical_sort_exprs, serialize_physical_window_expr,
-    serialize_record_batches,
+    serialize_physical_expr_with_converter, serialize_physical_sort_exprs,
+    serialize_physical_window_expr, serialize_record_batches,
 };
 use crate::protobuf::physical_aggregate_expr_node::AggregateFunction;
 use crate::protobuf::physical_expr_node::ExprType;
@@ -128,6 +128,34 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
     }
 
     fn try_into_physical_plan(
+        &self,
+        ctx: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.try_into_physical_plan_with_converter(
+            ctx,
+            codec,
+            &DefaultPhysicalProtoConverter {},
+        )
+    }
+
+    fn try_from_physical_plan(
+        plan: Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Self::try_from_physical_plan_with_converter(
+            plan,
+            codec,
+            &DefaultPhysicalProtoConverter {},
+        )
+    }
+}
+
+impl protobuf::PhysicalPlanNode {
+    pub fn try_into_physical_plan_with_converter(
         &self,
         ctx: &TaskContext,
 
@@ -280,7 +308,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         }
     }
 
-    fn try_from_physical_plan(
+    pub fn try_from_physical_plan_with_converter(
         plan: Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
@@ -525,7 +553,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     .into_iter()
                     .cloned()
                     .map(|i| {
-                        protobuf::PhysicalPlanNode::try_from_physical_plan(
+                        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
                             i,
                             codec,
                             proto_converter,
@@ -2165,7 +2193,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2198,7 +2226,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2220,7 +2248,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2248,7 +2276,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             limit.input().to_owned(),
             codec,
             proto_converter,
@@ -2273,7 +2301,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             limit.input().to_owned(),
             codec,
             proto_converter,
@@ -2293,12 +2321,12 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
             proto_converter,
         )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.right().to_owned(),
             codec,
             proto_converter,
@@ -2373,12 +2401,12 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
             proto_converter,
         )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.right().to_owned(),
             codec,
             proto_converter,
@@ -2494,12 +2522,12 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
             proto_converter,
         )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.right().to_owned(),
             codec,
             proto_converter,
@@ -2581,12 +2609,12 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
             proto_converter,
         )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.right().to_owned(),
             codec,
             proto_converter,
@@ -2651,7 +2679,7 @@ impl protobuf::PhysicalPlanNode {
             }
         };
         let input_schema = exec.input_schema();
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2728,7 +2756,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             coalesce_batches.input().to_owned(),
             codec,
             proto_converter,
@@ -2906,7 +2934,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2926,7 +2954,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -2989,11 +3017,13 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in union.inputs() {
-            inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
-                input.to_owned(),
-                codec,
-                proto_converter,
-            )?);
+            inputs.push(
+                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+                    input.to_owned(),
+                    codec,
+                    proto_converter,
+                )?,
+            );
         }
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Union(protobuf::UnionExecNode {
@@ -3009,11 +3039,13 @@ impl protobuf::PhysicalPlanNode {
     ) -> Result<Self> {
         let mut inputs: Vec<protobuf::PhysicalPlanNode> = vec![];
         for input in interleave.inputs() {
-            inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
-                input.to_owned(),
-                codec,
-                proto_converter,
-            )?);
+            inputs.push(
+                protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+                    input.to_owned(),
+                    codec,
+                    proto_converter,
+                )?,
+            );
         }
         Ok(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::Interleave(
@@ -3027,7 +3059,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -3064,12 +3096,12 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let left = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.left().to_owned(),
             codec,
             proto_converter,
         )?;
-        let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let right = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.right().to_owned(),
             codec,
             proto_converter,
@@ -3122,7 +3154,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -3157,7 +3189,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -3209,7 +3241,7 @@ impl protobuf::PhysicalPlanNode {
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Option<Self>> {
         let input: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan(
+            protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
                 exec.input().to_owned(),
                 codec,
                 proto_converter,
@@ -3287,7 +3319,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -3322,7 +3354,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             exec.input().to_owned(),
             codec,
             proto_converter,
@@ -3457,7 +3489,7 @@ impl protobuf::PhysicalPlanNode {
         codec: &dyn PhysicalExtensionCodec,
         proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self> {
-        let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+        let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(exec.input()),
             codec,
             proto_converter,
@@ -3499,13 +3531,11 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
         ctx: &TaskContext,
 
         codec: &dyn PhysicalExtensionCodec,
-        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     fn try_from_physical_plan(
         plan: Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
-        proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Self>
     where
         Self: Sized;
@@ -3639,7 +3669,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        proto.try_into_physical_plan(ctx, codec, self)
+        proto.try_into_physical_plan_with_converter(ctx, codec, self)
     }
 
     fn execution_plan_to_proto(
@@ -3650,7 +3680,11 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     where
         Self: Sized,
     {
-        protobuf::PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), codec, self)
+        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            codec,
+            self,
+        )
     }
 
     fn proto_to_physical_expr(
@@ -3664,7 +3698,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         Self: Sized,
     {
         // Default implementation calls the free function
-        parse_physical_expr(proto, ctx, input_schema, codec, self)
+        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
     }
 
     fn physical_expr_to_proto(
@@ -3672,7 +3706,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        serialize_physical_expr(expr, codec, self)
+        serialize_physical_expr_with_converter(expr, codec, self)
     }
 }
 

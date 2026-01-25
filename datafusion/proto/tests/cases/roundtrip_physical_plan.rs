@@ -24,13 +24,6 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-#[expect(deprecated)]
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-
-use crate::cases::{
-    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
-    MyRegexUdfNode,
-};
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -64,6 +57,8 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
+#[expect(deprecated)]
+use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
@@ -118,8 +113,8 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
     PhysicalExtensionCodec, PhysicalProtoConverterExtension,
@@ -127,6 +122,11 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
+
+use crate::cases::{
+    CustomUDWF, CustomUDWFNode, MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf,
+    MyRegexUdfNode,
+};
 
 /// Perform a serde roundtrip and assert that the string representation of the before and after plans
 /// are identical. Note that this often isn't sufficient to guarantee that no information is
@@ -1766,15 +1766,11 @@ async fn roundtrip_coalesce() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx.task_ctx(),
-        &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1806,15 +1802,11 @@ async fn roundtrip_generate_series() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
     )?;
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let restored = node.try_into_physical_plan(
-        &ctx.task_ctx(),
-        &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
-    )?;
+    let restored =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     assert_eq!(
         plan.schema(),
@@ -1929,19 +1921,12 @@ async fn roundtrip_physical_plan_node() {
         .await
         .unwrap();
 
-    let node: PhysicalPlanNode = PhysicalPlanNode::try_from_physical_plan(
-        plan,
-        &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
-    )
-    .unwrap();
+    let node: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap();
 
     let plan = node
-        .try_into_physical_plan(
-            &ctx.task_ctx(),
-            &DefaultPhysicalExtensionCodec {},
-            &DefaultPhysicalProtoConverter {},
-        )
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
         .unwrap();
 
     let _ = plan.execute(0, ctx.task_ctx()).unwrap();
@@ -2016,20 +2001,13 @@ async fn test_serialize_deserialize_tpch_queries() -> Result<()> {
 
             // serialize the physical plan
             let codec = DefaultPhysicalExtensionCodec {};
-            let proto_converter = DefaultPhysicalProtoConverter {};
 
-            let proto = PhysicalPlanNode::try_from_physical_plan(
-                physical_plan.clone(),
-                &codec,
-                &proto_converter,
-            )?;
+            let proto =
+                PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
             // deserialize the physical plan
-            let _deserialized_plan = proto.try_into_physical_plan(
-                &ctx.task_ctx(),
-                &codec,
-                &proto_converter,
-            )?;
+            let _deserialized_plan =
+                proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
         }
     }
 
@@ -2145,17 +2123,11 @@ async fn test_tpch_part_in_list_query_with_real_parquet_data() -> Result<()> {
 
     // Serialize the physical plan - bug may happen here already but not necessarily manifests
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
 
-    let proto = PhysicalPlanNode::try_from_physical_plan(
-        physical_plan.clone(),
-        &codec,
-        &proto_converter,
-    )?;
+    let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)?;
 
     // This will fail with the bug, but should succeed when fixed
-    let _deserialized_plan =
-        proto.try_into_physical_plan(&ctx.task_ctx(), &codec, &proto_converter)?;
+    let _deserialized_plan = proto.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
     Ok(())
 }
 
@@ -2178,17 +2150,13 @@ async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let node = PhysicalPlanNode::try_from_physical_plan(
         plan.clone(),
         &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
     )?;
 
     let node = PhysicalPlanNode::decode(node.encode_to_vec().as_slice())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    let unoptimized = node.try_into_physical_plan(
-        &ctx.task_ctx(),
-        &DefaultPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
-    )?;
+    let unoptimized =
+        node.try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})?;
 
     let physical_planner =
         datafusion::physical_planner::DefaultPhysicalPlanner::default();
@@ -2397,9 +2365,8 @@ async fn roundtrip_async_func_exec() -> Result<()> {
 /// it's a performance optimization filter, not a correctness requirement.
 #[test]
 fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
-    use datafusion::physical_plan::joins::HashTableLookupExpr;
-    use datafusion::physical_plan::joins::Map;
     use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
+    use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
 
     // Create a simple schema and input plan
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
@@ -2421,18 +2388,14 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     // Serialize
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
 
-    let proto: PhysicalPlanNode = PhysicalPlanNode::try_from_physical_plan(
-        filter.clone(),
-        &codec,
-        &proto_converter,
-    )
-    .expect("serialization should succeed");
+    let proto: PhysicalPlanNode =
+        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
+            .expect("serialization should succeed");
 
     // Deserialize
     let result: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &codec, &proto_converter)
+        .try_into_physical_plan(&ctx.task_ctx(), &codec)
         .expect("deserialization should succeed");
 
     // The deserialized plan should have lit(true) instead of HashTableLookupExpr
@@ -2502,7 +2465,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            proto.try_into_physical_plan(ctx, codec, self)
+            proto.try_into_physical_plan_with_converter(ctx, codec, self)
         }
 
         fn execution_plan_to_proto(
@@ -2520,7 +2483,11 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), codec, self)
+            PhysicalPlanNode::try_from_physical_plan_with_converter(
+                Arc::clone(plan),
+                codec,
+                self,
+            )
         }
 
         fn proto_to_physical_expr(
@@ -2540,7 +2507,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            parse_physical_expr(proto, ctx, input_schema, codec, self)
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
         }
 
         fn physical_expr_to_proto(
@@ -2555,7 +2522,7 @@ fn custom_proto_converter_intercepts() -> Result<()> {
                     .map_err(|err| exec_datafusion_err!("{err}"))?;
                 *counter += 1;
             }
-            serialize_physical_expr(expr, codec, self)
+            serialize_physical_expr_with_converter(expr, codec, self)
         }
     }
 

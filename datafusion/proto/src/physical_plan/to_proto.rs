@@ -24,8 +24,7 @@ use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::file_sink_config::FileSink;
-use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::{FileRange, PartitionedFile};
 use datafusion_datasource_csv::file_format::CsvSink;
 use datafusion_datasource_json::file_format::JsonSink;
@@ -36,22 +35,23 @@ use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_plan::expressions::LikeExpr;
 use datafusion_physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion_physical_plan::joins::{HashExpr, HashTableLookupExpr};
 use datafusion_physical_plan::udaf::AggregateFunctionExpr;
 use datafusion_physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 
+use super::{
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
+};
 use crate::protobuf::{
     self, PhysicalSortExprNode, PhysicalSortExprNodeCollection,
     physical_aggregate_expr_node, physical_window_expr_node,
 };
-
-use super::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 
 #[expect(clippy::needless_pass_by_value)]
 pub fn serialize_physical_aggr_expr(
@@ -234,6 +234,23 @@ where
 /// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
 /// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`])
 pub fn serialize_physical_expr(
+    value: &Arc<dyn PhysicalExpr>,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<protobuf::PhysicalExprNode> {
+    serialize_physical_expr_with_converter(
+        value,
+        codec,
+        &DefaultPhysicalProtoConverter {},
+    )
+}
+
+/// Serialize a `PhysicalExpr` to default protobuf representation.
+///
+/// If required, a [`PhysicalExtensionCodec`] can be provided which can handle
+/// serialization of udfs requiring specialized serialization (see [`PhysicalExtensionCodec::try_encode_udf`]).
+/// A [`PhysicalProtoConverterExtension`] can be provided to handle the
+/// conversion process (see [`PhysicalProtoConverterExtension::physical_expr_to_proto`]).
+pub fn serialize_physical_expr_with_converter(
     value: &Arc<dyn PhysicalExpr>,
     codec: &dyn PhysicalExtensionCodec,
     proto_converter: &dyn PhysicalProtoConverterExtension,

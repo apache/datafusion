@@ -21,14 +21,9 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
-use arrow::datatypes::Field;
+use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
-use datafusion_expr::dml::InsertOp;
-use object_store::ObjectMeta;
-use object_store::path::Path;
-
-use arrow::datatypes::Schema;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -42,6 +37,7 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
+use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
@@ -52,13 +48,16 @@ use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
+use object_store::ObjectMeta;
+use object_store::path::Path;
 
-use crate::convert_required;
+use super::{
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
+};
 use crate::logical_plan::{self};
-use crate::protobuf;
 use crate::protobuf::physical_expr_node::ExprType;
-
-use super::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use crate::{convert_required, protobuf};
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
@@ -230,8 +229,32 @@ where
 /// * `input_schema` - The Arrow schema for the input, used for determining expression data types
 ///   when performing type coercion.
 /// * `codec` - An extension codec used to decode custom UDFs.
-/// * `proto_converter` - Conversion functions for physical plans and expressions
 pub fn parse_physical_expr(
+    proto: &protobuf::PhysicalExprNode,
+    ctx: &TaskContext,
+    input_schema: &Schema,
+    codec: &dyn PhysicalExtensionCodec,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    parse_physical_expr_with_converter(
+        proto,
+        ctx,
+        input_schema,
+        codec,
+        &DefaultPhysicalProtoConverter {},
+    )
+}
+
+/// Parses a physical expression from a protobuf.
+///
+/// # Arguments
+///
+/// * `proto` - Input proto with physical expression node
+/// * `registry` - A registry knows how to build logical expressions out of user-defined function names
+/// * `input_schema` - The Arrow schema for the input, used for determining expression data types
+///   when performing type coercion.
+/// * `codec` - An extension codec used to decode custom UDFs.
+/// * `proto_converter` - Conversion functions for physical plans and expressions
+pub fn parse_physical_expr_with_converter(
     proto: &protobuf::PhysicalExprNode,
     ctx: &TaskContext,
     input_schema: &Schema,
@@ -814,11 +837,12 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::{TimeZone, Utc};
     use datafusion_datasource::PartitionedFile;
     use object_store::ObjectMeta;
     use object_store::path::Path;
+
+    use super::*;
 
     #[test]
     fn partitioned_file_path_roundtrip_percent_encoded() {

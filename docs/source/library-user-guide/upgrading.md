@@ -159,41 +159,59 @@ Note: `with_default_selectivity()` is not deprecated as it simply updates a fiel
 A new trait, `PhysicalProtoConverterExtension`, has been added to the `datafusion-proto`
 crate. This is used for controlling the process of conversion of physical plans and
 expressions to and from their protobuf equivalents. The methods for conversion now
-require an additional parameter. Most users can simply use the `DefaultPhysicalProtoConverter`
-implementation.
+require an additional parameter.
 
-For conversion from protobuf types to their physical types:
+The primary APIs for interacting with this crate have not been modified, so most users
+should not need to make any changes. If you do require this trait, you can use the
+`DefaultPhysicalProtoConverter` implementation.
+
+For example, to convert a sort expression protobuf node you can make the following
+updates:
 
 **Before:**
 
 ```rust,ignore
-let plan = proto_plan.try_into_physical_plan(ctx, codec)?;
-let expr = parse_physical_expr(proto_expr, ctx, input_schema, codec)?;
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+);
 ```
 
 **After:**
 
 ```rust,ignore
 let converter = DefaultPhysicalProtoConverter {};
-let plan = proto_plan.try_into_physical_plan(ctx, codec, &converter)?;
-let expr = parse_physical_expr(proto_expr, ctx, input_schema, codec, &converter)?;
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+    &converter
+);
 ```
 
-For conversion from physical types to their equivalent protobuf types:
+Similarly to convert from a physical sort expression into a protobuf node:
 
 **Before:**
 
 ```rust,ignore
-let proto_plan = protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec)?;
-let proto_expr = serialize_physical_expr(expr, codec)?;
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+);
 ```
 
 **After:**
 
 ```rust,ignore
 let converter = DefaultPhysicalProtoConverter {};
-let proto_plan = protobuf::PhysicalPlanNode::try_from_physical_plan(plan, codec, &converter)?;
-let proto_expr = serialize_physical_expr(expr, codec, &converter)?;
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+    proto_converter,
+);
 ```
 
 ## DataFusion `52.0.0`

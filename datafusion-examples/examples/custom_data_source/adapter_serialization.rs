@@ -57,10 +57,10 @@ use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
 };
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, PhysicalExtensionCodec, PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
 use datafusion_proto::protobuf::{
@@ -290,7 +290,8 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
                 })?;
 
             // Deserialize the inner plan using default implementation
-            let inner_plan = inner_proto.try_into_physical_plan(ctx, self, self)?;
+            let inner_plan =
+                inner_proto.try_into_physical_plan_with_converter(ctx, self, self)?;
 
             // Recreate the adapter factory
             let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
@@ -342,7 +343,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                 DataSourceExec::from_data_source(config_without_adapter);
 
             // 4. Serialize the inner plan to protobuf bytes
-            let inner_proto = PhysicalPlanNode::try_from_physical_plan(
+            let inner_proto = PhysicalPlanNode::try_from_physical_plan_with_converter(
                 plan_without_adapter,
                 extension_codec,
                 self,
@@ -379,7 +380,11 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         }
 
         // No adapter found - use default serialization
-        PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), extension_codec, self)
+        PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            extension_codec,
+            self,
+        )
     }
 
     // Interception point: override deserialization to unwrap adapters
@@ -409,8 +414,11 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                 })?;
 
             // Deserialize the inner plan using default implementation
-            let inner_plan =
-                inner_proto.try_into_physical_plan(ctx, extension_codec, self)?;
+            let inner_plan = inner_proto.try_into_physical_plan_with_converter(
+                ctx,
+                extension_codec,
+                self,
+            )?;
 
             // Recreate the adapter factory
             let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
@@ -420,7 +428,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         }
 
         // Not our extension - use default deserialization
-        proto.try_into_physical_plan(ctx, extension_codec, self)
+        proto.try_into_physical_plan_with_converter(ctx, extension_codec, self)
     }
 
     fn proto_to_physical_expr(
@@ -430,7 +438,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         input_schema: &Schema,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        parse_physical_expr(proto, ctx, input_schema, codec, self)
+        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
     }
 
     fn physical_expr_to_proto(
@@ -438,7 +446,7 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
-        serialize_physical_expr(expr, codec, self)
+        serialize_physical_expr_with_converter(expr, codec, self)
     }
 }
 

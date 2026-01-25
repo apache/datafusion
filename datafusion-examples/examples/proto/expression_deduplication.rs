@@ -46,10 +46,10 @@ use datafusion::physical_plan::expressions::{BinaryExpr, col};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::prelude::SessionContext;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
+    DefaultPhysicalExtensionCodec, PhysicalExtensionCodec,
     PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -103,8 +103,9 @@ pub async fn expression_deduplication() -> Result<()> {
     println!("Step 3: Serializing plan...");
 
     let extension_codec = DefaultPhysicalExtensionCodec {};
-    let caching_codec = CachingCodec::new();
-    let proto = caching_codec.execution_plan_to_proto(&filter_plan, &extension_codec)?;
+    let caching_converter = CachingCodec::new();
+    let proto =
+        caching_converter.execution_plan_to_proto(&filter_plan, &extension_codec)?;
 
     // Serialize to bytes
     let mut bytes = Vec::new();
@@ -115,10 +116,10 @@ pub async fn expression_deduplication() -> Result<()> {
     println!("Step 4: Deserializing plan with CachingCodec...");
 
     let ctx = SessionContext::new();
-    let deserialized_plan = proto.try_into_physical_plan(
+    let deserialized_plan = proto.try_into_physical_plan_with_converter(
         &ctx.task_ctx(),
         &extension_codec,
-        &caching_codec,
+        &caching_converter,
     )?;
 
     // Step 5: check that we deduplicated expressions
@@ -140,8 +141,8 @@ pub async fn expression_deduplication() -> Result<()> {
         println!("  Success: Duplicate expressions were deduplicated!");
         println!(
             "  Cache Stats: hits={}, misses={}",
-            caching_codec.stats.read().unwrap().cache_hits,
-            caching_codec.stats.read().unwrap().cache_misses,
+            caching_converter.stats.read().unwrap().cache_hits,
+            caching_converter.stats.read().unwrap().cache_misses,
         );
     } else {
         println!("  Failure: Duplicate expressions were NOT deduplicated.");
@@ -207,7 +208,7 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         extension_codec: &dyn PhysicalExtensionCodec,
         proto: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        proto.try_into_physical_plan(ctx, extension_codec, self)
+        proto.try_into_physical_plan_with_converter(ctx, extension_codec, self)
     }
 
     fn execution_plan_to_proto(
@@ -215,7 +216,11 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         plan: &Arc<dyn ExecutionPlan>,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
-        PhysicalPlanNode::try_from_physical_plan(Arc::clone(plan), extension_codec, self)
+        PhysicalPlanNode::try_from_physical_plan_with_converter(
+            Arc::clone(plan),
+            extension_codec,
+            self,
+        )
     }
 
     // CACHING IMPLEMENTATION: Intercept expression deserialization
@@ -246,7 +251,8 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         }
 
         // Cache miss - deserialize and store
-        let expr = parse_physical_expr(proto, ctx, input_schema, codec, self)?;
+        let expr =
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)?;
 
         // Store in cache
         {
@@ -264,6 +270,6 @@ impl PhysicalProtoConverterExtension for CachingCodec {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalExprNode> {
-        serialize_physical_expr(expr, codec, self)
+        serialize_physical_expr_with_converter(expr, codec, self)
     }
 }
