@@ -48,6 +48,7 @@ use datafusion_common::{
     types::logical_string,
     utils::take_function_args,
 };
+use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDFImpl, Signature,
@@ -251,7 +252,7 @@ impl ScalarUDFImpl for DatePartFunc {
         args: &[Expr],
         lit_expr: &Expr,
         info: &SimplifyContext,
-    ) -> Result<Option<interval_arithmetic::Interval>> {
+    ) -> Result<PreimageResult> {
         let [part, col_expr] = take_function_args(self.name(), args)?;
 
         // Get the interval unit from the part argument
@@ -264,24 +265,24 @@ impl ScalarUDFImpl for DatePartFunc {
         // only support extracting year
         match interval_unit {
             Some(IntervalUnit::Year) => (),
-            _ => return Ok(None),
+            _ => return Ok(PreimageResult::None),
         }
 
         // Check if the argument is a literal (e.g. date_part(YEAR, col) = 2024)
         let Some(argument_literal) = lit_expr.as_literal() else {
-            return Ok(None);
+            return Ok(PreimageResult::None);
         };
 
         // Extract i32 year from Scalar value
         let year = match argument_literal {
             ScalarValue::Int32(Some(y)) => *y,
-            _ => return Ok(None),
+            _ => return Ok(PreimageResult::None),
         };
 
         // Can only extract year from Date32/64 and Timestamp column
         let target_type = match info.get_data_type(col_expr)? {
             Date32 | Date64 | Timestamp(_, _) => &info.get_data_type(col_expr)?,
-            _ => return Ok(None),
+            _ => return Ok(PreimageResult::None),
         };
 
         // Compute the Interval bounds
@@ -296,11 +297,10 @@ impl ScalarUDFImpl for DatePartFunc {
             .expect("Expect preimage interval lower bound");
         let upper = date_to_scalar(end_time, target_type)
             .expect("Expect preimage interval upper bound");
-        Ok(Some(interval_arithmetic::Interval::try_new(lower, upper)?))
-    }
+        let interval = Box::new(interval_arithmetic::Interval::try_new(lower, upper)?);
 
-    fn column_expr(&self, args: &[Expr]) -> Option<Expr> {
-        Some(args[1].clone())
+        let expr = args[1].clone();
+        Ok(PreimageResult::Range { expr, interval })
     }
 
     fn aliases(&self) -> &[String] {
