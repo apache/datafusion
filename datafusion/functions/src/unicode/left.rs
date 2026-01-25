@@ -26,11 +26,11 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
+use datafusion_common::Result;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -173,7 +173,7 @@ fn left_impl_view(
 
     let views = string_view_array.views();
     // Every string in StringViewArray has one corresponding view in `views`
-    assert_or_internal_err!(views.len() == string_view_array.len());
+    debug_assert!(views.len() == string_view_array.len());
 
     // Compose null buffer at once
     let string_nulls = string_view_array.nulls();
