@@ -210,7 +210,7 @@ let converter = DefaultPhysicalProtoConverter {};
 let sort_proto = serialize_physical_sort_expr(
     sort_expr,
     codec,
-    proto_converter,
+    &converter,
 );
 ```
 
