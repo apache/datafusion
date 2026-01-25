@@ -47,6 +47,18 @@ SELECT concat(a, b, c) from (select 'a' a, 'b' b, 'c' c union all select null a,
 abc
 NULL
 
+# Test mixed types: Utf8View + Utf8
+query T
+SELECT concat(arrow_cast('hello', 'Utf8View'), ' world');
+----
+hello world
+
+# Test all three types mixed together
+query T
+SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View'));
+----
+abc
+
 # Utf8View: no extra CAST in plan
 statement ok
 CREATE TABLE test_concat_view (a VARCHAR, b VARCHAR) AS VALUES ('foo', 'bar'), ('hello', 'world');
