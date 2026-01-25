@@ -1007,6 +1007,7 @@ message FilterExecNode {
   PhysicalExprNode expr = 2;
   uint32 default_filter_selectivity = 3;
   repeated uint32 projection = 9;
+  uint32 batch_size = 10;
 }
 
 message FileGroup {

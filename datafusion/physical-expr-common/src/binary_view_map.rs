@@ -273,11 +273,10 @@ where
             let value: &[u8] = value.as_ref();
 
             let entry = self.map.find_mut(hash, |header| {
-                let v = self.builder.get_value(header.view_idx);
-
-                if v.len() != value.len() {
+                if header.hash != hash {
                     return false;
                 }
+                let v = self.builder.get_value(header.view_idx);
 
                 v == value
             });

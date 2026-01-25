@@ -128,7 +128,9 @@ where
                     let hash = key.hash(state);
                     let insert = self.map.entry(
                         hash,
-                        |&(g, _)| unsafe { self.values.get_unchecked(g).is_eq(key) },
+                        |&(g, h)| unsafe {
+                            hash == h && self.values.get_unchecked(g).is_eq(key)
+                        },
                         |&(_, h)| h,
                     );
 
