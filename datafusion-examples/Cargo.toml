@@ -70,7 +70,7 @@ tonic = "0.14"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3" }
 url = { workspace = true }
-uuid = "1.19"
+uuid = "1.20"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
