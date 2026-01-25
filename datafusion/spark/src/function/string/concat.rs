@@ -53,13 +53,9 @@ impl Default for SparkConcat {
 
 impl SparkConcat {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Variadic(vec![Utf8View, Utf8, LargeUtf8]),
-                    TypeSignature::Nullary,
-                ],
+                vec![TypeSignature::UserDefined, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
         }
