@@ -103,13 +103,13 @@ impl ScalarUDFImpl for LeftFunc {
     ) -> Result<ColumnarValue> {
         let args = &args.args;
         match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(left::<i32>, vec![])(args)
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                make_scalar_function(left, vec![])(args)
             }
-            DataType::LargeUtf8 => make_scalar_function(left::<i64>, vec![])(args),
             other => exec_err!(
-                "Unsupported data type {other:?} for function left,\
-                expected Utf8View, Utf8 or LargeUtf8."
+                "Unsupported data type {other:?} for function {},\
+                expected Utf8View, Utf8 or LargeUtf8.",
+                self.name()
             ),
         }
     }
@@ -123,15 +123,23 @@ impl ScalarUDFImpl for LeftFunc {
 /// left('abcde', 2) = 'ab'
 /// left('abcde', -2) = 'ab'
 /// The implementation uses UTF-8 code points as characters
-fn left<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn left(args: &[ArrayRef]) -> Result<ArrayRef> {
     let n_array = as_int64_array(&args[1])?;
 
-    if args[0].data_type() == &DataType::Utf8View {
-        let string_view_array = as_string_view_array(&args[0])?;
-        left_impl_view(string_view_array, n_array)
-    } else {
-        let string_array = as_generic_string_array::<T>(&args[0])?;
-        left_impl::<T, _>(string_array, n_array)
+    match args[0].data_type() {
+        DataType::Utf8 => {
+            let string_array = as_generic_string_array::<i32>(&args[0])?;
+            left_impl::<i32, _>(string_array, n_array)
+        }
+        DataType::LargeUtf8 => {
+            let string_array = as_generic_string_array::<i64>(&args[0])?;
+            left_impl::<i64, _>(string_array, n_array)
+        }
+        DataType::Utf8View => {
+            let string_view_array = as_string_view_array(&args[0])?;
+            left_impl_view(string_view_array, n_array)
+        }
+        _ => exec_err!("Not supported"),
     }
 }
 
