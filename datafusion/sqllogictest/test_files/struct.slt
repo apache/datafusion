@@ -492,18 +492,6 @@ Struct("r": Utf8, "c": Float64)
 statement ok
 drop table t;
 
-statement ok
-create table t as values({r: 'a', c: 1}), ({c: 2.3, r: 'b'});
-
-query ?
-select * from t;
-----
-{c: 1.0, r: a}
-{c: 2.3, r: b}
-
-statement ok
-drop table t;
-
 ##################################
 ## Test Coalesce with Struct
 ##################################
@@ -562,24 +550,12 @@ Struct("a": Float32, "b": Utf8View)
 statement ok
 drop table t;
 
-# row() with incorrect order
+# row() with incorrect order - row() is positional, not name-based
 statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values
     (row('red', 1), row(2.3, 'blue')),
     (row('purple', 1), row('green', 2.3));
 
-# out of order struct literal
-statement ok
-create table t(a struct(r varchar, c int)) as values ({r: 'a', c: 1}), ({c: 2, r: 'b'});
-
-query ?
-select * from t;
-----
-{r: a, c: 1}
-{r: b, c: 2}
-
-statement ok
-drop table t;
 
 ##################################
 ## Test Array of Struct
@@ -590,11 +566,6 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 ----
 [{r: a, c: 1}, {r: b, c: 2}]
 
-# Create a list of struct with different field types
-query ?
-select [{r: 'a', c: 1}, {c: 2, r: 'b'}];
-----
-[{c: 1, r: a}, {c: 2, r: b}]
 
 statement ok
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
@@ -607,18 +578,6 @@ List(Struct("r": Utf8View, "c": Float32))
 statement ok
 drop table t;
 
-# create table with different struct type is fine
-statement ok
-create table t(a struct(r varchar, c int), b struct(c float, r varchar)) as values (row('a', 1), row(2.3, 'b'));
-
-# create array with different struct type should be cast
-query T
-select arrow_typeof([a, b]) from t;
-----
-List(Struct("c": Float32, "r": Utf8View))
-
-statement ok
-drop table t;
 
 statement ok
 create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (row('a', 1, 2.3), row('b', 2.3, 2));
@@ -845,3 +804,864 @@ NULL
 
 statement ok
 drop table nullable_parent_test;
+
+# Test struct casting with field reordering - string fields
+query ?
+SELECT CAST({b: 'b_value', a: 'a_value'} AS STRUCT(a VARCHAR, b VARCHAR));
+----
+{a: a_value, b: b_value}
+
+# Test struct casting with field reordering - integer fields
+query ?
+SELECT CAST({b: 3, a: 4} AS STRUCT(a INT, b INT));
+----
+{a: 4, b: 3}
+
+# Test with type casting AND field reordering
+query ?
+SELECT CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
+----
+{a: 4, b: 3}
+
+# Test positional casting when there is no name overlap
+query ?
+SELECT CAST(struct(1, 'x') AS STRUCT(a INT, b VARCHAR));
+----
+{a: 1, b: x}
+
+# Test with missing field - should insert nulls
+query ?
+SELECT CAST({a: 1} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: NULL}
+
+# Test with extra source field - should be ignored
+query ?
+SELECT CAST({a: 1, b: 2, extra: 3} AS STRUCT(a INT, b INT));
+----
+{a: 1, b: 2}
+
+# Test no overlap with mismatched field count - should fail because no field names match
+statement error DataFusion error: (Plan error|Error during planning|This feature is not implemented): (Cannot cast struct: at least one field name must match between source and target|Cannot cast struct with 3 fields to 2 fields without name overlap|Unsupported CAST from Struct)
+SELECT CAST(struct(1, 'x', 'y') AS STRUCT(a INT, b VARCHAR));
+
+# Test nested struct with field reordering
+query ?
+SELECT CAST(
+  {inner: {y: 2, x: 1}}
+  AS STRUCT(inner STRUCT(x INT, y INT))
+);
+----
+{inner: {x: 1, y: 2}}
+
+# Test field reordering with table data
+statement ok
+CREATE TABLE struct_reorder_test (
+  data STRUCT(b INT, a VARCHAR)
+) AS VALUES
+  (struct(100, 'first')),
+  (struct(200, 'second')),
+  (struct(300, 'third'))
+;
+
+query ?
+SELECT CAST(data AS STRUCT(a VARCHAR, b INT)) AS casted_data FROM struct_reorder_test ORDER BY data['b'];
+----
+{a: first, b: 100}
+{a: second, b: 200}
+{a: third, b: 300}
+
+statement ok
+drop table struct_reorder_test;
+
+# Test casting struct with multiple levels of nesting and reordering
+query ?
+SELECT CAST(
+  {level1: {z: 100, y: 'inner', x: 1}}
+  AS STRUCT(level1 STRUCT(x INT, y VARCHAR, z INT))
+);
+----
+{level1: {x: 1, y: inner, z: 100}}
+
+# Test field reordering with nulls in source
+query ?
+SELECT CAST(
+  {b: NULL::INT, a: 42}
+  AS STRUCT(a INT, b INT)
+);
+----
+{a: 42, b: NULL}
+
+# Test casting preserves struct-level nulls
+query ?
+SELECT CAST(NULL::STRUCT(b INT, a INT) AS STRUCT(a INT, b INT));
+----
+NULL
+
+############################
+# Implicit Coercion Tests with CREATE TABLE AS VALUES
+############################
+
+# Test implicit coercion with same field order, different types
+statement ok
+create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("r": Utf8, "c": Float64)
+
+query ?
+select * from t order by column1.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nullable fields (same order)
+statement ok
+create table t as values({a: 1, b: 'x'}), ({a: 2, b: 'y'});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("a": Int64, "b": Utf8)
+
+query ?
+select * from t order by column1.a;
+----
+{a: 1, b: x}
+{a: 2, b: y}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nested structs (same field order)
+statement ok
+create table t as 
+  select {outer: {x: 1, y: 2}} as column1
+  union all
+  select {outer: {x: 3, y: 4}};
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("outer": Struct("x": Int64, "y": Int64))
+
+query ?
+select column1 from t order by column1.outer.x;
+----
+{outer: {x: 1, y: 2}}
+{outer: {x: 3, y: 4}}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with type widening (Int32 -> Int64)
+statement ok
+create table t as values({id: 1, val: 100}), ({id: 2, val: 9223372036854775807});
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("id": Int64, "val": Int64)
+
+query ?
+select * from t order by column1.id;
+----
+{id: 1, val: 100}
+{id: 2, val: 9223372036854775807}
+
+statement ok
+drop table t;
+
+# Test implicit coercion with nested struct and type coercion
+statement ok
+create table t as 
+  select {name: 'Alice', data: {score: 100, active: true}} as column1
+  union all
+  select {name: 'Bob', data: {score: 200, active: false}};
+
+query T
+select arrow_typeof(column1) from t limit 1;
+----
+Struct("name": Utf8, "data": Struct("score": Int64, "active": Boolean))
+
+query ?
+select column1 from t order by column1.name;
+----
+{name: Alice, data: {score: 100, active: true}}
+{name: Bob, data: {score: 200, active: false}}
+
+statement ok
+drop table t;
+
+############################
+# Field Reordering Tests (using explicit CAST)
+############################
+
+# Test explicit cast with field reordering in VALUES - basic case
+query ?
+select CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT));
+----
+{r: b, c: 2.3}
+
+# Test explicit cast with field reordering - multiple rows
+query ?
+select * from (values 
+  (CAST({c: 1, r: 'a'} AS STRUCT(r VARCHAR, c FLOAT))),
+  (CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT)))
+) order by column1.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+# Test table with explicit cast for field reordering
+statement ok
+create table t as select CAST({c: 1, r: 'a'} AS STRUCT(r VARCHAR, c FLOAT)) as s
+union all
+select CAST({c: 2.3, r: 'b'} AS STRUCT(r VARCHAR, c FLOAT));
+
+query T
+select arrow_typeof(s) from t limit 1;
+----
+Struct("r": Utf8View, "c": Float32)
+
+query ?
+select * from t order by s.r;
+----
+{r: a, c: 1.0}
+{r: b, c: 2.3}
+
+statement ok
+drop table t;
+
+# Test field reordering with nullable fields using CAST
+query ?
+select CAST({b: NULL, a: 42} AS STRUCT(a INT, b INT));
+----
+{a: 42, b: NULL}
+
+# Test field reordering with nested structs using CAST
+query ?
+select CAST({outer: {y: 4, x: 3}} AS STRUCT(outer STRUCT(x INT, y INT)));
+----
+{outer: {x: 3, y: 4}}
+
+# Test complex nested field reordering
+query ?
+select CAST(
+  {data: {active: false, score: 200}, name: 'Bob'}
+  AS STRUCT(name VARCHAR, data STRUCT(score INT, active BOOLEAN))
+);
+----
+{name: Bob, data: {score: 200, active: false}}
+
+############################
+# Array Literal Tests with Struct Field Reordering (Implicit Coercion)
+############################
+
+# Test array literal with reordered struct fields - implicit coercion by name
+# Field order in unified schema is determined during type coercion
+query ?
+select [{r: 'a', c: 1}, {c: 2.3, r: 'b'}];
+----
+[{c: 1.0, r: a}, {c: 2.3, r: b}]
+
+# Test array literal with same-named fields but different order
+# Fields are reordered during coercion
+query ?
+select [{a: 1, b: 2}, {b: 3, a: 4}];
+----
+[{b: 2, a: 1}, {b: 3, a: 4}]
+
+# Test array literal with explicit cast to unify struct schemas with partial overlap
+# Use CAST to explicitly unify schemas when fields don't match completely
+query ?
+select [
+  CAST({a: 1, b: 2} AS STRUCT(a INT, b INT, c INT)),
+  CAST({b: 3, c: 4} AS STRUCT(a INT, b INT, c INT))
+];
+----
+[{a: 1, b: 2, c: NULL}, {a: NULL, b: 3, c: 4}]
+
+# Test NULL handling in array literals with reordered but matching fields
+query ?
+select [{a: NULL, b: 1}, {b: 2, a: NULL}];
+----
+[{b: 1, a: NULL}, {b: 2, a: NULL}]
+
+# Verify arrow_typeof for array with reordered struct fields
+# The unified schema type follows the coercion order
+query T
+select arrow_typeof([{x: 1, y: 2}, {y: 3, x: 4}]);
+----
+List(Struct("y": Int64, "x": Int64))
+
+# Test array of structs with matching nested fields in different order
+# Inner nested fields are also reordered during coercion
+query ?
+select [
+  {id: 1, info: {name: 'Alice', age: 30}},
+  {info: {age: 25, name: 'Bob'}, id: 2}
+];
+----
+[{info: {age: 30, name: Alice}, id: 1}, {info: {age: 25, name: Bob}, id: 2}]
+
+# Test nested arrays with matching struct fields (different order)
+query ?
+select [[{x: 1, y: 2}], [{y: 4, x: 3}]];
+----
+[[{x: 1, y: 2}], [{x: 3, y: 4}]]
+
+# Test array literal with float type coercion across elements
+query ?
+select [{val: 1}, {val: 2.5}];
+----
+[{val: 1.0}, {val: 2.5}]
+
+############################
+# Dynamic Array Construction Tests (from Table Columns)
+############################
+
+# Setup test table with struct columns for dynamic array construction
+statement ok
+create table t_complete_overlap (
+  s1 struct(x int, y int),
+  s2 struct(y int, x int)
+) as values
+  ({x: 1, y: 2}, {y: 3, x: 4}),
+  ({x: 5, y: 6}, {y: 7, x: 8});
+
+# Test 1: Complete overlap - same fields, different order
+# Verify arrow_typeof for dynamically created array
+query T
+select arrow_typeof([s1, s2]) from t_complete_overlap limit 1;
+----
+List(Struct("y": Int32, "x": Int32))
+
+# Verify values are correctly mapped by name in the array
+# Field order follows the second column's field order
+query ?
+select [s1, s2] from t_complete_overlap order by s1.x;
+----
+[{y: 2, x: 1}, {y: 3, x: 4}]
+[{y: 6, x: 5}, {y: 7, x: 8}]
+
+statement ok
+drop table t_complete_overlap;
+
+# Test 2: Partial overlap - some shared fields between columns
+# Note: Columns must have the exact same field set for array construction to work
+# Test with identical field set (all fields present in both columns)
+statement ok
+create table t_partial_overlap (
+  col_a struct(name VARCHAR, age int, active boolean),
+  col_b struct(age int, name VARCHAR, active boolean)
+) as values
+  ({name: 'Alice', age: 30, active: true}, {age: 25, name: 'Bob', active: false}),
+  ({name: 'Charlie', age: 35, active: true}, {age: 40, name: 'Diana', active: false});
+
+# Verify unified type includes all fields from both structs
+query T
+select arrow_typeof([col_a, col_b]) from t_partial_overlap limit 1;
+----
+List(Struct("age": Int32, "name": Utf8View, "active": Boolean))
+
+# Verify values are correctly mapped by name in the array
+# Field order follows the second column's field order
+query ?
+select [col_a, col_b] from t_partial_overlap order by col_a.name;
+----
+[{age: 30, name: Alice, active: true}, {age: 25, name: Bob, active: false}]
+[{age: 35, name: Charlie, active: true}, {age: 40, name: Diana, active: false}]
+
+statement ok
+drop table t_partial_overlap;
+
+# Test 3: Complete field set matching (no CAST needed)
+# Schemas already align; confirm unified type and values
+statement ok
+create table t_with_cast (
+  col_x struct(id int, description VARCHAR),
+  col_y struct(id int, description VARCHAR)
+) as values
+  ({id: 1, description: 'First'}, {id: 10, description: 'First Value'}),
+  ({id: 2, description: 'Second'}, {id: 20, description: 'Second Value'});
+
+# Verify type unification with all fields
+query T
+select arrow_typeof([col_x, col_y]) from t_with_cast limit 1;
+----
+List(Struct("id": Int32, "description": Utf8View))
+
+# Verify values remain aligned by name
+query ?
+select [col_x, col_y] from t_with_cast order by col_x.id;
+----
+[{id: 1, description: First}, {id: 10, description: First Value}]
+[{id: 2, description: Second}, {id: 20, description: Second Value}]
+
+statement ok
+drop table t_with_cast;
+
+# Test 4: Explicit CAST for partial field overlap scenarios
+# When columns have different field sets, use explicit CAST to unify schemas
+query ?
+select [
+  CAST({id: 1} AS STRUCT(id INT, description VARCHAR)),
+  CAST({id: 10, description: 'Value'} AS STRUCT(id INT, description VARCHAR))
+];
+----
+[{id: 1, description: NULL}, {id: 10, description: Value}]
+
+# Test 5: Complex nested structs with field reordering
+# Nested fields must have the exact same field set for array construction
+statement ok
+create table t_nested (
+  col_1 struct(id int, outer struct(x int, y int)),
+  col_2 struct(id int, outer struct(x int, y int))
+) as values
+  ({id: 100, outer: {x: 1, y: 2}}, {id: 101, outer: {x: 4, y: 3}}),
+  ({id: 200, outer: {x: 5, y: 6}}, {id: 201, outer: {x: 8, y: 7}});
+
+# Verify nested struct in unified schema
+query T
+select arrow_typeof([col_1, col_2]) from t_nested limit 1;
+----
+List(Struct("id": Int32, "outer": Struct("x": Int32, "y": Int32)))
+
+# Verify nested field values are correctly mapped
+query ?
+select [col_1, col_2] from t_nested order by col_1.id;
+----
+[{id: 100, outer: {x: 1, y: 2}}, {id: 101, outer: {x: 4, y: 3}}]
+[{id: 200, outer: {x: 5, y: 6}}, {id: 201, outer: {x: 8, y: 7}}]
+
+statement ok
+drop table t_nested;
+
+# Test 6: NULL handling with matching field sets
+statement ok
+create table t_nulls (
+  col_a struct(val int, flag boolean),
+  col_b struct(val int, flag boolean)
+) as values
+  ({val: 1, flag: true}, {val: 10, flag: false}),
+  ({val: NULL, flag: false}, {val: NULL, flag: true});
+
+# Verify NULL values are preserved
+query ?
+select [col_a, col_b] from t_nulls order by col_a.val;
+----
+[{val: 1, flag: true}, {val: 10, flag: false}]
+[{val: NULL, flag: false}, {val: NULL, flag: true}]
+
+statement ok
+drop table t_nulls;
+
+# Test 7: Multiple columns with complete field matching
+statement ok
+create table t_multi (
+  col1 struct(a int, b int, c int),
+  col2 struct(a int, b int, c int)
+) as values
+  ({a: 1, b: 2, c: 3}, {a: 10, b: 20, c: 30}),
+  ({a: 4, b: 5, c: 6}, {a: 40, b: 50, c: 60});
+
+# Verify array with complete field matching
+query T
+select arrow_typeof([col1, col2]) from t_multi limit 1;
+----
+List(Struct("a": Int32, "b": Int32, "c": Int32))
+
+# Verify values are correctly unified
+query ?
+select [col1, col2] from t_multi order by col1.a;
+----
+[{a: 1, b: 2, c: 3}, {a: 10, b: 20, c: 30}]
+[{a: 4, b: 5, c: 6}, {a: 40, b: 50, c: 60}]
+
+statement ok
+drop table t_multi;
+
+############################
+# Comprehensive Implicit Struct Coercion Suite
+############################
+
+# Test 1: VALUES clause with field reordering coerced by name into declared schema
+statement ok
+create table implicit_values_reorder (
+  s struct(a int, b int)
+) as values
+  ({a: 1, b: 2}),
+  ({b: 3, a: 4});
+
+query T
+select arrow_typeof(s) from implicit_values_reorder limit 1;
+----
+Struct("a": Int32, "b": Int32)
+
+query ?
+select s from implicit_values_reorder order by s.a;
+----
+{a: 1, b: 2}
+{a: 4, b: 3}
+
+statement ok
+drop table implicit_values_reorder;
+
+# Test 2: Array literal coercion with reordered struct fields
+query IIII
+select 
+  [{a: 1, b: 2}, {b: 3, a: 4}][1]['a'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][1]['b'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][2]['a'],
+  [{a: 1, b: 2}, {b: 3, a: 4}][2]['b'];
+----
+1 2 4 3
+
+# Test 3: Array construction from columns with reordered struct fields
+statement ok
+create table struct_columns_order (
+  s1 struct(a int, b int),
+  s2 struct(b int, a int)
+) as values
+  ({a: 1, b: 2}, {b: 3, a: 4}),
+  ({a: 5, b: 6}, {b: 7, a: 8});
+
+query IIII
+select 
+  [s1, s2][1]['a'],
+  [s1, s2][1]['b'],
+  [s1, s2][2]['a'],
+  [s1, s2][2]['b']
+from struct_columns_order
+order by s1['a'];
+----
+1 2 4 3
+5 6 8 7
+
+statement ok
+drop table struct_columns_order;
+
+# Test 4: UNION with struct field reordering
+query II
+select s['a'], s['b']
+from (
+  select {a: 1, b: 2} as s
+  union all
+  select {b: 3, a: 4} as s
+) t
+order by s['a'];
+----
+1 2
+4 3
+
+# Test 5: CTE with struct coercion across branches
+query II
+with 
+  t1 as (select {a: 1, b: 2} as s),
+  t2 as (select {b: 3, a: 4} as s)
+select t1.s['a'], t1.s['b'] from t1
+union all
+select t2.s['a'], t2.s['b'] from t2
+order by 1;
+----
+1 2
+4 3
+
+# Test 6: Struct aggregation retains name-based mapping
+statement ok
+create table agg_structs_reorder (
+  k int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (1, {y: 3, x: 4}),
+  (2, {x: 5, y: 6});
+
+query I?
+select k, array_agg(s) from agg_structs_reorder group by k order by k;
+----
+1 [{x: 1, y: 2}, {x: 4, y: 3}]
+2 [{x: 5, y: 6}]
+
+statement ok
+drop table agg_structs_reorder;
+
+# Test 7: Nested struct coercion with reordered inner fields
+query IIII
+with nested as (
+  select [{outer: {inner: 1, value: 2}}, {outer: {value: 3, inner: 4}}] as arr
+)
+select 
+  arr[1]['outer']['inner'],
+  arr[1]['outer']['value'],
+  arr[2]['outer']['inner'],
+  arr[2]['outer']['value']
+from nested;
+----
+1 2 4 3
+
+# Test 8: Partial name overlap - currently errors (field count mismatch detected)
+# This is a documented limitation: structs must have exactly same field set for coercion
+query error DataFusion error: Error during planning: Inconsistent data type across values list
+select column1 from (values ({a: 1, b: 2}), ({b: 3, c: 4})) order by column1['a'];
+
+# Negative test: mismatched struct field counts are rejected (documented limitation)
+query error DataFusion error: .*
+select [{a: 1}, {a: 2, b: 3}];
+
+# Test 9: INSERT with name-based struct coercion into target schema
+statement ok
+create table target_struct_insert (s struct(a int, b int));
+
+statement ok
+insert into target_struct_insert values ({b: 1, a: 2});
+
+query ?
+select s from target_struct_insert;
+----
+{a: 2, b: 1}
+
+statement ok
+drop table target_struct_insert;
+
+# Test 10: CASE expression with different struct field orders
+query II
+select 
+  (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['a'] as a_val,
+  (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['b'] as b_val;
+----
+1 2
+
+############################
+# JOIN Coercion Tests
+############################
+
+# Test: Struct coercion in JOIN ON condition
+statement ok
+create table t_left (
+  id int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (2, {x: 3, y: 4});
+
+statement ok
+create table t_right (
+  id int,
+  s struct(y int, x int)
+) as values
+  (1, {y: 2, x: 1}),
+  (2, {y: 4, x: 3});
+
+# JOIN on reordered struct fields - matched by name
+query IIII
+select t_left.id, t_left.s['x'], t_left.s['y'], t_right.id
+from t_left
+join t_right on t_left.s = t_right.s
+order by t_left.id;
+----
+1 1 2 1
+2 3 4 2
+
+statement ok
+drop table t_left;
+
+statement ok
+drop table t_right;
+
+# Test: Struct coercion with filtered JOIN
+statement ok
+create table orders (
+  order_id int,
+  customer struct(name varchar, id int)
+) as values
+  (1, {name: 'Alice', id: 100}),
+  (2, {name: 'Bob', id: 101}),
+  (3, {name: 'Charlie', id: 102});
+
+statement ok
+create table customers (
+  customer_id int,
+  info struct(id int, name varchar)
+) as values
+  (100, {id: 100, name: 'Alice'}),
+  (101, {id: 101, name: 'Bob'}),
+  (103, {id: 103, name: 'Diana'});
+
+# Join with struct field reordering - names matched, not positions
+query I
+select count(*) from orders
+join customers on orders.customer = customers.info
+where orders.order_id <= 2;
+----
+2
+
+statement ok
+drop table orders;
+
+statement ok
+drop table customers;
+
+############################
+# WHERE Predicate Coercion Tests
+############################
+
+# Test: Struct equality in WHERE clause with field reordering
+statement ok
+create table t_where (
+  id int,
+  s struct(x int, y int)
+) as values
+  (1, {x: 1, y: 2}),
+  (2, {x: 3, y: 4}),
+  (3, {x: 1, y: 2});
+
+# WHERE clause with struct comparison - coerced by name
+query I
+select id from t_where
+where s = {y: 2, x: 1}
+order by id;
+----
+1
+3
+
+statement ok
+drop table t_where;
+
+# Test: Struct IN clause with reordering
+statement ok
+create table t_in (
+  id int,
+  s struct(a int, b varchar)
+) as values
+  (1, {a: 1, b: 'x'}),
+  (2, {a: 2, b: 'y'}),
+  (3, {a: 1, b: 'x'});
+
+# IN clause with reordered struct literals
+query I
+select id from t_in
+where s in ({b: 'x', a: 1}, {b: 'y', a: 2})
+order by id;
+----
+1
+2
+3
+
+statement ok
+drop table t_in;
+
+# Test: Struct BETWEEN (not supported, but documents limitation)
+# Structs don't support BETWEEN, but can use comparison operators
+
+statement ok
+create table t_between (
+  id int,
+  s struct(val int)
+) as values
+  (1, {val: 10}),
+  (2, {val: 20}),
+  (3, {val: 30});
+
+# Comparison via field extraction works
+query I
+select id from t_between
+where s['val'] >= 20
+order by id;
+----
+2
+3
+
+statement ok
+drop table t_between;
+
+############################
+# Window Function Coercion Tests
+############################
+
+# Test: Struct in window function PARTITION BY
+statement ok
+create table t_window (
+  id int,
+  s struct(category int, value int)
+) as values
+  (1, {category: 1, value: 10}),
+  (2, {category: 1, value: 20}),
+  (3, {category: 2, value: 30}),
+  (4, {category: 2, value: 40});
+
+# Window partition on struct field via extraction
+query III
+select 
+  id,
+  s['value'],
+  row_number() over (partition by s['category'] order by s['value'])
+from t_window
+order by id;
+----
+1 10 1
+2 20 2
+3 30 1
+4 40 2
+
+statement ok
+drop table t_window;
+
+# Test: Struct in window function ORDER BY with coercion
+statement ok
+create table t_rank (
+  id int,
+  s struct(rank_val int, group_id int)
+) as values
+  (1, {rank_val: 10, group_id: 1}),
+  (2, {rank_val: 20, group_id: 1}),
+  (3, {rank_val: 15, group_id: 2});
+
+# Window ranking with struct field extraction
+query III
+select 
+  id,
+  s['rank_val'],
+  rank() over (partition by s['group_id'] order by s['rank_val'])
+from t_rank
+order by id;
+----
+1 10 1
+2 20 2
+3 15 1
+
+statement ok
+drop table t_rank;
+
+# Test: Aggregate function with struct coercion across window partitions
+statement ok
+create table t_agg_window (
+  id int,
+  partition_id int,
+  s struct(amount int)
+) as values
+  (1, 1, {amount: 100}),
+  (2, 1, {amount: 200}),
+  (3, 2, {amount: 150});
+
+# Running sum via extracted struct field
+query III
+select 
+  id,
+  partition_id,
+  sum(s['amount']) over (partition by partition_id order by id)
+from t_agg_window
+order by id;
+----
+1 1 100
+2 1 300
+3 2 150
+
+statement ok
+drop table t_agg_window;

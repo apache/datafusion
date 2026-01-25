@@ -4747,10 +4747,11 @@ select array_union(arrow_cast([], 'LargeList(Int64)'), arrow_cast([], 'LargeList
 []
 
 # array_union scalar function #7
-query ?
-select array_union([[null]], []);
-----
-[[]]
+# re-enable when https://github.com/apache/arrow-rs/issues/9227 is fixed
+# query ?
+# select array_union([[null]], []);
+# ----
+# [[]]
 
 query error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'array_union' function:
 select array_union(arrow_cast([[null]], 'LargeList(List(Int64))'), arrow_cast([], 'LargeList(Int64)'));
@@ -7219,12 +7220,12 @@ select generate_series('2021-01-01'::timestamp, '2021-01-01T15:00:00'::timestamp
 
 # Other timestamp types are coerced to nanosecond
 query ?
-select generate_series(arrow_cast('2021-01-01'::timestamp, 'Timestamp(Second, None)'), '2021-01-01T15:00:00'::timestamp, INTERVAL '1' HOUR);
+select generate_series(arrow_cast('2021-01-01'::timestamp, 'Timestamp(s)'), '2021-01-01T15:00:00'::timestamp, INTERVAL '1' HOUR);
 ----
 [2021-01-01T00:00:00, 2021-01-01T01:00:00, 2021-01-01T02:00:00, 2021-01-01T03:00:00, 2021-01-01T04:00:00, 2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00]
 
 query ?
-select generate_series('2021-01-01'::timestamp, arrow_cast('2021-01-01T15:00:00'::timestamp, 'Timestamp(Microsecond, None)'), INTERVAL '1' HOUR);
+select generate_series('2021-01-01'::timestamp, arrow_cast('2021-01-01T15:00:00'::timestamp, 'Timestamp(µs)'), INTERVAL '1' HOUR);
 ----
 [2021-01-01T00:00:00, 2021-01-01T01:00:00, 2021-01-01T02:00:00, 2021-01-01T03:00:00, 2021-01-01T04:00:00, 2021-01-01T05:00:00, 2021-01-01T06:00:00, 2021-01-01T07:00:00, 2021-01-01T08:00:00, 2021-01-01T09:00:00, 2021-01-01T10:00:00, 2021-01-01T11:00:00, 2021-01-01T12:00:00, 2021-01-01T13:00:00, 2021-01-01T14:00:00, 2021-01-01T15:00:00]
 

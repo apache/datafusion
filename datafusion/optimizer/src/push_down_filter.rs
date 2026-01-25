@@ -2332,7 +2332,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.d
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.d, test1.e, test1.f
@@ -2362,7 +2362,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.a
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c

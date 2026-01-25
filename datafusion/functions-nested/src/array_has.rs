@@ -262,7 +262,7 @@ impl<'a> TryFrom<&'a dyn Array> for ArrayWrapper<'a> {
             DataType::FixedSizeList(_, _) => Ok(ArrayWrapper::FixedSizeList(
                 as_fixed_size_list_array(value)?,
             )),
-            _ => exec_err!("array_has does not support type '{:?}'.", value.data_type()),
+            _ => exec_err!("array_has does not support type '{}'.", value.data_type()),
         }
     }
 }
