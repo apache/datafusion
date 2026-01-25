@@ -48,7 +48,6 @@ crates = {
     'datafusion-benchmarks': 'benchmarks/Cargo.toml',
     'datafusion-cli': 'datafusion-cli/Cargo.toml',
     'datafusion-examples': 'datafusion-examples/Cargo.toml',
-    'datafusion-docs': 'docs/Cargo.toml',
 }
 
 def update_workspace_version(new_version: str):
@@ -116,7 +115,8 @@ def update_docs(path: str, new_version: str):
     with open(path, 'r+') as fd:
         content = fd.read()
         fd.seek(0)
-        content = re.sub(r'datafusion = "(.+)"', f'datafusion = "{new_version}"', content)
+        content = re.sub(r'datafusion = "(.+?)"', f'datafusion = "{new_version}"', content)
+        content = re.sub(r'datafusion = { version = "(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
         fd.write(content)
 
 
@@ -144,6 +144,9 @@ def main():
         update_downstream_versions(cargo_toml, new_version)
 
     update_docs("README.md", new_version)
+    update_docs("docs/source/download.md", new_version)
+    update_docs("docs/source/user-guide/example-usage.md", new_version)
+    update_docs("docs/source/user-guide/crate-configuration.md", new_version)
 
 
 if __name__ == "__main__":
