@@ -33,20 +33,15 @@ use async_trait::async_trait;
 use object_store::ObjectStore;
 
 /// Determines how `FileSink` output paths are interpreted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FileOutputMode {
     /// Infer output mode from the output URL (for example, by extension / trailing `/`).
+    #[default]
     Automatic,
     /// Write to a single output file at the exact output path.
     SingleFile,
     /// Write to a directory under the output path with generated filenames.
     Directory,
-}
-
-impl Default for FileOutputMode {
-    fn default() -> Self {
-        Self::Automatic
-    }
 }
 
 impl FileOutputMode {
