@@ -300,7 +300,7 @@ where
                 }
 
                 // Prefix matched - must compare full bytes
-                let stored_value = self.builder.get_value(header.view_idx);
+                let stored_value = self.builder.get_value(header.builder_idx as usize);
                 let input_value: &[u8] = values.value(i).as_ref();
                 stored_value == input_value
             });
@@ -313,10 +313,10 @@ where
                 let value: &[u8] = values.value(i).as_ref();
                 let payload = make_payload_fn(Some(value));
 
-                let inner_view_idx = self.builder.len();
+                let builder_idx = self.builder.len() as u32;
                 let new_header = Entry {
                     view: view_u128,
-                    view_idx: inner_view_idx,
+                    builder_idx,
                     hash,
                     payload,
                 };
@@ -400,17 +400,23 @@ where
 }
 
 /// Entry in the hash table -- see [`ArrowBytesViewMap`] for more details
+///
+/// Memory layout optimized: we use u32 for the builder index instead of usize,
+/// saving 4 bytes per entry on 64-bit systems. This still supports up to 4 billion
+/// distinct values which is sufficient for practical use cases.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 struct Entry<V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,
 {
     /// The original u128 view for fast comparison of inline strings (<=12 bytes)
-    /// and prefix comparison for larger strings
+    /// and prefix comparison for larger strings. For inline strings, this contains
+    /// the complete value. For out-of-line strings, bytes 4-7 contain the prefix.
     view: u128,
 
-    /// The idx into the views array
-    view_idx: usize,
+    /// Index into the builder array. Uses u32 instead of usize to save 4 bytes
+    /// per entry while supporting up to 4 billion distinct values.
+    builder_idx: u32,
 
     hash: u64,
 
