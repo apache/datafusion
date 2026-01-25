@@ -163,53 +163,48 @@ fn left_impl_view(
 ) -> Result<ArrayRef> {
     let len = n_array.len();
 
-    let (views, buffers, _nulls) = string_view_array.clone().into_parts();
-
-    if string_view_array.len() != n_array.len() {
-        return exec_err!(
-            "Expected same shape of arrays, given {} and {}",
-            string_view_array.len(),
-            n_array.len()
-        );
-    }
-
+    let views = string_view_array.views();
     // Every string in StringViewArray has one corresponding view in `views`
-    if views.len() != string_view_array.len() {
-        return exec_err!(
-            "StringViewArray views length {} does not match array length {}",
-            views.len(),
-            string_view_array.len()
-        );
-    }
-    let mut null_buffer_builder = NullBufferBuilder::new(len);
-    let mut new_views = Vec::with_capacity(len);
+    assert_or_internal_err!(views.len() == string_view_array.len());
 
-    for idx in 0..len {
-        let view = views[idx];
+    // Compose null buffer at once
+    let string_nulls = string_view_array.nulls();
+    let n_nulls = n_array.nulls();
+    let new_nulls = NullBuffer::union(string_nulls, n_nulls);
 
-        if string_view_array.is_valid(idx) && n_array.is_valid(idx) {
-            let string: &str = string_view_array.value(idx);
-            let n = n_array.value(idx);
+    let new_views = (0..len)
+        .map(|idx| {
+            let view = views[idx];
 
-            let byte_length = left_byte_length(string, n);
-            let new_length: u32 = byte_length.try_into().map_err(|_| {
-                exec_datafusion_err!("String is larger than 32-bit limit at index {idx}")
-            })?;
-            let byte_view = ByteView::from(view);
-            // Construct a new view
-            let new_view = shrink_string_view_array_view(string, new_length, byte_view)?;
-            new_views.push(new_view);
-            null_buffer_builder.append_non_null();
-        } else {
-            new_views.push(view);
-            // Emit null
-            null_buffer_builder.append_null();
-        }
-    }
+            let is_valid = match &new_nulls {
+                Some(nulls_buf) => nulls_buf.is_valid(idx),
+                None => true,
+            };
+
+            if is_valid {
+                let string: &str = string_view_array.value(idx);
+                let n = n_array.value(idx);
+
+                // Input string comes from StringViewArray, so it should fit in 32-bit length
+                let new_length: u32 = left_byte_length(string, n) as u32;
+                let byte_view = ByteView::from(view);
+                // Construct a new view
+                let new_view =
+                    shrink_string_view_array_view(string, new_length, byte_view)?;
+                Ok(new_view)
+            } else {
+                // For nulls, keep the original view
+                Ok(view)
+            }
+        })
+        .collect::<Result<Vec<u128>>>()?;
+
     // Buffers are unchanged
-    // Nulls are rebuilt from scratch
-    let nulls = null_buffer_builder.finish();
-    let result = StringViewArray::try_new(ScalarBuffer::from(new_views), buffers, nulls)?;
+    let result = StringViewArray::try_new(
+        ScalarBuffer::from(new_views),
+        Vec::from(string_view_array.data_buffers()),
+        new_nulls,
+    )?;
     Ok(Arc::new(result) as ArrayRef)
 }
 
