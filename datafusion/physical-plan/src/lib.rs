@@ -70,6 +70,7 @@ pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod column_rewriter;
 pub mod common;
+pub mod context;
 pub mod coop;
 pub mod display;
 pub mod empty;

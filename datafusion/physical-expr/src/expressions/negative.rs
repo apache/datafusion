@@ -39,6 +39,7 @@ use datafusion_expr::{
     ColumnarValue,
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
 };
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 
 /// Negative expression
 #[derive(Debug, Eq)]
@@ -177,6 +178,13 @@ impl PhysicalExpr for NegativeExpr {
         write!(f, "(- ")?;
         self.arg.fmt_sql(f)?;
         write!(f, ")")
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

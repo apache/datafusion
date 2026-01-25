@@ -28,6 +28,7 @@ use arrow::{
 };
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 
 /// A place holder expression, can not be evaluated.
 ///
@@ -79,5 +80,12 @@ impl PhysicalExpr for NoOp {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }

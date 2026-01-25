@@ -31,6 +31,7 @@ use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: false,
@@ -236,6 +237,13 @@ impl PhysicalExpr for CastExpr {
         write!(f, " AS {:?}", self.cast_type)?;
 
         write!(f, ")")
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::context::PlanNodeExecutionContext;
 pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -129,6 +130,11 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
+
+    /// Return all expressions associated with plan.
+    fn exprs(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![]
+    }
 
     /// Returns an error if this individual node does not conform to its invariants.
     /// These invariants are typically only checked in debug mode.
@@ -456,6 +462,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream>;
+
+    /// Execute this plan in [`PlanNodeExecutionContext`].
+    ///
+    /// [`PlanNodeExecutionContext`] manages execution metrics and is responsible
+    /// to properly execute children plans.
+    ///
+    fn execute_with(
+        &self,
+        partition: usize,
+        context: &Arc<PlanNodeExecutionContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.execute(partition, Arc::clone(context.plan_context().task_context()))
+    }
 
     /// Return a snapshot of the set of [`Metric`]s for this
     /// [`ExecutionPlan`]. If no `Metric`s are available, return None.

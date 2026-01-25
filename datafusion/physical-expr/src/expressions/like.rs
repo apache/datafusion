@@ -21,6 +21,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::apply_cmp;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
@@ -148,6 +149,13 @@ impl PhysicalExpr for LikeExpr {
         self.expr.fmt_sql(f)?;
         write!(f, " {} ", self.op_name())?;
         self.pattern.fmt_sql(f)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

@@ -25,7 +25,9 @@ use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::ScalarFunctionArgs;
 use datafusion_expr::async_udf::AsyncScalarUDF;
 use datafusion_expr_common::columnar_value::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::{
+    ExprExecutionContext, PhysicalExpr,
+};
 use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
@@ -246,5 +248,12 @@ impl PhysicalExpr for AsyncFuncExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.func)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }

@@ -717,6 +717,33 @@ impl Projector {
         }
     }
 
+    pub fn with_metrics_owned(
+        mut self,
+        metrics: &ExecutionPlanMetricsSet,
+        partition: usize,
+    ) -> Self {
+        self.expression_metrics = Some(
+            self.projection
+                .create_expression_metrics(metrics, partition),
+        );
+        self
+    }
+
+    pub fn with_exprs(&self, exprs: &[Arc<dyn PhysicalExpr>]) -> Self {
+        let projection = self
+            .projection
+            .iter()
+            .zip(exprs.into_iter())
+            .map(|(src, dst)| ProjectionExpr::new(Arc::clone(dst), src.alias.clone()))
+            .collect();
+
+        Self {
+            projection,
+            output_schema: Arc::clone(&self.output_schema),
+            expression_metrics: self.expression_metrics.clone(),
+        }
+    }
+
     /// Project a record batch according to this projector's expressions.
     ///
     /// # Errors

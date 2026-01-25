@@ -36,7 +36,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::statistics::Distribution;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::physical_expr::fmt_sql;
+use datafusion_physical_expr_common::physical_expr::{ExprExecutionContext, fmt_sql};
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 use crate::expr::columnar_value::FFI_ColumnarValue;
@@ -704,6 +704,13 @@ impl PhysicalExpr for ForeignPhysicalExpr {
 
     fn is_volatile_node(&self) -> bool {
         unsafe { (self.expr.is_volatile_node)(&self.expr) }
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

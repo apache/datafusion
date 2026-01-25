@@ -33,6 +33,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use indexmap::{IndexMap, IndexSet};
 use std::borrow::Cow;
 use std::hash::Hash;
@@ -1341,6 +1342,13 @@ impl PhysicalExpr for CaseExpr {
             write!(f, " ")?;
         }
         write!(f, "END")
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

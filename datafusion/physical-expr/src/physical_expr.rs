@@ -237,7 +237,9 @@ mod tests {
     use crate::physical_expr::{
         physical_exprs_bag_equal, physical_exprs_contains, physical_exprs_equal,
     };
-    use datafusion_physical_expr_common::physical_expr::is_volatile;
+    use datafusion_physical_expr_common::physical_expr::{
+        ExprExecutionContext, is_volatile,
+    };
 
     use arrow::datatypes::{DataType, Schema};
     use arrow::record_batch::RecordBatch;
@@ -429,6 +431,13 @@ mod tests {
 
         fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "mock_volatile({})", self.volatile)
+        }
+
+        fn execute(
+            self: Arc<Self>,
+            context: &ExprExecutionContext,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
         }
     }
 

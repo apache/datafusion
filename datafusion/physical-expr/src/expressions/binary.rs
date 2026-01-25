@@ -42,6 +42,7 @@ use datafusion_expr::statistics::{
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp};
 
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -608,6 +609,13 @@ impl PhysicalExpr for BinaryExpr {
         write_child(f, self.left.as_ref(), precedence)?;
         write!(f, " {} ", self.op)?;
         write_child(f, self.right.as_ref(), precedence)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

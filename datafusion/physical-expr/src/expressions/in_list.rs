@@ -40,6 +40,7 @@ use datafusion_expr::{ColumnarValue, expr_vec_fmt};
 
 use ahash::RandomState;
 use datafusion_common::HashMap;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use hashbrown::hash_map::RawEntryMut;
 
 /// Trait for InList static filters
@@ -861,6 +862,13 @@ impl PhysicalExpr for InListExpr {
             expr.fmt_sql(f)?;
         }
         write!(f, ")")
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

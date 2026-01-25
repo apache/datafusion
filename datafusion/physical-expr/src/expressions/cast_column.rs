@@ -27,6 +27,7 @@ use datafusion_common::{
     Result, ScalarValue, format::DEFAULT_CAST_OPTIONS, nested_struct::cast_column,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use std::{
     any::Any,
     fmt::{self, Display},
@@ -179,6 +180,13 @@ impl PhysicalExpr for CastColumnExpr {
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         Display::fmt(self, f)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

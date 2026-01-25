@@ -43,6 +43,21 @@ use itertools::izip;
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
+/// Describes execution context for the particular expression.
+pub struct ExprExecutionContext {
+    /// External parameters.
+    pub external_params: Arc<[ScalarValue]>,
+}
+
+impl ExprExecutionContext {
+    /// Make a new [`ExprExecutionContext`].
+    pub fn new(external_param: impl Into<Arc<[ScalarValue]>>) -> Self {
+        Self {
+            external_params: external_param.into(),
+        }
+    }
+}
+
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
 /// `PhysicalExpr` knows its type, nullability and can be evaluated directly on
@@ -430,6 +445,15 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     fn is_volatile_node(&self) -> bool {
         false
     }
+
+    /// Make this expression executable. The most expressions are executable and do not
+    /// require an additional work so this method could return `self`. However, there are
+    /// expressions that should be transformed prior to execution, e.g. placeholder that
+    /// should be resolved into scalar.
+    fn execute(
+        self: Arc<Self>,
+        context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>>;
 }
 
 #[deprecated(
@@ -662,7 +686,7 @@ pub fn is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::physical_expr::PhysicalExpr;
+    use crate::physical_expr::{ExprExecutionContext, PhysicalExpr};
     use arrow::array::{Array, BooleanArray, Int64Array, RecordBatch};
     use arrow::datatypes::{DataType, Schema};
     use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -706,6 +730,13 @@ mod test {
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             f.write_str("TestExpr")
+        }
+
+        fn execute(
+            self: Arc<Self>,
+            _context: &ExprExecutionContext,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
         }
     }
 

@@ -216,6 +216,26 @@ impl ProjectionExec {
         }
         Ok(alias_map)
     }
+
+    fn raw_execute(
+        metrics: &ExecutionPlanMetricsSet,
+        projector: Projector,
+        partition: usize,
+        input: SendableRecordBatchStream,
+        context: &TaskContext,
+    ) -> Result<SendableRecordBatchStream> {
+        trace!(
+            "Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
+        Ok(Box::pin(ProjectionStream::new(
+            projector,
+            input,
+            BaselineMetrics::new(&metrics, partition),
+        )?))
+    }
 }
 
 impl DisplayAs for ProjectionExec {
@@ -313,19 +333,30 @@ impl ExecutionPlan for ProjectionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!(
-            "Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}",
-            partition,
-            context.session_id(),
-            context.task_id()
-        );
-
+        // Take expressions and metrics from self.
         let projector = self.projector.with_metrics(&self.metrics, partition);
-        Ok(Box::pin(ProjectionStream::new(
+        let input = self.input.execute(partition, Arc::clone(&context))?;
+        Self::raw_execute(&self.metrics, projector, partition, input, &context)
+    }
+
+    fn execute_with(
+        &self,
+        partition: usize,
+        context: &Arc<crate::context::PlanNodeExecutionContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        // Take expressions, metrics from context.
+        let projector = self
+            .projector
+            .with_exprs(context.exprs())
+            .with_metrics(context.metrics(), partition);
+        let input = context.execute_child(0, partition)?;
+        Self::raw_execute(
+            context.metrics(),
             projector,
-            self.input.execute(partition, context)?,
-            BaselineMetrics::new(&self.metrics, partition),
-        )?))
+            partition,
+            input,
+            context.plan_context().task_context().as_ref(),
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {

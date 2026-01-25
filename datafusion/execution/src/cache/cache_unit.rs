@@ -111,7 +111,9 @@ mod tests {
     use datafusion_common::Statistics;
     use datafusion_common::stats::Precision;
     use datafusion_expr::ColumnarValue;
-    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_expr_common::physical_expr::{
+        ExprExecutionContext, PhysicalExpr,
+    };
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use object_store::ObjectMeta;
     use object_store::path::Path;
@@ -223,6 +225,13 @@ mod tests {
 
         fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "MockExpr")
+        }
+
+        fn execute(
+            self: Arc<Self>,
+            _context: &ExprExecutionContext,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
         }
     }
 

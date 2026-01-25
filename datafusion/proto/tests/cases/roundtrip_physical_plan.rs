@@ -39,6 +39,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 use prost::Message;
 
 use datafusion::arrow::array::ArrayRef;
@@ -1023,6 +1024,13 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
 
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             std::fmt::Display::fmt(self, f)
+        }
+
+        fn execute(
+            self: Arc<Self>,
+            _context: &ExprExecutionContext,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
         }
     }
 

@@ -48,6 +48,7 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, Volatility,
     expr_vec_fmt,
 };
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 
 /// Physical expression of a scalar function
 pub struct ScalarFunctionExpr {
@@ -361,6 +362,13 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn is_volatile_node(&self) -> bool {
         self.fun.signature().volatility == Volatility::Volatile
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

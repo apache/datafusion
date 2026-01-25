@@ -29,7 +29,7 @@ use datafusion_common::Result;
 use datafusion_common::hash_utils::{create_hashes, with_hashes};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::{
-    DynHash, PhysicalExpr, PhysicalExprRef,
+    DynHash, ExprExecutionContext, PhysicalExpr, PhysicalExprRef,
 };
 
 use crate::joins::Map;
@@ -203,6 +203,13 @@ impl PhysicalExpr for HashExpr {
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
     }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
+    }
 }
 
 /// Physical expression that checks join keys in a [`Map`] (hash table or array map).
@@ -348,6 +355,13 @@ impl PhysicalExpr for HashTableLookupExpr {
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.description)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

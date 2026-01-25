@@ -26,7 +26,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::physical_expr::DynHash;
+use datafusion_physical_expr_common::physical_expr::{DynHash, ExprExecutionContext};
 
 /// State of a dynamic filter, tracking both updates and completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,6 +444,13 @@ impl PhysicalExpr for DynamicFilterPhysicalExpr {
     fn snapshot_generation(&self) -> u64 {
         // Return the current generation of the expression.
         self.inner.read().generation
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 

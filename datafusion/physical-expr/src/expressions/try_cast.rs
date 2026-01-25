@@ -29,6 +29,7 @@ use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::ExprExecutionContext;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
 #[derive(Debug, Eq)]
@@ -124,6 +125,13 @@ impl PhysicalExpr for TryCastExpr {
         write!(f, "TRY_CAST(")?;
         self.expr.fmt_sql(f)?;
         write!(f, " AS {:?})", self.cast_type)
+    }
+
+    fn execute(
+        self: Arc<Self>,
+        _context: &ExprExecutionContext,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        Ok(self)
     }
 }
 
