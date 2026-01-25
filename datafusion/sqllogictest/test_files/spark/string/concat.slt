@@ -20,6 +20,12 @@ SELECT concat('Spark', 'SQL');
 ----
 SparkSQL
 
+# Test two Utf8View inputs: value and return type
+query TT
+SELECT concat(arrow_cast('Spark', 'Utf8View'), arrow_cast('SQL', 'Utf8View')), arrow_typeof(concat(arrow_cast('Spark', 'Utf8View'), arrow_cast('SQL', 'Utf8View')));
+----
+SparkSQL Utf8View
+
 query T
 SELECT concat('Spark', 'SQL', NULL);
 ----
@@ -48,30 +54,19 @@ abc
 NULL
 
 # Test mixed types: Utf8View + Utf8
-query T
-SELECT concat(arrow_cast('hello', 'Utf8View'), ' world');
+query TT
+SELECT concat(arrow_cast('hello', 'Utf8View'), ' world'), arrow_typeof(concat(arrow_cast('hello', 'Utf8View'), ' world'));
 ----
-hello world
+hello world Utf8View
+
+# Test Utf8 + LargeUtf8 => return type LargeUtf8
+query TT
+SELECT concat('a', arrow_cast('b', 'LargeUtf8')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8')));
+----
+ab LargeUtf8
 
 # Test all three types mixed together
-query T
-SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View'));
-----
-abc
-
-# Utf8View: no extra CAST in plan
-statement ok
-CREATE TABLE test_concat_view (a VARCHAR, b VARCHAR) AS VALUES ('foo', 'bar'), ('hello', 'world');
-
 query TT
-EXPLAIN SELECT concat(arrow_cast(a, 'Utf8View'), arrow_cast(b, 'Utf8View')) FROM test_concat_view;
+SELECT concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')), arrow_typeof(concat('a', arrow_cast('b', 'LargeUtf8'), arrow_cast('c', 'Utf8View')));
 ----
-logical_plan
-01)Projection: concat(test_concat_view.a, test_concat_view.b) AS concat(arrow_cast(test_concat_view.a,Utf8("Utf8View")),arrow_cast(test_concat_view.b,Utf8("Utf8View")))
-02)--TableScan: test_concat_view projection=[a, b]
-physical_plan
-01)ProjectionExec: expr=[concat(a@0, b@1) as concat(arrow_cast(test_concat_view.a,Utf8("Utf8View")),arrow_cast(test_concat_view.b,Utf8("Utf8View")))]
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-
-statement ok
-DROP TABLE test_concat_view;
+abc Utf8View

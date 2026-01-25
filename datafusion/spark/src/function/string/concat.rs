@@ -210,23 +210,6 @@ mod tests {
     }
 
     #[test]
-    fn test_concat_utf8view() -> Result<()> {
-        use arrow::array::StringViewArray;
-        test_scalar_function!(
-            SparkConcat::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("Spark".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("SQL".to_string()))),
-            ],
-            Ok(Some("SparkSQL")),
-            &str,
-            DataType::Utf8View,
-            StringViewArray
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_spark_concat_return_field_non_nullable() -> Result<()> {
         let func = SparkConcat::new();
 
@@ -268,31 +251,6 @@ mod tests {
         assert!(
             field.is_nullable(),
             "Expected concat result to be nullable when any input is nullable"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_spark_concat_return_field_largeutf8() -> Result<()> {
-        let func = SparkConcat::new();
-
-        let fields = vec![
-            Arc::new(Field::new("a", DataType::Utf8, false)),
-            Arc::new(Field::new("b", DataType::LargeUtf8, false)),
-        ];
-
-        let args = ReturnFieldArgs {
-            arg_fields: &fields,
-            scalar_arguments: &[],
-        };
-
-        let field = func.return_field_from_args(args)?;
-
-        assert_eq!(
-            field.data_type(),
-            &DataType::LargeUtf8,
-            "Expected concat result to be LargeUtf8 when any input is LargeUtf8"
         );
 
         Ok(())
