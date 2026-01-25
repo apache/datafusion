@@ -17,7 +17,7 @@
 
 use std::{collections::HashSet, str::FromStr};
 
-use rand::{rng, seq::SliceRandom, Rng};
+use rand::{Rng, rng, seq::SliceRandom};
 
 /// Random aggregate query builder
 ///

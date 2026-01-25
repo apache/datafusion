@@ -42,13 +42,13 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
-use datafusion_common::{assert_eq_or_internal_err, DataFusionError, Result};
+use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
 
-use futures::{ready, Stream, StreamExt};
+use futures::{Stream, StreamExt, ready};
 
 /// Window execution plan
 #[derive(Debug, Clone)]
@@ -157,24 +157,6 @@ impl WindowAggExec {
                 .min_by_key(|s| s.len())
                 .unwrap_or_else(Vec::new)
         }
-    }
-
-    fn statistics_inner(&self) -> Result<Statistics> {
-        let input_stat = self.input.partition_statistics(None)?;
-        let win_cols = self.window_expr.len();
-        let input_cols = self.input.schema().fields().len();
-        // TODO stats: some windowing function will maintain invariants such as min, max...
-        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
-        // copy stats of the input to the beginning of the schema.
-        column_statistics.extend(input_stat.column_statistics);
-        for _ in 0..win_cols {
-            column_statistics.push(ColumnStatistics::new_unknown())
-        }
-        Ok(Statistics {
-            num_rows: input_stat.num_rows,
-            column_statistics,
-            total_byte_size: Precision::Absent,
-        })
     }
 }
 
@@ -291,15 +273,25 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.statistics_inner()
+        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        if partition.is_none() {
-            self.statistics_inner()
-        } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+        let input_stat = self.input.partition_statistics(partition)?;
+        let win_cols = self.window_expr.len();
+        let input_cols = self.input.schema().fields().len();
+        // TODO stats: some windowing function will maintain invariants such as min, max...
+        let mut column_statistics = Vec::with_capacity(win_cols + input_cols);
+        // copy stats of the input to the beginning of the schema.
+        column_statistics.extend(input_stat.column_statistics);
+        for _ in 0..win_cols {
+            column_statistics.push(ColumnStatistics::new_unknown())
         }
+        Ok(Statistics {
+            num_rows: input_stat.num_rows,
+            column_statistics,
+            total_byte_size: Precision::Absent,
+        })
     }
 }
 

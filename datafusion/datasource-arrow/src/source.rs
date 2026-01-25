@@ -34,18 +34,19 @@
 use std::sync::Arc;
 use std::{any::Any, io::Cursor};
 
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
-use datafusion_datasource::{as_file_source, TableSchema};
+use datafusion_datasource::{TableSchema, as_file_source};
 
 use arrow::buffer::Buffer;
 use arrow::ipc::reader::{FileDecoder, FileReader, StreamReader};
 use datafusion_common::error::Result;
 use datafusion_common::exec_datafusion_err;
+use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::PartitionedFile;
+use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::ProjectionExprs;
 
 use datafusion_datasource::file_stream::FileOpenFuture;
 use datafusion_datasource::file_stream::FileOpener;
@@ -77,28 +78,32 @@ impl FileOpener for ArrowStreamFileOpener {
         }
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+
         Ok(Box::pin(async move {
             let r = object_store
                 .get(&partitioned_file.object_meta.location)
                 .await?;
-            match r.payload {
+
+            let stream = match r.payload {
                 #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(file, _) => Ok(futures::stream::iter(
+                GetResultPayload::File(file, _) => futures::stream::iter(
                     StreamReader::try_new(file.try_clone()?, projection.clone())?,
                 )
                 .map(|r| r.map_err(Into::into))
-                .boxed()),
+                .boxed(),
                 GetResultPayload::Stream(_) => {
                     let bytes = r.bytes().await?;
                     let cursor = Cursor::new(bytes);
-                    Ok(futures::stream::iter(StreamReader::try_new(
+                    futures::stream::iter(StreamReader::try_new(
                         cursor,
                         projection.clone(),
                     )?)
                     .map(|r| r.map_err(Into::into))
-                    .boxed())
+                    .boxed()
                 }
-            }
+            };
+
+            Ok(stream)
         }))
     }
 }
@@ -113,6 +118,7 @@ impl FileOpener for ArrowFileOpener {
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let object_store = Arc::clone(&self.object_store);
         let projection = self.projection.clone();
+
         Ok(Box::pin(async move {
             let range = partitioned_file.range.clone();
             match range {
@@ -120,24 +126,26 @@ impl FileOpener for ArrowFileOpener {
                     let r = object_store
                         .get(&partitioned_file.object_meta.location)
                         .await?;
-                    match r.payload {
+                    let stream = match r.payload {
                         #[cfg(not(target_arch = "wasm32"))]
-                        GetResultPayload::File(file, _) => Ok(futures::stream::iter(
+                        GetResultPayload::File(file, _) => futures::stream::iter(
                             FileReader::try_new(file.try_clone()?, projection.clone())?,
                         )
                         .map(|r| r.map_err(Into::into))
-                        .boxed()),
+                        .boxed(),
                         GetResultPayload::Stream(_) => {
                             let bytes = r.bytes().await?;
                             let cursor = Cursor::new(bytes);
-                            Ok(futures::stream::iter(FileReader::try_new(
+                            futures::stream::iter(FileReader::try_new(
                                 cursor,
                                 projection.clone(),
                             )?)
                             .map(|r| r.map_err(Into::into))
-                            .boxed())
+                            .boxed()
                         }
-                    }
+                    };
+
+                    Ok(stream)
                 }
                 Some(range) => {
                     // range is not none, the file maybe split into multiple parts to scan in parallel
@@ -226,7 +234,7 @@ impl FileOpener for ArrowFileOpener {
                         )
                         .await?;
 
-                    Ok(futures::stream::iter(
+                    let stream = futures::stream::iter(
                         recordbatches
                             .into_iter()
                             .zip(recordbatch_results)
@@ -237,7 +245,9 @@ impl FileOpener for ArrowFileOpener {
                             }),
                     )
                     .map(|r| r.map_err(Into::into))
-                    .boxed())
+                    .boxed();
+
+                    Ok(stream)
                 }
             }
         }))
@@ -248,29 +258,31 @@ impl FileOpener for ArrowFileOpener {
 #[derive(Clone)]
 pub struct ArrowSource {
     format: ArrowFormat,
-    table_schema: TableSchema,
     metrics: ExecutionPlanMetricsSet,
-    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    projection: SplitProjection,
+    table_schema: TableSchema,
 }
 
 impl ArrowSource {
     /// Creates an [`ArrowSource`] for file format
     pub fn new_file_source(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             format: ArrowFormat::File,
-            table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
         }
     }
 
     /// Creates an [`ArrowSource`] for stream format
     pub fn new_stream_file_source(table_schema: impl Into<TableSchema>) -> Self {
+        let table_schema = table_schema.into();
         Self {
             format: ArrowFormat::Stream,
-            table_schema: table_schema.into(),
             metrics: ExecutionPlanMetricsSet::new(),
-            schema_adapter_factory: None,
+            projection: SplitProjection::unprojected(&table_schema),
+            table_schema,
         }
     }
 }
@@ -279,19 +291,26 @@ impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
         object_store: Arc<dyn ObjectStore>,
-        base_config: &FileScanConfig,
+        _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Arc<dyn FileOpener> {
-        match self.format {
+    ) -> Result<Arc<dyn FileOpener>> {
+        let split_projection = self.projection.clone();
+
+        let opener: Arc<dyn FileOpener> = match self.format {
             ArrowFormat::File => Arc::new(ArrowFileOpener {
                 object_store,
-                projection: base_config.file_column_projection_indices(),
+                projection: Some(split_projection.file_indices.clone()),
             }),
             ArrowFormat::Stream => Arc::new(ArrowStreamFileOpener {
                 object_store,
-                projection: base_config.file_column_projection_indices(),
+                projection: Some(split_projection.file_indices.clone()),
             }),
-        }
+        };
+        ProjectionOpener::try_new(
+            split_projection,
+            opener,
+            self.table_schema.file_schema(),
+        )
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -299,10 +318,6 @@ impl FileSource for ArrowSource {
     }
 
     fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
-        Arc::new(Self { ..self.clone() })
-    }
-
-    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
         Arc::new(Self { ..self.clone() })
     }
 
@@ -315,20 +330,6 @@ impl FileSource for ArrowSource {
             ArrowFormat::File => "arrow",
             ArrowFormat::Stream => "arrow_stream",
         }
-    }
-
-    fn with_schema_adapter_factory(
-        &self,
-        schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
-    ) -> Result<Arc<dyn FileSource>> {
-        Ok(Arc::new(Self {
-            schema_adapter_factory: Some(schema_adapter_factory),
-            ..self.clone()
-        }))
-    }
-
-    fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> {
-        self.schema_adapter_factory.clone()
     }
 
     fn repartitioned(
@@ -355,9 +356,7 @@ impl FileSource for ArrowSource {
                 // Use the default trait implementation logic for file format
                 use datafusion_datasource::file_groups::FileGroupPartitioner;
 
-                if config.file_compression_type.is_compressed()
-                    || config.new_lines_in_values
-                {
+                if config.file_compression_type.is_compressed() {
                     return Ok(None);
                 }
 
@@ -380,6 +379,22 @@ impl FileSource for ArrowSource {
 
     fn table_schema(&self) -> &TableSchema {
         &self.table_schema
+    }
+
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        let mut source = self.clone();
+        source.projection = SplitProjection::new(
+            self.table_schema().file_schema(),
+            &source.projection.source.try_merge(projection)?,
+        );
+        Ok(Some(Arc::new(source)))
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        Some(&self.projection.source)
     }
 }
 
@@ -479,7 +494,7 @@ mod tests {
             )
             .build();
 
-            let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+            let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
             let mut stream = file_opener.open(partitioned_file)?.await?;
 
             assert!(stream.next().await.is_some());
@@ -521,7 +536,7 @@ mod tests {
         )
         .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let mut stream = file_opener.open(partitioned_file)?.await?;
 
         assert!(stream.next().await.is_some());
@@ -562,7 +577,7 @@ mod tests {
         )
         .build();
 
-        let file_opener = source.create_file_opener(object_store, &scan_config, 0);
+        let file_opener = source.create_file_opener(object_store, &scan_config, 0)?;
         let result = file_opener.open(partitioned_file);
         assert!(result.is_err());
 

@@ -23,21 +23,22 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use rand::distr::{Distribution, StandardUniform};
-use rand::prelude::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
 
 /// Returns fixed seedable RNG
 pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
+#[expect(clippy::needless_pass_by_value)]
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
     c.bench_function(name, |b| {

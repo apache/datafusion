@@ -23,15 +23,14 @@ use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    assert_eq_or_internal_err, tree_node::Transformed, DataFusionError, HashSet, Result,
+    DataFusionError, HashSet, Result, assert_eq_or_internal_err, tree_node::Transformed,
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::{
-    col,
+    Expr, col,
     expr::AggregateFunction,
     logical_plan::{Aggregate, LogicalPlan},
-    Expr,
 };
 
 /// single distinct to group by optimizer rule
@@ -56,7 +55,7 @@ pub struct SingleDistinctToGroupBy {}
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";
 
 impl SingleDistinctToGroupBy {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -185,7 +184,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             func,
                             params:
                                 AggregateFunctionParams {
-                                    mut args, distinct, ..
+                                    mut args,
+                                    distinct,
+                                    filter,
+                                    order_by,
+                                    null_treatment,
                                 },
                         }) => {
                             if distinct {
@@ -205,9 +208,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     func,
                                     vec![col(SINGLE_DISTINCT_ALIAS)],
                                     false, // intentional to remove distinct here
-                                    None,
-                                    vec![],
-                                    None,
+                                    filter,
+                                    order_by,
+                                    null_treatment,
                                 )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
@@ -218,9 +221,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         Arc::clone(&func),
                                         args,
                                         false,
-                                        None,
-                                        vec![],
-                                        None,
+                                        filter,
+                                        order_by,
+                                        null_treatment,
                                     ))
                                     .alias(&alias_str),
                                 );
@@ -288,8 +291,8 @@ mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
-    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::ExprFunctionExt;
+    use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};

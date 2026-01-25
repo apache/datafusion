@@ -26,7 +26,7 @@ use arrow::datatypes::{
     ArrowNativeType, DataType, Field, FieldRef, Int32Type, Int64Type,
 };
 use datafusion_common::types::logical_string;
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
     Volatility,
@@ -215,14 +215,37 @@ where
                         )
                     }
                 } else {
-                    // The `find` method returns the byte index of the substring.
-                    // We count the number of chars up to that byte index.
-                    T::Native::from_usize(
-                        string
-                            .find(substring)
-                            .map(|x| string[..x].chars().count() + 1)
-                            .unwrap_or(0),
-                    )
+                    // For non-ASCII, use a single-pass search that tracks both
+                    // byte position and character position simultaneously
+                    if substring.is_empty() {
+                        return T::Native::from_usize(1);
+                    }
+
+                    let substring_bytes = substring.as_bytes();
+                    let string_bytes = string.as_bytes();
+
+                    if substring_bytes.len() > string_bytes.len() {
+                        return T::Native::from_usize(0);
+                    }
+
+                    // Single pass: find substring while counting characters
+                    let mut char_pos = 0;
+                    for (byte_idx, _) in string.char_indices() {
+                        char_pos += 1;
+                        if byte_idx + substring_bytes.len() <= string_bytes.len() {
+                            // SAFETY: We just checked that byte_idx + substring_bytes.len() <= string_bytes.len()
+                            let slice = unsafe {
+                                string_bytes.get_unchecked(
+                                    byte_idx..byte_idx + substring_bytes.len(),
+                                )
+                            };
+                            if slice == substring_bytes {
+                                return T::Native::from_usize(char_pos);
+                            }
+                        }
+                    }
+
+                    T::Native::from_usize(0)
                 }
             }
             _ => None,

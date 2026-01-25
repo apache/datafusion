@@ -25,7 +25,7 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Null},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -130,8 +130,7 @@ impl ScalarUDFImpl for Flatten {
     }
 }
 
-/// Flatten SQL function
-pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array] = take_function_args("flatten", args)?;
 
     match array.data_type() {
@@ -209,7 +208,7 @@ pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         Null => Ok(Arc::clone(array)),
         _ => {
-            exec_err!("flatten does not support type '{:?}'", array.data_type())
+            exec_err!("flatten does not support type '{}'", array.data_type())
         }
     }
 }

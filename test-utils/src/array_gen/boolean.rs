@@ -17,8 +17,8 @@
 
 use arrow::array::{ArrayRef, BooleanArray, BooleanBuilder, UInt32Array};
 use arrow::compute::take;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 
 /// Randomly generate boolean arrays
 pub struct BooleanArrayGenerator {

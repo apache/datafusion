@@ -16,14 +16,15 @@
 // under the License.
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::cast::as_int64_array;
 use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::cast::as_int64_array;
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -33,7 +34,6 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -145,7 +145,7 @@ impl ScalarUDFImpl for RPadFunc {
     }
 }
 
-pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
+fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
     args: &[ArrayRef],
 ) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
@@ -205,7 +205,7 @@ pub fn rpad<StringArrayLen: OffsetSizeTrait, FillArrayLen: OffsetSizeTrait>(
 
 /// Extends the string to length 'length' by appending the characters fill (a space by default). If the string is already longer than length then it is truncated.
 /// rpad('hi', 5, 'xy') = 'hixyx'
-pub fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
+fn rpad_impl<'a, StringArrType, FillArrType, StringArrayLen>(
     string_array: &StringArrType,
     length_array: &Int64Array,
     fill_array: Option<FillArrType>,
@@ -216,6 +216,8 @@ where
     StringArrayLen: OffsetSizeTrait,
 {
     let mut builder: GenericStringBuilder<StringArrayLen> = GenericStringBuilder::new();
+    let mut graphemes_buf = Vec::new();
+    let mut fill_chars_buf = Vec::new();
 
     match fill_array {
         None => {
@@ -233,14 +235,17 @@ where
                             if length == 0 {
                                 builder.append_value("");
                             } else {
-                                let graphemes =
-                                    string.graphemes(true).collect::<Vec<&str>>();
-                                if length < graphemes.len() {
-                                    builder.append_value(graphemes[..length].concat());
+                                // Reuse buffer by clearing and refilling
+                                graphemes_buf.clear();
+                                graphemes_buf.extend(string.graphemes(true));
+
+                                if length < graphemes_buf.len() {
+                                    builder
+                                        .append_value(graphemes_buf[..length].concat());
                                 } else {
                                     builder.write_str(string)?;
                                     builder.write_str(
-                                        &" ".repeat(length - graphemes.len()),
+                                        &" ".repeat(length - graphemes_buf.len()),
                                     )?;
                                     builder.append_value("");
                                 }
@@ -268,19 +273,26 @@ where
                                     );
                                 }
                                 let length = if length < 0 { 0 } else { length as usize };
-                                let graphemes =
-                                    string.graphemes(true).collect::<Vec<&str>>();
+                                // Reuse buffer by clearing and refilling
+                                graphemes_buf.clear();
+                                graphemes_buf.extend(string.graphemes(true));
 
-                                if length < graphemes.len() {
-                                    builder.append_value(graphemes[..length].concat());
+                                if length < graphemes_buf.len() {
+                                    builder
+                                        .append_value(graphemes_buf[..length].concat());
                                 } else if fill.is_empty() {
                                     builder.append_value(string);
                                 } else {
                                     builder.write_str(string)?;
-                                    fill.chars()
-                                        .cycle()
-                                        .take(length - graphemes.len())
-                                        .for_each(|ch| builder.write_char(ch).unwrap());
+                                    // Reuse fill_chars_buf by clearing and refilling
+                                    fill_chars_buf.clear();
+                                    fill_chars_buf.extend(fill.chars());
+                                    for l in 0..length - graphemes_buf.len() {
+                                        let c = *fill_chars_buf
+                                            .get(l % fill_chars_buf.len())
+                                            .unwrap();
+                                        builder.write_char(c)?;
+                                    }
                                     builder.append_value("");
                                 }
                             }

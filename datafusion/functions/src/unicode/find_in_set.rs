@@ -19,14 +19,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
-    new_null_array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
-    OffsetSizeTrait, PrimitiveArray,
+    ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
+    PrimitiveArray, new_null_array,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
 use crate::utils::utf8_to_int_type;
 use datafusion_common::{
-    exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -167,7 +167,9 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 )
                             }
                             other => {
-                                exec_err!("Unsupported data type {other:?} for function find_in_set")
+                                exec_err!(
+                                    "Unsupported data type {other:?} for function find_in_set"
+                                )
                             }
                         };
                         Arc::new(result?)
@@ -211,7 +213,9 @@ impl ScalarUDFImpl for FindInSetFunc {
                                 )
                             }
                             other => {
-                                exec_err!("Unsupported data type {other:?} for function find_in_set")
+                                exec_err!(
+                                    "Unsupported data type {other:?} for function find_in_set"
+                                )
                             }
                         };
                         Arc::new(result?)
@@ -263,10 +267,7 @@ fn find_in_set(str: &ArrayRef, str_list: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-pub fn find_in_set_general<'a, T, V>(
-    string_array: V,
-    str_list_array: V,
-) -> Result<ArrayRef>
+fn find_in_set_general<'a, T, V>(string_array: V, str_list_array: V) -> Result<ArrayRef>
 where
     T: ArrowPrimitiveType,
     T::Native: OffsetSizeTrait,

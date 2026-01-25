@@ -17,18 +17,24 @@
 
 //! Physical Optimizer integration tests
 
+#[expect(clippy::needless_pass_by_value)]
 mod aggregate_statistics;
 mod combine_partial_final_agg;
+#[expect(clippy::needless_pass_by_value)]
 mod enforce_distribution;
 mod enforce_sorting;
 mod enforce_sorting_monotonicity;
+#[expect(clippy::needless_pass_by_value)]
 mod filter_pushdown;
 mod join_selection;
+#[expect(clippy::needless_pass_by_value)]
 mod limit_pushdown;
 mod limited_distinct_aggregation;
 mod partition_statistics;
 mod projection_pushdown;
+mod pushdown_sort;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
+#[expect(clippy::needless_pass_by_value)]
 mod test_utils;
 mod window_optimize;

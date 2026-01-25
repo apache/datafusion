@@ -19,7 +19,7 @@
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{assert_or_internal_err, DFSchema, DataFusionError};
+use datafusion_common::{DFSchema, assert_or_internal_err};
 use datafusion_common::{NullEquality, Result};
 use datafusion_expr::utils::split_conjunction_owned;
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
@@ -42,7 +42,7 @@ type EquijoinPredicate = (Expr, Expr);
 pub struct ExtractEquijoinPredicate;
 
 impl ExtractEquijoinPredicate {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -76,6 +76,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 join_constraint,
                 schema,
                 null_equality,
+                null_aware,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -117,6 +118,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             // According to `is not distinct from`'s semantics, it's
                             // safe to override it
                             null_equality: NullEquality::NullEqualsNull,
+                            null_aware,
                         })));
                     }
                 }
@@ -132,6 +134,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_constraint,
                         schema,
                         null_equality,
+                        null_aware,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -143,6 +146,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         join_constraint,
                         schema,
                         null_equality,
+                        null_aware,
                     })))
                 }
             }
@@ -273,7 +277,7 @@ mod tests {
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        col, lit, logical_plan::builder::LogicalPlanBuilder, JoinType,
+        JoinType, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
     use std::sync::Arc;
 

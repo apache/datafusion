@@ -22,8 +22,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarUDF, ScalarUDFImpl,
     Signature, Volatility,
@@ -121,16 +121,18 @@ impl ScalarUDFImpl for NowFunc {
 
     fn simplify(
         &self,
-        _args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        args: Vec<Expr>,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let now_ts = info
-            .execution_props()
-            .query_execution_start_time
-            .timestamp_nanos_opt();
+        let Some(now_ts) = info.query_execution_start_time() else {
+            return Ok(ExprSimplifyResult::Original(args));
+        };
 
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, self.timezone.clone()),
+            ScalarValue::TimestampNanosecond(
+                now_ts.timestamp_nanos_opt(),
+                self.timezone.clone(),
+            ),
             None,
         )))
     }
@@ -148,7 +150,7 @@ impl ScalarUDFImpl for NowFunc {
 mod tests {
     use super::*;
 
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     #[test]
     fn now_func_default_matches_config() {
         let default_config = ConfigOptions::default();

@@ -18,15 +18,15 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Capacities, GenericListArray,
-    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait, new_null_array,
 };
 use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -418,7 +418,7 @@ fn general_replace<O: OffsetSizeTrait>(
     )?))
 }
 
-pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace", args)?;
 
     // replace at most one occurrence for each element
@@ -437,7 +437,7 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to, max] = take_function_args("array_replace_n", args)?;
 
     // replace the specified number of occurrences
@@ -458,7 +458,7 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, from, to] = take_function_args("array_replace_all", args)?;
 
     // replace all occurrences (up to "i64::MAX")

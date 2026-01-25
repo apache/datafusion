@@ -26,19 +26,19 @@ use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
 use crate::datasource::file_format::json::JsonFormatFactory;
 use crate::datasource::{
-    provider_as_source, DefaultTableSource, MemTable, TableProvider,
+    DefaultTableSource, MemTable, TableProvider, provider_as_source,
 };
 use crate::error::Result;
-use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, ident, Expr, JoinType, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning, TableType,
+    Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning, TableType, col, ident,
 };
 use crate::physical_plan::{
-    collect, collect_partitioned, execute_stream, execute_stream_partitioned,
-    ExecutionPlan, SendableRecordBatchStream,
+    ExecutionPlan, SendableRecordBatchStream, collect, collect_partitioned,
+    execute_stream, execute_stream_partitioned,
 };
 use crate::prelude::SessionContext;
 use std::any::Any;
@@ -49,20 +49,20 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    unqualified_field_not_found, Column, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, SchemaError, TableReference, UnnestOptions,
+    Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
+    TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
+    plan_datafusion_err, plan_err, unqualified_field_not_found,
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
-    case,
+    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
     dml::InsertOp,
     expr::{Alias, ScalarFunction},
     is_null, lit,
     utils::COUNT_STAR_EXPANSION,
-    ExplainOption, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
@@ -107,6 +107,8 @@ impl DataFrameWriteOptions {
     }
 
     /// Set the single_file_output value to true or false
+    ///
+    /// When set to true, an output file will always be created even if the DataFrame is empty
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
         self.single_file_output = single_file_output;
         self
@@ -445,15 +447,31 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn drop_columns(self, columns: &[&str]) -> Result<DataFrame> {
+    pub fn drop_columns<T>(self, columns: &[T]) -> Result<DataFrame>
+    where
+        T: Into<Column> + Clone,
+    {
         let fields_to_drop = columns
             .iter()
-            .flat_map(|name| {
-                self.plan
-                    .schema()
-                    .qualified_fields_with_unqualified_name(name)
+            .flat_map(|col| {
+                let column: Column = col.clone().into();
+                match column.relation.as_ref() {
+                    Some(_) => {
+                        // qualified_field_from_column returns Result<(Option<&TableReference>, &FieldRef)>
+                        vec![self.plan.schema().qualified_field_from_column(&column)]
+                    }
+                    None => {
+                        // qualified_fields_with_unqualified_name returns Vec<(Option<&TableReference>, &FieldRef)>
+                        self.plan
+                            .schema()
+                            .qualified_fields_with_unqualified_name(&column.name)
+                            .into_iter()
+                            .map(Ok)
+                            .collect::<Vec<_>>()
+                    }
+                }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, _>>()?;
         let expr: Vec<Expr> = self
             .plan
             .schema()
@@ -2241,7 +2259,7 @@ impl DataFrame {
             .schema()
             .iter()
             .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
+                if qualifier.eq(&qualifier_rename) && field == field_rename {
                     (
                         col(Column::from((qualifier, field)))
                             .alias_qualified(qualifier.cloned(), new_name),
@@ -2330,6 +2348,10 @@ impl DataFrame {
 
     /// Cache DataFrame as a memory table.
     ///
+    /// Default behavior could be changed using
+    /// a [`crate::execution::session_state::CacheFactory`]
+    /// configured via [`SessionState`].
+    ///
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
@@ -2344,14 +2366,20 @@ impl DataFrame {
     /// # }
     /// ```
     pub async fn cache(self) -> Result<DataFrame> {
-        let context = SessionContext::new_with_state((*self.session_state).clone());
-        // The schema is consistent with the output
-        let plan = self.clone().create_physical_plan().await?;
-        let schema = plan.schema();
-        let task_ctx = Arc::new(self.task_ctx());
-        let partitions = collect_partitioned(plan, task_ctx).await?;
-        let mem_table = MemTable::try_new(schema, partitions)?;
-        context.read_table(Arc::new(mem_table))
+        if let Some(cache_factory) = self.session_state.cache_factory() {
+            let new_plan =
+                cache_factory.create(self.plan, self.session_state.as_ref())?;
+            Ok(Self::new(*self.session_state, new_plan))
+        } else {
+            let context = SessionContext::new_with_state((*self.session_state).clone());
+            // The schema is consistent with the output
+            let plan = self.clone().create_physical_plan().await?;
+            let schema = plan.schema();
+            let task_ctx = Arc::new(self.task_ctx());
+            let partitions = collect_partitioned(plan, task_ctx).await?;
+            let mem_table = MemTable::try_new(schema, partitions)?;
+            context.read_table(Arc::new(mem_table))
+        }
     }
 
     /// Apply an alias to the DataFrame.
@@ -2403,7 +2431,7 @@ impl DataFrame {
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| f.as_ref().clone())
+                .map(Arc::clone)
                 .collect()
         } else {
             self.find_columns(&columns)?
@@ -2440,7 +2468,7 @@ impl DataFrame {
     }
 
     // Helper to find columns from names
-    fn find_columns(&self, names: &[String]) -> Result<Vec<Field>> {
+    fn find_columns(&self, names: &[String]) -> Result<Vec<FieldRef>> {
         let schema = self.logical_plan().schema();
         names
             .iter()
@@ -2448,6 +2476,48 @@ impl DataFrame {
                 schema
                     .field_with_name(None, name)
                     .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
+            })
+            .collect()
+    }
+
+    /// Find qualified columns for this dataframe from names
+    ///
+    /// # Arguments
+    /// * `names` - Unqualified names to find.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// ctx.register_csv("first_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df = ctx.table("first_table").await?;
+    /// ctx.register_csv("second_table", "tests/data/example.csv", CsvReadOptions::new())
+    ///     .await?;
+    /// let df2 = ctx.table("second_table").await?;
+    /// let join_expr = df.find_qualified_columns(&["a"])?.iter()
+    ///     .zip(df2.find_qualified_columns(&["a"])?.iter())
+    ///     .map(|(col1, col2)| col(*col1).eq(col(*col2)))
+    ///     .collect::<Vec<Expr>>();
+    /// let df3 = df.join_on(df2, JoinType::Inner, join_expr)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn find_qualified_columns(
+        &self,
+        names: &[&str],
+    ) -> Result<Vec<(Option<&TableReference>, &FieldRef)>> {
+        let schema = self.logical_plan().schema();
+        names
+            .iter()
+            .map(|name| {
+                schema
+                    .qualified_field_from_column(&Column::from_name(*name))
                     .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()

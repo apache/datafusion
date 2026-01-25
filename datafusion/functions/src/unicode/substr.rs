@@ -28,9 +28,9 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
-    logical_int32, logical_int64, logical_string, NativeType,
+    NativeType, logical_int32, logical_int64, logical_string,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature,
     TypeSignatureClass, Volatility,
@@ -141,7 +141,7 @@ impl ScalarUDFImpl for SubstrFunc {
 /// substr('alphabet', 3) = 'phabet'
 /// substr('alphabet', 3, 2) = 'ph'
 /// The implementation uses UTF-8 code points as characters
-pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
@@ -176,7 +176,7 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
 // `get_true_start_end('Hi🌏', 1, None) -> (0, 6)`
 // `get_true_start_end('Hi🌏', 1, 1) -> (0, 1)`
 // `get_true_start_end('Hi🌏', -10, 2) -> (0, 0)`
-fn get_true_start_end(
+pub fn get_true_start_end(
     input: &str,
     start: i64,
     count: Option<u64>,
@@ -235,7 +235,7 @@ fn get_true_start_end(
 // string, such as `substr(long_str_with_1k_chars, 1, 32)`.
 // In such case the overhead of ASCII-validation may not be worth it, so
 // skip the validation for short prefix for now.
-fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
+pub fn enable_ascii_fast_path<'a, V: StringArrayType<'a>>(
     string_array: &V,
     start: &Int64Array,
     count: Option<&Int64Array>,
@@ -364,7 +364,7 @@ fn string_view_substr(
         other => {
             return exec_err!(
                 "substr was called with {other} arguments. It requires 2 or 3."
-            )
+            );
         }
     }
 
@@ -470,7 +470,7 @@ mod tests {
     use arrow::array::{Array, StringViewArray};
     use arrow::datatypes::DataType::Utf8View;
 
-    use datafusion_common::{exec_err, Result, ScalarValue};
+    use datafusion_common::{Result, ScalarValue, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::unicode::substr::SubstrFunc;

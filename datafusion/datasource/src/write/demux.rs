@@ -28,15 +28,15 @@ use datafusion_common::error::Result;
 use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
-    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, ArrayAccessor,
-    RecordBatch, StringArray, StructArray,
+    ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
+    cast::AsArray, downcast_dictionary_array,
 };
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_float16_array,
-    as_float32_array, as_float64_array, as_int16_array, as_int32_array, as_int64_array,
-    as_int8_array, as_string_array, as_string_view_array, as_uint16_array,
-    as_uint32_array, as_uint64_array, as_uint8_array,
+    as_float32_array, as_float64_array, as_int8_array, as_int16_array, as_int32_array,
+    as_int64_array, as_large_string_array, as_string_array, as_string_view_array,
+    as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array,
 };
 use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -191,7 +191,11 @@ async fn row_count_demuxer(
         part_idx += 1;
     }
 
+    let schema = input.schema();
+    let mut is_batch_received = false;
+
     while let Some(rb) = input.next().await.transpose()? {
+        is_batch_received = true;
         // ensure we have at least minimum_parallel_files open
         if open_file_streams.len() < minimum_parallel_files {
             open_file_streams.push(create_new_file_stream(
@@ -228,6 +232,19 @@ async fn row_count_demuxer(
 
         next_send_steam = (next_send_steam + 1) % minimum_parallel_files;
     }
+
+    // if there is no batch send but with a single file, send an empty batch
+    if single_file_output && !is_batch_received {
+        open_file_streams
+            .first_mut()
+            .ok_or_else(|| internal_datafusion_err!("Expected a single output file"))?
+            .send(RecordBatch::new_empty(schema))
+            .await
+            .map_err(|_| {
+                exec_datafusion_err!("Error sending empty RecordBatch to file stream!")
+            })?;
+    }
+
     Ok(())
 }
 
@@ -380,6 +397,12 @@ fn compute_partition_keys_by_row<'a>(
                     partition_values.push(Cow::from(array.value(i)));
                 }
             }
+            DataType::LargeUtf8 => {
+                let array = as_large_string_array(col_array)?;
+                for i in 0..rb.num_rows() {
+                    partition_values.push(Cow::from(array.value(i)));
+                }
+            }
             DataType::Utf8View => {
                 let array = as_string_view_array(col_array)?;
                 for i in 0..rb.num_rows() {
@@ -502,9 +525,9 @@ fn compute_partition_keys_by_row<'a>(
             }
             _ => {
                 return not_impl_err!(
-                "it is not yet supported to write to hive partitions with datatype {}",
-                dtype
-            )
+                    "it is not yet supported to write to hive partitions with datatype {}",
+                    dtype
+                );
             }
         }
 

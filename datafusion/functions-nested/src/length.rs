@@ -29,7 +29,7 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_generic_list_array, as_int64_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -150,8 +150,7 @@ macro_rules! array_length_impl {
     }};
 }
 
-/// Array_length SQL function
-pub fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn array_length_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() != 1 && args.len() != 2 {
         return exec_err!("array_length expects one or two arguments");
     }

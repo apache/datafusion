@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{assert_or_internal_err, DataFusionError, Result};
+use datafusion_common::{Result, assert_or_internal_err};
 
 /// Concatenate multiple [`RecordBatch`]es and apply a limit
 ///
@@ -132,6 +132,10 @@ impl LimitedBatchCoalescer {
         self.inner.finish_buffered_batch()?;
         self.finished = true;
         Ok(())
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished
     }
 
     /// Return the next completed batch, if any

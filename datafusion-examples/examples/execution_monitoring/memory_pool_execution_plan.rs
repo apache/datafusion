@@ -30,7 +30,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::record_batch;
 use datafusion::common::{exec_datafusion_err, internal_err};
-use datafusion::datasource::{memory::MemTable, DefaultTableSource};
+use datafusion::datasource::{DefaultTableSource, memory::MemTable};
 use datafusion::error::Result;
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -142,6 +142,7 @@ impl ExternalBatchBufferer {
         }
     }
 
+    #[expect(clippy::needless_pass_by_value)]
     fn add_batch(&mut self, batch_data: Vec<u8>) -> Result<()> {
         let additional_memory = batch_data.len();
 

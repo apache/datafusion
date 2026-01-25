@@ -17,17 +17,17 @@
 
 //! Tree node implementation for Logical Expressions
 
+use crate::Expr;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
-    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
-    WindowFunction, WindowFunctionParams,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, SetComparison,
+    TryCast, Unnest, WindowFunction, WindowFunctionParams,
 };
-use crate::Expr;
 
+use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion, TreeNodeRefContainer,
 };
-use datafusion_common::Result;
 
 /// Implementation of the [`TreeNode`] trait
 ///
@@ -58,7 +58,8 @@ impl TreeNode for Expr {
             | Expr::Negative(expr)
             | Expr::Cast(Cast { expr, .. })
             | Expr::TryCast(TryCast { expr, .. })
-            | Expr::InSubquery(InSubquery { expr, .. }) => expr.apply_elements(f),
+            | Expr::InSubquery(InSubquery { expr, .. })
+            | Expr::SetComparison(SetComparison { expr, .. }) => expr.apply_elements(f),
             Expr::GroupingSet(GroupingSet::Rollup(exprs))
             | Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs.apply_elements(f),
             Expr::ScalarFunction(ScalarFunction { args, .. }) => {
@@ -128,6 +129,19 @@ impl TreeNode for Expr {
             | Expr::ScalarSubquery(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_, _) => Transformed::no(self),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => expr.map_elements(f)?.update_data(|expr| {
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op,
+                    quantifier,
+                })
+            }),
             Expr::Unnest(Unnest { expr, .. }) => expr
                 .map_elements(f)?
                 .update_data(|expr| Expr::Unnest(Unnest { expr })),

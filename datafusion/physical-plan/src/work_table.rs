@@ -31,18 +31,15 @@ use crate::{
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{
-    assert_eq_or_internal_err, internal_datafusion_err, DataFusionError, Result,
-};
-use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// A vector of record batches with a memory reservation.
 #[derive(Debug)]
 pub(super) struct ReservedBatches {
     batches: Vec<RecordBatch>,
-    #[allow(dead_code)]
     reservation: MemoryReservation,
 }
 
@@ -61,13 +58,15 @@ impl ReservedBatches {
 #[derive(Debug)]
 pub struct WorkTable {
     batches: Mutex<Option<ReservedBatches>>,
+    name: String,
 }
 
 impl WorkTable {
     /// Create a new work table.
-    pub(super) fn new() -> Self {
+    pub(super) fn new(name: String) -> Self {
         Self {
             batches: Mutex::new(None),
+            name,
         }
     }
 
@@ -103,6 +102,8 @@ pub struct WorkTableExec {
     name: String,
     /// The schema of the stream
     schema: SchemaRef,
+    /// Projection to apply to build the output stream from the recursion state
+    projection: Option<Vec<usize>>,
     /// The work table
     work_table: Arc<WorkTable>,
     /// Execution metrics
@@ -113,15 +114,23 @@ pub struct WorkTableExec {
 
 impl WorkTableExec {
     /// Create a new execution plan for a worktable exec.
-    pub fn new(name: String, schema: SchemaRef) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&schema));
-        Self {
-            name,
-            schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-            work_table: Arc::new(WorkTable::new()),
-            cache,
+    pub fn new(
+        name: String,
+        mut schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        if let Some(projection) = &projection {
+            schema = Arc::new(schema.project(projection)?);
         }
+        let cache = Self::compute_properties(Arc::clone(&schema));
+        Ok(Self {
+            name: name.clone(),
+            schema,
+            projection,
+            work_table: Arc::new(WorkTable::new(name)),
+            metrics: ExecutionPlanMetricsSet::new(),
+            cache,
+        })
     }
 
     /// Ref to name
@@ -199,11 +208,22 @@ impl ExecutionPlan for WorkTableExec {
             0,
             "WorkTableExec got an invalid partition {partition} (expected 0)"
         );
-        let batch = self.work_table.take()?;
+        let ReservedBatches {
+            mut batches,
+            reservation,
+        } = self.work_table.take()?;
+        if let Some(projection) = &self.projection {
+            // We apply the projection
+            // TODO: it would be better to apply it as soon as possible and not only here
+            // TODO: an aggressive projection makes the memory reservation smaller, even if we do not edit it
+            batches = batches
+                .into_iter()
+                .map(|b| b.project(projection))
+                .collect::<Result<Vec<_>, _>>()?;
+        }
 
-        let stream =
-            MemoryStream::try_new(batch.batches, Arc::clone(&self.schema), None)?
-                .with_reservation(batch.reservation);
+        let stream = MemoryStream::try_new(batches, Arc::clone(&self.schema), None)?
+            .with_reservation(reservation);
         Ok(Box::pin(cooperative(stream)))
     }
 
@@ -233,9 +253,14 @@ impl ExecutionPlan for WorkTableExec {
         // Down-cast to the expected state type; propagate `None` on failure
         let work_table = state.downcast::<WorkTable>().ok()?;
 
+        if work_table.name != self.name {
+            return None; // Different table
+        }
+
         Some(Arc::new(Self {
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
+            projection: self.projection.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             work_table,
             cache: self.cache.clone(),
@@ -246,12 +271,14 @@ impl ExecutionPlan for WorkTableExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int16Array, Int32Array, Int64Array};
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
+    use futures::StreamExt;
 
     #[test]
     fn test_work_table() {
-        let work_table = WorkTable::new();
+        let work_table = WorkTable::new("test".into());
         // Can't take from empty work_table
         assert!(work_table.take().is_err());
 
@@ -279,5 +306,54 @@ mod tests {
         // The reservation should be freed after drop the memory_stream
         drop(memory_stream);
         assert_eq!(pool.reserved(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_work_table_exec() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int16, false),
+        ]));
+        let work_table_exec =
+            WorkTableExec::new("wt".into(), Arc::clone(&schema), Some(vec![2, 1]))
+                .unwrap();
+
+        // We inject the work table
+        let work_table = Arc::new(WorkTable::new("wt".into()));
+        let work_table_exec = work_table_exec
+            .with_new_state(Arc::clone(&work_table) as _)
+            .unwrap();
+
+        // We update the work table
+        let pool = Arc::new(UnboundedMemoryPool::default()) as _;
+        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+                Arc::new(Int16Array::from(vec![1, 2, 3, 4, 5])),
+            ],
+        )
+        .unwrap();
+        work_table.update(ReservedBatches::new(vec![batch], reservation));
+
+        // We get back the batch from the work table
+        let returned_batch = work_table_exec
+            .execute(0, Arc::new(TaskContext::default()))
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            returned_batch,
+            RecordBatch::try_from_iter(vec![
+                ("c", Arc::new(Int16Array::from(vec![1, 2, 3, 4, 5])) as _),
+                ("b", Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])) as _),
+            ])
+            .unwrap()
+        );
     }
 }

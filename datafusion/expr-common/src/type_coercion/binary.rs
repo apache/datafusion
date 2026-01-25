@@ -17,23 +17,26 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::operator::Operator;
 
-use arrow::array::{new_empty_array, Array};
+use arrow::array::{Array, new_empty_array};
 use arrow::compute::can_cast_types;
+use arrow::datatypes::IntervalUnit::MonthDayNano;
+use arrow::datatypes::TimeUnit::*;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
     DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_MAX_PRECISION,
-    DECIMAL64_MAX_SCALE,
+    DECIMAL64_MAX_SCALE, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DataType, Field, FieldRef, Fields,
+    TimeUnit,
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, not_impl_err, plan_datafusion_err, plan_err, Diagnostic,
-    Result, Span, Spans,
+    Diagnostic, Result, Span, Spans, exec_err, internal_err, not_impl_err,
+    plan_datafusion_err, plan_err,
 };
 use itertools::Itertools;
 
@@ -184,8 +187,8 @@ impl<'a> BinaryTypeCoercer<'a> {
     }
 
     fn signature_inner(&'a self, lhs: &DataType, rhs: &DataType) -> Result<Signature> {
-        use arrow::datatypes::DataType::*;
         use Operator::*;
+        use arrow::datatypes::DataType::*;
         let result = match self.op {
         Eq |
         NotEq |
@@ -258,15 +261,36 @@ impl<'a> BinaryTypeCoercer<'a> {
                 )
             })
         }
+        Minus if is_date_minus_date(lhs, rhs) => {
+            return Ok(Signature {
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+                ret: Int64,
+            });
+        }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
             if let Ok(ret) = self.get_result(lhs, rhs) {
+
                 // Temporal arithmetic, e.g. Date32 + Interval
                 Ok(Signature{
                     lhs: lhs.clone(),
                     rhs: rhs.clone(),
                     ret,
                 })
+            } else if let Some((lhs, rhs)) = temporal_math_coercion(lhs, rhs) {
+                // Temporal arithmetic, e.g. Date32 + int64, Timestamp + duration, etc
+                let ret = self.get_result(&lhs, &rhs).map_err(|e| {
+                    plan_datafusion_err!(
+                        "Cannot get result type for temporal operation {} {} {}: {e}", self.lhs, self.op, self.rhs
+                    )
+                })?;
+                Ok(Signature {
+                    lhs,
+                    rhs,
+                    ret,
+                })
             } else if let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs) {
+
                 // Temporal arithmetic by first coercing to a common time representation
                 // e.g. Date32 - Timestamp
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
@@ -334,6 +358,15 @@ fn is_decimal(data_type: &DataType) -> bool {
             | DataType::Decimal64(..)
             | DataType::Decimal128(..)
             | DataType::Decimal256(..)
+    )
+}
+
+/// Returns true if both operands are Date types (Date32 or Date64)
+/// Used to detect Date - Date operations which should return Int64 (days difference)
+fn is_date_minus_date(lhs: &DataType, rhs: &DataType) -> bool {
+    matches!(
+        (lhs, rhs),
+        (DataType::Date32, DataType::Date32) | (DataType::Date64, DataType::Date64)
     )
 }
 
@@ -751,7 +784,11 @@ pub fn try_type_union_resolution_with_struct(
             let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
-                    return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
+                    return exec_err!(
+                        "Expect same keys for struct type but got mismatched pair {} and {}",
+                        *k,
+                        keys
+                    );
                 }
             } else {
                 keys_string = Some(keys);
@@ -765,7 +802,9 @@ pub fn try_type_union_resolution_with_struct(
     {
         fields.iter().map(|f| f.data_type().to_owned()).collect()
     } else {
-        return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
+        return internal_err!(
+            "Struct type is checked is the previous function, so this should be unreachable"
+        );
     };
 
     for data_type in data_types.iter().skip(1) {
@@ -939,7 +978,7 @@ fn string_temporal_coercion(
                             None
                         }
                     }
-                    Timestamp(_, tz) => Some(Timestamp(TimeUnit::Nanosecond, tz.clone())),
+                    Timestamp(_, tz) => Some(Timestamp(Nanosecond, tz.clone())),
                     _ => None,
                 }
             }
@@ -1198,28 +1237,121 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
 
 fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
+            // Field count must match for coercion
             if lhs_fields.len() != rhs_fields.len() {
                 return None;
             }
 
-            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
-                .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
-                .collect::<Option<Vec<DataType>>>()?;
+            // If the two structs have exactly the same set of field names (possibly in
+            // different order), prefer name-based coercion. Otherwise fall back to
+            // positional coercion which preserves backward compatibility.
+            //
+            // Name-based coercion is used in:
+            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
+            // 2. UNION operations: different field orders unified by name
+            // 3. VALUES clauses: heterogeneous struct rows unified by field name
+            // 4. JOIN conditions: structs with matching field names
+            // 5. Window functions: partitions/orders by struct fields
+            // 6. Aggregate functions: collecting structs with reordered fields
+            //
+            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
+            if fields_have_same_names(lhs_fields, rhs_fields) {
+                return coerce_struct_by_name(lhs_fields, rhs_fields);
+            }
 
-            // preserve the field name and nullability
-            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
-
-            let fields: Vec<FieldRef> = coerced_types
-                .into_iter()
-                .zip(orig_fields)
-                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-                .collect();
-            Some(Struct(fields.into()))
+            coerce_struct_by_position(lhs_fields, rhs_fields)
         }
         _ => None,
     }
+}
+
+/// Return true if every left-field name exists in the right fields (and lengths are equal).
+///
+/// # Assumptions
+/// **This function assumes field names within each struct are unique.** This assumption is safe
+/// because field name uniqueness is enforced at multiple levels:
+/// - **Arrow level:** `StructType` construction enforces unique field names at the schema level
+/// - **DataFusion level:** SQL parser rejects duplicate field names in `CREATE TABLE` and struct type definitions
+/// - **Runtime level:** `StructArray::try_new()` validates field uniqueness
+///
+/// Therefore, we don't need to handle degenerate cases like:
+/// - `struct<c1 int> -> struct<c1 int, c1 int>` (target has duplicate field names)
+/// - `struct<c1 int, c1 int> -> struct<c1 int>` (source has duplicate field names)
+fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
+    // Debug assertions: field names should be unique within each struct
+    #[cfg(debug_assertions)]
+    {
+        let lhs_names: HashSet<_> = lhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            lhs_names.len(),
+            lhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+
+        let rhs_names_check: HashSet<_> = rhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            rhs_names_check.len(),
+            rhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+    }
+
+    let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
+    lhs_fields
+        .iter()
+        .all(|lf| rhs_names.contains(lf.name().as_str()))
+}
+
+/// Coerce two structs by matching fields by name. Assumes the name-sets match.
+fn coerce_struct_by_name(lhs_fields: &Fields, rhs_fields: &Fields) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    let rhs_by_name: HashMap<&str, &FieldRef> =
+        rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
+
+    let mut coerced: Vec<FieldRef> = Vec::with_capacity(lhs_fields.len());
+
+    for lhs in lhs_fields.iter() {
+        let rhs = rhs_by_name.get(lhs.name().as_str()).unwrap(); // safe: caller ensured names match
+        let coerced_type = comparison_coercion(lhs.data_type(), rhs.data_type())?;
+        let is_nullable = lhs.is_nullable() || rhs.is_nullable();
+        coerced.push(Arc::new(Field::new(
+            lhs.name().clone(),
+            coerced_type,
+            is_nullable,
+        )));
+    }
+
+    Some(Struct(coerced.into()))
+}
+
+/// Coerce two structs positionally (left-to-right). This preserves field names from
+/// the left struct and uses the combined nullability.
+fn coerce_struct_by_position(
+    lhs_fields: &Fields,
+    rhs_fields: &Fields,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    // First coerce individual types; fail early if any pair cannot be coerced.
+    let coerced_types: Vec<DataType> = lhs_fields
+        .iter()
+        .zip(rhs_fields.iter())
+        .map(|(l, r)| comparison_coercion(l.data_type(), r.data_type()))
+        .collect::<Option<Vec<DataType>>>()?;
+
+    // Build final fields preserving left-side names and combined nullability.
+    let orig_pairs = lhs_fields.iter().zip(rhs_fields.iter());
+    let fields: Vec<FieldRef> = coerced_types
+        .into_iter()
+        .zip(orig_pairs)
+        .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+        .collect();
+
+    Some(Struct(fields.into()))
 }
 
 /// returns the result of coercing two fields to a common type
@@ -1706,10 +1838,10 @@ pub fn regex_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTy
 fn is_time_with_valid_unit(datatype: &DataType) -> bool {
     matches!(
         datatype,
-        &DataType::Time32(TimeUnit::Second)
-            | &DataType::Time32(TimeUnit::Millisecond)
-            | &DataType::Time64(TimeUnit::Microsecond)
-            | &DataType::Time64(TimeUnit::Nanosecond)
+        &DataType::Time32(Second)
+            | &DataType::Time32(Millisecond)
+            | &DataType::Time64(Microsecond)
+            | &DataType::Time64(Nanosecond)
     )
 }
 
@@ -1795,6 +1927,73 @@ fn temporal_coercion_strict_timezone(
     }
 }
 
+fn temporal_math_coercion(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<(DataType, DataType)> {
+    use DataType::*;
+
+    match (lhs_type, rhs_type) {
+        // Coerce Date + int -> Date + Interval
+        (Date32, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some((Date32, Interval(MonthDayNano)))
+        }
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date32) => {
+            Some((Interval(MonthDayNano), Date32))
+        }
+        (Date64, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => {
+            Some((Date64, Interval(MonthDayNano)))
+        }
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date64) => {
+            Some((Interval(MonthDayNano), Date64))
+        }
+        // Coerce Date + time -> timestamp + Duration
+        (Date32, Time32(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time32(_), Date32) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date32, Time64(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time64(_), Date32) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date64, Time32(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time32(_), Date64) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        (Date64, Time64(_)) => Some((Timestamp(Nanosecond, None), Duration(Nanosecond))),
+        (Time64(_), Date64) => Some((Duration(Nanosecond), Timestamp(Nanosecond, None))),
+
+        // Coerce Duration to match Timestamp's unit,
+        // e.g. Timestamp(ms) + Duration(s) → Timestamp(ms) + Duration(ms)
+        (Timestamp(ts_unit, tz), Duration(_)) => {
+            Some((Timestamp(*ts_unit, tz.clone()), Duration(*ts_unit)))
+        }
+        (Duration(_), Timestamp(ts_unit, tz)) => {
+            Some((Duration(*ts_unit), Timestamp(*ts_unit, tz.clone())))
+        }
+        // time - time -> Interval
+        (Time32(_) | Time64(_), Time32(_) | Time64(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        // time + interval -> Interval
+        (Time32(_) | Time64(_), Interval(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        (Interval(_), Time32(_) | Time64(_)) => {
+            Some((Interval(MonthDayNano), Interval(MonthDayNano)))
+        }
+        // Interval * number => Interval
+        (
+            Interval(_),
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
+            | Float32 | Float64,
+        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        (
+            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float16
+            | Float32 | Float64,
+            Interval(_),
+        ) => Some((Interval(MonthDayNano), Interval(MonthDayNano))),
+        _ => None,
+    }
+}
+
 fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::IntervalUnit::*;
@@ -1804,7 +2003,19 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
         (Interval(_) | Duration(_), Interval(_) | Duration(_)) => {
             Some(Interval(MonthDayNano))
         }
+        (Date32, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
+        | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date32) => {
+            Some(Date32)
+        }
+        (Date64, Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64)
+        | (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Date64) => {
+            Some(Date64)
+        }
         (Date64, Date32) | (Date32, Date64) => Some(Date64),
+        (Date32, Time32(_)) | (Time32(_), Date32) => Some(Timestamp(Nanosecond, None)),
+        (Date32, Time64(_)) | (Time64(_), Date32) => Some(Timestamp(Nanosecond, None)),
+        (Date64, Time32(_)) | (Time32(_), Date64) => Some(Timestamp(Nanosecond, None)),
+        (Date64, Time64(_)) | (Time64(_), Date64) => Some(Timestamp(Nanosecond, None)),
         (Timestamp(_, None), Date64) | (Date64, Timestamp(_, None)) => {
             Some(Timestamp(Nanosecond, None))
         }

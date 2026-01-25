@@ -29,7 +29,7 @@ use datafusion_common::cast::{
     as_generic_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, Result, ScalarValue,
+    Result, ScalarValue, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::utils::format_state_name;
@@ -150,12 +150,14 @@ impl AggregateUDFImpl for StringAgg {
             (args.ordering_fields.is_empty()) && (!args.is_distinct);
         if no_order_no_distinct {
             // Case `SimpleStringAggAccumulator`
-            Ok(vec![Field::new(
-                format_state_name(args.name, "string_agg"),
-                DataType::LargeUtf8,
-                true,
-            )
-            .into()])
+            Ok(vec![
+                Field::new(
+                    format_state_name(args.name, "string_agg"),
+                    DataType::LargeUtf8,
+                    true,
+                )
+                .into(),
+            ])
         } else {
             // Case `StringAggAccumulator`
             self.array_agg.state_fields(args)
@@ -252,7 +254,10 @@ impl Accumulator for StringAggAccumulator {
         let scalar = self.array_agg_acc.evaluate()?;
 
         let ScalarValue::List(list) = scalar else {
-            return internal_err!("Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}", scalar.data_type());
+            return internal_err!(
+                "Expected a DataType::List while evaluating underlying ArrayAggAccumulator, but got {}",
+                scalar.data_type()
+            );
         };
 
         let string_arr: Vec<_> = match list.value_type() {
@@ -272,7 +277,7 @@ impl Accumulator for StringAggAccumulator {
                 return internal_err!(
                     "Expected elements to of type Utf8 or LargeUtf8, but got {}",
                     list.value_type()
-                )
+                );
             }
         };
 
@@ -379,14 +384,13 @@ impl Accumulator for SimpleStringAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let result = if self.has_value {
-            ScalarValue::LargeUtf8(Some(std::mem::take(&mut self.accumulated_string)))
+        if self.has_value {
+            Ok(ScalarValue::LargeUtf8(Some(
+                self.accumulated_string.clone(),
+            )))
         } else {
-            ScalarValue::LargeUtf8(None)
-        };
-
-        self.has_value = false;
-        Ok(result)
+            Ok(ScalarValue::LargeUtf8(None))
+        }
     }
 
     fn size(&self) -> usize {

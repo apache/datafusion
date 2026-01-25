@@ -25,20 +25,23 @@ fn test_coercion_error() -> Result<()> {
     let result_type = coercer.get_input_types();
 
     let e = result_type.unwrap_err();
-    assert_eq!(e.strip_backtrace(), "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types");
+    assert_eq!(
+        e.strip_backtrace(),
+        "Error during planning: Cannot coerce arithmetic expression Float32 + Utf8 to valid types"
+    );
     Ok(())
 }
 
 #[test]
 fn test_date_timestamp_arithmetic_error() -> Result<()> {
     let (lhs, rhs) = BinaryTypeCoercer::new(
-        &DataType::Timestamp(TimeUnit::Nanosecond, None),
+        &DataType::Timestamp(Nanosecond, None),
         &Operator::Minus,
-        &DataType::Timestamp(TimeUnit::Millisecond, None),
+        &DataType::Timestamp(Millisecond, None),
     )
     .get_input_types()?;
-    assert_eq!(lhs, DataType::Timestamp(TimeUnit::Millisecond, None));
-    assert_eq!(rhs, DataType::Timestamp(TimeUnit::Millisecond, None));
+    assert_eq!(lhs, DataType::Timestamp(Millisecond, None));
+    assert_eq!(rhs, DataType::Timestamp(Millisecond, None));
 
     let err =
         BinaryTypeCoercer::new(&DataType::Date32, &Operator::Plus, &DataType::Date64)
@@ -146,14 +149,18 @@ fn test_type_coercion_arithmetic() -> Result<()> {
     // (_, Float32) | (Float32, _) => Some(Float32)
     test_coercion_binary_rule_multiple!(
         Float32,
-        [Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float32, Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float32
     );
     // (_, Float16) | (Float16, _) => Some(Float16)
     test_coercion_binary_rule_multiple!(
         Float16,
-        [Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8],
+        [
+            Float16, Int64, UInt64, Int32, UInt32, Int16, UInt16, Int8, UInt8
+        ],
         Operator::Plus,
         Float16
     );

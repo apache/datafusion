@@ -22,8 +22,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
-// https://github.com/apache/datafusion/issues/18503
-#![deny(clippy::needless_pass_by_value)]
+#![deny(clippy::allow_attributes)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Spark Expression packages for [DataFusion].
@@ -93,9 +92,28 @@
 //! let expr = sha2(col("my_data"), lit(256));
 //! ```
 //!
+//! # Example: using the Spark expression planner
+//!
+//! The [`planner::SparkFunctionPlanner`] provides Spark-compatible expression
+//! planning, such as mapping SQL `EXTRACT` expressions to Spark's `date_part`
+//! function. To use it, register it with your session context:
+//!
+//! ```ignore
+//! use std::sync::Arc;
+//! use datafusion::prelude::SessionContext;
+//! use datafusion_spark::planner::SparkFunctionPlanner;
+//!
+//! let mut ctx = SessionContext::new();
+//! // Register the Spark expression planner
+//! ctx.register_expr_planner(Arc::new(SparkFunctionPlanner))?;
+//! // Now EXTRACT expressions will use Spark semantics
+//! let df = ctx.sql("SELECT EXTRACT(YEAR FROM timestamp_col) FROM my_table").await?;
+//! ```
+//!
 //![`Expr`]: datafusion_expr::Expr
 
 pub mod function;
+pub mod planner;
 
 use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
@@ -105,7 +123,7 @@ use log::debug;
 use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
-#[allow(unused)]
+#[expect(unused_imports)]
 pub mod expr_fn {
     pub use super::function::aggregate::expr_fn::*;
     pub use super::function::array::expr_fn::*;
@@ -124,8 +142,8 @@ pub mod expr_fn {
     pub use super::function::math::expr_fn::*;
     pub use super::function::misc::expr_fn::*;
     pub use super::function::predicate::expr_fn::*;
-    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::string::expr_fn::*;
+    pub use super::function::r#struct::expr_fn::*;
     pub use super::function::table::expr_fn::*;
     pub use super::function::url::expr_fn::*;
     pub use super::function::window::expr_fn::*;

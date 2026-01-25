@@ -18,18 +18,21 @@
 //! Aggregate without grouping columns
 
 use crate::aggregates::{
-    aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
-    AggregateMode,
+    AccumulatorItem, AggrDynFilter, AggregateMode, DynamicFilterAggregateType,
+    aggregate_expressions, create_accumulators, finalize_aggregation,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::expressions::{BinaryExpr, lit};
 use futures::stream::BoxStream;
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -53,15 +56,216 @@ pub(crate) struct AggregateStream {
 ///
 /// The latter requires a state object, which is [`AggregateStreamInner`].
 struct AggregateStreamInner {
+    // ==== Properties ====
     schema: SchemaRef,
     mode: AggregateMode,
     input: SendableRecordBatchStream,
-    baseline_metrics: BaselineMetrics,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
     filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+
+    // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
-    reservation: MemoryReservation,
+    // None if the dynamic filter is not applicable. See details in `AggrDynFilter`.
+    agg_dyn_filter_state: Option<Arc<AggrDynFilter>>,
     finished: bool,
+
+    // ==== Execution Resources ====
+    baseline_metrics: BaselineMetrics,
+    reservation: MemoryReservation,
+}
+
+impl AggregateStreamInner {
+    // TODO: check if we get Null handling correct
+    /// # Examples
+    /// - Example 1
+    ///   Accumulators: min(c1)
+    ///   Current Bounds: min(c1)=10
+    ///   --> dynamic filter PhysicalExpr: c1 < 10
+    ///
+    /// - Example 2
+    ///   Accumulators: min(c1), max(c1), min(c2)
+    ///   Current Bounds: min(c1)=10, max(c1)=100, min(c2)=20
+    ///   --> dynamic filter PhysicalExpr: (c1 < 10) OR (c1>100) OR (c2 < 20)
+    ///
+    /// # Errors
+    /// Returns internal errors if the dynamic filter is not enabled, or other
+    /// invariant check fails.
+    fn build_dynamic_filter_from_accumulator_bounds(
+        &self,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
+            return internal_err!(
+                "`build_dynamic_filter_from_accumulator_bounds()` is only called when dynamic filter is enabled"
+            );
+        };
+
+        let mut predicates: Vec<Arc<dyn PhysicalExpr>> =
+            Vec::with_capacity(filter_state.supported_accumulators_info.len());
+
+        for acc_info in &filter_state.supported_accumulators_info {
+            // Skip if we don't yet have a meaningful bound
+            let bound = {
+                let guard = acc_info.shared_bound.lock();
+                if (*guard).is_null() {
+                    continue;
+                }
+                guard.clone()
+            };
+
+            let agg_exprs = self
+                .aggregate_expressions
+                .get(acc_info.aggr_index)
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Invalid aggregate expression index {} for dynamic filter",
+                        acc_info.aggr_index
+                    )
+                })?;
+            // Only aggregates with a single argument are supported.
+            let column_expr = agg_exprs.first().ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Aggregate expression at index {} expected a single argument",
+                    acc_info.aggr_index
+                )
+            })?;
+
+            let literal = lit(bound);
+            let predicate: Arc<dyn PhysicalExpr> = match acc_info.aggr_type {
+                DynamicFilterAggregateType::Min => Arc::new(BinaryExpr::new(
+                    Arc::clone(column_expr),
+                    Operator::Lt,
+                    literal,
+                )),
+                DynamicFilterAggregateType::Max => Arc::new(BinaryExpr::new(
+                    Arc::clone(column_expr),
+                    Operator::Gt,
+                    literal,
+                )),
+            };
+            predicates.push(predicate);
+        }
+
+        let combined = predicates.into_iter().reduce(|acc, pred| {
+            Arc::new(BinaryExpr::new(acc, Operator::Or, pred)) as Arc<dyn PhysicalExpr>
+        });
+
+        Ok(combined.unwrap_or_else(|| lit(true)))
+    }
+
+    // If the dynamic filter is enabled, update it using the current accumulator's
+    // values
+    fn maybe_update_dyn_filter(&mut self) -> Result<()> {
+        // Step 1: Update each partition's current bound
+        let Some(filter_state) = self.agg_dyn_filter_state.as_ref() else {
+            return Ok(());
+        };
+
+        for acc_info in &filter_state.supported_accumulators_info {
+            let acc =
+                self.accumulators
+                    .get_mut(acc_info.aggr_index)
+                    .ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Invalid accumulator index {} for dynamic filter",
+                            acc_info.aggr_index
+                        )
+                    })?;
+            // First get current partition's bound, then update the shared bound among
+            // all partitions.
+            let current_bound = acc.evaluate()?;
+            {
+                let mut bound = acc_info.shared_bound.lock();
+                match acc_info.aggr_type {
+                    DynamicFilterAggregateType::Max => {
+                        *bound = scalar_max(&bound, &current_bound)?;
+                    }
+                    DynamicFilterAggregateType::Min => {
+                        *bound = scalar_min(&bound, &current_bound)?;
+                    }
+                }
+            }
+        }
+
+        // Step 2: Sync the dynamic filter physical expression with reader
+        let predicate = self.build_dynamic_filter_from_accumulator_bounds()?;
+        filter_state.filter.update(predicate)?;
+
+        Ok(())
+    }
+}
+
+/// Returns the element-wise minimum of two `ScalarValue`s.
+///
+/// # Null semantics
+/// - `min(NULL, NULL)      = NULL`
+/// - `min(NULL, x)         = x`
+/// - `min(x, NULL)         = x`
+///
+/// # Errors
+/// Returns internal error if v1 and v2 has incompatible types.
+fn scalar_min(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
+    if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
+        return Ok(result);
+    }
+
+    match v1.partial_cmp(v2) {
+        Some(Ordering::Less | Ordering::Equal) => Ok(v1.clone()),
+        Some(Ordering::Greater) => Ok(v2.clone()),
+        None => datafusion_common::internal_err!(
+            "cannot compare values of different or incompatible types: {v1:?} vs {v2:?}"
+        ),
+    }
+}
+
+/// Returns the element-wise maximum of two `ScalarValue`s.
+///
+/// # Null semantics
+/// - `max(NULL, NULL)      = NULL`
+/// - `max(NULL, x)         = x`
+/// - `max(x, NULL)         = x`
+///
+/// # Errors
+/// Returns internal error if v1 and v2 has incompatible types.
+fn scalar_max(v1: &ScalarValue, v2: &ScalarValue) -> Result<ScalarValue> {
+    if let Some(result) = scalar_cmp_null_short_circuit(v1, v2) {
+        return Ok(result);
+    }
+
+    match v1.partial_cmp(v2) {
+        Some(Ordering::Greater | Ordering::Equal) => Ok(v1.clone()),
+        Some(Ordering::Less) => Ok(v2.clone()),
+        None => datafusion_common::internal_err!(
+            "cannot compare values of different or incompatible types: {v1:?} vs {v2:?}"
+        ),
+    }
+}
+
+fn scalar_cmp_null_short_circuit(
+    v1: &ScalarValue,
+    v2: &ScalarValue,
+) -> Option<ScalarValue> {
+    match (v1, v2) {
+        (ScalarValue::Null, ScalarValue::Null) => Some(ScalarValue::Null),
+        (ScalarValue::Null, other) | (other, ScalarValue::Null) => Some(other.clone()),
+        _ => None,
+    }
+}
+
+/// Prepend the grouping ID column to the output columns if present.
+///
+/// For GROUPING SETS with no GROUP BY expressions, the schema includes a `__grouping_id`
+/// column that must be present in the output. This function inserts it at the beginning
+/// of the columns array to maintain schema alignment.
+fn prepend_grouping_id_column(
+    mut columns: Vec<Arc<dyn arrow::array::Array>>,
+    grouping_id: Option<&ScalarValue>,
+) -> Result<Vec<Arc<dyn arrow::array::Array>>> {
+    if let Some(id) = grouping_id {
+        let num_rows = columns.first().map(|array| array.len()).unwrap_or(1);
+        let grouping_ids = id.to_array_of_size(num_rows)?;
+        columns.insert(0, grouping_ids);
+    }
+    Ok(columns)
 }
 
 impl AggregateStream {
@@ -91,6 +295,24 @@ impl AggregateStream {
         let reservation = MemoryConsumer::new(format!("AggregateStream[{partition}]"))
             .register(context.memory_pool());
 
+        // Enable dynamic filter if:
+        // 1. AggregateExec did the check and ensure it supports the dynamic filter
+        //    (its dynamic_filter field will be Some(..))
+        // 2. Aggregate dynamic filter is enabled from the config
+        let mut maybe_dynamic_filter = match agg.dynamic_filter.as_ref() {
+            Some(filter) => Some(Arc::clone(filter)),
+            _ => None,
+        };
+
+        if !context
+            .session_config()
+            .options()
+            .optimizer
+            .enable_aggregate_dynamic_filter_pushdown
+        {
+            maybe_dynamic_filter = None;
+        }
+
         let inner = AggregateStreamInner {
             schema: Arc::clone(&agg.schema),
             mode: agg.mode,
@@ -101,27 +323,33 @@ impl AggregateStream {
             accumulators,
             reservation,
             finished: false,
+            agg_dyn_filter_state: maybe_dynamic_filter,
         };
+
         let stream = futures::stream::unfold(inner, |mut this| async move {
             if this.finished {
                 return None;
             }
 
-            let elapsed_compute = this.baseline_metrics.elapsed_compute();
-
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
-                        let timer = elapsed_compute.timer();
-                        let result = aggregate_batch(
-                            &this.mode,
-                            &batch,
-                            &mut this.accumulators,
-                            &this.aggregate_expressions,
-                            &this.filter_expressions,
-                        );
+                        let result = {
+                            let elapsed_compute = this.baseline_metrics.elapsed_compute();
+                            let _timer = elapsed_compute.timer(); // Stops on drop
+                            aggregate_batch(
+                                &this.mode,
+                                &batch,
+                                &mut this.accumulators,
+                                &this.aggregate_expressions,
+                                &this.filter_expressions,
+                            )
+                        };
 
-                        timer.done();
+                        let result = result.and_then(|allocated| {
+                            this.maybe_update_dyn_filter()?;
+                            Ok(allocated)
+                        });
 
                         // allocate memory
                         // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
@@ -139,6 +367,9 @@ impl AggregateStream {
                         let timer = this.baseline_metrics.elapsed_compute().timer();
                         let result =
                             finalize_aggregation(&mut this.accumulators, &this.mode)
+                                .and_then(|columns| {
+                                    prepend_grouping_id_column(columns, None)
+                                })
                                 .and_then(|columns| {
                                     RecordBatch::try_new(
                                         Arc::clone(&this.schema),

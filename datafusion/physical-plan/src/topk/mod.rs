@@ -19,7 +19,7 @@
 
 use arrow::{
     array::{Array, AsArray},
-    compute::{interleave_record_batch, prep_null_mask_filter, FilterBuilder},
+    compute::{FilterBuilder, interleave_record_batch, prep_null_mask_filter},
     row::{RowConverter, Rows, SortField},
 };
 use datafusion_expr::{ColumnarValue, Operator};
@@ -30,20 +30,20 @@ use super::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, RecordOutput,
 };
 use crate::spill::get_record_batch_memory_size;
-use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
+use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, HashMap, Result, ScalarValue,
+    HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
 };
 use datafusion_physical_expr::{
-    expressions::{is_not_null, is_null, lit, BinaryExpr, DynamicFilterPhysicalExpr},
     PhysicalExpr,
+    expressions::{BinaryExpr, DynamicFilterPhysicalExpr, is_not_null, is_null, lit},
 };
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use parking_lot::RwLock;
@@ -131,6 +131,9 @@ pub struct TopK {
     pub(crate) finished: bool,
 }
 
+/// For more background, please also see the [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]
+///
+/// [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries blog]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 #[derive(Debug, Clone)]
 pub struct TopKDynamicFilters {
     /// The current *global* threshold for the dynamic filter.
@@ -409,10 +412,10 @@ impl TopK {
         };
 
         // Update the filter expression
-        if let Some(pred) = predicate {
-            if !pred.eq(&lit(true)) {
-                filter.expr.update(pred)?;
-            }
+        if let Some(pred) = predicate
+            && !pred.eq(&lit(true))
+        {
+            filter.expr.update(pred)?;
         }
 
         Ok(())
@@ -870,7 +873,7 @@ impl TopKHeap {
                     ScalarValue::try_from_array(&array, 0)?
                 }
                 array => {
-                    return internal_err!("Expected a scalar value, got {:?}", array)
+                    return internal_err!("Expected a scalar value, got {:?}", array);
                 }
             };
 

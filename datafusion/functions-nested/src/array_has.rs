@@ -24,11 +24,11 @@ use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::cast::{as_fixed_size_list_array, as_generic_list_array};
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    in_list, ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility, in_list,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -125,7 +125,7 @@ impl ScalarUDFImpl for ArrayHas {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        _info: &dyn datafusion_expr::simplify::SimplifyInfo,
+        _info: &datafusion_expr::simplify::SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         let [haystack, needle] = take_function_args(self.name(), &mut args)?;
 
@@ -136,7 +136,7 @@ impl ScalarUDFImpl for ArrayHas {
                 return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
                     ScalarValue::Boolean(None),
                     None,
-                )))
+                )));
             }
             Expr::Literal(
                 // FixedSizeList gets coerced to List
@@ -262,7 +262,7 @@ impl<'a> TryFrom<&'a dyn Array> for ArrayWrapper<'a> {
             DataType::FixedSizeList(_, _) => Ok(ArrayWrapper::FixedSizeList(
                 as_fixed_size_list_array(value)?,
             )),
-            _ => exec_err!("array_has does not support type '{:?}'.", value.data_type()),
+            _ => exec_err!("array_has does not support type '{}'.", value.data_type()),
         }
     }
 }
@@ -366,11 +366,11 @@ fn array_has_dispatch_for_scalar(
         let length = end - start;
 
         // Check if the array at this position is null
-        if let Some(validity_buffer) = validity {
-            if !validity_buffer.is_valid(i) {
-                final_contained[i] = None; // null array -> null result
-                continue;
-            }
+        if let Some(validity_buffer) = validity
+            && !validity_buffer.is_valid(i)
+        {
+            final_contained[i] = None; // null array -> null result
+            continue;
         }
 
         // For non-null arrays: length is 0 for empty arrays
@@ -675,17 +675,17 @@ mod tests {
 
     use arrow::datatypes::Int32Type;
     use arrow::{
-        array::{create_array, Array, ArrayRef, AsArray, Int32Array, ListArray},
+        array::{Array, ArrayRef, AsArray, Int32Array, ListArray, create_array},
         buffer::OffsetBuffer,
         datatypes::{DataType, Field},
     };
     use datafusion_common::{
-        config::ConfigOptions, utils::SingleRowListArrayBuilder, DataFusionError,
-        ScalarValue,
+        DataFusionError, ScalarValue, config::ConfigOptions,
+        utils::SingleRowListArrayBuilder,
     };
     use datafusion_expr::{
-        col, execution_props::ExecutionProps, lit, simplify::ExprSimplifyResult,
-        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, col, lit,
+        simplify::ExprSimplifyResult,
     };
 
     use crate::expr_fn::make_array;
@@ -701,8 +701,7 @@ mod tests {
         .build_list_scalar());
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -725,8 +724,7 @@ mod tests {
         let haystack = make_array(vec![lit(1), lit(2), lit(3)]);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Simplified(Expr::InList(in_list))) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)
@@ -749,8 +747,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::Null, None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -767,8 +764,7 @@ mod tests {
         let haystack = Expr::Literal(ScalarValue::List(Arc::new(haystack)), None);
         let needle = col("c");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
         let Ok(ExprSimplifyResult::Simplified(simplified)) =
             ArrayHas::new().simplify(vec![haystack, needle], &context)
         else {
@@ -783,8 +779,7 @@ mod tests {
         let haystack = col("c1");
         let needle = col("c2");
 
-        let props = ExecutionProps::new();
-        let context = datafusion_expr::simplify::SimplifyContext::new(&props);
+        let context = datafusion_expr::simplify::SimplifyContext::default();
 
         let Ok(ExprSimplifyResult::Original(args)) =
             ArrayHas::new().simplify(vec![haystack, needle.clone()], &context)

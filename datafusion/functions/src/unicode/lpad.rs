@@ -19,17 +19,17 @@ use std::any::Any;
 use std::fmt::Write;
 use std::sync::Arc;
 
+use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{
     Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use unicode_segmentation::UnicodeSegmentation;
-use DataType::{LargeUtf8, Utf8, Utf8View};
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -129,7 +129,7 @@ impl ScalarUDFImpl for LPadFunc {
 /// Extends the string to length 'length' by prepending the characters fill (a space by default).
 /// If the string is already longer than length then it is truncated (on the right).
 /// lpad('hi', 5, 'xy') = 'xyxhi'
-pub fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn lpad<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.len() <= 1 || args.len() > 3 {
         return exec_err!(
             "lpad was called with {} arguments. It requires at least 2 and at most 3.",
@@ -206,6 +206,8 @@ where
 {
     let array = if let Some(fill_array) = fill_array {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
+        let mut fill_chars_buf = Vec::new();
 
         for ((string, length), fill) in string_array
             .iter()
@@ -223,16 +225,20 @@ where
                     continue;
                 }
 
-                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                let fill_chars = fill.chars().collect::<Vec<char>>();
+                // Reuse buffers by clearing and refilling
+                graphemes_buf.clear();
+                graphemes_buf.extend(string.graphemes(true));
 
-                if length < graphemes.len() {
-                    builder.append_value(graphemes[..length].concat());
-                } else if fill_chars.is_empty() {
+                fill_chars_buf.clear();
+                fill_chars_buf.extend(fill.chars());
+
+                if length < graphemes_buf.len() {
+                    builder.append_value(graphemes_buf[..length].concat());
+                } else if fill_chars_buf.is_empty() {
                     builder.append_value(string);
                 } else {
-                    for l in 0..length - graphemes.len() {
-                        let c = *fill_chars.get(l % fill_chars.len()).unwrap();
+                    for l in 0..length - graphemes_buf.len() {
+                        let c = *fill_chars_buf.get(l % fill_chars_buf.len()).unwrap();
                         builder.write_char(c)?;
                     }
                     builder.write_str(string)?;
@@ -246,6 +252,7 @@ where
         builder.finish()
     } else {
         let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+        let mut graphemes_buf = Vec::new();
 
         for (string, length) in string_array.iter().zip(length_array.iter()) {
             if let (Some(string), Some(length)) = (string, length) {
@@ -259,11 +266,15 @@ where
                     continue;
                 }
 
-                let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                if length < graphemes.len() {
-                    builder.append_value(graphemes[..length].concat());
+                // Reuse buffer by clearing and refilling
+                graphemes_buf.clear();
+                graphemes_buf.extend(string.graphemes(true));
+
+                if length < graphemes_buf.len() {
+                    builder.append_value(graphemes_buf[..length].concat());
                 } else {
-                    builder.write_str(" ".repeat(length - graphemes.len()).as_str())?;
+                    builder
+                        .write_str(" ".repeat(length - graphemes_buf.len()).as_str())?;
                     builder.write_str(string)?;
                     builder.append_value("");
                 }
@@ -526,9 +537,13 @@ mod tests {
         );
 
         #[cfg(not(feature = "unicode_expressions"))]
-        test_lpad!(Some("josé".into()), ScalarValue::Int64(Some(5i64)), internal_err!(
+        test_lpad!(
+            Some("josé".into()),
+            ScalarValue::Int64(Some(5i64)),
+            internal_err!(
                 "function lpad requires compilation with feature flag: unicode_expressions."
-        ));
+            )
+        );
 
         Ok(())
     }

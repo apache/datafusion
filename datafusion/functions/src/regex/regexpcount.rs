@@ -22,7 +22,7 @@ use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::Exact,
     TypeSignature::Uniform, Volatility,
@@ -146,7 +146,9 @@ impl ScalarUDFImpl for RegexpCountFunc {
 pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
     let args_len = args.len();
     if !(2..=4).contains(&args_len) {
-        return exec_err!("regexp_count was called with {args_len} arguments. It requires at least 2 and at most 4.");
+        return exec_err!(
+            "regexp_count was called with {args_len} arguments. It requires at least 2 and at most 4."
+        );
     }
 
     let values = &args[0];
@@ -183,7 +185,7 @@ pub fn regexp_count_func(args: &[ArrayRef]) -> Result<ArrayRef> {
 ///
 /// # Errors
 /// Returns an error if the input arrays have mismatched lengths or if the regular expression fails to compile.
-pub fn regexp_count(
+fn regexp_count(
     values: &dyn Array,
     regex_array: &dyn Datum,
     start_array: Option<&dyn Datum>,
@@ -306,7 +308,7 @@ where
         (true, true, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -323,7 +325,7 @@ where
         (true, true, false) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -352,7 +354,7 @@ where
         (true, false, true) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -372,7 +374,7 @@ where
         (true, false, false) => {
             let regex = match regex_scalar {
                 None | Some("") => {
-                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])))
+                    return Ok(Arc::new(Int64Array::from(vec![0; values.len()])));
                 }
                 Some(regex) => regex,
             };
@@ -567,8 +569,16 @@ fn count_matches(
             ));
         }
 
-        let find_slice = value.chars().skip(start as usize - 1).collect::<String>();
-        let count = pattern.find_iter(find_slice.as_str()).count();
+        // Find the byte offset for the start position (1-based character index)
+        let byte_offset = value
+            .char_indices()
+            .nth((start as usize).saturating_sub(1))
+            .map(|(idx, _)| idx)
+            .unwrap_or(value.len());
+
+        // Use string slicing instead of collecting chars into a new String
+        let find_slice = &value[byte_offset..];
+        let count = pattern.find_iter(find_slice).count();
         Ok(count as i64)
     } else {
         let count = pattern.find_iter(value).count();

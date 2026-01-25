@@ -27,18 +27,18 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
+    metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 use crate::execution_plan::{
-    boundedness_from_children, check_default_invariants, emission_type_from_children,
-    InvariantLevel,
+    InvariantLevel, boundedness_from_children, check_default_invariants,
+    emission_type_from_children,
 };
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::metrics::BaselineMetrics;
-use crate::projection::{make_with_child, ProjectionExec};
+use crate::projection::{ProjectionExec, make_with_child};
 use crate::stream::ObservedStream;
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
@@ -46,10 +46,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    assert_or_internal_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+    Result, assert_or_internal_err, exec_err, internal_datafusion_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{calculate_union, EquivalenceProperties, PhysicalExpr};
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -267,7 +267,12 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -498,7 +503,12 @@ impl ExecutionPlan for InterleaveExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        trace!("Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
+        trace!(
+            "Start InterleaveExec::execute for partition {} of context session_id {} and task_id {:?}",
+            partition,
+            context.session_id(),
+            context.task_id()
+        );
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -583,15 +593,28 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+    let first_field_count = first_schema.fields().len();
 
-    let fields = (0..first_schema.fields().len())
+    // validate that all inputs have the same number of fields
+    for (idx, input) in inputs.iter().enumerate().skip(1) {
+        let field_count = input.schema().fields().len();
+        if field_count != first_field_count {
+            return exec_err!(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields. \
+                 Input 0 has {first_field_count} fields, but input {idx} has {field_count} fields"
+            );
+        }
+    }
+
+    let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
             let base_field = first_schema.field(i).clone();
 
             // Coerce metadata and nullability across all inputs
-            let merged_field = inputs
+
+            inputs
                 .iter()
                 .enumerate()
                 .map(|(input_idx, input)| {
@@ -613,9 +636,7 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
                 // We can unwrap this because if inputs was empty, this would've already panic'ed when we
                 // indexed into inputs[0].
                 .unwrap()
-                .with_name(base_field.name());
-
-            merged_field
+                .with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
@@ -754,6 +775,18 @@ mod tests {
         Ok(schema)
     }
 
+    fn create_test_schema2() -> Result<SchemaRef> {
+        let a = Field::new("a", DataType::Int32, true);
+        let b = Field::new("b", DataType::Int32, true);
+        let c = Field::new("c", DataType::Int32, true);
+        let d = Field::new("d", DataType::Int32, true);
+        let e = Field::new("e", DataType::Int32, true);
+        let f = Field::new("f", DataType::Int32, true);
+        let schema = Arc::new(Schema::new(vec![a, b, c, d, e, f]));
+
+        Ok(schema)
+    }
+
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
@@ -791,6 +824,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
@@ -798,6 +832,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -805,6 +840,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Float32(Some(0.1))),
                     sum_value: Precision::Exact(ScalarValue::Float32(Some(42.0))),
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -819,6 +855,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -826,6 +863,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("b")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -833,6 +871,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -848,6 +887,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
                     sum_value: Precision::Exact(ScalarValue::Int64(Some(84))),
                     null_count: Precision::Exact(1),
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -855,6 +895,7 @@ mod tests {
                     min_value: Precision::Exact(ScalarValue::from("a")),
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
@@ -862,6 +903,7 @@ mod tests {
                     min_value: Precision::Absent,
                     sum_value: Precision::Absent,
                     null_count: Precision::Absent,
+                    byte_size: Precision::Absent,
                 },
             ],
         };
@@ -973,20 +1015,24 @@ mod tests {
     fn test_union_empty_inputs() {
         // Test that UnionExec::try_new fails with empty inputs
         let result = UnionExec::try_new(vec![]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("UnionExec requires at least one input"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("UnionExec requires at least one input")
+        );
     }
 
     #[test]
     fn test_union_schema_empty_inputs() {
         // Test that union_schema fails with empty inputs
         let result = union_schema(&[]);
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot create union schema from empty inputs"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot create union schema from empty inputs")
+        );
     }
 
     #[test]
@@ -1029,5 +1075,24 @@ mod tests {
         assert_eq!(union.inputs().len(), 2);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_union_schema_mismatch() {
+        // Test that UnionExec properly rejects inputs with different field counts
+        let schema = create_test_schema().unwrap();
+        let schema2 = create_test_schema2().unwrap();
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None).unwrap());
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema2), None).unwrap());
+
+        let result = UnionExec::try_new(vec![memory_exec1, memory_exec2]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains(
+                "UnionExec/InterleaveExec requires all inputs to have the same number of fields"
+            )
+        );
     }
 }

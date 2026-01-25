@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{Result, not_impl_err};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
@@ -72,7 +72,7 @@ impl TryCastExpr {
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TRY_CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type)
     }
 }
 
@@ -155,8 +155,8 @@ mod tests {
     };
     use arrow::{
         array::{
-            Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-            Int8Array, TimestampNanosecondArray, UInt32Array,
+            Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+            Int64Array, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
@@ -180,7 +180,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -231,7 +231,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
