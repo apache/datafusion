@@ -158,7 +158,7 @@ sqlparser = { workspace = true, optional = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.19", features = ["v4", "js"] }
+uuid = { version = "1.20", features = ["v4", "js"] }
 zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -182,7 +182,7 @@ recursive = { workspace = true }
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
-sysinfo = "0.37.2"
+sysinfo = "0.38.0"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
@@ -190,7 +190,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] 
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-nix = { version = "0.30.1", features = ["fs"] }
+nix = { version = "0.31.1", features = ["fs"] }
 
 [[bench]]
 harness = false
