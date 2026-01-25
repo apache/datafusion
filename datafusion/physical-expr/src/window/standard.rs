@@ -128,6 +128,9 @@ impl WindowExpr for StandardWindowExpr {
             let mut window_frame_ctx =
                 WindowFrameContext::new(Arc::clone(&self.window_frame), sort_options);
             let mut last_range = Range { start: 0, end: 0 };
+
+            window_frame_ctx.calculate_bounds(order_bys_ref)?;
+
             // We iterate on each row to calculate window frame range and and window function result
             for idx in 0..num_rows {
                 let range = window_frame_ctx.calculate_range(
@@ -203,6 +206,19 @@ impl WindowExpr for StandardWindowExpr {
             } else {
                 evaluator.is_causal()
             };
+
+            if evaluator.uses_window_frame() {
+                state
+                    .window_frame_ctx
+                    .get_or_insert_with(|| {
+                        WindowFrameContext::new(
+                            Arc::clone(&self.window_frame),
+                            sort_options.clone(),
+                        )
+                    })
+                    .calculate_bounds(order_bys_ref)?;
+            }
+
             for idx in state.last_calculated_index..num_rows {
                 let frame_range = if evaluator.uses_window_frame() {
                     state
