@@ -57,9 +57,21 @@ make_udf_function!(time_trunc::SparkTimeTrunc, time_trunc);
 make_udf_function!(to_utc_timestamp::SparkToUtcTimestamp, to_utc_timestamp);
 make_udf_function!(trunc::SparkTrunc, trunc);
 make_udf_function!(unix::SparkUnixDate, unix_date);
-make_udf_function!(unix::SparkUnixMicros, unix_micros);
-make_udf_function!(unix::SparkUnixMillis, unix_millis);
-make_udf_function!(unix::SparkUnixSeconds, unix_seconds);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_micros,
+    unix::SparkUnixTimestamp::microseconds
+);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_millis,
+    unix::SparkUnixTimestamp::milliseconds
+);
+make_udf_function!(
+    unix::SparkUnixTimestamp,
+    unix_seconds,
+    unix::SparkUnixTimestamp::seconds
+);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
