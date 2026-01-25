@@ -704,7 +704,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
             file_extension: conf.file_extension.to_string(),
-            single_file_output: conf.single_file_output,
+            single_file_output: conf.file_output_mode.into(),
         })
     }
 }

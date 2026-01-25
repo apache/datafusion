@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::physical_plan::FileSinkConfig;
+use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
@@ -550,13 +550,13 @@ impl DefaultPhysicalPlanner {
                 };
 
                 // Parse single_file_output option if explicitly set
-                let single_file_output = match source_option_tuples
+                let file_output_mode = match source_option_tuples
                     .get("single_file_output")
                     .map(|v| v.trim())
                 {
-                    None => None,
-                    Some("true") => Some(true),
-                    Some("false") => Some(false),
+                    None => FileOutputMode::Automatic,
+                    Some("true") => FileOutputMode::SingleFile,
+                    Some("false") => FileOutputMode::Directory,
                     Some(value) => {
                         return Err(DataFusionError::Configuration(format!(
                             "provided value for 'single_file_output' was not recognized: \"{value}\""
@@ -593,7 +593,7 @@ impl DefaultPhysicalPlanner {
                     insert_op: InsertOp::Append,
                     keep_partition_by_columns,
                     file_extension,
-                    single_file_output,
+                    file_output_mode,
                 };
 
                 let ordering = input_exec.properties().output_ordering().cloned();

@@ -737,8 +737,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             insert_op,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
-            // Read from proto; None if not present (backward compatible with old plans)
-            single_file_output: conf.single_file_output,
+            file_output_mode: conf.single_file_output.into(),
         })
     }
 }

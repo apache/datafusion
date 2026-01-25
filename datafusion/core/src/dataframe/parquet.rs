@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::file_format::{
@@ -77,6 +76,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.copy_to_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -84,12 +85,6 @@ impl DataFrame {
                 .sort(options.sort_by)?
                 .build()?
         };
-
-        // Build copy options, including single_file_output if explicitly set
-        let mut copy_options = HashMap::<String, String>::new();
-        if options.single_file_output {
-            copy_options.insert("single_file_output".to_string(), "true".to_string());
-        }
 
         let plan = LogicalPlanBuilder::copy_to(
             plan,

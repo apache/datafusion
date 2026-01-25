@@ -125,6 +125,14 @@ impl DataFrameWriteOptions {
         self.sort_by = sort_by;
         self
     }
+
+    fn copy_to_options(&self) -> HashMap<String, String> {
+        let mut copy_options = HashMap::new();
+        if self.single_file_output {
+            copy_options.insert("single_file_output".to_string(), "true".to_string());
+        }
+        copy_options
+    }
 }
 
 impl Default for DataFrameWriteOptions {
@@ -2040,6 +2048,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.copy_to_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2047,12 +2057,6 @@ impl DataFrame {
                 .sort(options.sort_by)?
                 .build()?
         };
-
-        // Build copy options, including single_file_output if explicitly set
-        let mut copy_options: HashMap<String, String> = HashMap::new();
-        if options.single_file_output {
-            copy_options.insert("single_file_output".to_string(), "true".to_string());
-        }
 
         let plan = LogicalPlanBuilder::copy_to(
             plan,
@@ -2114,6 +2118,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.copy_to_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2121,12 +2127,6 @@ impl DataFrame {
                 .sort(options.sort_by)?
                 .build()?
         };
-
-        // Build copy options, including single_file_output if explicitly set
-        let mut copy_options: HashMap<String, String> = HashMap::new();
-        if options.single_file_output {
-            copy_options.insert("single_file_output".to_string(), "true".to_string());
-        }
 
         let plan = LogicalPlanBuilder::copy_to(
             plan,
