@@ -19,18 +19,18 @@ use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, ByteView, GenericStringArray, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
-use datafusion_common::Result;
+use arrow_buffer::{NullBuffer, ScalarBuffer};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
-use datafusion_common::{exec_datafusion_err, exec_err};
+use datafusion_common::exec_err;
+use datafusion_common::{Result, assert_or_internal_err};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -94,11 +94,7 @@ impl ScalarUDFImpl for LeftFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types[0] == DataType::Utf8View {
-            Ok(DataType::Utf8View)
-        } else {
-            utf8_to_str_type(&arg_types[0], "left")
-        }
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_with_args(
