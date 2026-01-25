@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::utils::utf8_to_str_type;
 use arrow::array::{
-    ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
+    Array, ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
@@ -102,15 +102,37 @@ impl ScalarUDFImpl for RepeatFunc {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [string_arg, count_arg] = take_function_args(self.name(), args.args)?;
 
+        // Helper to create null result with correct type (follows utf8_to_str_type)
+        let null_result = |dt: &DataType| -> ColumnarValue {
+            let scalar = if matches!(dt, LargeUtf8) {
+                ScalarValue::LargeUtf8(None)
+            } else {
+                ScalarValue::Utf8(None)
+            };
+            ColumnarValue::Scalar(scalar)
+        };
+
+        // Early return if either argument is a scalar null
+        if let ColumnarValue::Scalar(s) = &string_arg
+            && s.is_null()
+        {
+            return Ok(null_result(&s.data_type()));
+        }
+        if let ColumnarValue::Scalar(c) = &count_arg
+            && c.is_null()
+        {
+            let dt = match &string_arg {
+                ColumnarValue::Scalar(s) => s.data_type(),
+                ColumnarValue::Array(a) => a.data_type().clone(),
+            };
+            return Ok(null_result(&dt));
+        }
+
         match (&string_arg, &count_arg) {
             (
                 ColumnarValue::Scalar(string_scalar),
                 ColumnarValue::Scalar(count_scalar),
             ) => {
-                if string_scalar.is_null() || count_scalar.is_null() {
-                    return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
-                }
-
                 let count = match count_scalar {
                     ScalarValue::Int64(Some(n)) => *n,
                     _ => {
@@ -121,23 +143,12 @@ impl ScalarUDFImpl for RepeatFunc {
                     }
                 };
 
-                let repeated = match string_scalar {
-                    ScalarValue::Utf8(Some(s))
-                    | ScalarValue::LargeUtf8(Some(s))
-                    | ScalarValue::Utf8View(Some(s)) => {
-                        if count <= 0 {
-                            String::new()
-                        } else {
-                            let result_len = s.len().saturating_mul(count as usize);
-                            if result_len > i32::MAX as usize {
-                                return exec_err!(
-                                    "string size overflow on repeat, max size is {}, but got {}",
-                                    i32::MAX,
-                                    result_len
-                                );
-                            }
-                            s.repeat(count as usize)
-                        }
+                let result = match string_scalar {
+                    ScalarValue::Utf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
+                        ScalarValue::Utf8(Some(compute_repeat(s, count)?))
+                    }
+                    ScalarValue::LargeUtf8(Some(s)) => {
+                        ScalarValue::LargeUtf8(Some(compute_repeat(s, count)?))
                     }
                     _ => {
                         return internal_err!(
@@ -147,12 +158,12 @@ impl ScalarUDFImpl for RepeatFunc {
                     }
                 };
 
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(repeated))))
+                Ok(ColumnarValue::Scalar(result))
             }
             _ => {
                 let string_array = string_arg.to_array(args.number_rows)?;
                 let count_array = count_arg.to_array(args.number_rows)?;
-                Ok(ColumnarValue::Array(repeat(&[string_array, count_array])?))
+                Ok(ColumnarValue::Array(repeat(&string_array, &count_array)?))
             }
         }
     }
@@ -162,13 +173,30 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 }
 
+/// Computes repeat for a single string value
+#[inline]
+fn compute_repeat(s: &str, count: i64) -> Result<String> {
+    if count <= 0 {
+        return Ok(String::new());
+    }
+    let result_len = s.len().saturating_mul(count as usize);
+    if result_len > i32::MAX as usize {
+        return exec_err!(
+            "string size overflow on repeat, max size is {}, but got {}",
+            i32::MAX,
+            result_len
+        );
+    }
+    Ok(s.repeat(count as usize))
+}
+
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
-fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let number_array = as_int64_array(&args[1])?;
-    match args[0].data_type() {
+fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
+    let number_array = as_int64_array(count_array)?;
+    match string_array.data_type() {
         Utf8View => {
-            let string_view_array = args[0].as_string_view();
+            let string_view_array = string_array.as_string_view();
             repeat_impl::<i32, &StringViewArray>(
                 &string_view_array,
                 number_array,
@@ -176,17 +204,17 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
             )
         }
         Utf8 => {
-            let string_array = args[0].as_string::<i32>();
+            let string_arr = string_array.as_string::<i32>();
             repeat_impl::<i32, &GenericStringArray<i32>>(
-                &string_array,
+                &string_arr,
                 number_array,
                 i32::MAX as usize,
             )
         }
         LargeUtf8 => {
-            let string_array = args[0].as_string::<i64>();
+            let string_arr = string_array.as_string::<i64>();
             repeat_impl::<i64, &GenericStringArray<i64>>(
-                &string_array,
+                &string_arr,
                 number_array,
                 i64::MAX as usize,
             )
@@ -207,7 +235,6 @@ where
     T: OffsetSizeTrait,
     S: StringArrayType<'a> + 'a,
 {
-    use arrow::array::Array;
     let mut total_capacity = 0;
     let mut max_item_capacity = 0;
     string_array.iter().zip(number_array.iter()).try_for_each(
@@ -238,11 +265,11 @@ where
     let mut buffer = Vec::<u8>::with_capacity(max_item_capacity);
 
     // Helper function to repeat a string into a buffer using doubling strategy
+    // count must be > 0
     #[inline]
-    fn repeat_to_buffer(buffer: &mut Vec<u8>, string: &str, count: i64) {
+    fn repeat_to_buffer(buffer: &mut Vec<u8>, string: &str, count: usize) {
         buffer.clear();
-        if count > 0 && !string.is_empty() {
-            let count = count as usize;
+        if !string.is_empty() {
             let src = string.as_bytes();
             buffer.extend_from_slice(src);
             while buffer.len() < src.len() * count {
@@ -252,14 +279,14 @@ where
         }
     }
 
-    // no nulls in either array
+    // Fast path: no nulls in either array
     if string_array.null_count() == 0 && number_array.null_count() == 0 {
         for i in 0..string_array.len() {
-            // SAFETY: null_count() == 0 guarantees no nulls
+            // SAFETY: i is within bounds (0..len) and null_count() == 0 guarantees valid value
             let string = unsafe { string_array.value_unchecked(i) };
             let count = number_array.value(i);
-            if count >= 0 {
-                repeat_to_buffer(&mut buffer, string, count);
+            if count > 0 {
+                repeat_to_buffer(&mut buffer, string, count as usize);
                 // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
                 builder.append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
             } else {
@@ -267,11 +294,11 @@ where
             }
         }
     } else {
-        //  handle nulls
+        // Slow path: handle nulls
         for (string, number) in string_array.iter().zip(number_array.iter()) {
             match (string, number) {
-                (Some(string), Some(number)) if number >= 0 => {
-                    repeat_to_buffer(&mut buffer, string, number);
+                (Some(string), Some(count)) if count > 0 => {
+                    repeat_to_buffer(&mut buffer, string, count as usize);
                     // SAFETY: buffer contains valid UTF-8 since we only copy from a valid &str
                     builder
                         .append_value(unsafe { std::str::from_utf8_unchecked(&buffer) });
