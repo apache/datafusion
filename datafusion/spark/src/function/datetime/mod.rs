@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod add_months;
 pub mod date_add;
 pub mod date_diff;
 pub mod date_part;
@@ -32,6 +33,7 @@ use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
 use std::sync::Arc;
 
+make_udf_function!(add_months::SparkAddMonths, add_months);
 make_udf_function!(date_add::SparkDateAdd, date_add);
 make_udf_function!(date_diff::SparkDateDiff, date_diff);
 make_udf_function!(date_part::SparkDatePart, date_part);
@@ -50,6 +52,11 @@ make_udf_function!(trunc::SparkTrunc, trunc);
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
+    export_functions!((
+        add_months,
+        "Returns the date that is months months after start. The function returns NULL if at least one of the input parameters is NULL.",
+        arg1 arg2
+    ));
     export_functions!((
         date_add,
         "Returns the date that is days days after start. The function returns NULL if at least one of the input parameters is NULL.",
@@ -122,6 +129,7 @@ pub mod expr_fn {
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
     vec![
+        add_months(),
         date_add(),
         date_diff(),
         date_part(),

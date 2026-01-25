@@ -153,7 +153,7 @@ impl ScalarUDFImpl for ToCharFunc {
             ColumnarValue::Array(_) => to_char_array(&args),
             _ => {
                 exec_err!(
-                    "Format for `to_char` must be non-null Utf8, received {:?}",
+                    "Format for `to_char` must be non-null Utf8, received {}",
                     format.data_type()
                 )
             }
@@ -814,7 +814,7 @@ mod tests {
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
             result.err().unwrap().strip_backtrace(),
-            "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
+            "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(ns)"
         );
     }
 }

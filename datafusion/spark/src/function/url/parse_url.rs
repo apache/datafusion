@@ -217,7 +217,12 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!(
+                "`parse_url` expects STRING arguments, got ({}, {}, {})",
+                url.data_type(),
+                part.data_type(),
+                key.data_type()
+            ),
         }
     } else {
         // The 'key' argument is omitted, assume all values are null
@@ -253,7 +258,11 @@ pub fn spark_handled_parse_url(
                     handler_err,
                 )
             }
-            _ => exec_err!("{} expects STRING arguments, got {:?}", "`parse_url`", args),
+            _ => exec_err!(
+                "`parse_url` expects STRING arguments, got ({}, {})",
+                url.data_type(),
+                part.data_type()
+            ),
         }
     }
 }
