@@ -299,8 +299,10 @@ impl ScalarUDFImpl for DatePartFunc {
             .expect("Expect preimage interval upper bound");
         let interval = Box::new(interval_arithmetic::Interval::try_new(lower, upper)?);
 
-        let expr = args[1].clone();
-        Ok(PreimageResult::Range { expr, interval })
+        Ok(PreimageResult::Range {
+            expr: col_expr.clone(),
+            interval,
+        })
     }
 
     fn aliases(&self) -> &[String] {
