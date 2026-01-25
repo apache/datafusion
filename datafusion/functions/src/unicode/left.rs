@@ -270,11 +270,7 @@ fn shrink_string_view_array_view(
     } else {
         // Non-inline view.
         // Use ByteView constructor to reference existing buffers
-        // 4 bytes: string prefix
-        let mut prefix = [0u8; 4];
-        prefix.copy_from_slice(&bytes[..4]);
-
-        let new_byte_view = ByteView::new(len, &prefix)
+        let new_byte_view = ByteView::new(len, &bytes[..4])
             .with_buffer_index(byte_view.buffer_index)
             .with_offset(byte_view.offset);
         Ok(new_byte_view.as_u128())
