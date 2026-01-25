@@ -407,14 +407,14 @@
 <section id="table-constraint-enforcement">
 <h1>Table Constraint Enforcement<a class="headerlink" href="#table-constraint-enforcement" title="Link to this heading">#</a></h1>
 <p>Table providers can describe table constraints using the
-<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/sql/planner/enum.TableConstraint.html"><code class="docutils literal notranslate"><span class="pre">TableConstraint</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/functional_dependencies/struct.Constraints.html"><code class="docutils literal notranslate"><span class="pre">Constraints</span></code></a> APIs. These constraints include
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/logical_expr/sqlparser/ast/enum.TableConstraint.html"><code class="docutils literal notranslate"><span class="pre">TableConstraint</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/common/struct.Constraints.html"><code class="docutils literal notranslate"><span class="pre">Constraints</span></code></a> APIs. These constraints include
 primary keys, unique keys, foreign keys and check constraints.</p>
 <p>DataFusion does <strong>not</strong> currently enforce these constraints at runtime.
 They are provided for informational purposes and can be used by custom
 <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> implementations or other parts of the system.</p>
 <ul class="simple">
 <li><p><strong>Nullability</strong>: The only property enforced by DataFusion is the
-nullability of each <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatype/struct.Field.html"><code class="docutils literal notranslate"><span class="pre">Field</span></code></a> in a schema. Returning data with null values
+nullability of each <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatypes/struct.Field.html"><code class="docutils literal notranslate"><span class="pre">Field</span></code></a> in a schema. Returning data with null values
 for Columns marked as not nullable will result in runtime errors during execution. DataFusion
 does not check or enforce nullability when data is ingested.</p></li>
 <li><p><strong>Primary and unique keys</strong>: DataFusion does not verify that the data
