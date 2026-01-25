@@ -378,6 +378,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         }
     };
     let original_data = list_array.values().to_data();
+    // Build up the offsets for the final output array
     let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
     offsets.push(OffsetSize::zero());
 
@@ -397,8 +398,10 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
         let start = offset_window[0].to_usize().unwrap();
         let end = offset_window[1].to_usize().unwrap();
+        // n is the number of elements to remove in this row
         let n = arr_n[row_index];
 
+        // compare each element in the list, `false` means the element matches and should be removed
         let eq_array = utils::compare_element_to_list(
             &list_array.value(row_index),
             element_array,
@@ -416,6 +419,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             continue;
         }
 
+        // Remove at most `n` matching elements
         let max_removals = n.min(false_count as i64);
         let mut removed = 0i64;
         let mut copied = 0usize;
