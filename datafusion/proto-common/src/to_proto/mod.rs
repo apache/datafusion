@@ -171,6 +171,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::LargeList(item_type) => Self::LargeList(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
+            DataType::ListView(item_type) => Self::ListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
+            DataType::LargeListView(item_type) => Self::LargeListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
@@ -219,9 +225,6 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 return Err(Error::General(
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
-            }
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
             }
         };
 
