@@ -20,14 +20,14 @@
 use crate::utils;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    cast::AsArray, make_array, Array, ArrayRef, Capacities,
-    GenericListArray, MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait, cast::AsArray, make_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, internal_err, utils::take_function_args};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, TypeSignature, Volatility,

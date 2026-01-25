@@ -19,8 +19,8 @@
 extern crate criterion;
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Decimal128Array,
-    FixedSizeBinaryArray, Float64Array, Int64Array, ListArray, StringArray,
+    Array, ArrayRef, BinaryArray, BooleanArray, Decimal128Array, FixedSizeBinaryArray,
+    Float64Array, Int64Array, ListArray, StringArray,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
@@ -30,8 +30,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_functions_nested::remove::ArrayRemove;
 use rand::Rng;
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -302,7 +302,8 @@ fn bench_array_remove_fixed_size_binary(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_remove_fixed_size_binary");
 
     for &array_size in ARRAY_SIZES {
-        let list_array = create_fixed_size_binary_list_array(NUM_ROWS, array_size, NULL_DENSITY);
+        let list_array =
+            create_fixed_size_binary_list_array(NUM_ROWS, array_size, NULL_DENSITY);
         let element_to_remove = ScalarValue::FixedSizeBinary(16, Some(vec![1u8; 16]));
         let args = create_args(list_array.clone(), element_to_remove.clone());
 
@@ -347,7 +348,11 @@ fn create_args(list_array: ArrayRef, element: ScalarValue) -> Vec<ColumnarValue>
     ]
 }
 
-fn create_int64_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_int64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -373,7 +378,11 @@ fn create_int64_list_array(num_rows: usize, array_size: usize, null_density: f64
     )
 }
 
-fn create_f64_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_f64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -399,7 +408,11 @@ fn create_f64_list_array(num_rows: usize, array_size: usize, null_density: f64) 
     )
 }
 
-fn create_string_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_string_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -407,7 +420,7 @@ fn create_string_list_array(num_rows: usize, array_size: usize, null_density: f6
                 None
             } else {
                 let idx = rng.random_range(0..array_size);
-                Some(format!("value_{}", idx))
+                Some(format!("value_{idx}"))
             }
         })
         .collect::<StringArray>();
@@ -426,7 +439,11 @@ fn create_string_list_array(num_rows: usize, array_size: usize, null_density: f6
     )
 }
 
-fn create_binary_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_binary_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -434,7 +451,7 @@ fn create_binary_list_array(num_rows: usize, array_size: usize, null_density: f6
                 None
             } else {
                 let idx = rng.random_range(0..array_size);
-                Some(format!("value_{}", idx).into_bytes())
+                Some(format!("value_{idx}").into_bytes())
             }
         })
         .collect::<BinaryArray>();
@@ -453,7 +470,11 @@ fn create_binary_list_array(num_rows: usize, array_size: usize, null_density: f6
     )
 }
 
-fn create_boolean_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_boolean_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -479,7 +500,11 @@ fn create_boolean_list_array(num_rows: usize, array_size: usize, null_density: f
     )
 }
 
-fn create_decimal64_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_decimal64_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let values = (0..num_rows * array_size)
         .map(|_| {
@@ -507,7 +532,11 @@ fn create_decimal64_list_array(num_rows: usize, array_size: usize, null_density:
     )
 }
 
-fn create_fixed_size_binary_list_array(num_rows: usize, array_size: usize, null_density: f64) -> ArrayRef {
+fn create_fixed_size_binary_list_array(
+    num_rows: usize,
+    array_size: usize,
+    null_density: f64,
+) -> ArrayRef {
     let mut rng = StdRng::seed_from_u64(SEED);
     let mut buffer = Vec::with_capacity(num_rows * array_size * 16);
     let mut null_buffer = Vec::with_capacity(num_rows * array_size);
