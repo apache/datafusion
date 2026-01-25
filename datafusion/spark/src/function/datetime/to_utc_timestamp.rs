@@ -110,36 +110,36 @@ impl ScalarUDFImpl for SparkToUtcTimestamp {
 fn to_utc_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [timestamp, timezone] = take_function_args("to_utc_timestamp", args)?;
 
-    match (timestamp.data_type(), timezone.data_type()) {
-        (DataType::Timestamp(TimeUnit::Nanosecond, tz_opt), _) => {
+    match timestamp.data_type() {
+        DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
             process_timestamp_with_tz_array::<TimestampNanosecondType>(
                 timestamp,
                 timezone,
                 tz_opt.clone(),
             )
         }
-        (DataType::Timestamp(TimeUnit::Microsecond, tz_opt), _) => {
+        DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
             process_timestamp_with_tz_array::<TimestampMicrosecondType>(
                 timestamp,
                 timezone,
                 tz_opt.clone(),
             )
         }
-        (DataType::Timestamp(TimeUnit::Millisecond, tz_opt), _) => {
+        DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
             process_timestamp_with_tz_array::<TimestampMillisecondType>(
                 timestamp,
                 timezone,
                 tz_opt.clone(),
             )
         }
-        (DataType::Timestamp(TimeUnit::Second, tz_opt), _) => {
+        DataType::Timestamp(TimeUnit::Second, tz_opt) => {
             process_timestamp_with_tz_array::<TimestampSecondType>(
                 timestamp,
                 timezone,
                 tz_opt.clone(),
             )
         }
-        (ts_type, _) => {
+        ts_type => {
             exec_err!("`to_utc_timestamp`: unsupported argument types: {ts_type}")
         }
     }
