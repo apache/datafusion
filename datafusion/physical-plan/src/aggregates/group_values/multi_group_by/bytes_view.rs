@@ -159,12 +159,14 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         match all_null_or_non_null {
             Nulls::Some => {
+                self.views.reserve(rows.len());
                 for &row in rows {
                     self.append_val_inner(array, row);
                 }
             }
 
             Nulls::None => {
+                self.views.reserve(rows.len());
                 self.nulls.append_n(rows.len(), false);
                 for &row in rows {
                     self.do_append_val_inner(arr, row);
@@ -183,21 +185,25 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     where
         B: ByteViewType,
     {
-        let value: &[u8] = array.value(row).as_ref();
+        let view = array.views()[row];
+        let value_len = view as u32;
 
-        let value_len = value.len();
         let view = if value_len <= 12 {
-            make_view(value, 0, 0)
+            // Inlined value case, directly use the
+            // existing view
+            view
         } else {
             // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
-
+            self.ensure_in_progress_big_enough(value_len as usize);
+            let value = unsafe { array.value_unchecked(row).as_ref() };
             // Append value
             let buffer_index = self.completed.len();
             let offset = self.in_progress.len();
             self.in_progress.extend_from_slice(value);
 
-            make_view(value, buffer_index as u32, offset as u32)
+            let view = ByteView::from(view);
+
+            view.with_buffer_index(buffer_index as u32).as_u128()
         };
 
         // Append view
@@ -268,10 +274,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             // both inlined, so compare inlined value
             exist_view == input_view
         } else {
-            let exist_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
-            let input_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+            let exist_prefix = (exist_view >> 32) as u32;
+            let input_prefix = (input_view >> 32) as u32;
 
             if exist_prefix != input_prefix {
                 return false;
