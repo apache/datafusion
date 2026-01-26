@@ -131,8 +131,8 @@ use substrait::proto::{
 ///
 ///     // and handlers for user-define types
 ///     fn consume_user_defined_type(&self, typ: &proto::r#type::UserDefined) -> Result<DataType> {
-///         let type_string = self.extensions.types.get(&typ.type_reference).unwrap();
-///         match type_string.as_str() {
+///         let (type_name, _uri_anchor) = self.extensions.types.get(&typ.type_reference).unwrap();
+///         match type_name.as_str() {
 ///             "u!foo" => not_impl_err!("handle foo conversion"),
 ///             "u!bar" => not_impl_err!("handle bar conversion"),
 ///             _ => substrait_err!("unexpected type")
@@ -141,8 +141,8 @@ use substrait::proto::{
 ///
 ///     // and user-defined literals
 ///     fn consume_user_defined_literal(&self, literal: &proto::expression::literal::UserDefined) -> Result<ScalarValue> {
-///         let type_string = self.extensions.types.get(&literal.type_reference).unwrap();
-///         match type_string.as_str() {
+///         let (type_name, _uri_anchor) = self.extensions.types.get(&literal.type_reference).unwrap();
+///         match type_name.as_str() {
 ///             "u!foo" => not_impl_err!("handle foo conversion"),
 ///             "u!bar" => not_impl_err!("handle bar conversion"),
 ///             _ => substrait_err!("unexpected type")
