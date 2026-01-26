@@ -298,37 +298,40 @@ where
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
 
-                self.map.find(hash, |header| {
-                    if header.hash != hash {
-                        return false;
-                    }
+                self.map
+                    .find(hash, |header| {
+                        if header.hash != hash {
+                            return false;
+                        }
 
-                    // Fast path: inline strings can be compared directly
-                    if len <= 12 {
-                        return header.view == view_u128;
-                    }
+                        // Fast path: inline strings can be compared directly
+                        if len <= 12 {
+                            return header.view == view_u128;
+                        }
 
-                    // For larger strings: first compare the 4-byte prefix
-                    let stored_prefix = (header.view >> 32) as u32;
-                    let input_prefix = (view_u128 >> 32) as u32;
-                    if stored_prefix != input_prefix {
-                        return false;
-                    }
+                        // For larger strings: first compare the 4-byte prefix
+                        let stored_prefix = (header.view >> 32) as u32;
+                        let input_prefix = (view_u128 >> 32) as u32;
+                        if stored_prefix != input_prefix {
+                            return false;
+                        }
 
-                    // Prefix matched - compare full bytes
-                    let byte_view = ByteView::from(header.view);
-                    let stored_len = byte_view.length as usize;
-                    let buffer_index = byte_view.buffer_index as usize;
-                    let offset = byte_view.offset as usize;
+                        // Prefix matched - compare full bytes
+                        let byte_view = ByteView::from(header.view);
+                        let stored_len = byte_view.length as usize;
+                        let buffer_index = byte_view.buffer_index as usize;
+                        let offset = byte_view.offset as usize;
 
-                    let stored_value = if buffer_index < completed.len() {
-                        &completed[buffer_index].as_slice()[offset..offset + stored_len]
-                    } else {
-                        &in_progress[offset..offset + stored_len]
-                    };
-                    let input_value: &[u8] = values.value(i).as_ref();
-                    stored_value == input_value
-                }).map(|entry| entry.payload)
+                        let stored_value = if buffer_index < completed.len() {
+                            &completed[buffer_index].as_slice()
+                                [offset..offset + stored_len]
+                        } else {
+                            &in_progress[offset..offset + stored_len]
+                        };
+                        let input_value: &[u8] = values.value(i).as_ref();
+                        stored_value == input_value
+                    })
+                    .map(|entry| entry.payload)
             };
 
             let payload = if let Some(payload) = maybe_payload {
@@ -370,16 +373,18 @@ where
         // Build null buffer if we have any nulls
         let null_buffer = if self.nulls.iter().any(|&is_null| is_null) {
             Some(NullBuffer::from(
-                self.nulls.iter().map(|&is_null| !is_null).collect::<Vec<_>>(),
+                self.nulls
+                    .iter()
+                    .map(|&is_null| !is_null)
+                    .collect::<Vec<_>>(),
             ))
         } else {
             None
         };
 
         let views = ScalarBuffer::from(self.views);
-        let array = unsafe {
-            BinaryViewArray::new_unchecked(views, self.completed, null_buffer)
-        };
+        let array =
+            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),
