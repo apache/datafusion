@@ -116,7 +116,7 @@ def update_docs(path: str, new_version: str):
         content = fd.read()
         fd.seek(0)
         content = re.sub(r'datafusion = "(.+?)"', f'datafusion = "{new_version}"', content)
-        content = re.sub(r'datafusion = { version = "(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
+        content = re.sub(r'datafusion = \{ version = "(.+?)"', f'datafusion = {{ version = "{new_version}"', content)
         fd.write(content)
 
 
