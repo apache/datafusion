@@ -81,7 +81,7 @@ cargo run --example dataframe -- dataframe
 | default_column_values | [`custom_data_source/default_column_values.rs`](examples/custom_data_source/default_column_values.rs) | Custom default values using metadata          |
 | file_stream_provider  | [`custom_data_source/file_stream_provider.rs`](examples/custom_data_source/file_stream_provider.rs)   | Read/write via FileStreamProvider for streams |
 
-## Data Io Examples
+## Data IO Examples
 
 ### Group: `data_io`
 
@@ -100,7 +100,7 @@ cargo run --example dataframe -- dataframe
 | query_http_csv       | [`data_io/query_http_csv.rs`](examples/data_io/query_http_csv.rs)                         | Query CSV files via HTTP                               |
 | remote_catalog       | [`data_io/remote_catalog.rs`](examples/data_io/remote_catalog.rs)                         | Interact with a remote catalog                         |
 
-## Dataframe Examples
+## DataFrame Examples
 
 ### Group: `dataframe`
 
@@ -186,7 +186,7 @@ cargo run --example dataframe -- dataframe
 | pivot_unpivot   | [`relation_planner/pivot_unpivot.rs`](examples/relation_planner/pivot_unpivot.rs)     | Implement PIVOT / UNPIVOT                  |
 | table_sample    | [`relation_planner/table_sample.rs`](examples/relation_planner/table_sample.rs)       | Implement TABLESAMPLE                      |
 
-## Sql Ops Examples
+## SQL Ops Examples
 
 ### Group: `sql_ops`
 
@@ -199,7 +199,7 @@ cargo run --example dataframe -- dataframe
 | frontend          | [`sql_ops/frontend.rs`](examples/sql_ops/frontend.rs)                   | Build LogicalPlans from SQL                        |
 | query             | [`sql_ops/query.rs`](examples/sql_ops/query.rs)                         | Query data using SQL                               |
 
-## Udf Examples
+## UDF Examples
 
 ### Group: `udf`
 
