@@ -42,6 +42,7 @@ const NULL_DENSITY: f64 = 0.1;
 
 fn criterion_benchmark(c: &mut Criterion) {
     // Test array_remove with different data types and array sizes
+    // TODO: Add performance tests for nested datatypes
     bench_array_remove_int64(c);
     bench_array_remove_f64(c);
     bench_array_remove_strings(c);

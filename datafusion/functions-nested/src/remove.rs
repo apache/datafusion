@@ -412,7 +412,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         let num_to_remove = eq_array.false_count();
 
         // Fast path: no elements to remove, copy entire row
-        if false_count == 0 {
+        if num_to_remove == 0 {
             mutable.extend(0, start, end);
             offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
             valid.append_non_null();
@@ -420,27 +420,27 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         }
 
         // Remove at most `n` matching elements
-        let max_removals = n.min(false_count as i64);
+        let max_removals = n.min(num_to_remove as i64);
         let mut removed = 0i64;
         let mut copied = 0usize;
-               // marks the beginning of a range of elements pending to be copied.
-               let mut pending_batch_to_retain: Option<usize> = None;
+        // marks the beginning of a range of elements pending to be copied.
+        let mut pending_batch_to_retain: Option<usize> = None;
         for (i, keep) in eq_array.iter().enumerate() {
             if keep == Some(false) && removed < max_removals {
                 // Flush pending batch before skipping this element
-                if let Some(bs) = batch_start {
+                if let Some(bs) = pending_batch_to_retain {
                     mutable.extend(0, start + bs, start + i);
                     copied += i - bs;
-                    batch_start = None;
+                    pending_batch_to_retain = None;
                 }
                 removed += 1;
-            } else if batch_start.is_none() {
-                batch_start = Some(i);
+            } else if pending_batch_to_retain.is_none() {
+                pending_batch_to_retain = Some(i);
             }
         }
 
         // Flush remaining batch
-        if let Some(bs) = batch_start {
+        if let Some(bs) = pending_batch_to_retain {
             mutable.extend(0, start + bs, start + eq_array.len());
             copied += eq_array.len() - bs;
         }
