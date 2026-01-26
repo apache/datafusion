@@ -20,10 +20,11 @@
 use std::mem;
 use std::sync::Arc;
 
-use datafusion_catalog::Session;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{HashMap, Result, ScalarValue, assert_or_internal_err};
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::PartitionedFile;
+use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
@@ -368,7 +369,8 @@ fn try_into_partitioned_file(
 /// `filters` should only contain expressions that can be evaluated
 /// using only the partition columns.
 pub async fn pruned_partition_list<'a>(
-    ctx: &'a dyn Session,
+    config: &'a ConfigOptions,
+    runtime_env: &'a Arc<RuntimeEnv>,
     store: &'a dyn ObjectStore,
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
@@ -382,7 +384,7 @@ pub async fn pruned_partition_list<'a>(
     };
 
     let objects = table_path
-        .list_prefixed_files(ctx, store, prefix, file_extension)
+        .list_prefixed_files(config, runtime_env, store, prefix, file_extension)
         .await?
         .try_filter(|object_meta| futures::future::ready(object_meta.size > 0));
 
