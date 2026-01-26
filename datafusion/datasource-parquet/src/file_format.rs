@@ -418,32 +418,9 @@ impl FileFormat for ParquetFormat {
             .map(|result| {
                 let coerce_int96 = coerce_int96.clone();
                 async move {
-                    let (object, metadata) = result?;
+                    let (object, metadata): (ObjectMeta, Arc<ParquetMetaData>) = result?;
 
-                    let (location, schema) = if tokio::runtime::Handle::try_current()
-                        .is_ok()
-                    {
-                        SpawnedTask::spawn_blocking(move || {
-                            let file_metadata = metadata.file_metadata();
-                            let schema = parquet::arrow::parquet_to_arrow_schema(
-                                file_metadata.schema_descr(),
-                                file_metadata.key_value_metadata(),
-                            )?;
-                            let schema = coerce_int96
-                                .as_ref()
-                                .and_then(|time_unit| {
-                                    coerce_int96_to_resolution(
-                                        file_metadata.schema_descr(),
-                                        &schema,
-                                        time_unit,
-                                    )
-                                })
-                                .unwrap_or(schema);
-                            Ok::<_, DataFusionError>((object.location.clone(), schema))
-                        })
-                        .await
-                        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??
-                    } else {
+                    let parse_schema = move || {
                         let file_metadata = metadata.file_metadata();
                         let schema = parquet::arrow::parquet_to_arrow_schema(
                             file_metadata.schema_descr(),
@@ -459,10 +436,16 @@ impl FileFormat for ParquetFormat {
                                 )
                             })
                             .unwrap_or(schema);
-                        (object.location.clone(), schema)
+                        Ok::<_, DataFusionError>((object.location.clone(), schema))
                     };
 
-                    Ok::<_, DataFusionError>((location, schema))
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        SpawnedTask::spawn_blocking(parse_schema)
+                            .await
+                            .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+                    } else {
+                        parse_schema()
+                    }
                 }
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
