@@ -89,7 +89,10 @@ impl ScalarUDFImpl for SparkBase64 {
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        exec_err!("{} should have been simplified", self.name())
+        exec_err!(
+            "invoke should not be called on a simplified {} function",
+            self.name()
+        )
     }
 
     fn simplify(
