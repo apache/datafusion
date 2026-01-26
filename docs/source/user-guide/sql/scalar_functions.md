@@ -2880,7 +2880,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -2928,7 +2929,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -2971,7 +2973,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -3014,7 +3017,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
 The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.
@@ -3056,7 +3060,8 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -3097,7 +3102,11 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 ### `to_unixtime`
 
-Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`). Supports strings, dates, timestamps, integer, unsigned integer, and float types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
+Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00`).
+Supports strings, dates, timestamps, integer, unsigned integer, and float types as input.
+Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
+Integers, unsigned integers, and floats are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00`).
 
 ```sql
 to_unixtime(expression[, ..., format_n])
