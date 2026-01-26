@@ -489,7 +489,7 @@ fn summarize_min_max_null_counts(
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
 
         let exactness = &is_max_value_exact_stat;
-        if exactness.len() > 0
+        if !exactness.is_empty()
             && exactness.null_count() == 0
             && exactness.true_count() == exactness.len()
         {
@@ -507,7 +507,7 @@ fn summarize_min_max_null_counts(
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
 
         let exactness = &is_min_value_exact_stat;
-        if exactness.len() > 0
+        if !exactness.is_empty()
             && exactness.null_count() == 0
             && exactness.true_count() == exactness.len()
         {
