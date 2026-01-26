@@ -185,7 +185,7 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
     where
         B: ByteViewType,
     {
-        let view = array.views()[row];
+        let view = unsafe { *array.views().get_unchecked(row) };
         let value_len = view as u32;
 
         let view = if value_len <= 12 {
@@ -201,9 +201,10 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             let offset = self.in_progress.len();
             self.in_progress.extend_from_slice(value);
 
-            let view = ByteView::from(view);
-
-            view.with_buffer_index(buffer_index as u32).as_u128()
+            let mut view = ByteView::from(view);
+            view.offset = offset as u32;
+            view.buffer_index = buffer_index as u32;
+            view.as_u128()
         };
 
         // Append view
