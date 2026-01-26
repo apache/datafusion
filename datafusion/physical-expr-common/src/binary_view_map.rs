@@ -257,7 +257,7 @@ impl ArrowBytesViewMap {
             let len = view_u128 as u32;
 
             // Check if value already exists
-            let maybe_payload = {
+            let existing = {
                 // Borrow completed and in_progress for comparison
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
@@ -296,7 +296,7 @@ impl ArrowBytesViewMap {
                     stored_value == input_value
                 })
             };
-            if maybe_payload.is_none() {
+            if existing.is_none() {
                 // no existing value, make a new one
                 if len <= 12 {
                     // inline value
@@ -304,7 +304,16 @@ impl ArrowBytesViewMap {
                     self.nulls.push(false);
                 } else {
                     // out-of-line value
-                    let value: &[u8] = values.value(i).as_ref();
+                    let buffers = values.data_buffers();
+                    let view = ByteView::from(view_u128);
+                    let buffer: &Buffer =
+                        unsafe { buffers.get_unchecked(view.buffer_index as usize) };
+                    let value: &[u8] = unsafe {
+                        buffer.get_unchecked(
+                            view.offset as usize..(view.offset + view.length) as usize,
+                        )
+                    };
+
                     self.append_value(view_u128, value);
                 }
                 let new_header = Entry {
