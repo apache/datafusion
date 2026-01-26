@@ -301,6 +301,7 @@ impl ArrowBytesViewMap {
                 if len <= 12 {
                     // inline value
                     self.views.push(view_u128);
+                    self.nulls.push(false);
                 } else {
                     // out-of-line value
                     let value: &[u8] = values.value(i).as_ref();
@@ -690,12 +691,13 @@ mod tests {
                     let buffer_index = byte_view.buffer_index as usize;
                     let offset = byte_view.offset as usize;
 
-                    let buffer = if buffer_index < self.map.completed.len() {
-                        &self.map.completed[buffer_index]
+                    let bytes = if buffer_index < self.map.completed.len() {
+                        &self.map.completed[buffer_index].as_slice()[offset..offset + stored_len]
+                    } else if buffer_index == self.map.completed.len() {
+                        &self.map.in_progress[offset..offset + stored_len]
                     } else {
                         panic!("buffer index {} out of range", buffer_index);
                     };
-                    let bytes = &buffer.as_slice()[offset..offset + stored_len];
                     std::str::from_utf8(bytes).unwrap()
                 };
                 let key = Some(value_str.to_string());
