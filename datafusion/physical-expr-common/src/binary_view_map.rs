@@ -20,7 +20,7 @@
 use crate::binary_map::OutputType;
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView};
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
@@ -298,10 +298,14 @@ impl ArrowBytesViewMap {
             };
             if maybe_payload.is_none() {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
-
-                // Create view pointing to our buffers
-                self.append_value(value);
+                if len <= 12 {
+                    // inline value
+                    self.views.push(view_u128);
+                } else {
+                    // out-of-line value
+                    let value: &[u8] = values.value(i).as_ref();
+                    self.append_value(view_u128, value);
+                }
                 let new_header = Entry {
                     view_idx: self.views.len() - 1,
                     hash,
@@ -354,30 +358,26 @@ impl ArrowBytesViewMap {
     }
 
     /// Append a value to our buffers and return the view pointing to it
-    fn append_value(&mut self, value: &[u8]) -> u128 {
-        let len = value.len();
-        let view = if len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
-                    &mut self.in_progress,
-                    Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
-                );
-                self.completed.push(Buffer::from_vec(flushed));
-            }
+    fn append_value(&mut self, view: u128, value: &[u8]) {
+        // Ensure buffer is big enough
+        if self.in_progress.len() + value.len() > BYTE_VIEW_MAX_BLOCK_SIZE {
+            let flushed = std::mem::replace(
+                &mut self.in_progress,
+                Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
+            );
+            self.completed.push(Buffer::from_vec(flushed));
+        }
 
-            let buffer_index = self.completed.len() as u32;
-            let offset = self.in_progress.len() as u32;
-            self.in_progress.extend_from_slice(value);
+        let buffer_index = self.completed.len() as u32;
+        let offset = self.in_progress.len() as u32;
+        self.in_progress.extend_from_slice(value);
 
-            make_view(value, buffer_index, offset)
-        };
-
-        self.views.push(view);
+        let mut view = ByteView::from(view);
+        view.buffer_index = buffer_index;
+        view.offset = offset;
+        let view_u128: u128 = view.into();
+        self.views.push(view_u128);
         self.nulls.push(false);
-        view
     }
 
     /// Total number of entries (including null, if present)
