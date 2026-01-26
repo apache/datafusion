@@ -692,7 +692,8 @@ mod tests {
                     let offset = byte_view.offset as usize;
 
                     let bytes = if buffer_index < self.map.completed.len() {
-                        &self.map.completed[buffer_index].as_slice()[offset..offset + stored_len]
+                        &self.map.completed[buffer_index].as_slice()
+                            [offset..offset + stored_len]
                     } else if buffer_index == self.map.completed.len() {
                         &self.map.in_progress[offset..offset + stored_len]
                     } else {
