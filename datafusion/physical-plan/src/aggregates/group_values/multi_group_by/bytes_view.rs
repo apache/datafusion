@@ -177,9 +177,11 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         } = self;
 
         views.extend(rows.iter().map(|&row| {
-            if HAS_NULLS && array.is_null(row) {
-                nulls.append(true);
-                return 0;
+            if HAS_NULLS {
+                if array.is_null(row) {
+                    nulls.append(true);
+                    return 0;
+                }
             }
             let view = unsafe { *array.views().get_unchecked(row) };
             let value_len = view as u32;
