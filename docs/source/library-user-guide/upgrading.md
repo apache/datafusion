@@ -145,12 +145,14 @@ You must explicitly rename or map fields to ensure at least one field name match
 **Example 1: Rename fields in the target schema to match source names**
 
 **Before (would fail now):**
+
 ```sql
 -- This would previously succeed by mapping positionally: x→a, y→b
 SELECT CAST(source_col AS STRUCT<a INT, b INT>) FROM table1;
 ```
 
 **After (must align names):**
+
 ```sql
 -- Explicitly rename to match source field names
 SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
@@ -169,7 +171,7 @@ If you need to map fields by position, use explicit struct construction:
 ```rust,ignore
 // Rust API: Build the target struct explicitly
 let source_array = /* ... */;
-let target_field = Field::new("target_col", 
+let target_field = Field::new("target_col",
     DataType::Struct(vec![
         FieldRef::new("new_a", DataType::Int32),
         FieldRef::new("new_b", DataType::Utf8),
