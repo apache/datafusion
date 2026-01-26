@@ -2175,7 +2175,7 @@ encode(expression, format)
 #### Arguments
 
 - **expression**: Expression containing string or binary data
-- **format**: Supported formats are: `base64`, `hex`
+- **format**: Supported formats are: `base64`, `base64pad`, `hex`
 
 **Related functions**:
 
