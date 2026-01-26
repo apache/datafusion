@@ -885,7 +885,7 @@ async fn parquet_explain_analyze() {
     assert!(
         (i_file < i_rowgroup_stat)
             && (i_rowgroup_stat < i_rowgroup_bloomfilter)
-            && (i_rowgroup_bloomfilter < i_page_rows && i_page_rows < i_page_pages),
+            && (i_rowgroup_bloomfilter < i_page_pages && i_page_pages < i_page_rows),
         "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
     );
 }
