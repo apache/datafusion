@@ -113,6 +113,13 @@ cargo run --example dataframe -- dataframe
 ```
 "#;
 
+const ABBREVIATIONS: &[(&str, &str)] = &[
+    ("dataframe", "DataFrame"),
+    ("io", "IO"),
+    ("sql", "SQL"),
+    ("udf", "UDF"),
+];
+
 /// Describes the layout of a DataFusion repository.
 ///
 /// This type centralizes knowledge about where example-related
@@ -248,15 +255,7 @@ impl GroupName {
     pub fn from_dir_name(raw: String) -> Self {
         let title = raw
             .split('_')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    Some(first) => {
-                        first.to_uppercase().collect::<String>() + chars.as_str()
-                    }
-                    None => String::new(),
-                }
-            })
+            .map(format_part)
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -445,6 +444,25 @@ fn discover_example_groups(root: &Path) -> Result<Vec<PathBuf>> {
     groups.sort();
 
     Ok(groups)
+}
+
+/// Formats a single group-name segment for display.
+///
+/// This function applies DataFusion-specific capitalization rules:
+/// - Known abbreviations (e.g. `sql`, `io`, `udf`) are rendered in all caps
+/// - All other segments fall back to standard Title Case
+fn format_part(part: &str) -> String {
+    let lower = part.to_ascii_lowercase();
+
+    if let Some((_, replacement)) = ABBREVIATIONS.iter().find(|(k, _)| *k == lower) {
+        return replacement.to_string();
+    }
+
+    let mut chars = part.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -645,5 +663,22 @@ mod tests {
     fn group_name_title_is_human_readable() {
         let name = GroupName::from_dir_name("very_long_group_name".to_string());
         assert_eq!(name.title(), "Very Long Group Name");
+    }
+
+    #[test]
+    fn group_name_handles_abbreviations() {
+        assert_eq!(
+            GroupName::from_dir_name("dataframe".to_string()).title(),
+            "DataFrame"
+        );
+        assert_eq!(
+            GroupName::from_dir_name("data_io".to_string()).title(),
+            "Data IO"
+        );
+        assert_eq!(
+            GroupName::from_dir_name("sql_ops".to_string()).title(),
+            "SQL Ops"
+        );
+        assert_eq!(GroupName::from_dir_name("udf".to_string()).title(), "UDF");
     }
 }
