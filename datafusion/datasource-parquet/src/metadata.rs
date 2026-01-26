@@ -488,6 +488,7 @@ fn summarize_min_max_null_counts(
     if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
         max_acc.update_batch(&[Arc::clone(&max_values)])?;
 
+        // handle the common special case when all row groups have exact statistics
         let exactness = &is_max_value_exact_stat;
         if !exactness.is_empty()
             && exactness.null_count() == 0
@@ -506,6 +507,7 @@ fn summarize_min_max_null_counts(
     if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
         min_acc.update_batch(&[Arc::clone(&min_values)])?;
 
+        // handle the common special case when all row groups have exact statistics
         let exactness = &is_min_value_exact_stat;
         if !exactness.is_empty()
             && exactness.null_count() == 0
