@@ -174,9 +174,8 @@ Now:
 | value |
 +-------+
 +-------+
-0 row(s) fetched. 
+0 row(s) fetched.
 ```
-
 
 ## DataFusion `52.0.0`
 
