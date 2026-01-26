@@ -55,16 +55,7 @@ impl GroupValues for GroupValuesBytesView {
 
         groups.clear();
         let start_group = self.num_groups;
-        self.map.insert_if_new(
-            arr,
-            // called for each new group
-            |_value| {
-                // assign new group index on each insert
-                let group_idx = self.num_groups;
-                self.num_groups += 1;
-                group_idx
-            },
-        );
+        self.map.insert_if_new(arr);
 
         // TODO: avoid this allocation by returning a range
         groups.extend(start_group..self.num_groups);
