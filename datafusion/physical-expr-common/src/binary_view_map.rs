@@ -729,7 +729,7 @@ mod tests {
                     } else if buffer_index == self.map.completed.len() {
                         &self.map.in_progress[offset..offset + stored_len]
                     } else {
-                        panic!("buffer index {} out of range", buffer_index);
+                        panic!("buffer index {buffer_index} out of range");
                     };
                     std::str::from_utf8(bytes).unwrap()
                 };
@@ -738,9 +738,7 @@ mod tests {
                 // validate that the payload matches the expected index
                 assert_eq!(
                     self.strings[expected_index], key,
-                    "payload index {} does not match expected string {:?}",
-                    expected_index, key
-                );
+                    "payload index {expected_index} does not match expected string {key:?}"                );
             });
         }
 
