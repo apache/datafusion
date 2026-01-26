@@ -714,14 +714,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// # Return Value
     ///
-    /// Implementations should return intervals with an inclusive lower bound and
-    /// exclusive upper bound.
+    /// Implementations should return a half-open interval: inclusive lower
+    /// bound and exclusive upper bound. Note that this is slightly different
+    /// from normal [`Interval`] semantics where the upper bound is closed. The
+    /// upper endpoint should be adjusted to the next value.
     ///
     /// # Background
     ///
-    /// A [preimage] is a single contiguous [`Interval`] of the functions
-    /// argument where the function will return a single literal (constant)
-    /// value. This can also be thought of as form of interval containment.
+    /// A [preimage] here is a single contiguous [`Interval`] of the function's
+    /// argument(s) where the function will return a single literal (constant)
+    /// value. This can also be thought of as a form of interval containment.
     ///
     /// Using a preimage to rewrite predicates is described in the [ClickHouse
     /// Paper]:
@@ -732,15 +734,15 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// > For example, `toYear(k) = 2024` can be replaced by
     /// > `k >= 2024-01-01 && k < 2025-01-01`
     ///
-    /// As mentioned above, the preimage can be used to simply certain types of
-    /// expressions such as `date_part` into a form that is more optimize able.
+    /// As mentioned above, the preimage can be used to simplify certain types of
+    /// expressions such as `date_part` into a form that is more optimizable.
     ///
     /// For example, given an expression like
     /// ```sql
     /// date_part(YEAR, k) = 2024
     /// ```
     ///
-    /// There is a single preimage [`2024-01-01`, `2025-01-01`], which is the
+    /// There is a single preimage [`2024-01-01`, `2025-01-01`), which is the
     /// range of dates covering the entire year of 2024 for which
     /// `date_part(YEAR, k)` evaluates to `2024`. Using this preimage the
     /// expression can be rewritten to
