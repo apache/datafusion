@@ -20,15 +20,13 @@
 use crate::binary_map::OutputType;
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
-use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BooleanBufferBuilder, ByteView, make_view,
-};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::fmt::Debug;
-use std::mem::size_of;
+use std::mem::{replace, size_of};
 use std::sync::Arc;
 
 /// HashSet optimized for storing string or binary values that can produce that
@@ -135,8 +133,8 @@ where
     in_progress: Vec<u8>,
     /// Completed buffers containing string data
     completed: Vec<Buffer>,
-    /// Tracks null values using efficient bit-packed representation
-    nulls: BooleanBufferBuilder,
+    /// Tracks null values (true = null)
+    nulls: Vec<bool>,
 
     /// random state used to generate hashes
     random_state: RandomState,
@@ -163,7 +161,7 @@ where
             views: Vec::new(),
             in_progress: Vec::new(),
             completed: Vec::new(),
-            nulls: BooleanBufferBuilder::new(INITIAL_MAP_CAPACITY),
+            nulls: Vec::new(),
             random_state: RandomState::new(),
             hashes_buffer: vec![],
             null: None,
@@ -283,7 +281,7 @@ where
                     let payload = make_payload_fn(None);
                     let null_index = self.views.len();
                     self.views.push(0);
-                    self.nulls.append(false); // false = null in validity buffer
+                    self.nulls.push(true);
                     self.null = Some((payload, null_index));
                     payload
                 };
@@ -292,7 +290,7 @@ where
             }
 
             // Extract length from the view (first 4 bytes of u128 in little-endian)
-            let len = (view_u128 & 0xFFFFFFFF) as u32;
+            let len = view_u128 as u32;
 
             // Check if value already exists
             let maybe_payload = {
@@ -300,40 +298,37 @@ where
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
 
-                self.map
-                    .find(hash, |header| {
-                        if header.hash != hash {
-                            return false;
-                        }
+                self.map.find(hash, |header| {
+                    if header.hash != hash {
+                        return false;
+                    }
 
-                        // Fast path: inline strings can be compared directly
-                        if len <= 12 {
-                            return header.view == view_u128;
-                        }
+                    // Fast path: inline strings can be compared directly
+                    if len <= 12 {
+                        return header.view == view_u128;
+                    }
 
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = ((header.view >> 32) & 0xFFFFFFFF) as u32;
-                        let input_prefix = ((view_u128 >> 32) & 0xFFFFFFFF) as u32;
-                        if stored_prefix != input_prefix {
-                            return false;
-                        }
+                    // For larger strings: first compare the 4-byte prefix
+                    let stored_prefix = (header.view >> 32) as u32;
+                    let input_prefix = (view_u128 >> 32) as u32;
+                    if stored_prefix != input_prefix {
+                        return false;
+                    }
 
-                        // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
-                        let stored_len = byte_view.length as usize;
-                        let buffer_index = byte_view.buffer_index as usize;
-                        let offset = byte_view.offset as usize;
+                    // Prefix matched - compare full bytes
+                    let byte_view = ByteView::from(header.view);
+                    let stored_len = byte_view.length as usize;
+                    let buffer_index = byte_view.buffer_index as usize;
+                    let offset = byte_view.offset as usize;
 
-                        let stored_value = if buffer_index < completed.len() {
-                            &completed[buffer_index].as_slice()
-                                [offset..offset + stored_len]
-                        } else {
-                            &in_progress[offset..offset + stored_len]
-                        };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
-                    })
-                    .map(|entry| entry.payload)
+                    let stored_value = if buffer_index < completed.len() {
+                        &completed[buffer_index].as_slice()[offset..offset + stored_len]
+                    } else {
+                        &in_progress[offset..offset + stored_len]
+                    };
+                    let input_value: &[u8] = values.value(i).as_ref();
+                    stored_value == input_value
+                }).map(|entry| entry.payload)
             };
 
             let payload = if let Some(payload) = maybe_payload {
@@ -368,20 +363,23 @@ where
     pub fn into_state(mut self) -> ArrayRef {
         // Flush any remaining in-progress buffer
         if !self.in_progress.is_empty() {
-            let flushed = std::mem::take(&mut self.in_progress);
+            let flushed = replace(&mut self.in_progress, Vec::new());
             self.completed.push(Buffer::from_vec(flushed));
         }
 
-        // Build null buffer from the validity bitmap
-        let null_buffer = if self.null.is_some() {
-            Some(NullBuffer::new(self.nulls.finish()))
+        // Build null buffer if we have any nulls
+        let null_buffer = if self.nulls.iter().any(|&is_null| is_null) {
+            Some(NullBuffer::from(
+                self.nulls.iter().map(|&is_null| !is_null).collect::<Vec<_>>(),
+            ))
         } else {
             None
         };
 
         let views = ScalarBuffer::from(self.views);
-        let array =
-            unsafe { BinaryViewArray::new_unchecked(views, self.completed, null_buffer) };
+        let array = unsafe {
+            BinaryViewArray::new_unchecked(views, self.completed, null_buffer)
+        };
 
         match self.output_type {
             OutputType::BinaryView => Arc::new(array),
@@ -400,8 +398,9 @@ where
         let view = if len <= 12 {
             make_view(value, 0, 0)
         } else {
+            // Ensure buffer is big enough
             if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
+                let flushed = replace(
                     &mut self.in_progress,
                     Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
                 );
@@ -416,7 +415,7 @@ where
         };
 
         self.views.push(view);
-        self.nulls.append(true); // true = valid (not null)
+        self.nulls.push(false);
         view
     }
 
@@ -441,7 +440,7 @@ where
         let views_size = self.views.len() * size_of::<u128>();
         let in_progress_size = self.in_progress.capacity();
         let completed_size: usize = self.completed.iter().map(|b| b.len()).sum();
-        let nulls_size = self.nulls.len() / 8 + 1; // bit-packed size
+        let nulls_size = self.nulls.len();
 
         self.map_size
             + views_size
