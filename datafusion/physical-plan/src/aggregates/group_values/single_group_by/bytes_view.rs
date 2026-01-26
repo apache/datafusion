@@ -28,7 +28,7 @@ use std::mem::size_of;
 /// purpose `Row`s format
 pub struct GroupValuesBytesView {
     /// Map string/binary values to group index
-    map: ArrowBytesViewMap<usize>,
+    map: ArrowBytesViewMap,
     /// The total number of groups so far (used to assign group_index)
     num_groups: usize,
 }
