@@ -20,11 +20,11 @@ pub mod expm1;
 pub mod factorial;
 pub mod hex;
 pub mod modulus;
+pub mod negative;
 pub mod rint;
 pub mod trigonometry;
 pub mod unhex;
 pub mod width_bucket;
-pub mod negative;
 
 use datafusion_expr::ScalarUDF;
 use datafusion_functions::make_udf_function;
