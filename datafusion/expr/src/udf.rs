@@ -709,8 +709,8 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Returns the preimage for this function and the specified scalar
-    /// expression, if any.
+    /// Returns a single contiguous preimage for this function and the specified
+    /// scalar expression, if any.
     ///
     /// # Return Value
     ///
@@ -732,12 +732,24 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// > For example, `toYear(k) = 2024` can be replaced by
     /// > `k >= 2024-01-01 && k < 2025-01-01`
     ///
-    /// As mentioned above, this rewrite is particularly useful for simplifying
-    /// expressions such as `date_part` or equivalent functions. The idea is for
-    /// an an expression like `date_part(YEAR, k) = 2024`, if there is a
-    /// [preimage] for `date_part(YEAR, k)`, which is the range of dates
-    /// covering the entire year of 2024,  you can rewrite the expression to `k
-    /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
+    /// As mentioned above, the preimage can be used to simply certain types of
+    /// expressions such as `date_part` into a form that is more optimize able.
+    ///
+    /// For example, given an expression like
+    /// ```sql
+    /// date_part(YEAR, k) = 2024
+    /// ```
+    ///
+    /// There is a single preimage [`2024-01-01`, `2025-01-01`], which is the
+    /// range of dates covering the entire year of 2024 for which
+    /// `date_part(YEAR, k)` evaluates to `2024`. Using this preimage the
+    /// expression can be rewritten to
+    ///
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// which is often more optimizable, such as being used in min/max pruning.
     ///
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
