@@ -136,7 +136,7 @@ Starting with DataFusion 53.0.0, struct casts now require **at least one overlap
 
 If you encounter an error like:
 
-```
+```text
 Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
 ```
 
