@@ -100,32 +100,19 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let [string_arg, count_arg] = take_function_args(self.name(), args.args)?;
-
-        // Helper to create null result with correct type (follows utf8_to_str_type)
-        let null_result = |dt: &DataType| -> ColumnarValue {
-            let scalar = if matches!(dt, LargeUtf8) {
-                ScalarValue::LargeUtf8(None)
-            } else {
-                ScalarValue::Utf8(None)
-            };
-            ColumnarValue::Scalar(scalar)
-        };
 
         // Early return if either argument is a scalar null
         if let ColumnarValue::Scalar(s) = &string_arg
             && s.is_null()
         {
-            return Ok(null_result(&s.data_type()));
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(&return_type)?));
         }
         if let ColumnarValue::Scalar(c) = &count_arg
             && c.is_null()
         {
-            let dt = match &string_arg {
-                ColumnarValue::Scalar(s) => s.data_type(),
-                ColumnarValue::Array(a) => a.data_type().clone(),
-            };
-            return Ok(null_result(&dt));
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(&return_type)?));
         }
 
         match (&string_arg, &count_arg) {
@@ -145,11 +132,15 @@ impl ScalarUDFImpl for RepeatFunc {
 
                 let result = match string_scalar {
                     ScalarValue::Utf8(Some(s)) | ScalarValue::Utf8View(Some(s)) => {
-                        ScalarValue::Utf8(Some(compute_repeat(s, count)?))
+                        ScalarValue::Utf8(Some(compute_repeat(
+                            s,
+                            count,
+                            i32::MAX as usize,
+                        )?))
                     }
-                    ScalarValue::LargeUtf8(Some(s)) => {
-                        ScalarValue::LargeUtf8(Some(compute_repeat(s, count)?))
-                    }
+                    ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
+                        compute_repeat(s, count, i64::MAX as usize)?,
+                    )),
                     _ => {
                         return internal_err!(
                             "Unexpected data type {:?} for function repeat",
@@ -173,17 +164,17 @@ impl ScalarUDFImpl for RepeatFunc {
     }
 }
 
-/// Computes repeat for a single string value
+/// Computes repeat for a single string value with max size check
 #[inline]
-fn compute_repeat(s: &str, count: i64) -> Result<String> {
+fn compute_repeat(s: &str, count: i64, max_size: usize) -> Result<String> {
     if count <= 0 {
         return Ok(String::new());
     }
     let result_len = s.len().saturating_mul(count as usize);
-    if result_len > i32::MAX as usize {
+    if result_len > max_size {
         return exec_err!(
             "string size overflow on repeat, max size is {}, but got {}",
-            i32::MAX,
+            max_size,
             result_len
         );
     }
@@ -271,9 +262,12 @@ where
         buffer.clear();
         if !string.is_empty() {
             let src = string.as_bytes();
+            // Initial copy
             buffer.extend_from_slice(src);
+            // Doubling strategy: copy what we have so far until we reach the target
             while buffer.len() < src.len() * count {
                 let copy_len = buffer.len().min(src.len() * count - buffer.len());
+                // SAFETY: we're copying valid UTF-8 bytes that we already verified
                 buffer.extend_from_within(..copy_len);
             }
         }
