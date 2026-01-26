@@ -26,11 +26,11 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
+use datafusion_common::Result;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
-use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -197,9 +197,7 @@ fn left_impl_view(
                 let new_length: u32 = left_byte_length(string, n) as u32;
                 let byte_view = ByteView::from(view);
                 // Construct a new view
-                let new_view =
-                    shrink_string_view_array_view(string, new_length, byte_view);
-                new_view
+                shrink_string_view_array_view(string, new_length, byte_view)
             } else {
                 // For nulls, keep the original view
                 view
@@ -219,32 +217,17 @@ fn left_impl_view(
 /// Calculate the byte length of the substring of `n` chars from string `string`
 fn left_byte_length(string: &str, n: i64) -> usize {
     match n.cmp(&0) {
-        Ordering::Less => {
-            let mut indices = string.char_indices();
-            // Find the first byte of a character past last `-n` characters
-            let mut end_idx: usize = usize::MAX;
-            for _ in n..0 {
-                if let Some((i, _)) = indices.next_back() {
-                    end_idx = i;
-                } else {
-                    end_idx = 0;
-                    break;
-                }
-            }
-            end_idx
-        }
+        Ordering::Less => string
+            .char_indices()
+            .nth_back(n.unsigned_abs() as usize - 1)
+            .map(|(index, _)| index)
+            .unwrap_or(0),
         Ordering::Equal => 0,
-        Ordering::Greater => {
-            if let Some((end_idx, end_char)) =
-                string.char_indices().take(n as usize).last()
-            {
-                // Include length of the last character
-                end_idx + end_char.len_utf8()
-            } else {
-                // String is empty
-                0
-            }
-        }
+        Ordering::Greater => string
+            .char_indices()
+            .nth(n as usize)
+            .map(|(index, _)| index)
+            .unwrap_or(string.len()),
     }
 }
 
