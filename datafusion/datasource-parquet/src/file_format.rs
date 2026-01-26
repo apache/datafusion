@@ -383,21 +383,34 @@ impl FileFormat for ParquetFormat {
                 let options = self.options.clone();
                 let file_metadata_cache = Arc::clone(&file_metadata_cache);
                 let metadata_size_hint = self.metadata_size_hint();
-                SpawnedTask::spawn(async move {
-                    let file_decryption_properties = get_file_decryption_properties(
-                        &runtime,
-                        &options,
-                        &object.location,
-                    )
-                    .await?;
-                    let metadata = DFParquetMetadata::new(store.as_ref(), &object)
-                        .with_metadata_size_hint(metadata_size_hint)
-                        .with_decryption_properties(file_decryption_properties)
-                        .with_file_metadata_cache(Some(file_metadata_cache))
-                        .fetch_metadata()
+                async move {
+                    let fetch_metadata = async move {
+                        let file_decryption_properties = get_file_decryption_properties(
+                            &runtime,
+                            &options,
+                            &object.location,
+                        )
                         .await?;
-                    Ok::<_, DataFusionError>((object, metadata))
-                })
+                        let metadata = DFParquetMetadata::new(store.as_ref(), &object)
+                            .with_metadata_size_hint(metadata_size_hint)
+                            .with_decryption_properties(file_decryption_properties)
+                            .with_file_metadata_cache(Some(file_metadata_cache))
+                            .fetch_metadata()
+                            .await?;
+                        Ok::<_, DataFusionError>((object, metadata))
+                    };
+
+                    if tokio::runtime::Handle::try_current().is_ok() {
+                        let handle = tokio::runtime::Handle::current();
+                        SpawnedTask::spawn_blocking(move || {
+                            handle.block_on(fetch_metadata)
+                        })
+                        .await
+                        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+                    } else {
+                        fetch_metadata.await
+                    }
+                }
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch metadata concurrently
@@ -405,14 +418,32 @@ impl FileFormat for ParquetFormat {
             .map(|result| {
                 let coerce_int96 = coerce_int96.clone();
                 async move {
-                    let (object, metadata) = match result {
-                        Ok(res) => res?,
-                        Err(e) => {
-                            return Err(DataFusionError::ExecutionJoin(Box::new(e)));
-                        }
-                    };
+                    let (object, metadata) = result?;
 
-                    let join_res = SpawnedTask::spawn_blocking(move || {
+                    let (location, schema) = if tokio::runtime::Handle::try_current()
+                        .is_ok()
+                    {
+                        SpawnedTask::spawn_blocking(move || {
+                            let file_metadata = metadata.file_metadata();
+                            let schema = parquet::arrow::parquet_to_arrow_schema(
+                                file_metadata.schema_descr(),
+                                file_metadata.key_value_metadata(),
+                            )?;
+                            let schema = coerce_int96
+                                .as_ref()
+                                .and_then(|time_unit| {
+                                    coerce_int96_to_resolution(
+                                        file_metadata.schema_descr(),
+                                        &schema,
+                                        time_unit,
+                                    )
+                                })
+                                .unwrap_or(schema);
+                            Ok::<_, DataFusionError>((object.location.clone(), schema))
+                        })
+                        .await
+                        .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??
+                    } else {
                         let file_metadata = metadata.file_metadata();
                         let schema = parquet::arrow::parquet_to_arrow_schema(
                             file_metadata.schema_descr(),
@@ -428,14 +459,10 @@ impl FileFormat for ParquetFormat {
                                 )
                             })
                             .unwrap_or(schema);
-                        Ok::<_, DataFusionError>((object.location.clone(), schema))
-                    })
-                    .await;
+                        (object.location.clone(), schema)
+                    };
 
-                    match join_res {
-                        Ok(res) => res,
-                        Err(e) => Err(DataFusionError::ExecutionJoin(Box::new(e))),
-                    }
+                    Ok::<_, DataFusionError>((location, schema))
                 }
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
