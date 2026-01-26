@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
 #[derive(Debug)]
-pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
+pub struct ArrowBytesViewSet(ArrowBytesViewMap);
 
 impl ArrowBytesViewSet {
     pub fn new(output_type: OutputType) -> Self {
@@ -41,10 +41,7 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
-        fn observe_payload_fn(_payload: ()) {}
-        self.0
-            .insert_if_new(values, make_payload_fn, observe_payload_fn);
+        self.0.insert_if_new(values);
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -113,14 +110,11 @@ impl ArrowBytesViewSet {
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
 /// group values when they are a single string array.
-pub struct ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+pub struct ArrowBytesViewMap {
     /// Should the output be StringView or BinaryView?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::hash_table::HashTable<Entry<V>>,
+    map: hashbrown::hash_table::HashTable<Entry>,
     /// Total size of the map in bytes
     map_size: usize,
 
@@ -133,16 +127,13 @@ where
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
-    null: Option<(V, usize)>,
+    null: Option<usize>,
 }
 
 /// The size, in number of entries, of the initial hash table
 const INITIAL_MAP_CAPACITY: usize = 512;
 
-impl<V> ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+impl ArrowBytesViewMap {
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
@@ -189,32 +180,16 @@ where
     ///
     /// Note that `make_payload_fn` and `observe_payload_fn` are only invoked
     /// with valid values from `values`, not for the `NULL` value.
-    pub fn insert_if_new<MP, OP>(
-        &mut self,
-        values: &ArrayRef,
-        make_payload_fn: MP,
-        observe_payload_fn: OP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
-    {
+    pub fn insert_if_new(&mut self, values: &ArrayRef) {
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_if_new_inner::<MP, OP, BinaryViewType>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                self.insert_if_new_inner::<BinaryViewType>(values)
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_if_new_inner::<MP, OP, StringViewType>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                self.insert_if_new_inner::<StringViewType>(values)
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
         };
@@ -228,14 +203,8 @@ where
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<MP, OP, B>(
-        &mut self,
-        values: &ArrayRef,
-        mut make_payload_fn: MP,
-        mut observe_payload_fn: OP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
+    fn insert_if_new_inner<B>(&mut self, values: &ArrayRef)
+    where
         B: ByteViewType,
     {
         // step 1: compute hashes
@@ -256,16 +225,14 @@ where
         for (value, &hash) in values.iter().zip(batch_hashes.iter()) {
             // handle null value
             let Some(value) = value else {
-                let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    payload
+                if let Some(&null_index) = self.null.as_ref() {
+                    null_index
                 } else {
-                    let payload = make_payload_fn(None);
                     let null_index = self.builder.len();
                     self.builder.append_null();
-                    self.null = Some((payload, null_index));
-                    payload
+                    self.null = Some(null_index);
+                    null_index
                 };
-                observe_payload_fn(payload);
                 continue;
             };
 
@@ -282,26 +249,20 @@ where
                 v == value
             });
 
-            let payload = if let Some(entry) = entry {
-                entry.payload
-            } else {
+            if entry.is_none() {
                 // no existing value, make a new one.
-                let payload = make_payload_fn(Some(value));
 
                 let inner_view_idx = self.builder.len();
                 let new_header = Entry {
                     view_idx: inner_view_idx,
                     hash,
-                    payload,
                 };
 
                 self.builder.append_value(value);
 
                 self.map
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
-                payload
             };
-            observe_payload_fn(payload);
         }
     }
 
@@ -358,10 +319,7 @@ where
     }
 }
 
-impl<V> Debug for ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+impl Debug for ArrowBytesViewMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
@@ -374,18 +332,12 @@ where
 }
 
 /// Entry in the hash table -- see [`ArrowBytesViewMap`] for more details
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-struct Entry<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct Entry {
     /// The idx into the views array
     view_idx: usize,
 
     hash: u64,
-
-    /// value stored by the entry
-    payload: V,
 }
 
 #[cfg(test)]
@@ -580,15 +532,9 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
-    #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
-    struct TestPayload {
-        // store the string value to check against input
-        index: usize, // store the index of the string (each new string gets the next sequential input)
-    }
-
     /// Wraps an [`ArrowBytesViewMap`], validating its invariants
     struct TestMap {
-        map: ArrowBytesViewMap<TestPayload>,
+        map: ArrowBytesViewMap,
         // stores distinct strings seen, in order
         strings: Vec<Option<String>>,
         // map strings to index in strings
@@ -611,7 +557,6 @@ mod tests {
             let string_array = StringViewArray::from(strings.to_vec());
             let arr: ArrayRef = Arc::new(string_array);
 
-            let mut next_index = self.indexes.len();
             let mut actual_new_strings = vec![];
             let mut actual_seen_indexes = vec![];
             // update self with new values, keeping track of newly added values
@@ -628,25 +573,21 @@ mod tests {
             }
 
             // insert the values into the map, recording what we did
-            let mut seen_new_strings = vec![];
-            let mut seen_indexes = vec![];
-            self.map.insert_if_new(
-                &arr,
-                |s| {
-                    let value = s
-                        .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
-                    let index = next_index;
-                    next_index += 1;
-                    seen_new_strings.push(value);
-                    TestPayload { index }
-                },
-                |payload| {
-                    seen_indexes.push(payload.index);
-                },
-            );
+            self.map.insert_if_new(&arr);
 
-            assert_eq!(actual_seen_indexes, seen_indexes);
-            assert_eq!(actual_new_strings, seen_new_strings);
+            self.map.map.iter().for_each(|entry| {
+                let view_idx = entry.view_idx;
+                let value = self.map.builder.get_value(view_idx);
+                let value_str = std::str::from_utf8(value).unwrap();
+                let key = Some(value_str.to_string());
+                let expected_index = *self.indexes.get(&key).unwrap();
+                // validate that the payload matches the expected index
+                assert_eq!(
+                    self.strings[expected_index], key,
+                    "payload index {} does not match expected string {:?}",
+                    expected_index, key
+                );
+            });
         }
 
         /// Call `self.map.into_array()` validating that the strings are in the same

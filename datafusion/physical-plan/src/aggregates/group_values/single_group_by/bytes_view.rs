@@ -54,6 +54,7 @@ impl GroupValues for GroupValuesBytesView {
         let arr = &cols[0];
 
         groups.clear();
+        let start_group = self.num_groups;
         self.map.insert_if_new(
             arr,
             // called for each new group
@@ -63,11 +64,10 @@ impl GroupValues for GroupValuesBytesView {
                 self.num_groups += 1;
                 group_idx
             },
-            // called for each group
-            |group_idx| {
-                groups.push(group_idx);
-            },
         );
+
+        // TODO: avoid this allocation by returning a range
+        groups.extend(start_group..self.num_groups);
 
         // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
