@@ -118,6 +118,76 @@ let context = SimplifyContext::default()
 
 See [`SimplifyContext` documentation](https://docs.rs/datafusion-expr/latest/datafusion_expr/simplify/struct.SimplifyContext.html) for more details.
 
+### Struct Casting Now Requires Field Name Overlap
+
+DataFusion's struct casting mechanism previously allowed casting between structs with differing field names if the field counts matched. This "positional fallback" behavior could silently misalign fields and cause data corruption.
+
+**Breaking Change:**
+
+Starting with DataFusion 53.0.0, struct casts now require **at least one overlapping field name** between the source and target structs. Casts without field name overlap are rejected at plan time with a clear error message.
+
+**Who is affected:**
+
+- Applications that cast between structs with no overlapping field names
+- Queries that rely on positional struct field mapping (e.g., casting `struct(x, y)` to `struct(a, b)` based solely on position)
+- Code that constructs or transforms struct columns programmatically
+
+**Migration guide:**
+
+If you encounter an error like:
+
+```
+Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+```
+
+You must explicitly rename or map fields to ensure at least one field name matches. Here are common patterns:
+
+**Example 1: Rename fields in the target schema to match source names**
+
+**Before (would fail now):**
+```sql
+-- This would previously succeed by mapping positionally: x→a, y→b
+SELECT CAST(source_col AS STRUCT<a INT, b INT>) FROM table1;
+```
+
+**After (must align names):**
+```sql
+-- Explicitly rename to match source field names
+SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
+
+-- OR use a struct constructor with explicit field names
+SELECT STRUCT_CONSTRUCT(
+    'x', source_col.x,
+    'y', source_col.y
+) FROM table1;
+```
+
+**Example 2: Using struct constructors to rebind fields**
+
+If you need to map fields by position, use explicit struct construction:
+
+```rust,ignore
+// Rust API: Build the target struct explicitly
+let source_array = /* ... */;
+let target_field = Field::new("target_col", 
+    DataType::Struct(vec![
+        FieldRef::new("new_a", DataType::Int32),
+        FieldRef::new("new_b", DataType::Utf8),
+    ]));
+
+// Don't rely on casting—construct directly
+// Use struct builders or row constructors that preserve your mapping logic
+```
+
+**Why this change:**
+
+1. **Safety:** Field names are now the primary contract for struct compatibility
+2. **Explicitness:** Prevents silent data misalignment caused by positional assumptions
+3. **Consistency:** Aligns with DuckDB and other SQL engines that enforce name-based matching
+4. **Debuggability:** Errors now appear at plan time rather than as silent data corruption
+
+See [Issue #19841](https://github.com/apache/datafusion/issues/19841) and [PR #19955](https://github.com/apache/datafusion/pull/19955) for more details.
+
 ### `FilterExec` builder methods deprecated
 
 The following methods on `FilterExec` have been deprecated in favor of using `FilterExecBuilder`:
