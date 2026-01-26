@@ -283,7 +283,7 @@ mod tests {
         assert!(work_table.take().is_err());
 
         let pool = Arc::new(UnboundedMemoryPool::default()) as _;
-        let mut reservation = MemoryConsumer::new("test_work_table").register(&pool);
+        let reservation = MemoryConsumer::new("test_work_table").register(&pool);
 
         // Update batch to work_table
         let array: ArrayRef = Arc::new((0..5).collect::<Int32Array>());
