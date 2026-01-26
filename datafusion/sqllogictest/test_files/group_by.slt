@@ -5478,7 +5478,7 @@ create table source as values
 ;
 
 statement ok
-create view t as select column1 as a, arrow_cast(column2, 'Timestamp(Nanosecond, None)') as b from source;
+create view t as select column1 as a, arrow_cast(column2, 'Timestamp(ns)') as b from source;
 
 query IPI
 select a, b, count(*) from t group by a, b order by a, b;

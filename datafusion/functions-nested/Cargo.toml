@@ -84,3 +84,7 @@ name = "array_slice"
 [[bench]]
 harness = false
 name = "map"
+
+[[bench]]
+harness = false
+name = "array_remove"

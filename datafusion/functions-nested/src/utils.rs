@@ -260,7 +260,7 @@ pub(crate) fn get_map_entry_field(data_type: &DataType) -> Result<&Fields> {
             match field_data_type {
                 DataType::Struct(fields) => Ok(fields),
                 _ => {
-                    internal_err!("Expected a Struct type, got {:?}", field_data_type)
+                    internal_err!("Expected a Struct type, got {}", field_data_type)
                 }
             }
         }

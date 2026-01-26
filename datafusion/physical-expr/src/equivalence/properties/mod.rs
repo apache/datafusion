@@ -1277,7 +1277,7 @@ impl EquivalenceProperties {
             // Rewriting equivalence properties in terms of new schema is not
             // safe when schemas are not aligned:
             return plan_err!(
-                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {:?}\n New schema: {:?}",
+                "Schemas have to be aligned to rewrite equivalences:\n Old schema: {}\n New schema: {}",
                 self.schema,
                 schema
             );

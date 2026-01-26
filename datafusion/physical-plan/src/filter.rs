@@ -240,6 +240,11 @@ impl FilterExec {
         FilterExecBuilder::new(predicate, input).build()
     }
 
+    /// Get a batch size
+    pub fn batch_size(&self) -> usize {
+        self.batch_size
+    }
+
     /// Set the default selectivity
     pub fn with_default_selectivity(
         mut self,

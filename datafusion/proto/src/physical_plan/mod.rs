@@ -590,6 +590,7 @@ impl protobuf::PhysicalPlanNode {
 
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
+            .with_batch_size(filter.batch_size as usize)
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
@@ -2121,6 +2122,7 @@ impl protobuf::PhysicalPlanNode {
                     projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
+                    batch_size: exec.batch_size() as u32,
                 },
             ))),
         })
