@@ -167,6 +167,10 @@ impl ArrowBytesViewMap {
         new_self
     }
 
+    pub fn null(&self) -> Option<usize> {
+        self.null
+    }
+
     /// Inserts each value from `values` into the map, invoking `payload_fn` for
     /// each value if *not* already present, deferring the allocation of the
     /// payload until it is needed.

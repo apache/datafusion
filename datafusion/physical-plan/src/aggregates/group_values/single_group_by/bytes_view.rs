@@ -54,12 +54,13 @@ impl GroupValues for GroupValuesBytesView {
         let arr = &cols[0];
 
         groups.clear();
-        let start_group = self.num_groups;
+        let start_group = self.map.non_null_len() + self.map.null().is_some() as usize;
         self.map.insert_if_new(arr);
+        let end_groups = self.map.non_null_len() + self.map.null().is_some() as usize;
 
         // TODO: avoid this allocation by returning a range
-        groups.extend(start_group..self.num_groups);
-
+        groups.extend(start_group..end_groups);
+        self.num_groups += arr.len();
         // ensure we assigned a group to for each row
         assert_eq!(groups.len(), arr.len());
         Ok(())
