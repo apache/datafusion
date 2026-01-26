@@ -226,8 +226,8 @@ When working with Arrow and RecordBatches, watch out for these common issues:
 [`field`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Field.html
 [`schema`]: https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html
 [`datatype`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html
-[`int32array`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.Int32Array.html
-[`stringarray`]: https://docs.rs/arrow-array/latest/arrow_array/array/struct.StringArray.html
+[`int32array`]: https://docs.rs/arrow/latest/arrow/array/type.Int32Array.html
+[`stringarray`]: https://docs.rs/arrow/latest/arrow/array/type.StringArray.html
 [`int32`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int32
 [`int64`]: https://docs.rs/arrow-schema/latest/arrow_schema/enum.DataType.html#variant.Int64
 [extension points]: ../library-user-guide/extensions.md
@@ -241,8 +241,8 @@ When working with Arrow and RecordBatches, watch out for these common issues:
 [`.show()`]: https://docs.rs/datafusion/latest/datafusion/dataframe/struct.DataFrame.html#method.show
 [`memtable`]: https://docs.rs/datafusion/latest/datafusion/datasource/struct.MemTable.html
 [`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
-[`csvreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.CsvReadOptions.html
-[`parquetreadoptions`]: https://docs.rs/datafusion/latest/datafusion/execution/options/struct.ParquetReadOptions.html
+[`csvreadoptions`]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/options/struct.CsvReadOptions.html
+[`parquetreadoptions`]: https://docs.rs/datafusion/latest/datafusion/datasource/file_format/options/struct.ParquetReadOptions.html
 [`recordbatch`]: https://docs.rs/arrow-array/latest/arrow_array/struct.RecordBatch.html
 [`read_csv`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_csv
 [`read_parquet`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.read_parquet
