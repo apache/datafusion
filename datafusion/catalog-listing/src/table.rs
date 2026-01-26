@@ -45,7 +45,7 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
-use futures::{Stream, StreamExt, TryStreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, future, stream};
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
@@ -712,21 +712,20 @@ impl ListingTable {
             });
         };
         // list files (with partitions)
+        let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
+            pruned_partition_list(
+                ctx,
+                store.as_ref(),
+                table_path,
+                filters,
+                &self.options.file_extension,
+                &self.options.table_partition_cols,
+            )
+        }))
+        .await?;
         let meta_fetch_concurrency =
             ctx.config_options().execution.meta_fetch_concurrency;
-        let file_list = stream::iter(self.table_paths.iter())
-            .map(|table_path| {
-                pruned_partition_list(
-                    ctx,
-                    store.as_ref(),
-                    table_path,
-                    filters,
-                    &self.options.file_extension,
-                    &self.options.table_partition_cols,
-                )
-            })
-            .buffer_unordered(meta_fetch_concurrency)
-            .try_flatten_unordered(meta_fetch_concurrency);
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
