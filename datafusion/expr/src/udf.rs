@@ -709,19 +709,34 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
         Ok(ExprSimplifyResult::Original(args))
     }
 
-    /// Returns the [preimage] for this function and the specified scalar value, if any.
+    /// Returns the preimage for this function and the specified scalar
+    /// expression, if any.
     ///
-    /// A preimage is a single contiguous [`Interval`] of values where the function
-    /// will always return `lit_value`
+    /// # Return Value
     ///
     /// Implementations should return intervals with an inclusive lower bound and
     /// exclusive upper bound.
     ///
-    /// This rewrite is described in the [ClickHouse Paper] and is particularly
-    /// useful for simplifying expressions `date_part` or equivalent functions. The
-    /// idea is that if you have an expression like `date_part(YEAR, k) = 2024` and you
-    /// can find a [preimage] for `date_part(YEAR, k)`, which is the range of dates
-    /// covering the entire year of 2024. Thus, you can rewrite the expression to `k
+    /// # Background
+    ///
+    /// A [preimage] is a single contiguous [`Interval`] of the functions
+    /// argument where the function will return a single literal (constant)
+    /// value. This can also be thought of as form of interval containment.
+    ///
+    /// Using a preimage to rewrite predicates is described in the [ClickHouse
+    /// Paper]:
+    ///
+    /// > some functions can compute the preimage of a given function result.
+    /// > This is used to replace comparisons of constants with function calls
+    /// > on the key columns by comparing the key column value with the preimage.
+    /// > For example, `toYear(k) = 2024` can be replaced by
+    /// > `k >= 2024-01-01 && k < 2025-01-01`
+    ///
+    /// As mentioned above, this rewrite is particularly useful for simplifying
+    /// expressions such as `date_part` or equivalent functions. The idea is for
+    /// an an expression like `date_part(YEAR, k) = 2024`, if there is a
+    /// [preimage] for `date_part(YEAR, k)`, which is the range of dates
+    /// covering the entire year of 2024,  you can rewrite the expression to `k
     /// >= '2024-01-01' AND k < '2025-01-01' which is often more optimizable.
     ///
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
