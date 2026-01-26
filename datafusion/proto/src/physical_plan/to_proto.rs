@@ -695,6 +695,17 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let file_output_mode = match conf.file_output_mode {
+            datafusion_datasource::file_sink_config::FileOutputMode::Automatic => {
+                protobuf::FileOutputMode::Automatic
+            }
+            datafusion_datasource::file_sink_config::FileOutputMode::SingleFile => {
+                protobuf::FileOutputMode::SingleFile
+            }
+            datafusion_datasource::file_sink_config::FileOutputMode::Directory => {
+                protobuf::FileOutputMode::Directory
+            }
+        };
         Ok(Self {
             object_store_url: conf.object_store_url.to_string(),
             file_groups,
@@ -704,7 +715,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
             file_extension: conf.file_extension.to_string(),
-            single_file_output: conf.file_output_mode.into(),
+            file_output_mode: file_output_mode.into(),
         })
     }
 }

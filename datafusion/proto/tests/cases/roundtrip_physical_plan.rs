@@ -1475,7 +1475,7 @@ fn roundtrip_json_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "json".into(),
-        file_output_mode: FileOutputMode::Automatic,
+        file_output_mode: FileOutputMode::SingleFile,
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1514,7 +1514,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
         file_extension: "csv".into(),
-        file_output_mode: FileOutputMode::Automatic,
+        file_output_mode: FileOutputMode::Directory,
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
