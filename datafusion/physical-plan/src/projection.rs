@@ -20,7 +20,7 @@
 //! of a projection on table `t1` where the expressions `a`, `b`, and `a+b` are the
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
-use super::expressions::{Column, Literal};
+use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -35,7 +35,7 @@ use crate::filter_pushdown::{
 use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn, JoinOnRef};
 use crate::{DisplayFormatType, ExecutionPlan, PhysicalExpr};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -48,6 +48,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{DataFusionError, JoinSide, Result, internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
@@ -216,6 +217,72 @@ impl ProjectionExec {
         }
         Ok(alias_map)
     }
+
+    /// Returns true if the projection is beneficial to push through most operators.
+    ///
+    /// Some cases to consider:
+    ///
+    /// - Sorts: sorts do expensive work (re-arranging rows) and thus benefit from
+    ///   having as little data underneath them as possible.
+    ///   We don't want to push down expressions such as literals that could be
+    ///   evaluated after the sort.
+    ///   Truthfully we probably would want to push down some complex expressions if
+    ///   they reduce the amount of data (e.g. `a like '%foo%'` converts a large string
+    ///   column into a boolean column) but we currently don't have any good way to estimate that.
+    /// - RepartitionExec / CoalesceBatchesExec: these operators change the parallelism
+    ///   or batch sizes and are designed to optimize CPU work for operators above them.
+    ///   Pushing down expensive expressions past them defeats their purpose so we want to avoid that.
+    /// - Filters: filters can reduce the amount of data processed by upstream operators,
+    ///   so pushing down expensive computation under them would result in that computation being
+    ///   applied to more rows.
+    ///   Again if we knew that `a like '%foo%'` reduces the projection size significantly
+    ///   and the filter is not selective we actually might want to push it down, but we don't have
+    ///   a good way to estimate that currently.
+    /// - Joins: joins both benefit from having less data under them (they may have to select sparse rows)
+    ///   but they also serve as filters.
+    ///
+    /// Obviously given the information we have currently, we cannot make perfect decisions here.
+    /// Our approach is to stick to the obvious cases:
+    ///
+    /// - If the projection narrows the schema (drops columns) and is only column references it
+    ///   always makes sense to push it down.
+    /// - If the projection contains any trivial expression (which can reduce the data size
+    ///   of the projection significantly at a very low computational cost) and does not contain
+    ///   any computationally expensive expressions, we also consider it beneficial to push down.
+    ///
+    /// In all other cases we consider the projection not beneficial to push down.
+    ///
+    /// This is true when:
+    /// - The projection narrows the schema (drops columns) - saves memory, OR
+    /// - Any expression is PlaceAtLeafs (like get_field) - beneficial computation pushdown
+    ///
+    /// Pure Column references that don't narrow the schema are NOT beneficial to push,
+    /// as they just rearrange the plan without any gain.
+    ///
+    /// Note: Projections are split by `try_split_projection` before reaching this function,
+    /// so if any expression is PlaceAtLeafs, all expressions should be leaf-pushable.
+    pub fn is_leaf_pushable_or_narrows_schema(&self) -> bool {
+        let all_columns = self
+            .expr()
+            .iter()
+            .all(|proj_expr| proj_expr.expr.as_any().downcast_ref::<Column>().is_some());
+        let narrows_schema = self.expr().len() < self.input().schema().fields().len();
+        let all_columns_and_narrows_schema = all_columns && narrows_schema;
+
+        let has_leaf_expressions = self
+            .expr()
+            .iter()
+            .any(|p| matches!(p.expr.placement(), ExpressionPlacement::PlaceAtLeafs));
+
+        let has_root_expressions = self.expr().iter().any(|p| {
+            matches!(
+                p.expr.placement(),
+                ExpressionPlacement::PlaceAtRoot | ExpressionPlacement::Literal
+            )
+        });
+
+        (has_leaf_expressions && !has_root_expressions) || all_columns_and_narrows_schema
+    }
 }
 
 impl DisplayAs for ProjectionExec {
@@ -279,18 +346,13 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn benefits_from_input_partitioning(&self) -> Vec<bool> {
-        let all_simple_exprs =
-            self.projector
-                .projection()
-                .as_ref()
-                .iter()
-                .all(|proj_expr| {
-                    proj_expr.expr.as_any().is::<Column>()
-                        || proj_expr.expr.as_any().is::<Literal>()
-                });
-        // If expressions are all either column_expr or Literal, then all computations in this projection are reorder or rename,
-        // and projection would not benefit from the repartition, benefits_from_input_partitioning will return false.
-        vec![!all_simple_exprs]
+        // If all projection expressions are either column references or leaf-pushable expressions,
+        // then all operations are cheap and don't benefit from partitioning.
+        let has_expensive_expressions = self
+            .expr()
+            .iter()
+            .all(|p| !matches!(p.expr.placement(), ExpressionPlacement::PlaceAtRoot));
+        vec![!has_expensive_expressions]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -692,7 +754,9 @@ pub fn remove_unnecessary_projections(
             if is_projection_removable(projection) {
                 return Ok(Transformed::yes(Arc::clone(projection.input())));
             }
-            // If it does, check if we can push it under its child(ren):
+
+            // Try to push the projection under its child(ren). Each operator's
+            // try_swapping_with_projection handles the operator-specific logic.
             projection
                 .input()
                 .try_swapping_with_projection(projection)?
@@ -758,13 +822,6 @@ pub fn make_with_child(
         .map(|e| Arc::new(e) as _)
 }
 
-/// Returns `true` if all the expressions in the argument are `Column`s.
-pub fn all_columns(exprs: &[ProjectionExpr]) -> bool {
-    exprs
-        .iter()
-        .all(|proj_expr| proj_expr.expr.as_any().is::<Column>())
-}
-
 /// Updates the given lexicographic ordering according to given projected
 /// expressions using the [`update_expr`] function.
 pub fn update_ordering(
@@ -799,6 +856,96 @@ pub fn update_ordering_requirement(
         updated_exprs.push(sort_expr);
     }
     Ok(LexRequirement::new(updated_exprs))
+}
+
+/// Augments a projection with additional columns needed by an operator.
+///
+/// This helper encapsulates the pattern used by FilterExec and other operators
+/// that need to rewrite expressions after projections drop columns in [`ExecutionPlan::try_swapping_with_projection`].
+///
+/// # Arguments
+/// * `base_projection` - The original projection expressions
+/// * `needed_columns` - Column indices that are needed by expressions in the operator
+/// * `input_schema` - The input schema before projection
+///
+/// # Returns
+/// * `ProjectionWithDependencies` struct with:
+///   - `combined_projection`: Augmented projection including base + additional columns
+///   - `restore_projection`: Optional projection to restore original columns only
+///
+/// # Example
+/// If projection selects [A, C] but sort needs column B:
+/// - combined_projection: [A, C, B]
+/// - restore_projection: [0, 1] (selects A, C from the combined projection output)
+#[derive(Debug, Clone)]
+pub struct ProjectionWithDependencies {
+    /// Combined projection including base and additional needed columns.
+    pub combined_projection: ProjectionExprs,
+    /// Projection that restores original columns after operator consumes the
+    /// columns that were added for dependencies.
+    pub restore_projection: Option<ProjectionExprs>,
+}
+
+impl ProjectionWithDependencies {
+    /// Creates a new augmented projection with dependencies.
+    pub fn new(
+        base_projection: &ProjectionExprs,
+        needed_columns: &[usize],
+        input_schema: &SchemaRef,
+    ) -> Result<Self> {
+        let base_len = base_projection.iter().count();
+
+        // Collect columns already in the base projection
+        let base_indices: HashSet<usize> = base_projection
+            .iter()
+            .filter_map(|proj_expr| {
+                proj_expr
+                    .expr
+                    .as_any()
+                    .downcast_ref::<Column>()
+                    .map(|col| col.index())
+            })
+            .collect();
+
+        // Find columns needed by the operator that aren't in the projection
+        let additional_columns: Vec<usize> = needed_columns
+            .iter()
+            .filter(|idx| !base_indices.contains(idx))
+            .copied()
+            .collect();
+
+        if additional_columns.is_empty() {
+            // No additional columns needed
+            return Ok(Self {
+                combined_projection: base_projection.clone(),
+                restore_projection: None,
+            });
+        }
+
+        // Create projection for the additional columns
+        let additional_projection =
+            ProjectionExprs::from_indices(&additional_columns, input_schema);
+
+        // Combine base projection with additional columns
+        let combined_projection = ProjectionExprs::new(
+            base_projection
+                .iter()
+                .cloned()
+                .chain(additional_projection.iter().cloned()),
+        );
+
+        // Create restore projection that selects only original columns (indices 0..base_len)
+        // from the combined projection's output schema
+        let combined_schema = combined_projection.project_schema(input_schema)?;
+        let restore_indices: Vec<usize> = (0..base_len).collect();
+        let restore_projection =
+            ProjectionExprs::from_indices(&restore_indices, &combined_schema);
+
+        Ok(Self {
+            combined_projection,
+            restore_projection: Some(restore_projection),
+        })
+    }
 }
 
 /// Downcasts all the expressions in `exprs` to `Column`s. If any of the given
@@ -1002,14 +1149,20 @@ fn try_unifying_projections(
             })
             .unwrap();
     });
-    // Merging these projections is not beneficial, e.g
-    // If an expression is not trivial and it is referred more than 1, unifies projections will be
-    // beneficial as caching mechanism for non-trivial computations.
-    // See discussion in: https://github.com/apache/datafusion/issues/8296
-    if column_ref_map.iter().any(|(column, count)| {
-        *count > 1 && !is_expr_trivial(&Arc::clone(&child.expr()[column.index()].expr))
-    }) {
-        return Ok(None);
+    // Don't merge if:
+    // 1. A non-trivial expression is referenced more than once (caching benefit)
+    //    See discussion in: https://github.com/apache/datafusion/issues/8296
+    // 2. The child projection has PlaceAtLeafs (like get_field) that should be pushed
+    //    down to the data source separately
+    for (column, count) in column_ref_map.iter() {
+        let placement = child.expr()[column.index()].expr.placement();
+        // Don't merge if multi-referenced root level (caching)
+        if (*count > 1 && matches!(placement, ExpressionPlacement::PlaceAtRoot))
+            // Don't merge if child has PlaceAtLeafs (should push to source)
+            || matches!(placement, ExpressionPlacement::PlaceAtLeafs)
+        {
+            return Ok(None);
+        }
     }
     for proj_expr in projection.expr() {
         // If there is no match in the input projection, we cannot unify these
@@ -1034,7 +1187,7 @@ fn collect_column_indices(exprs: &[ProjectionExpr]) -> Vec<usize> {
         .iter()
         .flat_map(|proj_expr| collect_columns(&proj_expr.expr))
         .map(|x| x.index())
-        .collect::<std::collections::HashSet<_>>()
+        .collect::<HashSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
     indices.sort();
@@ -1115,13 +1268,6 @@ fn new_columns_for_join_on(
         })
         .collect::<Vec<_>>();
     (new_columns.len() == hash_join_on.len()).then_some(new_columns)
-}
-
-/// Checks if the given expression is trivial.
-/// An expression is considered trivial if it is either a `Column` or a `Literal`.
-fn is_expr_trivial(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    expr.as_any().downcast_ref::<Column>().is_some()
-        || expr.as_any().downcast_ref::<Literal>().is_some()
 }
 
 #[cfg(test)]

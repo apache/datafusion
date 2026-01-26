@@ -35,7 +35,7 @@ use crate::filter_pushdown::{
 };
 use crate::metrics::{MetricBuilder, MetricType};
 use crate::projection::{
-    EmbeddedProjection, ProjectionExec, ProjectionExpr, make_with_child,
+    EmbeddedProjection, ProjectionExec, ProjectionExpr, ProjectionWithDependencies,
     try_embed_projection, update_expr,
 };
 use crate::{
@@ -567,20 +567,92 @@ impl ExecutionPlan for FilterExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down:
-        if projection.expr().len() < projection.input().schema().fields().len() {
-            // Each column in the predicate expression must exist after the projection.
-            if let Some(new_predicate) =
-                update_expr(self.predicate(), projection.expr(), false)?
-            {
-                return FilterExecBuilder::from(self)
-                    .with_input(make_with_child(projection, self.input())?)
-                    .with_predicate(new_predicate)
-                    .build()
-                    .map(|e| Some(Arc::new(e) as _));
-            }
+        // If we have an embedded projection already we cannot continue
+        // This is not a real problem: calling this method generates the embeded projection
+        // so we should not have one already!
+        if self.projection().is_some() {
+            return Ok(None);
         }
-        try_embed_projection(projection, self)
+
+        // Push projection through filter if:
+        // - It narrows the schema (drops columns), OR
+        // - It's trivial (columns or cheap expressions like get_field)
+        if !projection.is_leaf_pushable_or_narrows_schema() {
+            return try_embed_projection(projection, self);
+        }
+
+        let pushed_down_projection = projection.projection_expr().clone();
+
+        // Collect columns needed by the predicate
+        let columns_needed_by_predicate = collect_columns(self.predicate());
+        let columns_needed_by_predicate: Vec<usize> = columns_needed_by_predicate
+            .into_iter()
+            .map(|c| c.index())
+            .collect();
+
+        // Augment projection with columns needed by predicate
+        let projection_with_deps = ProjectionWithDependencies::new(
+            &pushed_down_projection,
+            &columns_needed_by_predicate,
+            &self.input.schema(),
+        )?;
+
+        // Rewrite predicate to reference augmented projection output
+        let new_predicate = match update_expr(
+            self.predicate(),
+            projection_with_deps.combined_projection.exprs(),
+            false,
+        )? {
+            Some(expr) => expr,
+            None => {
+                return internal_err!(
+                    "Failed to rewrite predicate for projection pushdown"
+                );
+            }
+        };
+
+        // Restore projection indices (if augmentation was needed)
+        let restore_projection = projection_with_deps
+            .restore_projection
+            .as_ref()
+            .map(|_rp| (0..pushed_down_projection.exprs().len()).collect());
+
+        // Create the new projection that we will push down
+        let input = ProjectionExec::try_new(
+            projection_with_deps.combined_projection.exprs().to_vec(),
+            Arc::clone(self.input()),
+        )?;
+
+        // Now that we have the new projection, we can ask the question again:
+        // Is it worth pushing down?
+        // We need to ask this question again because it's possible that taking into account the
+        // columns needed by the predicate, the projection is no longer narrowing
+        // (if it had trivial expressions and all we did was add columns needed by the predicate
+        // it will still be worth pushing down).
+        if !input.is_leaf_pushable_or_narrows_schema() {
+            // Effectively bail out of this whole process and just embed the projection
+            return try_embed_projection(projection, self);
+        }
+
+        // Try to push down further
+        let input: Arc<dyn ExecutionPlan> = if let Some(new_input) =
+            input.input().try_swapping_with_projection(&input)?
+        {
+            new_input
+        } else {
+            Arc::new(input)
+        };
+
+        // Create the new FilterExec with the new predicate and projection
+        let new_filter = FilterExecBuilder::from(self)
+            .with_input(input)
+            .with_predicate(new_predicate)
+            .apply_projection(restore_projection)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        Ok(Some(Arc::new(new_filter) as _))
     }
 
     fn gather_filters_for_pushdown(

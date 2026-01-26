@@ -391,8 +391,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down.
-        if projection.expr().len() >= projection.input().schema().fields().len() {
+        // Only push projections that are trivial or narrow the schema to avoid
+        // evaluating expressions (like literals) on all input rows.
+        if !projection.is_leaf_pushable_or_narrows_schema() {
             return Ok(None);
         }
 

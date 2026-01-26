@@ -35,6 +35,7 @@ use datafusion_common::{
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_expr_common::statistics::Distribution;
 
@@ -429,6 +430,24 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    /// Returns the placement classification of this expression.
+    ///
+    /// Leaf-pushable expressions include:
+    /// - Column references (`ExpressionPlacement::Column`)
+    /// - Literal values (`ExpressionPlacement::Literal`)
+    /// - Struct field access via `get_field` (`ExpressionPlacement::PlaceAtLeafs`)
+    /// - Nested combinations of field accessors (e.g., `col['a']['b']`)
+    ///
+    /// This is used to identify expressions that are cheap to duplicate or
+    /// don't benefit from caching/partitioning optimizations.
+    ///
+    /// **Performance note**: Expressions marked as `PlaceAtLeafs` may be pushed
+    /// below filters during optimization. If an expression does per-row work,
+    /// marking it leaf-pushable may slow things down by causing evaluation on more rows.
+    fn placement(&self) -> ExpressionPlacement {
+        ExpressionPlacement::PlaceAtRoot
     }
 }
 

@@ -92,6 +92,7 @@ pub use datafusion_doc::{
     DocSection, Documentation, DocumentationBuilder, aggregate_doc_sections,
     scalar_doc_sections, window_doc_sections,
 };
+pub use datafusion_expr_common::ExpressionPlacement;
 pub use datafusion_expr_common::accumulator::Accumulator;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
