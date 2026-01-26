@@ -35,6 +35,7 @@ single-file vs directory output behavior. Any code constructing `FileSinkConfig`
 literals must initialize this field.
 
 The `FileOutputMode` enum has three variants:
+
 - `Automatic` (default): Infer output mode from the URL (extension/trailing `/` heuristic)
 - `SingleFile`: Write to a single file at the exact output path
 - `Directory`: Write to a directory with generated filenames
