@@ -375,7 +375,7 @@ impl FileFormat for ParquetFormat {
         let meta_fetch_concurrency =
             state.config_options().execution.meta_fetch_concurrency;
 
-        let mut schemas: Vec<_> = futures::stream::iter(objects)
+        let mut schemas: Vec<(Path, Schema)> = futures::stream::iter(objects)
             .map(|object| {
                 let object = object.clone();
                 let store = Arc::clone(store);
@@ -390,24 +390,58 @@ impl FileFormat for ParquetFormat {
                         &object.location,
                     )
                     .await?;
-                    let result = DFParquetMetadata::new(store.as_ref(), &object)
+                    let metadata = DFParquetMetadata::new(store.as_ref(), &object)
                         .with_metadata_size_hint(metadata_size_hint)
                         .with_decryption_properties(file_decryption_properties)
                         .with_file_metadata_cache(Some(file_metadata_cache))
-                        .with_coerce_int96(coerce_int96)
-                        .fetch_schema_with_location()
+                        .fetch_metadata()
                         .await?;
-                    Ok::<_, DataFusionError>(result)
+                    Ok::<_, DataFusionError>((object, metadata))
                 })
+            })
+            .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
+            // fetch metadata concurrently
+            .buffer_unordered(meta_fetch_concurrency)
+            .map(|result| {
+                let coerce_int96 = coerce_int96.clone();
+                async move {
+                    let (object, metadata) = match result {
+                        Ok(res) => res?,
+                        Err(e) => {
+                            return Err(DataFusionError::ExecutionJoin(Box::new(e)));
+                        }
+                    };
+
+                    let join_res = SpawnedTask::spawn_blocking(move || {
+                        let file_metadata = metadata.file_metadata();
+                        let schema = parquet::arrow::parquet_to_arrow_schema(
+                            file_metadata.schema_descr(),
+                            file_metadata.key_value_metadata(),
+                        )?;
+                        let schema = coerce_int96
+                            .as_ref()
+                            .and_then(|time_unit| {
+                                coerce_int96_to_resolution(
+                                    file_metadata.schema_descr(),
+                                    &schema,
+                                    time_unit,
+                                )
+                            })
+                            .unwrap_or(schema);
+                        Ok::<_, DataFusionError>((object.location.clone(), schema))
+                    })
+                    .await;
+
+                    match join_res {
+                        Ok(res) => res,
+                        Err(e) => Err(DataFusionError::ExecutionJoin(Box::new(e))),
+                    }
+                }
             })
             .boxed() // Workaround https://github.com/rust-lang/rust/issues/64552
             // fetch schemas concurrently, if requested
             // order does not matter for schema inference, it is handled below
             .buffer_unordered(meta_fetch_concurrency)
-            .map(|result| match result {
-                Ok(res) => res,
-                Err(e) => Err(DataFusionError::External(Box::new(e))),
-            })
             .try_collect()
             .await?;
 
