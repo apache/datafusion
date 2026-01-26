@@ -36,7 +36,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
-use crate::projection::{ProjectionExec, make_with_child, update_ordering};
+use crate::projection::{ProjectionExec, ProjectionWithDependencies, update_ordering};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -65,6 +65,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::utils::collect_columns;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1391,21 +1392,99 @@ impl ExecutionPlan for SortExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down.
-        if projection.expr().len() >= projection.input().schema().fields().len() {
+        // Only push projections that are trivial (column refs, field accessors) or
+        // narrow the schema (drop columns). Non-trivial projections that don't narrow
+        // the schema would cause Sort to process more data than necessary.
+        if !projection.is_leaf_pushable_or_narrows_schema() {
             return Ok(None);
         }
 
-        let Some(updated_exprs) = update_ordering(self.expr.clone(), projection.expr())?
+        // 1. Collect columns needed by sort expressions
+        let mut columns_needed_by_sort = std::collections::HashSet::new();
+        for sort_expr in &self.expr {
+            columns_needed_by_sort.extend(collect_columns(&sort_expr.expr));
+        }
+        let columns_needed_by_sort: Vec<usize> = columns_needed_by_sort
+            .into_iter()
+            .map(|c| c.index())
+            .collect();
+
+        // 2. Augment projection if needed
+        let pushed_down_projection = projection.projection_expr().clone();
+        let projection_with_deps = ProjectionWithDependencies::new(
+            &pushed_down_projection,
+            &columns_needed_by_sort,
+            &self.input().schema(),
+        )?;
+
+        // 3. Rewrite sort expressions for the augmented projection
+        let Some(updated_exprs) = update_ordering(
+            self.expr.clone(),
+            projection_with_deps.combined_projection.as_ref(),
+        )?
         else {
             return Ok(None);
         };
 
-        Ok(Some(Arc::new(
-            SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
-                .with_fetch(self.fetch())
-                .with_preserve_partitioning(self.preserve_partitioning()),
-        )))
+        // 4. Update common_sort_prefix if present
+        let updated_prefix = if !self.common_sort_prefix.is_empty() {
+            if let Some(prefix_ordering) =
+                LexOrdering::new(self.common_sort_prefix.iter().cloned())
+            {
+                update_ordering(
+                    prefix_ordering,
+                    projection_with_deps.combined_projection.as_ref(),
+                )?
+                .map(|ordering| ordering.into_iter().collect())
+                .unwrap_or_default()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        // 5. Create projection to push down
+        let input = ProjectionExec::try_new(
+            projection_with_deps.combined_projection.exprs().to_vec(),
+            Arc::clone(self.input()),
+        )?;
+
+        // 6. Re-validate if still beneficial
+        if !input.is_leaf_pushable_or_narrows_schema() {
+            // Augmentation made the projection non-beneficial, bail out
+            return Ok(None);
+        }
+
+        // 7. Try recursive pushdown
+        let input: Arc<dyn ExecutionPlan> = if let Some(new_input) =
+            input.input().try_swapping_with_projection(&input)?
+        {
+            new_input
+        } else {
+            Arc::new(input)
+        };
+
+        // 8. Build new SortExec
+        let new_sort = SortExec::new(updated_exprs, input)
+            .with_fetch(self.fetch())
+            .with_preserve_partitioning(self.preserve_partitioning());
+
+        // Update common_sort_prefix
+        let mut new_sort = new_sort;
+        new_sort.common_sort_prefix = updated_prefix;
+
+        let mut res: Arc<dyn ExecutionPlan> = Arc::new(new_sort);
+
+        // 9. Wrap in restore projection if needed
+        if let Some(restore_projection) = projection_with_deps.restore_projection {
+            res = Arc::new(ProjectionExec::try_new(
+                restore_projection.exprs().to_vec(),
+                res,
+            )?);
+        }
+
+        Ok(Some(res))
     }
 
     fn gather_filters_for_pushdown(
@@ -1447,6 +1526,7 @@ mod tests {
     use crate::test::exec::{BlockingExec, assert_strong_count_converges_to_zero};
     use crate::test::{assert_is_pending, make_partition};
 
+    use crate::projection::ProjectionExprs;
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
@@ -2712,6 +2792,58 @@ mod tests {
 
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_with_dependencies_basic() -> Result<()> {
+        // Test the ProjectionWithDependencies helper struct
+        use crate::projection::ProjectionWithDependencies;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        // Create a projection [a, c] (drops b)
+        let projection = ProjectionExprs::from_indices(&[0, 2], &schema);
+
+        // Augment it with column b (index 1)
+        let augmented = ProjectionWithDependencies::new(&projection, &[1], &schema)?;
+
+        // Should have a restore projection since we added a column
+        assert!(augmented.restore_projection.is_some());
+
+        // Combined projection should have all 3 columns
+        assert_eq!(augmented.combined_projection.exprs().len(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_projection_with_dependencies_no_augmentation_needed() -> Result<()> {
+        // Test the case where no augmentation is needed
+        use crate::projection::ProjectionWithDependencies;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        // Create a projection [a, b, c] (keeps all)
+        let projection = ProjectionExprs::from_indices(&[0, 1, 2], &schema);
+
+        // Augment it with column b (index 1) which is already included
+        let augmented = ProjectionWithDependencies::new(&projection, &[1], &schema)?;
+
+        // Should NOT have a restore projection since no columns were added
+        assert!(augmented.restore_projection.is_none());
+
+        // Combined projection should be the same as the original
+        assert_eq!(augmented.combined_projection.exprs().len(), 3);
 
         Ok(())
     }

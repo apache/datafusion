@@ -256,18 +256,13 @@ impl ExecutionPlan for OutputRequirementExec {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If the projection does not narrow the schema, we should not try to push it down:
-        let proj_exprs = projection.expr();
-        if proj_exprs.len() >= projection.input().schema().fields().len() {
-            return Ok(None);
-        }
-
         let mut requirements = self.required_input_ordering().swap_remove(0);
         if let Some(reqs) = requirements {
             let mut updated_reqs = vec![];
             let (lexes, soft) = reqs.into_alternatives();
             for lex in lexes.into_iter() {
-                let Some(updated_lex) = update_ordering_requirement(lex, proj_exprs)?
+                let Some(updated_lex) =
+                    update_ordering_requirement(lex, projection.expr())?
                 else {
                     return Ok(None);
                 };

@@ -27,7 +27,7 @@ use std::sync::Arc;
 use crate::expr_fn::binary_expr;
 use crate::function::WindowFunctionSimplification;
 use crate::logical_plan::Subquery;
-use crate::{AggregateUDF, Volatility};
+use crate::{AggregateUDF, ExpressionPlacement, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -1930,6 +1930,28 @@ impl Expr {
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Returns the placement classification of this expression.
+    ///
+    /// This tells us if optimizers should preferentially
+    /// move this expression towards the leafs of the execution plan
+    /// tree (for cheap expressions or expressions that reduce the data size)
+    /// or towards the root of the execution plan tree (for expensive expressions
+    /// that should be run after filtering or parallelization, or expressions that increase the data size).
+    pub fn placement(&self) -> ExpressionPlacement {
+        match self {
+            Expr::Column(_) => ExpressionPlacement::Column,
+            Expr::Literal(_, _) => ExpressionPlacement::Literal,
+            Expr::ScalarFunction(func) => {
+                // Classify each argument's placement for context-aware decision making
+                let arg_placements: Vec<ExpressionPlacement> =
+                    func.args.iter().map(|arg| arg.placement()).collect();
+
+                func.func.placement_with_args(&arg_placements)
+            }
+            _ => ExpressionPlacement::PlaceAtRoot,
         }
     }
 

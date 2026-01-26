@@ -31,6 +31,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{ExprSchema, Result, ScalarValue, not_impl_err};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::placement::ExpressionPlacement;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -121,6 +122,22 @@ impl ScalarUDF {
     /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
     pub fn new_from_shared_impl(fun: Arc<dyn ScalarUDFImpl>) -> ScalarUDF {
         Self { inner: fun }
+    }
+
+    /// Returns the placement classification of this function given its arguments' placement.
+    ///
+    /// This allows functions to make context-dependent decisions about where they should
+    /// be placed in the query plan. For example, `get_field(struct_col, 'field_name')` is
+    /// leaf-pushable (static field lookup), but `string_col like '%foo%'`
+    /// performs expensive per-row computation and should be placed
+    /// as further up the tree so that it can be run after filtering, sorting, etc.
+    ///
+    /// See [`ScalarUDFImpl::placement`] for more details.
+    pub fn placement_with_args(
+        &self,
+        args: &[ExpressionPlacement],
+    ) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function
@@ -885,6 +902,37 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Returns the placement classification of this function given its arguments' placement.
+    ///
+    /// This method allows functions to make context-dependent decisions about
+    /// where they should be placed in the query plan. The default implementation
+    /// returns [`ExpressionPlacement::PlaceAtRoot`] (conservative default).
+    ///
+    /// Leaf-pushable functions are lightweight accessor functions like `get_field`
+    /// (struct field access) that simply access nested data within a column
+    /// without significant computation.
+    /// These can be pushed down to leaf nodes near data sources to reduce data volume early in the plan.
+    ///
+    /// [`ExpressionPlacement::PlaceAtRoot`] represents expressions that should be kept after filtering,
+    /// such as expensive computations or aggregates that benefit from operating
+    /// on fewer rows.
+    ///
+    /// # Example
+    ///
+    /// - `get_field(struct_col, 'field_name')` with a literal key is leaf-pushable as it
+    ///    performs metadata only (cheap) extraction of a sub-array from a struct column.
+    ///    Thus, it can be placed near the data source to minimize data early.
+    /// - `string_col like '%foo%'` performs expensive per-row computation and should be placed
+    ///    further up the tree so that it can be run after filtering, sorting, etc.
+    ///
+    /// # Arguments
+    ///
+    /// * `args` - Classification of each argument's placement, collected from the expression tree
+    ///    by the caller.
+    fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        ExpressionPlacement::PlaceAtRoot
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -1011,6 +1059,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 

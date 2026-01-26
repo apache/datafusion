@@ -670,6 +670,11 @@ impl ProjectionExprs {
         stats.column_statistics = column_statistics;
         Ok(stats)
     }
+
+    /// Get the projection expressions as a slice.
+    pub fn exprs(&self) -> &[ProjectionExpr] {
+        &self.exprs
+    }
 }
 
 impl<'a> IntoIterator for &'a ProjectionExprs {

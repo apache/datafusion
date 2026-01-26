@@ -23,6 +23,7 @@
 use crate::PhysicalOptimizerRule;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
+use indexmap::IndexMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -31,7 +32,9 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
@@ -76,6 +79,13 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             })
             .map(|t| t.data)?;
 
+        // First, try to split mixed projections (beneficial + non-beneficial expressions)
+        // This allows the beneficial parts to be pushed down while keeping non-beneficial parts above.
+        let plan = plan
+            .transform_down(|plan| try_split_projection(plan, &alias_generator))
+            .map(|t| t.data)?;
+
+        // Then apply the normal projection pushdown logic
         plan.transform_down(remove_unnecessary_projections).data()
     }
 
@@ -85,6 +95,271 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 
     fn schema_check(&self) -> bool {
         true
+    }
+}
+
+/// Tries to split a projection to extract beneficial sub-expressions for pushdown.
+///
+/// This function walks each expression in the projection and extracts beneficial
+/// sub-expressions (like `get_field`) from within larger non-beneficial expressions.
+/// For example:
+/// - Input: `get_field(col, 'foo') + 1`
+/// - Output: Inner projection: `get_field(col, 'foo') AS __extracted_0`, Outer: `__extracted_0 + 1`
+///
+/// This enables the beneficial parts to be pushed down while keeping non-beneficial
+/// expressions (like literals and computations) above.
+fn try_split_projection(
+    plan: Arc<dyn ExecutionPlan>,
+    alias_generator: &AliasGenerator,
+) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.as_any().downcast_ref::<ProjectionExec>() else {
+        return Ok(Transformed::no(plan));
+    };
+
+    let input_schema = projection.input().schema();
+    let mut extractor =
+        LeafExpressionExtractor::new(input_schema.as_ref(), alias_generator);
+
+    // Extract leaf-pushable sub-expressions from each projection expression
+    let mut outer_exprs = Vec::new();
+    let mut has_extractions = false;
+
+    for proj_expr in projection.expr() {
+        // If this is already an expression from an extraction don't try to re-extract it (would cause infinite recursion)
+        if proj_expr.alias.starts_with("__extracted") {
+            outer_exprs.push(proj_expr.clone());
+            continue;
+        }
+
+        // Only extract from root-level expressions. If the entire expression is
+        // already PlaceAtLeafs (like `get_field(col, 'foo')`), it can be pushed as-is.
+        // We only need to split when there's a root expression with leaf-pushable
+        // sub-expressions (like `get_field(col, 'foo') + 1`).
+        if matches!(
+            proj_expr.expr.placement(),
+            ExpressionPlacement::PlaceAtLeafs
+        ) {
+            outer_exprs.push(proj_expr.clone());
+            continue;
+        }
+
+        let rewritten = extractor.extract(Arc::clone(&proj_expr.expr))?;
+        if !Arc::ptr_eq(&rewritten, &proj_expr.expr) {
+            has_extractions = true;
+        }
+        outer_exprs.push(ProjectionExpr::new(rewritten, proj_expr.alias.clone()));
+    }
+
+    if !has_extractions {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Collect columns needed by outer expressions that aren't extracted
+    extractor.collect_columns_needed(&outer_exprs)?;
+
+    // Build inner projection from extracted expressions + needed columns
+    let inner_exprs = extractor.build_inner_projection()?;
+
+    if inner_exprs.is_empty() {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Create the inner projection (to be pushed down)
+    let inner = ProjectionExec::try_new(inner_exprs, Arc::clone(projection.input()))?;
+
+    // Rewrite outer expressions to reference the inner projection's output schema
+    let inner_schema = inner.schema();
+    let final_outer_exprs = extractor.finalize_outer_exprs(outer_exprs, &inner_schema)?;
+
+    // Create the outer projection (stays above)
+    let outer = ProjectionExec::try_new(final_outer_exprs, Arc::new(inner))?;
+
+    Ok(Transformed::yes(Arc::new(outer)))
+}
+
+/// Extracts beneficial leaf-pushable sub-expressions from larger expressions.
+///
+/// Similar to `JoinFilterRewriter`, this struct walks expression trees top-down
+/// and extracts sub-expressions where `placement() == ExpressionPlacement::PlaceAtLeafs`
+/// (beneficial leaf-pushable expressions like field accessors).
+///
+/// The extracted expressions are replaced with column references pointing to
+/// an inner projection that computes these sub-expressions.
+struct LeafExpressionExtractor<'a> {
+    /// Extracted leaf-pushable expressions: maps expression -> alias
+    extracted: IndexMap<Arc<dyn PhysicalExpr>, String>,
+    /// Columns needed by outer expressions: maps input column index -> alias
+    columns_needed: IndexMap<usize, String>,
+    /// Input schema for the projection
+    input_schema: &'a Schema,
+    /// Alias generator for unique names
+    alias_generator: &'a AliasGenerator,
+}
+
+impl<'a> LeafExpressionExtractor<'a> {
+    fn new(input_schema: &'a Schema, alias_generator: &'a AliasGenerator) -> Self {
+        Self {
+            extracted: IndexMap::new(),
+            columns_needed: IndexMap::new(),
+            input_schema,
+            alias_generator,
+        }
+    }
+
+    /// Extracts beneficial leaf-pushable sub-expressions from the given expression.
+    ///
+    /// Walks the expression tree top-down and replaces beneficial leaf-pushable
+    /// sub-expressions with column references to the inner projection.
+    fn extract(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        // Top-down: check self first, then recurse to children
+        if matches!(expr.placement(), ExpressionPlacement::PlaceAtLeafs) {
+            // Extract this entire sub-tree
+            return Ok(self.add_extracted_expr(expr));
+        }
+
+        // Not extractable at this level - recurse into children
+        let children = expr.children();
+        if children.is_empty() {
+            return Ok(expr);
+        }
+
+        let mut new_children = Vec::with_capacity(children.len());
+        let mut any_changed = false;
+
+        for child in children {
+            let new_child = self.extract(Arc::clone(child))?;
+            if !Arc::ptr_eq(&new_child, child) {
+                any_changed = true;
+            }
+            new_children.push(new_child);
+        }
+
+        if any_changed {
+            expr.with_new_children(new_children)
+        } else {
+            Ok(expr)
+        }
+    }
+
+    /// Adds an expression to the extracted set and returns a column reference.
+    ///
+    /// If the same expression was already extracted, reuses the existing alias.
+    fn add_extracted_expr(
+        &mut self,
+        expr: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        if let Some(alias) = self.extracted.get(&expr) {
+            // Already extracted - return a column reference
+            // The index will be determined later in finalize
+            Arc::new(Column::new(alias, 0)) as Arc<dyn PhysicalExpr>
+        } else {
+            // New extraction
+            let alias = self.alias_generator.next("__extracted");
+            self.extracted.insert(expr, alias.clone());
+            Arc::new(Column::new(&alias, 0)) as Arc<dyn PhysicalExpr>
+        }
+    }
+
+    /// Collects columns from outer expressions that need to be passed through inner projection.
+    fn collect_columns_needed(&mut self, outer_exprs: &[ProjectionExpr]) -> Result<()> {
+        for proj in outer_exprs {
+            proj.expr.apply(|e| {
+                if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                    // Check if this column references an extracted expression (by alias)
+                    let is_extracted =
+                        self.extracted.values().any(|alias| alias == col.name());
+
+                    if !is_extracted && !self.columns_needed.contains_key(&col.index()) {
+                        // This is an original input column - need to pass it through
+                        let field = self.input_schema.field(col.index());
+                        self.columns_needed
+                            .insert(col.index(), field.name().clone());
+                    }
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Builds the inner projection expressions from extracted expressions and needed columns.
+    fn build_inner_projection(&self) -> Result<Vec<ProjectionExpr>> {
+        let mut result: Vec<ProjectionExpr> = self
+            .extracted
+            .iter()
+            .map(|(expr, alias)| ProjectionExpr::new(Arc::clone(expr), alias.clone()))
+            .collect();
+
+        // Add columns needed by outer expressions
+        for (&col_idx, alias) in &self.columns_needed {
+            let field = self.input_schema.field(col_idx);
+            result.push(ProjectionExpr::new(
+                Arc::new(Column::new(field.name(), col_idx)),
+                alias.clone(),
+            ));
+        }
+
+        Ok(result)
+    }
+
+    /// Finalizes the outer expressions by fixing column indices to match the inner projection.
+    fn finalize_outer_exprs(
+        &self,
+        outer_exprs: Vec<ProjectionExpr>,
+        inner_schema: &Schema,
+    ) -> Result<Vec<ProjectionExpr>> {
+        // Build a map from alias name to index in inner projection
+        let mut alias_to_idx: IndexMap<&str, usize> = self
+            .extracted
+            .values()
+            .enumerate()
+            .map(|(idx, alias)| (alias.as_str(), idx))
+            .collect();
+
+        // Add columns needed by outer expressions
+        let base_idx = self.extracted.len();
+        for (i, (_, alias)) in self.columns_needed.iter().enumerate() {
+            alias_to_idx.insert(alias, base_idx + i);
+        }
+
+        // Build a map from original column index to inner projection index
+        let mut col_idx_to_inner: IndexMap<usize, usize> = IndexMap::new();
+        for (i, (&col_idx, _)) in self.columns_needed.iter().enumerate() {
+            col_idx_to_inner.insert(col_idx, base_idx + i);
+        }
+
+        // Rewrite column references in outer expressions
+        outer_exprs
+            .into_iter()
+            .map(|proj| {
+                let new_expr = Arc::clone(&proj.expr)
+                    .transform(|e| {
+                        if let Some(col) = e.as_any().downcast_ref::<Column>() {
+                            // First check if it's a reference to an extracted expression
+                            if let Some(&idx) = alias_to_idx.get(col.name()) {
+                                let field = inner_schema.field(idx);
+                                return Ok(Transformed::yes(Arc::new(Column::new(
+                                    field.name(),
+                                    idx,
+                                ))
+                                    as Arc<dyn PhysicalExpr>));
+                            }
+                            // Then check if it's an original column that needs remapping
+                            if let Some(&inner_idx) = col_idx_to_inner.get(&col.index()) {
+                                let field = inner_schema.field(inner_idx);
+                                return Ok(Transformed::yes(Arc::new(Column::new(
+                                    field.name(),
+                                    inner_idx,
+                                ))
+                                    as Arc<dyn PhysicalExpr>));
+                            }
+                        }
+                        Ok(Transformed::no(e))
+                    })?
+                    .data;
+                Ok(ProjectionExpr::new(new_expr, proj.alias))
+            })
+            .collect()
     }
 }
 
