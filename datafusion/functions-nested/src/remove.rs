@@ -409,7 +409,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             false,
         )?;
 
-        let false_count = eq_array.false_count();
+        let num_to_remove = eq_array.false_count();
 
         // Fast path: no elements to remove, copy entire row
         if false_count == 0 {
@@ -423,7 +423,8 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
         let max_removals = n.min(false_count as i64);
         let mut removed = 0i64;
         let mut copied = 0usize;
-        let mut batch_start: Option<usize> = None;
+               // marks the beginning of a range of elements pending to be copied.
+               let mut pending_batch_to_retain: Option<usize> = None;
         for (i, keep) in eq_array.iter().enumerate() {
             if keep == Some(false) && removed < max_removals {
                 // Flush pending batch before skipping this element
