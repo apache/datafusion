@@ -41,7 +41,7 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        self.0.insert_if_new(values);
+        self.0.insert_if_new(values, |_group_idx| {});
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -197,16 +197,19 @@ impl ArrowBytesViewMap {
     ///
     /// Note that `make_payload_fn` and `observe_payload_fn` are only invoked
     /// with valid values from `values`, not for the `NULL` value.
-    pub fn insert_if_new(&mut self, values: &ArrayRef) {
+    pub fn insert_if_new<F>(&mut self, values: &ArrayRef, groups_fn: F)
+    where
+        F: FnMut(usize),
+    {
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_if_new_inner::<BinaryViewType>(values)
+                self.insert_if_new_inner::<BinaryViewType, F>(values, groups_fn)
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_if_new_inner::<StringViewType>(values)
+                self.insert_if_new_inner::<StringViewType, F>(values, groups_fn)
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
         };
@@ -220,9 +223,10 @@ impl ArrowBytesViewMap {
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<B>(&mut self, values: &ArrayRef)
+    fn insert_if_new_inner<B, F>(&mut self, values: &ArrayRef, mut groups_fn: F)
     where
         B: ByteViewType,
+        F: FnMut(usize),
     {
         // step 1: compute hashes
         let batch_hashes = &mut self.hashes_buffer;
@@ -248,12 +252,17 @@ impl ArrowBytesViewMap {
 
             // handle null value via validity bitmap check
             if !values.is_valid(i) {
-                if self.null.is_none() {
+                let null_index = if let Some(null_index) = self.null {
+                    // already have a null entry, use its index
+                    null_index
+                } else {
                     let null_index = self.views.len();
                     self.views.push(0);
                     self.nulls.push(true);
                     self.null = Some(null_index);
+                    null_index
                 };
+                groups_fn(null_index);
                 continue;
             }
 
@@ -300,7 +309,10 @@ impl ArrowBytesViewMap {
                     stored_value == input_value
                 })
             };
-            if existing.is_none() {
+            if let Some(existing) = existing {
+                // existing value found, use its index
+                groups_fn(existing.view_idx);
+            } else {
                 // no existing value, make a new one
                 if len <= 12 {
                     // inline value
@@ -324,6 +336,8 @@ impl ArrowBytesViewMap {
                     view_idx: self.views.len() - 1,
                     hash,
                 };
+
+                groups_fn(self.views.len() - 1);
 
                 self.map
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
@@ -685,8 +699,13 @@ mod tests {
                 actual_seen_indexes.push(index);
             }
 
+            let mut groups = vec![];
+
             // insert the values into the map, recording what we did
-            self.map.insert_if_new(&arr);
+            self.map.insert_if_new(&arr, |group_idx| {
+                groups.push(group_idx);
+            });
+            assert_eq!(groups, actual_seen_indexes);
 
             self.map.map.iter().for_each(|entry| {
                 let view_idx = entry.view_idx;
