@@ -5247,7 +5247,7 @@ mod tests {
         let result = simplifier.simplify(expr.clone()).unwrap();
         assert_eq!(
             result, expr,
-            "Struct cast with different names but same field count should not be const-folded"
+            "Struct cast with different names but same field count should not be simplified"
         );
     }
 
