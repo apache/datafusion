@@ -26,11 +26,11 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBuffer, ScalarBuffer};
-use datafusion_common::Result;
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
+use datafusion_common::Result;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -198,14 +198,14 @@ fn left_impl_view(
                 let byte_view = ByteView::from(view);
                 // Construct a new view
                 let new_view =
-                    shrink_string_view_array_view(string, new_length, byte_view)?;
-                Ok(new_view)
+                    shrink_string_view_array_view(string, new_length, byte_view);
+                new_view
             } else {
                 // For nulls, keep the original view
-                Ok(view)
+                view
             }
         })
-        .collect::<Result<Vec<u128>>>()?;
+        .collect::<Vec<u128>>();
 
     // Buffers are unchanged
     let result = StringViewArray::try_new(
@@ -251,18 +251,8 @@ fn left_byte_length(string: &str, n: i64) -> usize {
 /// Construct a new StringViewArray view from existing view `byte_view` and new length `len`.
 /// Prefix is taken from the original string `string`.
 /// Handles both inline and non-inline views, referencing the same buffers.
-fn shrink_string_view_array_view(
-    string: &str,
-    len: u32,
-    byte_view: ByteView,
-) -> Result<u128> {
-    if len > byte_view.length {
-        return exec_err!(
-            "Original length {} must be greater than new length {}",
-            byte_view.length,
-            len
-        );
-    }
+fn shrink_string_view_array_view(string: &str, len: u32, byte_view: ByteView) -> u128 {
+    debug_assert!(len <= byte_view.length);
     // Acquire bytes view to string (no allocations)
     let bytes = string.as_bytes();
 
@@ -274,14 +264,14 @@ fn shrink_string_view_array_view(
         view_buffer[0..4].copy_from_slice(&len.to_le_bytes());
         // 12 bytes: the whole zero-padded string
         view_buffer[4..4 + len as usize].copy_from_slice(&bytes[..len as usize]);
-        Ok(u128::from_le_bytes(view_buffer))
+        u128::from_le_bytes(view_buffer)
     } else {
         // Non-inline view.
         // Use ByteView constructor to reference existing buffers
         let new_byte_view = ByteView::new(len, &bytes[..4])
             .with_buffer_index(byte_view.buffer_index)
             .with_offset(byte_view.offset);
-        Ok(new_byte_view.as_u128())
+        new_byte_view.as_u128()
     }
 }
 
