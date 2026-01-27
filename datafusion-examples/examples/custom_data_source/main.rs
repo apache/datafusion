@@ -26,6 +26,7 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
+//! - `adapter_serialization` — preserve custom PhysicalExprAdapter information during plan serialization using PhysicalExtensionCodec interception
 //! - `csv_json_opener` — use low level FileOpener APIs to read CSV/JSON into Arrow RecordBatches
 //! - `csv_sql_streaming` — build and run a streaming query plan from a SQL statement against a local CSV file
 //! - `custom_datasource` — run queries against a custom datasource (TableProvider)
@@ -34,6 +35,7 @@
 //! - `default_column_values` — implement custom default value handling for missing columns using field metadata and PhysicalExprAdapter
 //! - `file_stream_provider` — run a query on FileStreamProvider which implements StreamProvider for reading and writing to arbitrary stream sources/sinks
 
+mod adapter_serialization;
 mod csv_json_opener;
 mod csv_sql_streaming;
 mod custom_datasource;
@@ -50,6 +52,7 @@ use strum_macros::{Display, EnumIter, EnumString, VariantNames};
 #[strum(serialize_all = "snake_case")]
 enum ExampleKind {
     All,
+    AdapterSerialization,
     CsvJsonOpener,
     CsvSqlStreaming,
     CustomDatasource,
@@ -73,6 +76,9 @@ impl ExampleKind {
                     println!("Running example: {example}");
                     Box::pin(example.run()).await?;
                 }
+            }
+            ExampleKind::AdapterSerialization => {
+                adapter_serialization::adapter_serialization().await?
             }
             ExampleKind::CsvJsonOpener => csv_json_opener::csv_json_opener().await?,
             ExampleKind::CsvSqlStreaming => {
