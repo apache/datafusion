@@ -2408,11 +2408,7 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(
-            expr,
-            Arc::clone(&schema),
-        )
-        .unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
         // note pruning expression refers to row_count twice
         assert_eq!(
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
@@ -3053,11 +3049,8 @@ mod tests {
             dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
-        let p = PruningPredicate::try_new(
-            dynamic_filter_expr,
-            Arc::clone(&schema),
-        )
-        .unwrap();
+        let p =
+            PruningPredicate::try_new(dynamic_filter_expr, Arc::clone(&schema)).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5425,11 +5418,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(
-            expr,
-            Arc::<Schema>::clone(schema),
-        )
-        .unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
@@ -5444,11 +5433,7 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(
-            expr,
-            Arc::<Schema>::clone(schema),
-        )
-        .unwrap();
+        let p = PruningPredicate::try_new(expr, Arc::<Schema>::clone(schema)).unwrap();
         let result = p.prune(statistics).unwrap();
         assert_eq!(result, expected);
     }
