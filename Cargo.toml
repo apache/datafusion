@@ -188,6 +188,7 @@ tempfile = "3"
 testcontainers-modules = { version = "0.14" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+uuid = "1.20"
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
