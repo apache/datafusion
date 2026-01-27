@@ -82,27 +82,6 @@ impl ScalarUDFImpl for SparkNegative {
     }
 }
 
-/// Helper macro to generate wrapping negation for scalar types
-macro_rules! wrapping_negative_scalar {
-    ($INPUT:ident, $SCALAR_TYPE:ident) => {{
-        let result = $INPUT.wrapping_neg();
-        Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(Some(
-            result,
-        ))))
-    }};
-}
-
-/// Helper macro to generate wrapping negation for decimal scalar types
-macro_rules! wrapping_negative_decimal_scalar {
-    ($INPUT:ident, $PRECISION:expr, $SCALE:expr, $SCALAR_TYPE:ident) => {{
-        let result = $INPUT.wrapping_neg();
-        Ok(ColumnarValue::Scalar(ScalarValue::$SCALAR_TYPE(
-            Some(result),
-            $PRECISION,
-            $SCALE,
-        )))
-    }};
-}
 
 /// Core implementation of Spark's negative function
 fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -180,10 +159,22 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             sv if sv.is_null() => Ok(args[0].clone()),
 
             // Signed integers - wrapping negation
-            ScalarValue::Int8(Some(v)) => wrapping_negative_scalar!(v, Int8),
-            ScalarValue::Int16(Some(v)) => wrapping_negative_scalar!(v, Int16),
-            ScalarValue::Int32(Some(v)) => wrapping_negative_scalar!(v, Int32),
-            ScalarValue::Int64(Some(v)) => wrapping_negative_scalar!(v, Int64),
+            ScalarValue::Int8(Some(v)) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Int8(Some(result))))
+            }
+            ScalarValue::Int16(Some(v)) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Int16(Some(result))))
+            }
+            ScalarValue::Int32(Some(v)) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(result))))
+            }
+            ScalarValue::Int64(Some(v)) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(result))))
+            }
 
             // Floating point - simple negation
             ScalarValue::Float16(Some(v)) => {
@@ -198,10 +189,20 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
             // Decimal types - wrapping negation
             ScalarValue::Decimal128(Some(v), precision, scale) => {
-                wrapping_negative_decimal_scalar!(v, *precision, *scale, Decimal128)
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
+                    Some(result),
+                    *precision,
+                    *scale,
+                )))
             }
             ScalarValue::Decimal256(Some(v), precision, scale) => {
-                wrapping_negative_decimal_scalar!(v, *precision, *scale, Decimal256)
+               let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Decimal256(
+                    Some(result),
+                    *precision,
+                    *scale,
+                )))
             }
 
             dt => internal_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
