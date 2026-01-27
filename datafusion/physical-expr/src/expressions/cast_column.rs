@@ -26,7 +26,9 @@ use arrow::{
 use datafusion_common::{
     Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
-    nested_struct::{cast_column, validate_field_compatibility, validate_struct_compatibility},
+    nested_struct::{
+        cast_column, validate_field_compatibility, validate_struct_compatibility,
+    },
     plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -323,7 +325,7 @@ mod tests {
         datatypes::{DataType, Field, Fields, SchemaRef},
     };
     use datafusion_common::{
-        Result as DFResult, ScalarValue,
+        Result as DFResult, ScalarValue, assert_contains,
         cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
 
@@ -568,20 +570,22 @@ mod tests {
         )
         .expect_err("expected incompatible data type error");
 
-        assert!(err.to_string().contains("not compatible"));
+        assert_contains!(
+            err.to_string(),
+            r#"CastColumnExpr column 'b' at index 1 has data type 'Struct("nested": Int32)' which is not compatible with input field data type 'Int32' - they cannot be cast"#
+        );
     }
 
     #[test]
     fn cast_column_schema_mismatch_nullability_metadata() {
-        // Now that CastColumnExpr reuses validate_field_compatibility from nested_struct,
+        // CastColumnExpr reuses validate_field_compatibility from nested_struct,
         // it properly rejects nullable -> non-nullable casts to prevent data loss.
-        let input_field = Field::new("a", DataType::Int32, true);  // nullable
+        let input_field = Field::new("a", DataType::Int32, true); // nullable
         let target_field = Field::new("a", DataType::Int32, false); // non-nullable
         let schema = Arc::new(Schema::new(vec![input_field.clone()]));
 
         let column = Arc::new(Column::new("a", 0));
 
-        // This now fails due to nullability validation
         let err = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field),
@@ -591,6 +595,9 @@ mod tests {
         )
         .expect_err("should reject nullable -> non-nullable cast");
 
-        assert!(err.to_string().contains("nullable"));
+        assert_contains!(
+            err.to_string(),
+            "Cannot cast nullable struct field 'a' to non-nullable field"
+        );
     }
 }
