@@ -331,6 +331,7 @@ impl ArrowBytesViewMap {
                     };
 
                     self.append_value(view_u128, value);
+                    self.nulls.push(false);
                 }
                 let new_header = Entry {
                     view_idx: self.views.len() - 1,
