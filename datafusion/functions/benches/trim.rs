@@ -227,6 +227,46 @@ fn criterion_benchmark(c: &mut Criterion) {
     let ltrim = string::ltrim();
     let rtrim = string::rtrim();
     let btrim = string::btrim();
+    let config_options = Arc::new(ConfigOptions::default());
+
+    // Scalar benchmarks for ltrim (outside size loop)
+    c.bench_function("ltrim/scalar_utf8", |b| {
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(
+                    "___datafusion___".to_string(),
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("_".to_string()))),
+            ],
+            arg_fields: vec![
+                Field::new("str", DataType::Utf8, false).into(),
+                Field::new("trim_str", DataType::Utf8, false).into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::clone(&config_options),
+        };
+        b.iter(|| black_box(ltrim.invoke_with_args(args.clone()).unwrap()))
+    });
+
+    c.bench_function("ltrim/scalar_utf8view", |b| {
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                    "___datafusion___".to_string(),
+                ))),
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("_".to_string()))),
+            ],
+            arg_fields: vec![
+                Field::new("str", DataType::Utf8View, false).into(),
+                Field::new("trim_str", DataType::Utf8View, false).into(),
+            ],
+            number_rows: 1,
+            return_field: Field::new("f", DataType::Utf8View, true).into(),
+            config_options: Arc::clone(&config_options),
+        };
+        b.iter(|| black_box(ltrim.invoke_with_args(args.clone()).unwrap()))
+    });
 
     let characters = ",!()";
 

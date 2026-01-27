@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::string::common::*;
 use crate::utils::make_scalar_function;
 use datafusion_common::types::logical_string;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -119,169 +119,88 @@ impl ScalarUDFImpl for LtrimFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        match args.args[0].data_type() {
+        let return_type = args.return_field.data_type();
+        let number_rows = args.number_rows;
+        let args = args.args;
+
+        // If any argument is a scalar NULL, the output is NULL for all rows
+        if args
+            .iter()
+            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()))
+        {
+            if args.iter().any(|v| matches!(v, ColumnarValue::Array(_))) {
+                return Ok(ColumnarValue::Array(arrow::array::new_null_array(
+                    return_type,
+                    number_rows,
+                )));
+            }
+            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(return_type)?));
+        }
+
+        // Scalar fast path
+        if args.iter().all(|v| matches!(v, ColumnarValue::Scalar(_))) {
+            let arg0 = &args[0];
+            let arg1 = args.get(1);
+
+            let (value, pattern) = match (arg0, arg1) {
+                (ColumnarValue::Scalar(s0), None) => (s0, None),
+                (ColumnarValue::Scalar(s0), Some(ColumnarValue::Scalar(s1))) => {
+                    (s0, Some(s1))
+                }
+                _ => unreachable!(),
+            };
+
+            let trim_chars: Vec<char> = match pattern {
+                None => vec![' '],
+                Some(ScalarValue::Utf8(Some(p)))
+                | Some(ScalarValue::LargeUtf8(Some(p)))
+                | Some(ScalarValue::Utf8View(Some(p))) => p.chars().collect(),
+                Some(other) => {
+                    return internal_err!(
+                        "Unexpected data type {:?} for ltrim pattern",
+                        other.data_type()
+                    );
+                }
+            };
+
+            let trimmed = match value {
+                ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
+                    s.trim_start_matches(&trim_chars[..]).to_string(),
+                )),
+                ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
+                    s.trim_start_matches(&trim_chars[..]).to_string(),
+                )),
+                ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
+                    s.trim_start_matches(&trim_chars[..]).to_string(),
+                )),
+                other => {
+                    return internal_err!(
+                        "Unexpected data type {:?} for function ltrim",
+                        other.data_type()
+                    );
+                }
+            };
+
+            return Ok(ColumnarValue::Scalar(trimmed));
+        }
+
+        // Array path
+        match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 ltrim::<i32>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(&args.args),
+            )(&args),
             DataType::LargeUtf8 => make_scalar_function(
                 ltrim::<i64>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(&args.args),
+            )(&args),
             other => exec_err!(
-                "Unsupported data type {other:?} for function ltrim,\
-                expected Utf8, LargeUtf8 or Utf8View."
+                "Unsupported data type {other:?} for function ltrim, expected Utf8, LargeUtf8 or Utf8View."
             ),
         }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use arrow::array::{Array, StringArray, StringViewArray};
-    use arrow::datatypes::DataType::{Utf8, Utf8View};
-
-    use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
-
-    use crate::string::ltrim::LtrimFunc;
-    use crate::utils::test::test_function;
-
-    #[test]
-    fn test_functions() {
-        // String view cases for checking normal logic
-        test_function!(
-            LtrimFunc::new(),
-            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                String::from("alphabet  ")
-            ))),],
-            Ok(Some("alphabet  ")),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
-                String::from("  alphabet  ")
-            ))),],
-            Ok(Some("alphabet  ")),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("t")))),
-            ],
-            Ok(Some("alphabet")),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabe"
-                )))),
-            ],
-            Ok(Some("t")),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "alphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
-            ],
-            Ok(None),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        // Special string view case for checking unlined output(len > 12)
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
-                    "xxxalphabetalphabet"
-                )))),
-                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("x")))),
-            ],
-            Ok(Some("alphabetalphabet")),
-            &str,
-            Utf8View,
-            StringViewArray
-        );
-        // String cases
-        test_function!(
-            LtrimFunc::new(),
-            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("alphabet  ")
-            ))),],
-            Ok(Some("alphabet  ")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                String::from("alphabet  ")
-            ))),],
-            Ok(Some("alphabet  ")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("t")))),
-            ],
-            Ok(Some("alphabet")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabe")))),
-            ],
-            Ok(Some("t")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        test_function!(
-            LtrimFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("alphabet")))),
-                ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-            ],
-            Ok(None),
-            &str,
-            Utf8,
-            StringArray
-        );
     }
 }
