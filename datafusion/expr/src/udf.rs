@@ -741,10 +741,10 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// date_part(YEAR, k) = 2024
     /// ```
     ///
-    /// There is a single preimage [`2024-01-01`, `2025-01-01`), which is the
-    /// range of dates covering the entire year of 2024 for which
-    /// `date_part('YEAR', k)` evaluates to `2024`. Using this preimage the
-    /// expression can be rewritten to
+    /// The interval [`2024-01-01`, `2025-01-01`) contains all possible
+    /// input values (preimage values) for which the function `date_part(YEAR, k)`
+    /// produces the output value `2024` (image value). Using this interval,
+    /// the expression can be rewritten to
     ///
     /// ```sql
     /// k >= '2024-01-01' AND k < '2025-01-01'
