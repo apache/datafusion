@@ -721,12 +721,11 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// # Background
     ///
-    /// A [preimage] here is a single contiguous [`Interval`] of the function's
-    /// argument(s) where the function will return a single literal (constant)
-    /// value. This can also be thought of as a form of interval containment.
-    ///
-    /// Using a preimage to rewrite predicates is described in the [ClickHouse
-    /// Paper]:
+    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms
+    /// a predicate containing a function call into a predicate containing an
+    /// equivalent set of input literal (constant) values. The resulting predicate
+    /// is then in a form that can be further optimized by other rewrites.
+    /// From the paper:
     ///
     /// > some functions can compute the preimage of a given function result.
     /// > This is used to replace comparisons of constants with function calls
@@ -744,16 +743,52 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// There is a single preimage [`2024-01-01`, `2025-01-01`), which is the
     /// range of dates covering the entire year of 2024 for which
-    /// `date_part(YEAR, k)` evaluates to `2024`. Using this preimage the
+    /// `date_part('YEAR', k)` evaluates to `2024`. Using this preimage the
     /// expression can be rewritten to
     ///
     /// ```sql
     /// k >= '2024-01-01' AND k < '2025-01-01'
     /// ```
     ///
-    /// which is often more optimizable, such as being used in min/max pruning.
-    ///
+   /// which is often more optimizable: the predicate is rewritten into a simpler
+  /// and more canonical form, making it easier for different optimizer passes
+  /// to recognize and apply further transformations. For example:
+  ///
+  /// Case 1:
+  ///
+  /// Original:
+  /// ```sql
+  /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
+  /// ```
+  ///
+  /// After preimage rewrite:
+  /// ```sql
+  /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
+  /// ```
+  ///
+  /// Since this form is much simpler, the optimizer can combine and simplify
+  /// sub-expressions further into:
+  /// ```sql
+  /// k >= '2024-06-01' AND k < '2025-01-01'
+  /// ```
+  ///
+  /// Case 2:
+  ///
+  /// For min/max pruning, simpler predicates such as:
+  /// ```sql
+  /// k >= '2024-01-01' AND k < '2025-01-01'
+  /// ```
+  /// are much easier for the pruner to reason about. See [PruningPredicate]
+  /// for the backgrounds of predicate pruning.
+  ///
+  /// The trade-off is that evaluating the preimage form can be slightly more
+  /// expensive than evaluating the original expression. In practice, this cost
+  /// is usually outweighed by the more aggressive optimization opportunities it
+  /// enables.
+  ///
+  /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
+    /// [image]: https://en.wikipedia.org/wiki/Image_(mathematics)#Image_of_an_element
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
     fn preimage(
         &self,
