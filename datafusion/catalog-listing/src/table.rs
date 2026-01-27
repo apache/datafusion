@@ -50,6 +50,7 @@ use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::task::JoinSet;
 
 /// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
@@ -714,57 +715,84 @@ impl ListingTable {
             });
         };
         // list files (with partitions)
-        // list files (with partitions)
-        let mut join_set = JoinSet::new();
-        let config = ctx.config_options().clone();
-        let runtime_env = Arc::clone(ctx.runtime_env());
-        let file_extension = self.options.file_extension.clone();
-        let partition_cols = self.options.table_partition_cols.clone();
-        let filters = filters.to_vec();
+        // For non-WASM targets, use parallel execution with JoinSet
+        #[cfg(not(target_arch = "wasm32"))]
+        let file_list = {
+            let mut join_set = JoinSet::new();
+            let config = ctx.config_options().clone();
+            let runtime_env = Arc::clone(ctx.runtime_env());
+            let file_extension = self.options.file_extension.clone();
+            let partition_cols = self.options.table_partition_cols.clone();
+            let filters = filters.to_vec();
 
-        for table_path in &self.table_paths {
-            let store = Arc::clone(&store);
-            let table_path = table_path.clone();
-            let config = config.clone();
-            let runtime_env = Arc::clone(&runtime_env);
-            let file_extension = file_extension.clone();
-            let partition_cols = partition_cols.clone();
-            let filters = filters.clone();
+            for table_path in &self.table_paths {
+                let store = Arc::clone(&store);
+                let table_path = table_path.clone();
+                let config = config.clone();
+                let runtime_env = Arc::clone(&runtime_env);
+                let file_extension = file_extension.clone();
+                let partition_cols = partition_cols.clone();
+                let filters = filters.clone();
 
-            join_set.spawn(async move {
-                let stream = pruned_partition_list(
-                    &config,
-                    &runtime_env,
-                    store.as_ref(),
-                    &table_path,
-                    &filters,
-                    &file_extension,
-                    &partition_cols,
-                )
-                .await?;
-                stream.try_collect::<Vec<_>>().await
-            });
-        }
+                join_set.spawn(async move {
+                    let stream = pruned_partition_list(
+                        &config,
+                        &runtime_env,
+                        store.as_ref(),
+                        &table_path,
+                        &filters,
+                        &file_extension,
+                        &partition_cols,
+                    )
+                    .await?;
+                    stream.try_collect::<Vec<_>>().await
+                });
+            }
 
-        let mut file_list: Vec<
-            stream::BoxStream<'static, datafusion_common::Result<PartitionedFile>>,
-        > = Vec::with_capacity(self.table_paths.len());
-        while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Ok(files)) => {
-                    file_list.push(stream::iter(files.into_iter().map(Ok)).boxed())
-                }
-                Ok(Err(e)) => return Err(e),
-                Err(e) => {
-                    return Err(datafusion_common::DataFusionError::External(Box::new(
-                        e,
-                    )));
+            let mut file_list: Vec<
+                stream::BoxStream<'static, datafusion_common::Result<PartitionedFile>>,
+            > = Vec::with_capacity(self.table_paths.len());
+            while let Some(res) = join_set.join_next().await {
+                match res {
+                    Ok(Ok(files)) => {
+                        file_list.push(stream::iter(files.into_iter().map(Ok)).boxed())
+                    }
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => {
+                        return Err(datafusion_common::DataFusionError::External(
+                            Box::new(e),
+                        ));
+                    }
                 }
             }
-        }
-        let meta_fetch_concurrency =
-            ctx.config_options().execution.meta_fetch_concurrency;
-        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
+            let meta_fetch_concurrency =
+                ctx.config_options().execution.meta_fetch_concurrency;
+            stream::iter(file_list).flatten_unordered(meta_fetch_concurrency)
+        };
+
+        // For WASM targets, use sequential execution with try_join_all
+        #[cfg(target_arch = "wasm32")]
+        let file_list = {
+            let config = ctx.config_options();
+            let runtime_env = ctx.runtime_env();
+            let file_list = futures::future::try_join_all(self.table_paths.iter().map(
+                |table_path| {
+                    pruned_partition_list(
+                        config,
+                        runtime_env,
+                        store.as_ref(),
+                        table_path,
+                        filters,
+                        &self.options.file_extension,
+                        &self.options.table_partition_cols,
+                    )
+                },
+            ))
+            .await?;
+            let meta_fetch_concurrency =
+                ctx.config_options().execution.meta_fetch_concurrency;
+            stream::iter(file_list).flatten_unordered(meta_fetch_concurrency)
+        };
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
