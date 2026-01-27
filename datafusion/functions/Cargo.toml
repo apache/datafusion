@@ -87,7 +87,7 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.19", features = ["v4"], optional = true }
+uuid = { workspace = true, features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -319,4 +319,9 @@ required-features = ["math_expressions"]
 [[bench]]
 harness = false
 name = "floor_ceil"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
+name = "round"
 required-features = ["math_expressions"]

@@ -39,7 +39,7 @@ use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::filter::FilterExec;
+use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
@@ -655,6 +655,30 @@ impl DefaultPhysicalPlanner {
                     );
                 }
             }
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                target,
+                op: WriteOp::Truncate,
+                ..
+            }) => {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
+                    provider
+                        .table_provider
+                        .truncate(session_state)
+                        .await
+                        .map_err(|e| {
+                            e.context(format!(
+                                "TRUNCATE operation on table '{table_name}'"
+                            ))
+                        })?
+                } else {
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
+                }
+            }
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 assert_or_internal_err!(
                     !window_expr.is_empty(),
@@ -938,8 +962,12 @@ impl DefaultPhysicalPlanner {
                     input_schema.as_arrow(),
                 )? {
                     PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
-                            .with_batch_size(session_state.config().batch_size())?
+                        FilterExecBuilder::new(
+                            Arc::clone(&runtime_expr[0]),
+                            physical_input,
+                        )
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     PlanAsyncExpr::Async(
                         async_map,
@@ -949,16 +977,17 @@ impl DefaultPhysicalPlanner {
                             async_map.async_exprs,
                             physical_input,
                         )?;
-                        FilterExec::try_new(
+                        FilterExecBuilder::new(
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
-                        )?
+                        )
                         // project the output columns excluding the async functions
                         // The async functions are always appended to the end of the schema.
-                        .with_projection(Some(
+                        .apply_projection(Some(
                             (0..input.schema().fields().len()).collect(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size())?
+                        .with_batch_size(session_state.config().batch_size())
+                        .build()?
                     }
                     _ => {
                         return internal_err!(
@@ -1091,6 +1120,7 @@ impl DefaultPhysicalPlanner {
                 filter,
                 join_type,
                 null_equality,
+                null_aware,
                 schema: join_schema,
                 ..
             }) => {
@@ -1487,6 +1517,8 @@ impl DefaultPhysicalPlanner {
                 } else if session_state.config().target_partitions() > 1
                     && session_state.config().repartition_joins()
                     && prefer_hash_join
+                    && !*null_aware
+                // Null-aware joins must use CollectLeft
                 {
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
@@ -1497,6 +1529,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::Auto,
                         *null_equality,
+                        *null_aware,
                     )?)
                 } else {
                     Arc::new(HashJoinExec::try_new(
@@ -1508,6 +1541,7 @@ impl DefaultPhysicalPlanner {
                         None,
                         PartitionMode::CollectLeft,
                         *null_equality,
+                        *null_aware,
                     )?)
                 };
 
@@ -2719,7 +2753,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
             && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
         {
             internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()

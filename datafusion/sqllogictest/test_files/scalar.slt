@@ -1165,7 +1165,7 @@ from small_floats;
 ----
 0.447 0.4 0.447
 0.707 0.7 0.707
-0.837 0.8 0.837
+0.836 0.8 0.836
 1 1 1
 
 ## bitwise and
@@ -2010,8 +2010,8 @@ D false
 # test string_temporal_coercion
 query BBBBBBBBBB
 select
-  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == '2020-01-01T01:01:11',
-  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(Second, None)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
+  arrow_cast(to_timestamp('2020-01-01 01:01:11.1234567890Z'), 'Timestamp(s)') == '2020-01-01T01:01:11',
+  arrow_cast(to_timestamp('2020-01-02 01:01:11.1234567890Z'), 'Timestamp(s)') == arrow_cast('2020-01-02T01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-03 01:01:11.1234567890Z'), 'Time32(Second)') == '01:01:11',
   arrow_cast(to_timestamp('2020-01-04 01:01:11.1234567890Z'), 'Time32(Second)') == arrow_cast('01:01:11', 'LargeUtf8'),
   arrow_cast(to_timestamp('2020-01-05 01:01:11.1234567890Z'), 'Time64(Microsecond)') == '01:01:11.123456',
@@ -2069,7 +2069,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\) but received NativeType::Int64, DataType: Int64
+query error DataFusion error: Error during planning: Function 'strpos' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Int64 \(DataType: Int64\)
 select position(1 in 1)
 
 query I

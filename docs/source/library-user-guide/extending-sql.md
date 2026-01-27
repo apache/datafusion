@@ -27,6 +27,11 @@ need to:
 - Add custom data types not natively supported
 - Implement SQL constructs like `TABLESAMPLE`, `PIVOT`/`UNPIVOT`, or `MATCH_RECOGNIZE`
 
+You can read more about this topic in the [Extending SQL in DataFusion: from ->>
+to TABLESAMPLE] blog.
+
+[extending sql in datafusion: from ->> to tablesample]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
+
 ## Architecture Overview
 
 When DataFusion processes a SQL query, it goes through these stages:
@@ -329,7 +334,7 @@ SELECT * FROM sales
 [`executionplan`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html
 [`sessioncontext`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html
 [`sessionstatebuilder`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionStateBuilder.html
-[`relationplannercontext`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/trait.RelationPlannerContext.html
+[`relationplannercontext`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlannerContext.html
 [exprplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.ExprPlanner.html
 [typeplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.TypePlanner.html
 [relationplanner api documentation]: https://docs.rs/datafusion/latest/datafusion/logical_expr/planner/trait.RelationPlanner.html
