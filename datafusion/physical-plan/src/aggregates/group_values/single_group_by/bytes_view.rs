@@ -73,12 +73,13 @@ impl GroupValues for GroupValuesBytesView {
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
+        let len = self.len();
         // Reset the map to default, and convert it into a single array
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
             EmitTo::All => map_contents,
-            EmitTo::First(n) if n == self.len() => map_contents,
+            EmitTo::First(n) if n == len => map_contents,
             EmitTo::First(n) => {
                 // if we only wanted to take the first n, insert the rest back
                 // into the map we could potentially avoid this reallocation, at
