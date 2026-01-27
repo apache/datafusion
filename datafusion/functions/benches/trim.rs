@@ -79,13 +79,33 @@ fn create_string_array_and_characters(
     string_array_type: StringArrayType,
     trim_type: TrimType,
 ) -> (ArrayRef, ScalarValue) {
+    create_string_array_and_characters_with_null_rate(
+        size,
+        characters,
+        trimmed,
+        remaining_len,
+        string_array_type,
+        trim_type,
+        0.1,
+    )
+}
+
+fn create_string_array_and_characters_with_null_rate(
+    size: usize,
+    characters: &str,
+    trimmed: &str,
+    remaining_len: usize,
+    string_array_type: StringArrayType,
+    trim_type: TrimType,
+    null_rate: f32,
+) -> (ArrayRef, ScalarValue) {
     let rng = &mut StdRng::seed_from_u64(42);
 
     // Create `size` rows:
     //   - 10% rows will be `None`
     //   - Other 90% will be strings with `remaining_len` content length
     let string_iter = (0..size).map(|_| {
-        if rng.random::<f32>() < 0.1 {
+        if rng.random::<f32>() < null_rate {
             None
         } else {
             let content: String = rng
@@ -129,13 +149,34 @@ fn create_args(
     string_array_type: StringArrayType,
     trim_type: TrimType,
 ) -> Vec<ColumnarValue> {
-    let (string_array, pattern) = create_string_array_and_characters(
+    create_args_with_null_rate(
         size,
         characters,
         trimmed,
         remaining_len,
         string_array_type,
         trim_type,
+        0.1,
+    )
+}
+
+fn create_args_with_null_rate(
+    size: usize,
+    characters: &str,
+    trimmed: &str,
+    remaining_len: usize,
+    string_array_type: StringArrayType,
+    trim_type: TrimType,
+    null_rate: f32,
+) -> Vec<ColumnarValue> {
+    let (string_array, pattern) = create_string_array_and_characters_with_null_rate(
+        size,
+        characters,
+        trimmed,
+        remaining_len,
+        string_array_type,
+        trim_type,
+        null_rate,
     );
     vec![
         ColumnarValue::Array(string_array),
@@ -266,6 +307,67 @@ fn criterion_benchmark(c: &mut Criterion) {
             config_options: Arc::clone(&config_options),
         };
         b.iter(|| black_box(ltrim.invoke_with_args(args.clone()).unwrap()))
+    });
+
+    // Array benchmarks with no nulls to demonstrate null_count fast path
+    const N_ROWS_NO_NULLS: usize = 8192;
+
+    c.bench_function("ltrim/no_nulls_utf8", |b| {
+        let args = create_args_with_null_rate(
+            N_ROWS_NO_NULLS,
+            "_",
+            "____",
+            8,
+            StringArrayType::Utf8,
+            TrimType::Ltrim,
+            0.0,
+        );
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        b.iter(|| {
+            black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
+                args: args.clone(),
+                arg_fields: arg_fields.clone(),
+                number_rows: N_ROWS_NO_NULLS,
+                return_field: Field::new("f", DataType::Utf8, true).into(),
+                config_options: Arc::clone(&config_options),
+            }))
+        })
+    });
+
+    c.bench_function("ltrim/no_nulls_utf8view", |b| {
+        let args = create_args_with_null_rate(
+            N_ROWS_NO_NULLS,
+            "_",
+            "____",
+            8,
+            StringArrayType::Utf8View,
+            TrimType::Ltrim,
+            0.0,
+        );
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| {
+                Field::new(format!("arg_{idx}"), arg.data_type(), true).into()
+            })
+            .collect::<Vec<_>>();
+
+        b.iter(|| {
+            black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
+                args: args.clone(),
+                arg_fields: arg_fields.clone(),
+                number_rows: N_ROWS_NO_NULLS,
+                return_field: Field::new("f", DataType::Utf8View, true).into(),
+                config_options: Arc::clone(&config_options),
+            }))
+        })
     });
 
     let characters = ",!()";

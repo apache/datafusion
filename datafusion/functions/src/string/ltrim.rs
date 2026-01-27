@@ -147,7 +147,11 @@ impl ScalarUDFImpl for LtrimFunc {
                 (ColumnarValue::Scalar(s0), Some(ColumnarValue::Scalar(s1))) => {
                     (s0, Some(s1))
                 }
-                _ => unreachable!(),
+                _ => {
+                    return internal_err!(
+                        "Unexpected argument combination in ltrim scalar fast path"
+                    );
+                }
             };
 
             let trim_chars: Vec<char> = match pattern {
