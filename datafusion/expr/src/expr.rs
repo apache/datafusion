@@ -1936,7 +1936,7 @@ impl Expr {
     /// Returns the placement classification of this expression.
     ///
     /// This tells us if optimizers should preferentially
-    /// move this expression towards the leafs of the execution plan
+    /// move this expression towards the leaves of the execution plan
     /// tree (for cheap expressions or expressions that reduce the data size)
     /// or towards the root of the execution plan tree (for expensive expressions
     /// that should be run after filtering or parallelization, or expressions that increase the data size).

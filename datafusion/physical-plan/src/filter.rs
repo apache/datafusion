@@ -568,7 +568,7 @@ impl ExecutionPlan for FilterExec {
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If we have an embedded projection already we cannot continue
-        // This is not a real problem: calling this method generates the embeded projection
+        // This is not a real problem: calling this method generates the embedded projection
         // so we should not have one already!
         if self.projection().is_some() {
             return Ok(None);
