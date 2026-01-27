@@ -59,7 +59,6 @@ impl GroupValues for GroupValuesBytesView {
             let group_idx = self.num_groups;
             self.num_groups += 1;
             groups.push(group_idx);
-            self.num_groups += 1;
         });
 
         // ensure we assigned a group to for each row
