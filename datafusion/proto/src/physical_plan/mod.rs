@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use arrow::compute::SortOptions;
@@ -3664,6 +3665,40 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
+/// Internal state for expression deduplication during deserialization.
+/// Wrapped in Arc so it can be shared with RecursionGuard.
+struct DeserializationState {
+    /// Cache mapping expr_arc_id to deserialized expressions.
+    cache: RwLock<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    /// Tracks recursion depth. When this returns to 0, the cache is cleared.
+    depth: AtomicUsize,
+}
+
+impl Default for DeserializationState {
+    fn default() -> Self {
+        Self {
+            cache: RwLock::new(HashMap::new()),
+            depth: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// RAII guard that decrements recursion depth and clears the cache when
+/// the outermost deserialization call completes (depth returns to 0).
+struct RecursionGuard {
+    state: Arc<DeserializationState>,
+}
+
+impl Drop for RecursionGuard {
+    fn drop(&mut self) {
+        let prev = self.state.depth.fetch_sub(1, Ordering::SeqCst);
+        if prev == 1 {
+            // We just decremented from 1 to 0, clear the cache
+            self.state.cache.write().unwrap().clear();
+        }
+    }
+}
+
 /// Default implementation of [`PhysicalProtoConverterExtension`] that provides
 /// expression deduplication during deserialization.
 ///
@@ -3681,24 +3716,32 @@ struct DataEncoderTuple {
 /// - Different processes may allocate Arcs at the same address
 /// - The same process may reuse addresses after deallocation
 ///
-/// Therefore, you **must create a fresh `DefaultPhysicalProtoConverter` instance
-/// for each plan you deserialize**. Do not reuse the same converter instance
-/// across multiple plans from different sources, as this could incorrectly
-/// deduplicate unrelated expressions that happen to share the same pointer address.
-#[derive(Default)]
+/// The cache is automatically cleared when the top-level deserialization call
+/// completes, so it is safe to reuse the same converter instance for multiple
+/// sequential deserializations.
 pub struct DefaultPhysicalProtoConverter {
-    /// Cache for expression deduplication during deserialization.
-    /// Maps expr_arc_id (the original Arc pointer address) to the deserialized expression.
-    ///
-    /// This cache should only be used for a single plan deserialization.
-    /// Create a new converter instance for each plan to avoid cross-plan collisions.
-    dedup_cache: RwLock<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+    /// Shared state for deduplication, wrapped in Arc for use with RecursionGuard.
+    state: Arc<DeserializationState>,
+}
+
+impl Default for DefaultPhysicalProtoConverter {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(DeserializationState::default()),
+        }
+    }
 }
 
 impl DefaultPhysicalProtoConverter {
     /// Creates a new `DefaultPhysicalProtoConverter` with an empty dedup cache.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the current size of the dedup cache.
+    /// Primarily useful for testing to verify cache behavior.
+    pub fn cache_size(&self) -> usize {
+        self.state.cache.read().unwrap().len()
     }
 }
 
@@ -3709,6 +3752,14 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Track depth at the plan level, not expression level.
+        // This ensures the cache is only cleared when the entire plan
+        // deserialization is complete, not after each expression.
+        self.state.depth.fetch_add(1, Ordering::SeqCst);
+        let _guard = RecursionGuard {
+            state: Arc::clone(&self.state),
+        };
+
         proto.try_into_physical_plan_with_converter(ctx, codec, self)
     }
 
@@ -3737,11 +3788,19 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     where
         Self: Sized,
     {
+        // Track depth for expressions too, in case this is called directly
+        // (not through proto_to_execution_plan). This ensures the cache is
+        // cleared when the top-level expression deserialization completes.
+        self.state.depth.fetch_add(1, Ordering::SeqCst);
+        let _guard = RecursionGuard {
+            state: Arc::clone(&self.state),
+        };
+
         // Check if we've seen this expr_arc_id before (deduplication)
         if let Some(arc_id) = proto.expr_arc_id {
             // Try to get from cache first
             {
-                let cache = self.dedup_cache.read().unwrap();
+                let cache = self.state.cache.read().unwrap();
                 if let Some(cached) = cache.get(&arc_id) {
                     return Ok(Arc::clone(cached));
                 }
@@ -3758,7 +3817,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
 
             // Cache it for future lookups
             {
-                let mut cache = self.dedup_cache.write().unwrap();
+                let mut cache = self.state.cache.write().unwrap();
                 cache.insert(arc_id, Arc::clone(&expr));
             }
 
