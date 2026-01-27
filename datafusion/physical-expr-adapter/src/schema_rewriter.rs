@@ -823,31 +823,36 @@ mod tests {
 
         let result = adapter.rewrite(column_expr).unwrap();
 
+        // Build expected physical (source) field: Struct(id: Int32, name: Utf8)
+        let physical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]
+        .into();
+        let physical_field = Arc::new(Field::new(
+            "data",
+            DataType::Struct(physical_struct_fields),
+            false,
+        ));
+
+        // Build expected logical (target) field: Struct(id: Int64, name: Utf8View)
+        let logical_struct_fields: Fields = vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]
+        .into();
+        let logical_field = Arc::new(Field::new(
+            "data",
+            DataType::Struct(logical_struct_fields),
+            false,
+        ));
+
+        // Create the expected cast expression
         let expected = Arc::new(
             CastColumnExpr::new_with_schema(
                 Arc::new(Column::new("data", 0)),
-                Arc::new(Field::new(
-                    "data",
-                    DataType::Struct(
-                        vec![
-                            Field::new("id", DataType::Int32, false),
-                            Field::new("name", DataType::Utf8, true),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                )),
-                Arc::new(Field::new(
-                    "data",
-                    DataType::Struct(
-                        vec![
-                            Field::new("id", DataType::Int64, false),
-                            Field::new("name", DataType::Utf8View, true),
-                        ]
-                        .into(),
-                    ),
-                    false,
-                )),
+                physical_field,
+                logical_field,
                 None,
                 Arc::clone(&physical_schema),
             )
