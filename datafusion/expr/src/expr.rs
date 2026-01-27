@@ -1949,7 +1949,7 @@ impl Expr {
                 let arg_placements: Vec<ExpressionPlacement> =
                     func.args.iter().map(|arg| arg.placement()).collect();
 
-                func.func.placement_with_args(&arg_placements)
+                func.func.placement(&arg_placements)
             }
             _ => ExpressionPlacement::PlaceAtRoot,
         }

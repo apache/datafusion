@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn test_placement_with_args_literal_key() {
+    fn test_placement_literal_key() {
         let func = GetFieldFunc::new();
 
         // get_field(col, 'literal') -> leaf-pushable (static field access)
@@ -599,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    fn test_placement_with_args_column_key() {
+    fn test_placement_column_key() {
         let func = GetFieldFunc::new();
 
         // get_field(col, other_col) -> NOT leaf-pushable (dynamic per-row lookup)
@@ -616,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_placement_with_args_root() {
+    fn test_placement_root() {
         let func = GetFieldFunc::new();
 
         // get_field(root_expr, 'literal') -> NOT leaf-pushable
@@ -635,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn test_placement_with_args_edge_cases() {
+    fn test_placement_edge_cases() {
         let func = GetFieldFunc::new();
 
         // Empty args -> NOT leaf-pushable

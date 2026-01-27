@@ -133,7 +133,7 @@ impl ScalarUDF {
     /// as further up the tree so that it can be run after filtering, sorting, etc.
     ///
     /// See [`ScalarUDFImpl::placement`] for more details.
-    pub fn placement_with_args(
+    pub fn placement(
         &self,
         args: &[ExpressionPlacement],
     ) -> ExpressionPlacement {
