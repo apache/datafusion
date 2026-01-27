@@ -86,13 +86,13 @@ statement error DataFusion error: This feature is not implemented: UPDATE ... FR
 update t1 set b = t2.b, c = t2.a, d = 1 from t2 where t1.a = t2.a and t1.b > 'foo' and t2.c > 1.0;
 
 # set from multiple tables, DataFusion only supports from one table
-query error DataFusion error: Error during planning: Multiple tables in UPDATE SET FROM not yet supported
+statement error DataFusion error: This feature is not implemented: Multiple tables in UPDATE SET FROM not yet supported
 explain update t1 set b = t2.b, c = t3.a, d = 1 from t2, t3 where t1.a = t2.a and t1.a = t3.a;
 
 # test table alias
 # UPDATE ... FROM is currently unsupported
 # TODO fix https://github.com/apache/datafusion/issues/19950
-query error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
+statement error DataFusion error: This feature is not implemented: UPDATE ... FROM is not supported
 explain update t1 as T set b = t2.b, c = t.a, d = 1 from t2 where t.a = t2.a and t.b > 'foo' and t2.c > 1.0;
 
 # test update with table alias with actual data
