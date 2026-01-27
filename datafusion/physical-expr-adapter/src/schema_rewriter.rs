@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion_common::{
     Result, ScalarValue, exec_err,
     nested_struct::validate_struct_compatibility,
@@ -420,19 +420,19 @@ impl DefaultPhysicalExprAdapterRewriter {
         };
         let physical_field = self.physical_file_schema.field(physical_column_index);
 
-        let column = match (
-            column.index() == physical_column_index,
-            logical_field.data_type() == physical_field.data_type(),
-        ) {
-            // If the column index matches and the data types match, we can use the column as is
-            (true, true) => return Ok(Transformed::no(expr)),
-            // If the indexes or data types do not match, we need to create a new column expression
-            (true, _) => column.clone(),
-            (false, _) => Column::new_with_schema(
-                logical_field.name(),
-                self.physical_file_schema.as_ref(),
-            )?,
-        };
+        // Check if index and types match - if so, we can return early
+        if column.index() == physical_column_index
+            && logical_field.data_type() == physical_field.data_type()
+        {
+            return Ok(Transformed::no(expr));
+        }
+
+        let column = self.resolve_column(
+            column,
+            physical_column_index,
+            logical_field.data_type(),
+            physical_field.data_type(),
+        )?;
 
         if logical_field.data_type() == physical_field.data_type() {
             // If the data types match, we can use the column as is
@@ -443,20 +443,56 @@ impl DefaultPhysicalExprAdapterRewriter {
         // TODO: add optimization to move the cast from the column to literal expressions in the case of `col = 123`
         // since that's much cheaper to evalaute.
         // See https://github.com/apache/datafusion/issues/15780#issuecomment-2824716928
-        //
+        self.create_cast_column_expr(column, logical_field)
+    }
+
+    /// Resolves a column expression, handling index and type mismatches.
+    ///
+    /// Returns the appropriate Column expression when the column's index or data type
+    /// don't match the physical schema. Assumes that the early-exit case (both index
+    /// and type match) has already been checked by the caller.
+    fn resolve_column(
+        &self,
+        column: &Column,
+        physical_column_index: usize,
+        _logical_type: &DataType,
+        _physical_type: &DataType,
+    ) -> Result<Column> {
+        if column.index() == physical_column_index {
+            // Index matches but type differs - reuse the column as-is
+            Ok(column.clone())
+        } else {
+            // Index doesn't match - create a new column with the correct index
+            Column::new_with_schema(column.name(), self.physical_file_schema.as_ref())
+        }
+    }
+
+    /// Validates type compatibility and creates a CastColumnExpr if needed.
+    ///
+    /// Checks whether the physical field can be cast to the logical field type,
+    /// handling both struct and scalar types. Returns a CastColumnExpr with the
+    /// appropriate configuration.
+    fn create_cast_column_expr(
+        &self,
+        column: Column,
+        logical_field: &Field,
+    ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // Get the actual field at the column's index (not pre-calculated)
+        // This is important when the column was recreated with a different index
+        let actual_physical_field = self.physical_file_schema.field(column.index());
+
+        // Validate type compatibility for struct and scalar types
         // For struct types, use validate_struct_compatibility which handles:
         // - Missing fields in source (filled with nulls)
         // - Extra fields in source (ignored)
         // - Recursive validation of nested structs
         // For non-struct types, use Arrow's can_cast_types
-
-        // Get the actual field at the column's index (not the pre-calculated physical_field)
-        // This is important when the column was recreated with a different index
-        let actual_physical_field = self.physical_file_schema.field(column.index());
-
         match (actual_physical_field.data_type(), logical_field.data_type()) {
             (DataType::Struct(physical_fields), DataType::Struct(logical_fields)) => {
-                validate_struct_compatibility(physical_fields, logical_fields)?;
+                validate_struct_compatibility(
+                    physical_fields.as_ref(),
+                    logical_fields.as_ref(),
+                )?;
             }
             _ => {
                 let is_compatible = can_cast_types(

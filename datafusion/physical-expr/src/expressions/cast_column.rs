@@ -95,6 +95,75 @@ fn normalize_cast_options(
     }
 }
 
+/// Validates that a cast is compatible between input and target fields.
+///
+/// This function checks:
+/// - If the expression is a Column, its index is within the schema bounds
+/// - If the expression is a Column, its data type can be cast to the input field type
+/// - The input field type can be cast to the target field type
+/// - For struct types, field compatibility is validated recursively
+fn validate_cast_compatibility(
+    expr: &Arc<dyn PhysicalExpr>,
+    input_field: &FieldRef,
+    target_field: &FieldRef,
+    input_schema: &Schema,
+) -> Result<()> {
+    // Validate that if the expression is a Column, it's within the schema bounds
+    if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        let fields = input_schema.fields();
+        if column.index() >= fields.len() {
+            return plan_err!(
+                "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
+                column.index(),
+                fields.len()
+            );
+        }
+
+        // Validate that the column's field is compatible with the input_field for casting.
+        // We only check data type compatibility, not name/nullability/metadata, since those
+        // can differ in schema adaptation scenarios where a column from one schema is being
+        // cast to another schema's field type.
+        let schema_field = &fields[column.index()];
+        if schema_field.data_type() != input_field.data_type() {
+            let is_compatible =
+                can_cast_types(schema_field.data_type(), input_field.data_type());
+            if !is_compatible {
+                return plan_err!(
+                    "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
+                    column.name(),
+                    column.index(),
+                    schema_field.data_type(),
+                    input_field.data_type()
+                );
+            }
+        }
+    }
+
+    match (input_field.data_type(), target_field.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            validate_struct_compatibility(source_fields, target_fields)?;
+        }
+        (_, DataType::Struct(_)) => {
+            return plan_err!(
+                "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
+                input_field.data_type(),
+                target_field.data_type()
+            );
+        }
+        _ => {
+            if !can_cast_types(input_field.data_type(), target_field.data_type()) {
+                return plan_err!(
+                    "CastColumnExpr cannot cast input type '{}' to target type '{}'",
+                    input_field.data_type(),
+                    target_field.data_type()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 impl CastColumnExpr {
     fn build(
         expr: Arc<dyn PhysicalExpr>,
@@ -105,58 +174,8 @@ impl CastColumnExpr {
     ) -> Result<Self> {
         let cast_options = normalize_cast_options(cast_options);
 
-        // Validate that if the expression is a Column, it's within the schema bounds
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            let fields = input_schema.fields();
-            if column.index() >= fields.len() {
-                return plan_err!(
-                    "CastColumnExpr column index {} is out of bounds for input schema with {} fields",
-                    column.index(),
-                    fields.len()
-                );
-            }
-
-            // Validate that the column's field is compatible with the input_field for casting.
-            // We only check data type compatibility, not name/nullability/metadata, since those
-            // can differ in schema adaptation scenarios where a column from one schema is being
-            // cast to another schema's field type.
-            let schema_field = &fields[column.index()];
-            if schema_field.data_type() != input_field.data_type() {
-                let is_compatible =
-                    can_cast_types(schema_field.data_type(), input_field.data_type());
-                if !is_compatible {
-                    return plan_err!(
-                        "CastColumnExpr column '{}' at index {} has data type '{}' which is not compatible with input field data type '{}' - they cannot be cast",
-                        column.name(),
-                        column.index(),
-                        schema_field.data_type(),
-                        input_field.data_type()
-                    );
-                }
-            }
-        }
-
-        match (input_field.data_type(), target_field.data_type()) {
-            (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-                validate_struct_compatibility(source_fields, target_fields)?;
-            }
-            (_, DataType::Struct(_)) => {
-                return plan_err!(
-                    "CastColumnExpr cannot cast non-struct input '{}' to struct target '{}'",
-                    input_field.data_type(),
-                    target_field.data_type()
-                );
-            }
-            _ => {
-                if !can_cast_types(input_field.data_type(), target_field.data_type()) {
-                    return plan_err!(
-                        "CastColumnExpr cannot cast input type '{}' to target type '{}'",
-                        input_field.data_type(),
-                        target_field.data_type()
-                    );
-                }
-            }
-        }
+        // Validate cast compatibility before constructing the expression
+        validate_cast_compatibility(&expr, &input_field, &target_field, &input_schema)?;
 
         Ok(Self {
             expr,
