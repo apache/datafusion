@@ -182,8 +182,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
                     nulls.append(true);
                     return 0;
                 }
-                nulls.append(false);
             }
+            nulls.append(false);
             let view = unsafe { *array.views().get_unchecked(row) };
             let value_len = view as u32;
 
