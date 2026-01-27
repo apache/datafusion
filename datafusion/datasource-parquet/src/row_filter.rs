@@ -728,7 +728,7 @@ mod test {
         let table_schema = Schema::new(vec![Field::new(
             "timestamp_col",
             DataType::Timestamp(Nanosecond, Some(Arc::from("UTC"))),
-            false,
+            true,
         )]);
 
         // Test all should fail

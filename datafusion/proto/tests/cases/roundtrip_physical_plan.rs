@@ -299,7 +299,7 @@ fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
 
 #[test]
 fn roundtrip_cast_column_expr_with_target_field_change() -> Result<()> {
-    let input_field = field_with_origin("payload", DataType::Int32, true, "input");
+    let input_field = field_with_origin("payload", DataType::Int32, false, "input");
     let target_field = field_with_origin("payload_cast", DataType::Utf8, false, "target");
 
     let input_schema = Schema::new(vec![input_field.clone()]);
@@ -341,7 +341,7 @@ fn cast_fields(
     input_type: DataType,
     target_type: DataType,
 ) -> (Field, Field) {
-    let input_field = field_with_origin(name, input_type, true, "input");
+    let input_field = field_with_origin(name, input_type, false, "input");
     let target_field = field_with_origin(name, target_type, false, "target");
     (input_field, target_field)
 }

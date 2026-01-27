@@ -277,7 +277,8 @@ mod tests {
         array: ArrayRef,
     ) -> RecordBatch {
         let mut fields = SchemaBuilder::from(batch.schema().fields());
-        fields.push(Field::new(field_name, array.data_type().clone(), true));
+        let nullable = array.null_count() > 0;
+        fields.push(Field::new(field_name, array.data_type().clone(), nullable));
         let schema = Arc::new(fields.finish());
 
         let mut columns = batch.columns().to_vec();
@@ -1134,12 +1135,24 @@ mod tests {
         let batch3 = create_batch(vec![("c1", c1.clone()), ("c2", c2.clone())]);
 
         // batch4 (has c2, c1) -- different column order, should still prune
-        let batch4 = create_batch(vec![("c2", c2), ("c1", c1)]);
+        let batch4 = create_batch(vec![
+            // Ensure c1 appears in this batch to avoid non-nullable missing column errors
+            ("c1", c1.clone()),
+            ("c2", c2),
+        ]);
 
         let filter = col("c2").eq(lit(1_i64));
 
+        // Provide a nullable logical schema so missing columns across batches
+        // are filled with nulls rather than treated as non-nullable.
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Int64, true),
+        ]));
+
         // read/write them files:
         let rt = RoundTrip::new()
+            .with_table_schema(table_schema)
             .with_predicate(filter)
             .with_page_index_predicate()
             .round_trip(vec![batch1, batch2, batch3, batch4])

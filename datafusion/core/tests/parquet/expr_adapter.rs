@@ -136,7 +136,7 @@ async fn test_custom_schema_adapter_and_custom_expression_adapter() {
     write_parquet(batch, store.clone(), path).await;
 
     let table_schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Int64, false),
+        Field::new("c1", DataType::Int64, true),
         Field::new("c2", DataType::Utf8, true),
     ]));
 
@@ -234,9 +234,9 @@ async fn test_physical_expr_adapter_with_non_null_defaults() {
 
     // Table schema has additional columns c2 (Utf8) and c3 (Int64) that don't exist in file
     let table_schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Int64, false), // type differs from file (Int32 vs Int64)
-        Field::new("c2", DataType::Utf8, true),   // missing from file
-        Field::new("c3", DataType::Int64, true),  // missing from file
+        Field::new("c1", DataType::Int64, true), // type differs from file (Int32 vs Int64)
+        Field::new("c2", DataType::Utf8, true),  // missing from file
+        Field::new("c3", DataType::Int64, true), // missing from file
     ]));
 
     let mut cfg = SessionConfig::new()
@@ -343,7 +343,7 @@ async fn test_physical_expr_adapter_factory_reuse_across_tables() {
 
     // Table schema has additional columns that don't exist in files
     let table_schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Int64, false),
+        Field::new("c1", DataType::Int64, true),
         Field::new("c2", DataType::Utf8, true), // missing from files
     ]));
 
