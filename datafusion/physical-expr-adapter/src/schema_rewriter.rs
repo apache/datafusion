@@ -425,17 +425,9 @@ impl DefaultPhysicalExprAdapterRewriter {
             logical_field.data_type() == physical_field.data_type(),
         ) {
             // If the column index matches and the data types match, we can use the column as is
-            (true, true) => {
-                eprintln!("[DEBUG] rewrite_column: early return (index and type match)");
-                return Ok(Transformed::no(expr));
-            }
+            (true, true) => return Ok(Transformed::no(expr)),
             // If the indexes or data types do not match, we need to create a new column expression
-            (true, _) => {
-                eprintln!(
-                    "[DEBUG] rewrite_column: cloning column (index matches, type differs)"
-                );
-                column.clone()
-            }
+            (true, _) => column.clone(),
             (false, _) => Column::new_with_schema(
                 logical_field.name(),
                 self.physical_file_schema.as_ref(),
