@@ -25,7 +25,9 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{
+    CardinalityEffect, EmissionType, has_same_children_properties,
+};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDownPredicate,
@@ -33,7 +35,7 @@ use crate::filter_pushdown::{
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
     DisplayFormatType, Distribution, ExecutionPlan, InputOrderMode,
-    SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, Statistics, check_if_same_properties,
 };
 use datafusion_common::config::ConfigOptions;
 use datafusion_physical_expr::utils::collect_columns;
@@ -566,7 +568,7 @@ pub struct AggregateExec {
     required_input_ordering: Option<OrderingRequirements>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
     /// During initialization, if the plan supports dynamic filtering (see [`AggrDynFilter`]),
     /// it is set to `Some(..)` regardless of whether it can be pushed down to a child node.
     ///
@@ -590,7 +592,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
@@ -610,7 +612,7 @@ impl AggregateExec {
             required_input_ordering: self.required_input_ordering.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode: self.input_order_mode.clone(),
-            cache: self.cache.clone(),
+            cache: Arc::clone(&self.cache),
             mode: self.mode,
             group_by: self.group_by.clone(),
             aggr_expr: self.aggr_expr.clone(),
@@ -747,7 +749,7 @@ impl AggregateExec {
             required_input_ordering,
             limit_options: None,
             input_order_mode,
-            cache,
+            cache: Arc::new(cache),
             dynamic_filter: None,
         };
 
@@ -1104,6 +1106,17 @@ impl AggregateExec {
             _ => Precision::Absent,
         }
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for AggregateExec {
@@ -1242,7 +1255,7 @@ impl ExecutionPlan for AggregateExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -1283,14 +1296,16 @@ impl ExecutionPlan for AggregateExec {
 
     fn with_new_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
+
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
-            Arc::clone(&children[0]),
+            children.swap_remove(0),
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
         )?;
@@ -2328,14 +2343,17 @@ mod tests {
     struct TestYieldingExec {
         /// True if this exec should yield back to runtime the first time it is polled
         pub yield_first: bool,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl TestYieldingExec {
         fn new(yield_first: bool) -> Self {
             let schema = some_data().0;
             let cache = Self::compute_properties(schema);
-            Self { yield_first, cache }
+            Self {
+                yield_first,
+                cache: Arc::new(cache),
+            }
         }
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -2376,7 +2394,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 

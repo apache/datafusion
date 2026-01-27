@@ -447,7 +447,7 @@ impl ExecutionPlan for TestNode {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.input.properties()
     }
 

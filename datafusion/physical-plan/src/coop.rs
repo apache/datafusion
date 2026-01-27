@@ -87,14 +87,14 @@ use crate::filter_pushdown::{
 use crate::projection::ProjectionExec;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, SortOrderPushdownResult,
+    SendableRecordBatchStream, SortOrderPushdownResult, check_if_same_properties,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use datafusion_common::{Result, Statistics, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
 
-use crate::execution_plan::SchedulingType;
+use crate::execution_plan::{SchedulingType, has_same_children_properties};
 use crate::stream::RecordBatchStreamAdapter;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};
@@ -217,16 +217,15 @@ where
 #[derive(Debug, Clone)]
 pub struct CooperativeExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl CooperativeExec {
     /// Creates a new `CooperativeExec` operator that wraps the given input execution plan.
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = input
-            .properties()
-            .clone()
-            .with_scheduling_type(SchedulingType::Cooperative);
+        let properties = PlanProperties::clone(input.properties())
+            .with_scheduling_type(SchedulingType::Cooperative)
+            .into();
 
         Self { input, properties }
     }
@@ -234,6 +233,16 @@ impl CooperativeExec {
     /// Returns a reference to the wrapped input execution plan.
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            ..Self::clone(self)
+        }
     }
 }
 
@@ -260,7 +269,7 @@ impl ExecutionPlan for CooperativeExec {
         self.input.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -281,6 +290,7 @@ impl ExecutionPlan for CooperativeExec {
             1,
             "CooperativeExec requires exactly one child"
         );
+        check_if_same_properties!(self, children);
         Ok(Arc::new(CooperativeExec::new(children.swap_remove(0))))
     }
 

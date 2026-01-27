@@ -31,7 +31,9 @@ use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::coalesce::LimitedBatchCoalescer;
-use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::execution_plan::{
+    CardinalityEffect, EvaluationType, SchedulingType, has_same_children_properties,
+};
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
@@ -39,7 +41,10 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolWriter};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+use crate::{
+    DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics,
+    check_if_same_properties,
+};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
@@ -763,7 +768,7 @@ pub struct RepartitionExec {
     /// `SortPreservingRepartitionExec`, false means `RepartitionExec`.
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 #[derive(Debug, Clone)]
@@ -832,6 +837,18 @@ impl RepartitionExec {
     pub fn name(&self) -> &str {
         "RepartitionExec"
     }
+
+    fn with_new_children_and_same_properties(
+        &self,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Self {
+        Self {
+            input: children.swap_remove(0),
+            metrics: ExecutionPlanMetricsSet::new(),
+            state: Default::default(),
+            ..Self::clone(self)
+        }
+    }
 }
 
 impl DisplayAs for RepartitionExec {
@@ -891,7 +908,7 @@ impl ExecutionPlan for RepartitionExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -903,6 +920,7 @@ impl ExecutionPlan for RepartitionExec {
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        check_if_same_properties!(self, children);
         let mut repartition = RepartitionExec::try_new(
             children.swap_remove(0),
             self.partitioning().clone(),
@@ -1204,7 +1222,7 @@ impl ExecutionPlan for RepartitionExec {
         _config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         use Partitioning::*;
-        let mut new_properties = self.cache.clone();
+        let mut new_properties = PlanProperties::clone(&self.cache);
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
@@ -1215,7 +1233,7 @@ impl ExecutionPlan for RepartitionExec {
             state: Arc::clone(&self.state),
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
-            cache: new_properties,
+            cache: new_properties.into(),
         })))
     }
 }
@@ -1235,7 +1253,7 @@ impl RepartitionExec {
             state: Default::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
-            cache,
+            cache: Arc::new(cache),
         })
     }
 
@@ -1296,7 +1314,7 @@ impl RepartitionExec {
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
-        self.cache = self.cache.with_eq_properties(eq_properties);
+        Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
     }
 
