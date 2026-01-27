@@ -45,6 +45,27 @@ pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
 }
 
+/// Returns fields for a test table with a struct column
+pub fn test_table_scan_with_struct_fields() -> Vec<Field> {
+    vec![Field::new(
+        "user",
+        DataType::Struct(
+            vec![
+                Field::new("name", DataType::Utf8, true),
+                Field::new("status", DataType::Utf8, true),
+            ]
+            .into(),
+        ),
+        true,
+    )]
+}
+
+/// some tests share a common table with a struct column
+pub fn test_table_scan_with_struct() -> Result<LogicalPlan> {
+    let schema = Schema::new(test_table_scan_with_struct_fields());
+    table_scan(Some("test"), &schema, None)?.build()
+}
+
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
     name: Option<&str>,
