@@ -25,7 +25,8 @@
 //! default. This example shows how to:
 //! 1. Detect plans with custom adapters during serialization
 //! 2. Wrap them as Extension nodes with JSON-serialized adapter metadata
-//! 3. Unwrap and restore the adapter during deserialization
+//! 3. Store the inner DataSourceExec (without adapter) as a child in the extension's inputs field
+//! 4. Unwrap and restore the adapter during deserialization
 //!
 //! This demonstrates nested serialization (protobuf outer, JSON inner) and the power
 //! of the `PhysicalExtensionCodec` interception pattern. Both plan and expression
@@ -69,7 +70,6 @@ use datafusion_proto::protobuf::{
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStore, PutPayload};
-use prost::Message;
 use serde::{Deserialize, Serialize};
 
 /// Example showing how to preserve custom adapter information during plan serialization.
@@ -252,8 +252,6 @@ struct ExtensionPayload {
     marker: String,
     /// JSON-serialized adapter metadata
     adapter_metadata: AdapterMetadata,
-    /// Protobuf-serialized inner DataSourceExec (without adapter)
-    inner_plan_bytes: Vec<u8>,
 }
 
 /// Metadata about the adapter to recreate it during deserialization
@@ -274,24 +272,20 @@ impl PhysicalExtensionCodec for AdapterPreservingCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
-        ctx: &TaskContext,
+        inputs: &[Arc<dyn ExecutionPlan>],
+        _ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Try to parse as our extension payload
         if let Ok(payload) = serde_json::from_slice::<ExtensionPayload>(buf)
             && payload.marker == EXTENSION_MARKER
         {
-            // Decode the inner plan
-            let inner_proto = PhysicalPlanNode::decode(&payload.inner_plan_bytes[..])
-                .map_err(|e| {
-                    datafusion::error::DataFusionError::Plan(format!(
-                        "Failed to decode inner plan: {e}"
-                    ))
-                })?;
-
-            // Deserialize the inner plan using default implementation
-            let inner_plan =
-                inner_proto.try_into_physical_plan_with_converter(ctx, self, self)?;
+            if inputs.len() != 1 {
+                return Err(datafusion::error::DataFusionError::Plan(format!(
+                    "Extension node expected exactly 1 child, got {}",
+                    inputs.len()
+                )));
+            }
+            let inner_plan = inputs[0].clone();
 
             // Recreate the adapter factory
             let adapter_factory = create_adapter_factory(&payload.adapter_metadata.tag);
@@ -335,32 +329,20 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
             // 1. Create adapter metadata
             let adapter_metadata = AdapterMetadata { tag };
 
-            // 2. Create a copy of the config without the adapter
-            let config_without_adapter = rebuild_config_without_adapter(config);
-
-            // 3. Create a new DataSourceExec without adapter
-            let plan_without_adapter: Arc<dyn ExecutionPlan> =
-                DataSourceExec::from_data_source(config_without_adapter);
-
-            // 4. Serialize the inner plan to protobuf bytes
+            // 2. Serialize the inner plan to protobuf
+            //    Note that this will drop the custom adapter since the default serialization cannot handle it
             let inner_proto = PhysicalPlanNode::try_from_physical_plan_with_converter(
-                plan_without_adapter,
+                Arc::clone(plan),
                 extension_codec,
                 self,
             )?;
 
-            let mut inner_bytes = Vec::new();
-            inner_proto.encode(&mut inner_bytes).map_err(|e| {
-                datafusion::error::DataFusionError::Plan(format!(
-                    "Failed to encode inner plan: {e}"
-                ))
-            })?;
-
-            // 5. Create extension payload
+            // 3. Create extension payload to wrap the plan
+            //    so that the custom adapter gets re-attached during deserialization
+            //    The choice of JSON is arbitrary; other formats could be used.
             let payload = ExtensionPayload {
                 marker: EXTENSION_MARKER.to_string(),
                 adapter_metadata,
-                inner_plan_bytes: inner_bytes,
             };
             let payload_bytes = serde_json::to_vec(&payload).map_err(|e| {
                 datafusion::error::DataFusionError::Plan(format!(
@@ -368,18 +350,18 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                 ))
             })?;
 
-            // 6. Return as PhysicalExtensionNode
+            // 4. Return as PhysicalExtensionNode with child plan in inputs
             return Ok(PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::Extension(
                     PhysicalExtensionNode {
                         node: payload_bytes,
-                        inputs: vec![], // Leaf node
+                        inputs: vec![inner_proto],
                     },
                 )),
             });
         }
 
-        // No adapter found - use default serialization
+        // No adapter found, not a DataSourceExec, etc. - use default serialization
         PhysicalPlanNode::try_from_physical_plan_with_converter(
             Arc::clone(plan),
             extension_codec,
@@ -405,15 +387,15 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                 payload.adapter_metadata.tag
             );
 
-            // Decode the inner plan
-            let inner_proto = PhysicalPlanNode::decode(&payload.inner_plan_bytes[..])
-                .map_err(|e| {
-                    datafusion::error::DataFusionError::Plan(format!(
-                        "Failed to decode inner plan: {e}"
-                    ))
-                })?;
+            // Get the inner plan proto from inputs field
+            if extension.inputs.is_empty() {
+                return Err(datafusion::error::DataFusionError::Plan(
+                    "Extension node missing child plan in inputs".to_string(),
+                ));
+            }
+            let inner_proto = &extension.inputs[0];
 
-            // Deserialize the inner plan using default implementation
+            // Deserialize the inner plan
             let inner_plan = inner_proto.try_into_physical_plan_with_converter(
                 ctx,
                 extension_codec,
@@ -492,13 +474,6 @@ fn extract_adapter_tag(factory: &dyn PhysicalExprAdapterFactory) -> Option<Strin
 /// Create an adapter factory from a tag
 fn create_adapter_factory(tag: &str) -> Arc<dyn PhysicalExprAdapterFactory> {
     Arc::new(MetadataAdapterFactory::new(tag))
-}
-
-/// Rebuild a FileScanConfig without the adapter
-fn rebuild_config_without_adapter(config: &FileScanConfig) -> FileScanConfig {
-    FileScanConfigBuilder::from(config.clone())
-        .with_expr_adapter(None)
-        .build()
 }
 
 /// Inject an adapter into a plan (assumes plan is a DataSourceExec with FileScanConfig)
