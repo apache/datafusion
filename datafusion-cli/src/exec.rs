@@ -269,7 +269,7 @@ impl StatementExecutor {
         let options = task_ctx.session_config().options();
 
         // Track memory usage for the query result if it's bounded
-        let mut reservation =
+        let reservation =
             MemoryConsumer::new("DataFusion-Cli").register(task_ctx.memory_pool());
 
         if physical_plan.boundedness().is_unbounded() {

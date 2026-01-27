@@ -17,20 +17,12 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use arrow::array::Float64Array;
 use arrow::datatypes::FieldRef;
-use arrow::{
-    array::{ArrayRef, UInt64Array},
-    compute::cast,
-    datatypes::DataType,
-    datatypes::Field,
-};
-use datafusion_common::{
-    HashMap, Result, ScalarValue, downcast_value, plan_err, unwrap_or_internal_err,
-};
+use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use datafusion_common::cast::{as_float64_array, as_uint64_array};
+use datafusion_common::{HashMap, Result, ScalarValue};
 use datafusion_doc::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::type_coercion::aggregates::NUMERICS;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
@@ -58,26 +50,20 @@ make_regr_udaf_expr_and_func!(regr_sxx, regr_sxx_udaf, RegrType::SXX);
 make_regr_udaf_expr_and_func!(regr_syy, regr_syy_udaf, RegrType::SYY);
 make_regr_udaf_expr_and_func!(regr_sxy, regr_sxy_udaf, RegrType::SXY);
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Regr {
     signature: Signature,
     regr_type: RegrType,
     func_name: &'static str,
 }
 
-impl Debug for Regr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("regr")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
-}
-
 impl Regr {
     pub fn new(regr_type: RegrType, func_name: &'static str) -> Self {
         Self {
-            signature: Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable),
+            signature: Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
             regr_type,
             func_name,
         }
@@ -468,11 +454,7 @@ impl AggregateUDFImpl for Regr {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if !arg_types[0].is_numeric() {
-            return plan_err!("Covariance requires numeric input types");
-        }
-
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         if matches!(self.regr_type, RegrType::Count) {
             Ok(DataType::UInt64)
         } else {
@@ -606,32 +588,18 @@ impl Accumulator for RegrAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // regr_slope(Y, X) calculates k in y = k*x + b
-        let values_y = &cast(&values[0], &DataType::Float64)?;
-        let values_x = &cast(&values[1], &DataType::Float64)?;
+        let values_y = as_float64_array(&values[0])?;
+        let values_x = as_float64_array(&values[1])?;
 
-        let mut arr_y = downcast_value!(values_y, Float64Array).iter().flatten();
-        let mut arr_x = downcast_value!(values_x, Float64Array).iter().flatten();
-
-        for i in 0..values_y.len() {
+        for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let value_y = if values_y.is_valid(i) {
-                arr_y.next()
-            } else {
-                None
+            let (value_y, value_x) = match (value_y, value_x) {
+                (Some(y), Some(x)) => (y, x),
+                // skip either x or y is NULL
+                _ => continue,
             };
-            let value_x = if values_x.is_valid(i) {
-                arr_x.next()
-            } else {
-                None
-            };
-            if value_y.is_none() || value_x.is_none() {
-                continue;
-            }
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
-            let value_y = unwrap_or_internal_err!(value_y);
-            let value_x = unwrap_or_internal_err!(value_x);
-
             self.count += 1;
             let delta_x = value_x - self.mean_x;
             let delta_y = value_y - self.mean_y;
@@ -652,32 +620,18 @@ impl Accumulator for RegrAccumulator {
     }
 
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values_y = &cast(&values[0], &DataType::Float64)?;
-        let values_x = &cast(&values[1], &DataType::Float64)?;
+        let values_y = as_float64_array(&values[0])?;
+        let values_x = as_float64_array(&values[1])?;
 
-        let mut arr_y = downcast_value!(values_y, Float64Array).iter().flatten();
-        let mut arr_x = downcast_value!(values_x, Float64Array).iter().flatten();
-
-        for i in 0..values_y.len() {
+        for (value_y, value_x) in values_y.iter().zip(values_x) {
             // skip either x or y is NULL
-            let value_y = if values_y.is_valid(i) {
-                arr_y.next()
-            } else {
-                None
+            let (value_y, value_x) = match (value_y, value_x) {
+                (Some(y), Some(x)) => (y, x),
+                // skip either x or y is NULL
+                _ => continue,
             };
-            let value_x = if values_x.is_valid(i) {
-                arr_x.next()
-            } else {
-                None
-            };
-            if value_y.is_none() || value_x.is_none() {
-                continue;
-            }
 
             // Update states for regr_slope(y,x) [using cov_pop(x,y)/var_pop(x)]
-            let value_y = unwrap_or_internal_err!(value_y);
-            let value_x = unwrap_or_internal_err!(value_x);
-
             if self.count > 1 {
                 self.count -= 1;
                 let delta_x = value_x - self.mean_x;
@@ -703,12 +657,12 @@ impl Accumulator for RegrAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let count_arr = downcast_value!(states[0], UInt64Array);
-        let mean_x_arr = downcast_value!(states[1], Float64Array);
-        let mean_y_arr = downcast_value!(states[2], Float64Array);
-        let m2_x_arr = downcast_value!(states[3], Float64Array);
-        let m2_y_arr = downcast_value!(states[4], Float64Array);
-        let algo_const_arr = downcast_value!(states[5], Float64Array);
+        let count_arr = as_uint64_array(&states[0])?;
+        let mean_x_arr = as_float64_array(&states[1])?;
+        let mean_y_arr = as_float64_array(&states[2])?;
+        let m2_x_arr = as_float64_array(&states[3])?;
+        let m2_y_arr = as_float64_array(&states[4])?;
+        let algo_const_arr = as_float64_array(&states[5])?;
 
         for i in 0..count_arr.len() {
             let count_b = count_arr.value(i);
