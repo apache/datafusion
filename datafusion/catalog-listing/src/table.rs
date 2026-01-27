@@ -715,7 +715,12 @@ impl ListingTable {
             });
         };
         // list files (with partitions)
-        // For non-WASM targets, use parallel execution with JoinSet
+        // For non-WASM targets, use parallel execution with JoinSet.
+        // Note: This implementation collects files into memory per table_path rather than
+        // streaming lazily. This is a trade-off required because JoinSet tasks need 'static
+        // lifetime, which prevents returning borrowed streams directly. For most use cases,
+        // the parallelization benefit outweighs the temporary memory overhead. The WASM
+        // fallback below preserves streaming behavior for memory-constrained environments.
         #[cfg(not(target_arch = "wasm32"))]
         let file_list = {
             let mut join_set = JoinSet::new();
