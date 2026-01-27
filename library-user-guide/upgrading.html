@@ -516,6 +516,35 @@
 <p>The builder pattern is more efficient as it computes properties once during <code class="docutils literal notranslate"><span class="pre">build()</span></code> rather than recomputing them for each method call.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">with_default_selectivity()</span></code> is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.</p>
 </section>
+<section id="generate-series-and-range-table-functions-changed">
+<h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed<a class="headerlink" href="#generate-series-and-range-table-functions-changed" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions now return an empty set when the interval is invalid, instead of an error.
+This behavior is consistent with systems like PostgreSQL.</p>
+<p>Before:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">during</span><span class="w"> </span><span class="n">planning</span><span class="p">:</span><span class="w"> </span><span class="k">Start</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">bigger</span><span class="w"> </span><span class="k">than</span><span class="w"> </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="k">increment</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">positive</span><span class="p">:</span><span class="w"> </span><span class="n">Cannot</span><span class="w"> </span><span class="n">generate</span><span class="w"> </span><span class="n">infinite</span><span class="w"> </span><span class="n">series</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="n">Error</span><span class="w"> </span><span class="n">during</span><span class="w"> </span><span class="n">planning</span><span class="p">:</span><span class="w"> </span><span class="k">Start</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">bigger</span><span class="w"> </span><span class="k">than</span><span class="w"> </span><span class="k">end</span><span class="p">,</span><span class="w"> </span><span class="n">but</span><span class="w"> </span><span class="k">increment</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">positive</span><span class="p">:</span><span class="w"> </span><span class="n">Cannot</span><span class="w"> </span><span class="n">generate</span><span class="w"> </span><span class="n">infinite</span><span class="w"> </span><span class="n">series</span>
+</pre></div>
+</div>
+<p>Now:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">generate_series</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+
+<span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="mi">0</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+</pre></div>
+</div>
+</section>
 </section>
 <section id="datafusion-52-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code><a class="headerlink" href="#datafusion-52-0-0" title="Link to this heading">#</a></h2>
@@ -2229,6 +2258,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-series-and-range-table-functions-changed"><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-52-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">52.0.0</span></code></a><ul class="nav section-nav flex-column">
