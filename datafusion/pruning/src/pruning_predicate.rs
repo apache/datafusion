@@ -2408,10 +2408,9 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new_with_config(
+        let p = PruningPredicate::try_new(
             expr,
             Arc::clone(&schema),
-            &PruningPredicateConfig::default(),
         )
         .unwrap();
         // note pruning expression refers to row_count twice
@@ -3054,10 +3053,9 @@ mod tests {
             dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
-        let p = PruningPredicate::try_new_with_config(
+        let p = PruningPredicate::try_new(
             dynamic_filter_expr,
             Arc::clone(&schema),
-            &PruningPredicateConfig::default(),
         )
         .unwrap();
         let result = p.prune(&statistics).unwrap();
@@ -5427,10 +5425,9 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new_with_config(
+        let p = PruningPredicate::try_new(
             expr,
             Arc::<Schema>::clone(schema),
-            &PruningPredicateConfig::default(),
         )
         .unwrap();
         let result = p.prune(statistics).unwrap();
@@ -5447,10 +5444,9 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new_with_config(
+        let p = PruningPredicate::try_new(
             expr,
             Arc::<Schema>::clone(schema),
-            &PruningPredicateConfig::default(),
         )
         .unwrap();
         let result = p.prune(statistics).unwrap();
