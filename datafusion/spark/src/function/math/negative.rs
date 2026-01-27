@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// Returns the negation of input (equivalent to unary minus)
 /// Returns NULL if input is NULL, returns NaN if input is NaN.
 ///
-/// TODOs:
+/// ANSI mode support see (https://github.com/apache/datafusion/issues/20034):
 ///  - Spark's ANSI-compliant dialect, when off (i.e. `spark.sql.ansi.enabled=false`),
 ///    negating the minimal value of a signed integer wraps around.
 ///    For example: negative(i32::MIN) returns i32::MIN (wraps instead of error).
