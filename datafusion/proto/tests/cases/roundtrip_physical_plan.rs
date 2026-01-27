@@ -200,6 +200,63 @@ async fn all_types_context() -> Result<SessionContext> {
 
     Ok(ctx)
 }
+
+fn cast_fields(
+    name: &str,
+    input_type: DataType,
+    target_type: DataType,
+) -> (Field, Field) {
+    let input_field = field_with_origin(name, input_type, false, "input");
+    let target_field = field_with_origin(name, target_type, false, "target");
+    (input_field, target_field)
+}
+
+fn field_with_origin(
+    name: &str,
+    data_type: DataType,
+    nullable: bool,
+    origin: &str,
+) -> Field {
+    let mut metadata = HashMap::new();
+    metadata.insert("origin".to_string(), origin.to_string());
+    Field::new(name, data_type, nullable).with_metadata(metadata)
+}
+
+fn round_trip_cast_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let proto = serialize_cast_expr(&expr)?;
+    parse_cast_expr(&proto, input_schema)
+}
+
+fn serialize_cast_expr(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<protobuf::PhysicalExprNode> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    datafusion_proto::physical_plan::to_proto::serialize_physical_expr(expr, &codec)
+}
+
+fn parse_cast_expr(
+    proto: &protobuf::PhysicalExprNode,
+    input_schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    datafusion_proto::physical_plan::from_proto::parse_physical_expr(
+        proto,
+        &ctx.task_ctx(),
+        input_schema,
+        &codec,
+    )
+}
+
+fn downcast_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<&CastColumnExpr> {
+    expr.as_any()
+        .downcast_ref::<CastColumnExpr>()
+        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))
+}
+
 #[test]
 fn roundtrip_cast_column_expr() -> Result<()> {
     let (input_field, target_field) = cast_fields("a", DataType::Int32, DataType::Int64);
@@ -334,62 +391,6 @@ fn roundtrip_cast_column_expr_with_target_field_change() -> Result<()> {
     assert_eq!(column_expr.index(), 0);
 
     Ok(())
-}
-
-fn cast_fields(
-    name: &str,
-    input_type: DataType,
-    target_type: DataType,
-) -> (Field, Field) {
-    let input_field = field_with_origin(name, input_type, false, "input");
-    let target_field = field_with_origin(name, target_type, false, "target");
-    (input_field, target_field)
-}
-
-fn field_with_origin(
-    name: &str,
-    data_type: DataType,
-    nullable: bool,
-    origin: &str,
-) -> Field {
-    let mut metadata = HashMap::new();
-    metadata.insert("origin".to_string(), origin.to_string());
-    Field::new(name, data_type, nullable).with_metadata(metadata)
-}
-
-fn round_trip_cast_expr(
-    expr: Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let proto = serialize_cast_expr(&expr)?;
-    parse_cast_expr(&proto, input_schema)
-}
-
-fn serialize_cast_expr(
-    expr: &Arc<dyn PhysicalExpr>,
-) -> Result<protobuf::PhysicalExprNode> {
-    let codec = DefaultPhysicalExtensionCodec {};
-    datafusion_proto::physical_plan::to_proto::serialize_physical_expr(expr, &codec)
-}
-
-fn parse_cast_expr(
-    proto: &protobuf::PhysicalExprNode,
-    input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    datafusion_proto::physical_plan::from_proto::parse_physical_expr(
-        proto,
-        &ctx.task_ctx(),
-        input_schema,
-        &codec,
-    )
-}
-
-fn downcast_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<&CastColumnExpr> {
-    expr.as_any()
-        .downcast_ref::<CastColumnExpr>()
-        .ok_or_else(|| internal_datafusion_err!("Expected CastColumnExpr"))
 }
 
 #[test]
