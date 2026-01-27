@@ -29,15 +29,12 @@ use std::mem::size_of;
 pub struct GroupValuesBytesView {
     /// Map string/binary values to group index
     map: ArrowBytesViewMap,
-    /// The total number of groups so far (used to assign group_index)
-    num_groups: usize,
 }
 
 impl GroupValuesBytesView {
     pub fn new(output_type: OutputType) -> Self {
         Self {
             map: ArrowBytesViewMap::new(output_type),
-            num_groups: 0,
         }
     }
 }
@@ -54,10 +51,7 @@ impl GroupValues for GroupValuesBytesView {
         let arr = &cols[0];
 
         groups.clear();
-        self.map.insert_if_new(arr, |_value| {
-            // assign new group index on each insert
-            let group_idx = self.num_groups;
-            self.num_groups += 1;
+        self.map.insert_if_new(arr, |group_idx| {
             groups.push(group_idx);
         });
 
@@ -70,12 +64,12 @@ impl GroupValues for GroupValuesBytesView {
         self.map.size() + size_of::<Self>()
     }
 
-    fn is_empty(&self) -> bool {
-        self.num_groups == 0
+    fn len(&self) -> usize {
+        self.map.len()
     }
 
-    fn len(&self) -> usize {
-        self.num_groups
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> datafusion_common::Result<Vec<ArrayRef>> {
@@ -83,14 +77,8 @@ impl GroupValues for GroupValuesBytesView {
         let map_contents = self.map.take().into_state();
 
         let group_values = match emit_to {
-            EmitTo::All => {
-                self.num_groups -= map_contents.len();
-                map_contents
-            }
-            EmitTo::First(n) if n == self.len() => {
-                self.num_groups -= map_contents.len();
-                map_contents
-            }
+            EmitTo::All => map_contents,
+            EmitTo::First(n) if n == self.len() => map_contents,
             EmitTo::First(n) => {
                 // if we only wanted to take the first n, insert the rest back
                 // into the map we could potentially avoid this reallocation, at
@@ -100,7 +88,6 @@ impl GroupValues for GroupValuesBytesView {
                 let remaining_group_values =
                     map_contents.slice(n, map_contents.len() - n);
 
-                self.num_groups = 0;
                 let mut group_indexes = vec![];
                 self.intern(&[remaining_group_values], &mut group_indexes)?;
 
