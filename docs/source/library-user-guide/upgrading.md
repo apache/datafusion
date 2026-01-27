@@ -214,6 +214,39 @@ let sort_proto = serialize_physical_sort_expr(
 );
 ```
 
+### `generate_series` and `range` table functions changed
+
+The `generate_series` and `range` table functions now return an empty set when the interval is invalid, instead of an error.
+This behavior is consistent with systems like PostgreSQL.
+
+Before:
+
+```sql
+> select * from generate_series(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+
+> select * from range(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+```
+
+Now:
+
+```sql
+> select * from generate_series(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+
+> select * from range(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+```
+
 ## DataFusion `52.0.0`
 
 ### Changes to DFSchema API
