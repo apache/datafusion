@@ -71,25 +71,6 @@ impl fmt::Display for TrimType {
 /// For ltrim: trim characters are at the start (prefix)
 /// For rtrim: trim characters are at the end (suffix)
 /// For btrim: trim characters are at both start and end
-fn create_string_array_and_characters(
-    size: usize,
-    characters: &str,
-    trimmed: &str,
-    remaining_len: usize,
-    string_array_type: StringArrayType,
-    trim_type: TrimType,
-) -> (ArrayRef, ScalarValue) {
-    create_string_array_and_characters_with_null_rate(
-        size,
-        characters,
-        trimmed,
-        remaining_len,
-        string_array_type,
-        trim_type,
-        0.1,
-    )
-}
-
 fn create_string_array_and_characters_with_null_rate(
     size: usize,
     characters: &str,
@@ -101,9 +82,6 @@ fn create_string_array_and_characters_with_null_rate(
 ) -> (ArrayRef, ScalarValue) {
     let rng = &mut StdRng::seed_from_u64(42);
 
-    // Create `size` rows:
-    //   - 10% rows will be `None`
-    //   - Other 90% will be strings with `remaining_len` content length
     let string_iter = (0..size).map(|_| {
         if rng.random::<f32>() < null_rate {
             None
