@@ -142,42 +142,61 @@ Cannot cast struct with 2 fields to 2 fields because there is no field name over
 
 You must explicitly rename or map fields to ensure at least one field name matches. Here are common patterns:
 
-**Example 1: Rename fields in the target schema to match source names**
+**Example 1: Source and target field names already match (Name-based casting)**
 
-**Before (would fail now):**
+**Success case (field names align):**
 
 ```sql
--- This would previously succeed by mapping positionally: x→a, y→b
+-- source_col has schema: STRUCT<x INT, y INT>
+-- Casting to the same field names succeeds (no-op or type validation only)
+SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
+```
+
+**Example 2: Source and target field names differ (Migration scenario)**
+
+**What fails now (no field name overlap):**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- This FAILS because there is no field name overlap:
+-- ❌ SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
+-- Error: Cannot cast struct with 2 fields to 2 fields because there is no field name overlap
+```
+
+**Migration options (must align names):**
+
+**Option A: Use struct constructor for explicit field mapping**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- Use STRUCT_CONSTRUCT with explicit field names
+SELECT STRUCT_CONSTRUCT(
+    'x', source_col.a,
+    'y', source_col.b
+) AS renamed_struct FROM table1;
+```
+
+**Option B: Rename in the cast target to match source names**
+
+```sql
+-- source_col has schema: STRUCT<a INT, b INT>
+-- Cast to target with matching field names
 SELECT CAST(source_col AS STRUCT<a INT, b INT>) FROM table1;
 ```
 
-**After (must align names):**
+**Example 3: Using struct constructors in Rust API**
 
-```sql
--- Explicitly rename to match source field names
-SELECT CAST(source_col AS STRUCT<x INT, y INT>) FROM table1;
-
--- OR use a struct constructor with explicit field names
-SELECT STRUCT_CONSTRUCT(
-    'x', source_col.x,
-    'y', source_col.y
-) FROM table1;
-```
-
-**Example 2: Using struct constructors to rebind fields**
-
-If you need to map fields by position, use explicit struct construction:
+If you need to map fields programmatically, build the target struct explicitly:
 
 ```rust,ignore
-// Rust API: Build the target struct explicitly
-let source_array = /* ... */;
-let target_field = Field::new("target_col",
-    DataType::Struct(vec![
-        FieldRef::new("new_a", DataType::Int32),
-        FieldRef::new("new_b", DataType::Utf8),
-    ]));
+// Build the target struct with explicit field names
+let target_struct_type = DataType::Struct(vec![
+    FieldRef::new("x", DataType::Int32),
+    FieldRef::new("y", DataType::Utf8),
+]);
 
-// Don't rely on casting—construct directly
+// Use struct constructors rather than casting for field mapping
+// This makes the field mapping explicit and unambiguous
 // Use struct builders or row constructors that preserve your mapping logic
 ```
 
