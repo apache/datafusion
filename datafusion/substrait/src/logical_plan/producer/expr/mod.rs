@@ -37,13 +37,13 @@ pub use window_function::*;
 
 use crate::logical_plan::producer::utils::flatten_names;
 use crate::logical_plan::producer::{
-    to_substrait_named_struct, DefaultSubstraitProducer, SubstraitProducer,
+    DefaultSubstraitProducer, SubstraitProducer, to_substrait_named_struct,
 };
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{internal_err, not_impl_err, DFSchemaRef};
+use datafusion::common::{DFSchemaRef, internal_err, not_impl_err};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::expr::Alias;
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::expr::Alias;
 use substrait::proto::expression_reference::ExprType;
 use substrait::proto::{Expression, ExpressionReference, ExtendedExpression};
 use substrait::version;
@@ -141,6 +141,7 @@ pub fn to_substrait_rex(
         Expr::InList(expr) => producer.handle_in_list(expr, schema),
         Expr::Exists(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::InSubquery(expr) => producer.handle_in_subquery(expr, schema),
+        Expr::SetComparison(expr) => producer.handle_set_comparison(expr, schema),
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }

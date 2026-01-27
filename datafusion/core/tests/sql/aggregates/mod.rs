@@ -20,15 +20,15 @@
 use super::*;
 use arrow::{
     array::{
-        types::UInt32Type, Decimal128Array, DictionaryArray, DurationNanosecondArray,
-        Int32Array, LargeBinaryArray, StringArray, TimestampMicrosecondArray,
-        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        Decimal128Array, DictionaryArray, DurationNanosecondArray, Int32Array,
+        LargeBinaryArray, StringArray, TimestampMicrosecondArray, UInt8Array,
+        UInt16Array, UInt32Array, UInt64Array, types::UInt32Type,
     },
     datatypes::{DataType, Field, Schema, TimeUnit},
     record_batch::RecordBatch,
 };
 use datafusion::{
-    common::{test_util::batches_to_string, Result},
+    common::{Result, test_util::batches_to_string},
     execution::{config::SessionConfig, context::SessionContext},
 };
 use datafusion_catalog::MemTable;
@@ -959,8 +959,8 @@ impl FuzzTimestampTestData {
 }
 
 /// Sets up test contexts for fuzz table with timestamps and both single and multiple partitions
-pub async fn setup_fuzz_timestamp_test_contexts(
-) -> Result<(SessionContext, SessionContext)> {
+pub async fn setup_fuzz_timestamp_test_contexts()
+-> Result<(SessionContext, SessionContext)> {
     let test_data = FuzzTimestampTestData::new();
 
     // Single partition context

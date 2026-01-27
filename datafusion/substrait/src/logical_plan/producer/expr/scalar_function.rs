@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::producer::{to_substrait_literal_expr, SubstraitProducer};
-use datafusion::common::{not_impl_err, DFSchemaRef, ScalarValue};
-use datafusion::logical_expr::{expr, Between, BinaryExpr, Expr, Like, Operator};
+use crate::logical_plan::producer::{SubstraitProducer, to_substrait_literal_expr};
+use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
+use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
 use substrait::proto::expression::{RexType, ScalarFunction};
 use substrait::proto::function_argument::ArgType;
 use substrait::proto::{Expression, FunctionArgument};

@@ -22,9 +22,14 @@
 //! A single call to `poll_next` on a top-level [`Stream`] may potentially perform a lot of work
 //! before it returns a `Poll::Pending`. Think for instance of calculating an aggregation over a
 //! large dataset.
+//!
 //! If a `Stream` runs for a long period of time without yielding back to the Tokio executor,
 //! it can starve other tasks waiting on that executor to execute them.
 //! Additionally, this prevents the query execution from being cancelled.
+//!
+//! For more background, please also see the [Using Rust async for Query Execution and Cancelling Long-Running Queries blog]
+//!
+//! [Using Rust async for Query Execution and Cancelling Long-Running Queries blog]: https://datafusion.apache.org/blog/2025/06/30/cancellation
 //!
 //! To ensure that `Stream` implementations yield regularly, operators can insert explicit yield
 //! points using the utilities in this module. For most operators this is **not** necessary. The
@@ -79,9 +84,10 @@ use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
 };
+use crate::projection::ProjectionExec;
 use crate::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    SendableRecordBatchStream, SortOrderPushdownResult,
 };
 use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
@@ -90,6 +96,7 @@ use datafusion_execution::TaskContext;
 
 use crate::execution_plan::SchedulingType;
 use crate::stream::RecordBatchStreamAdapter;
+use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use futures::{Stream, StreamExt};
 
 /// A stream that passes record batches through unchanged while cooperating with the Tokio runtime.
@@ -207,7 +214,7 @@ where
 /// An execution plan decorator that enables cooperative multitasking.
 /// It wraps the streams produced by its input execution plan using the [`make_cooperative`] function,
 /// which makes the stream participate in Tokio cooperative scheduling.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CooperativeExec {
     input: Arc<dyn ExecutionPlan>,
     properties: PlanProperties,
@@ -298,6 +305,18 @@ impl ExecutionPlan for CooperativeExec {
         Equal
     }
 
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        match self.input.try_swapping_with_projection(projection)? {
+            Some(new_input) => Ok(Some(
+                Arc::new(self.clone()).with_new_children(vec![new_input])?,
+            )),
+            None => Ok(None),
+        }
+    }
+
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
@@ -314,6 +333,27 @@ impl ExecutionPlan for CooperativeExec {
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
         Ok(FilterPushdownPropagation::if_all(child_pushdown_result))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        let child = self.input();
+
+        match child.try_pushdown_sort(order)? {
+            SortOrderPushdownResult::Exact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Exact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                let new_exec = Arc::new(self.clone()).with_new_children(vec![inner])?;
+                Ok(SortOrderPushdownResult::Inexact { inner: new_exec })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
     }
 }
 

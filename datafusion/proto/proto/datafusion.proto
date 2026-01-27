@@ -278,6 +278,7 @@ message DmlNode{
     INSERT_APPEND = 3;
     INSERT_OVERWRITE = 4;
     INSERT_REPLACE = 5;
+    TRUNCATE = 6;
   }
   Type dml_type = 1;
   LogicalPlanNode input = 2;
@@ -872,6 +873,8 @@ message PhysicalExprNode {
     PhysicalExtensionExprNode extension = 19;
 
     UnknownColumn unknown_column = 20;
+
+    PhysicalHashExprNode hash_expr = 21;
   }
 }
 
@@ -990,11 +993,21 @@ message PhysicalExtensionExprNode {
   repeated PhysicalExprNode inputs = 2;
 }
 
+message PhysicalHashExprNode {
+  repeated PhysicalExprNode on_columns = 1;
+  uint64 seed0 = 2;
+  uint64 seed1 = 3;
+  uint64 seed2 = 4;
+  uint64 seed3 = 5;
+  string description = 6;
+}
+
 message FilterExecNode {
   PhysicalPlanNode input = 1;
   PhysicalExprNode expr = 2;
   uint32 default_filter_selectivity = 3;
   repeated uint32 projection = 9;
+  uint32 batch_size = 10;
 }
 
 message FileGroup {
@@ -1100,6 +1113,7 @@ message HashJoinExecNode {
   datafusion_common.NullEquality null_equality = 7;
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
+  bool null_aware = 10;
 }
 
 enum StreamPartitionMode {
@@ -1208,6 +1222,8 @@ message MaybePhysicalSortExprs {
 message AggLimit {
   // wrap into a message to make it optional
   uint64 limit = 1;
+  // Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+  optional bool descending = 2;
 }
 
 message AggregateExecNode {
@@ -1223,6 +1239,7 @@ message AggregateExecNode {
   repeated bool groups = 9;
   repeated MaybeFilter filter_expr = 10;
   AggLimit limit = 11;
+  bool has_grouping_set = 12;
 }
 
 message GlobalLimitExecNode {

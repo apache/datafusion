@@ -444,6 +444,7 @@ pub mod dml_node {
         InsertAppend = 3,
         InsertOverwrite = 4,
         InsertReplace = 5,
+        Truncate = 6,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -458,6 +459,7 @@ pub mod dml_node {
                 Self::InsertAppend => "INSERT_APPEND",
                 Self::InsertOverwrite => "INSERT_OVERWRITE",
                 Self::InsertReplace => "INSERT_REPLACE",
+                Self::Truncate => "TRUNCATE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -469,6 +471,7 @@ pub mod dml_node {
                 "INSERT_APPEND" => Some(Self::InsertAppend),
                 "INSERT_OVERWRITE" => Some(Self::InsertOverwrite),
                 "INSERT_REPLACE" => Some(Self::InsertReplace),
+                "TRUNCATE" => Some(Self::Truncate),
                 _ => None,
             }
         }
@@ -1276,7 +1279,7 @@ pub struct PhysicalExtensionNode {
 pub struct PhysicalExprNode {
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1327,6 +1330,8 @@ pub mod physical_expr_node {
         Extension(super::PhysicalExtensionExprNode),
         #[prost(message, tag = "20")]
         UnknownColumn(super::UnknownColumn),
+        #[prost(message, tag = "21")]
+        HashExpr(super::PhysicalHashExprNode),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1517,6 +1522,21 @@ pub struct PhysicalExtensionExprNode {
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalHashExprNode {
+    #[prost(message, repeated, tag = "1")]
+    pub on_columns: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(uint64, tag = "2")]
+    pub seed0: u64,
+    #[prost(uint64, tag = "3")]
+    pub seed1: u64,
+    #[prost(uint64, tag = "4")]
+    pub seed2: u64,
+    #[prost(uint64, tag = "5")]
+    pub seed3: u64,
+    #[prost(string, tag = "6")]
+    pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FilterExecNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
@@ -1526,6 +1546,8 @@ pub struct FilterExecNode {
     pub default_filter_selectivity: u32,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, tag = "10")]
+    pub batch_size: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
@@ -1671,6 +1693,8 @@ pub struct HashJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "9")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(bool, tag = "10")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -1813,6 +1837,9 @@ pub struct AggLimit {
     /// wrap into a message to make it optional
     #[prost(uint64, tag = "1")]
     pub limit: u64,
+    /// Optional ordering direction for TopK aggregation (true = descending, false = ascending)
+    #[prost(bool, optional, tag = "2")]
+    pub descending: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateExecNode {
@@ -1839,6 +1866,8 @@ pub struct AggregateExecNode {
     pub filter_expr: ::prost::alloc::vec::Vec<MaybeFilter>,
     #[prost(message, optional, tag = "11")]
     pub limit: ::core::option::Option<AggLimit>,
+    #[prost(bool, tag = "12")]
+    pub has_grouping_set: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalLimitExecNode {

@@ -263,6 +263,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
         Expr::Exists { .. }
         | Expr::InSubquery(_)
+        | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
         | Expr::Unnest(_) => {
@@ -766,8 +767,9 @@ impl OptimizerRule for PushDownFilter {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let _ = config.options();
         if let LogicalPlan::Join(join) = plan {
             return push_down_join(join, None);
         };
@@ -811,8 +813,7 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     child_filter.input,
                 )?);
-                #[allow(clippy::used_underscore_binding)]
-                self.rewrite(new_filter, _config)
+                self.rewrite(new_filter, config)
             }
             LogicalPlan::Repartition(repartition) => {
                 let new_filter =
@@ -1378,7 +1379,7 @@ fn insert_below(
 }
 
 impl PushDownFilter {
-    #[allow(missing_docs)]
+    #[expect(missing_docs)]
     pub fn new() -> Self {
         Self {}
     }
@@ -2331,7 +2332,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.d
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.d, test1.e, test1.f
@@ -2361,7 +2362,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test1.a
-          Cross Join: 
+          Cross Join:
             Projection: test.a, test.b, test.c
               TableScan: test, full_filters=[test.a = Int32(1)]
             Projection: test1.a, test1.b, test1.c

@@ -21,7 +21,7 @@ description = "Common functionality of physical expression for DataFusion query 
 keywords = ["arrow", "query", "sql"]
 readme = "README.md"
 version = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 homepage = { workspace = true }
 repository = { workspace = true }
 license = { workspace = true }
@@ -43,7 +43,10 @@ name = "datafusion_physical_expr_common"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
+parking_lot = { workspace = true }

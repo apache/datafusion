@@ -23,6 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::_config_err;
 use crate::format::{ExplainAnalyzeLevel, ExplainFormat};
+use crate::parquet_config::DFParquetWriterVersion;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -468,6 +469,25 @@ config_namespace! {
         /// metadata memory consumption
         pub batch_size: usize, default = 8192
 
+        /// A perfect hash join (see `HashJoinExec` for more details) will be considered
+        /// if the range of keys (max - min) on the build side is < this threshold.
+        /// This provides a fast path for joins with very small key ranges,
+        /// bypassing the density check.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_small_build_threshold: usize, default = 1024
+
+        /// The minimum required density of join keys on the build side to consider a
+        /// perfect hash join (see `HashJoinExec` for more details). Density is calculated as:
+        /// `(number of rows) / (max_key - min_key + 1)`.
+        /// A perfect hash join may be used if the actual key density > this
+        /// value.
+        ///
+        /// Currently only supports cases where build_side.num_rows() < u32::MAX.
+        /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
+        pub perfect_hash_join_min_key_density: f64, default = 0.15
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
@@ -737,12 +757,12 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
         /// valid values are "1.0" and "2.0"
-        pub writer_version: String, default = "1.0".to_string()
+        pub writer_version: DFParquetWriterVersion, default = DFParquetWriterVersion::default()
 
         /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
         ///
@@ -752,7 +772,7 @@ config_namespace! {
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         ///
@@ -1000,6 +1020,34 @@ config_namespace! {
         /// ```
         pub repartition_sorts: bool, default = true
 
+        /// Partition count threshold for subset satisfaction optimization.
+        ///
+        /// When the current partition count is >= this threshold, DataFusion will
+        /// skip repartitioning if the required partitioning expression is a subset
+        /// of the current partition expression such as Hash(a) satisfies Hash(a, b).
+        ///
+        /// When the current partition count is < this threshold, DataFusion will
+        /// repartition to increase parallelism even when subset satisfaction applies.
+        ///
+        /// Set to 0 to always repartition (disable subset satisfaction optimization).
+        /// Set to a high value to always use subset satisfaction.
+        ///
+        /// Example (subset_repartition_threshold = 4):
+        /// ```text
+        ///     Hash([a]) satisfies Hash([a, b]) because (Hash([a, b]) is subset of Hash([a])
+        ///
+        ///     If current partitions (3) < threshold (4), repartition:
+        ///     AggregateExec: mode=FinalPartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       RepartitionExec: partitioning=Hash([a, b], 8), input_partitions=3
+        ///         AggregateExec: mode=Partial, gby=[a, b], aggr=[SUM(x)]
+        ///           DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 3)
+        ///
+        ///     If current partitions (8) >= threshold (4), use subset satisfaction:
+        ///     AggregateExec: mode=SinglePartitioned, gby=[a, b], aggr=[SUM(x)]
+        ///       DataSourceExec: file_groups={...}, output_partitioning=Hash([a], 8)
+        /// ```
+        pub subset_repartition_threshold: usize, default = 4
+
         /// When true, DataFusion will opportunistically remove sorts when the data is already sorted,
         /// (i.e. setting `preserve_order` to true on `RepartitionExec`  and
         /// using `SortPreservingMergeExec`)
@@ -1079,6 +1127,21 @@ config_namespace! {
         /// then the output will be coerced to a non-view.
         /// Coerces `Utf8View` to `LargeUtf8`, and `BinaryView` to `LargeBinary`.
         pub expand_views_at_output: bool, default = false
+
+        /// Enable sort pushdown optimization.
+        /// When enabled, attempts to push sort requirements down to data sources
+        /// that can natively handle them (e.g., by reversing file/row group read order).
+        ///
+        /// Returns **inexact ordering**: Sort operator is kept for correctness,
+        /// but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N),
+        /// providing significant speedup.
+        ///
+        /// Memory: No additional overhead (only changes read order).
+        ///
+        /// Future: Will add option to detect perfectly sorted data and eliminate Sort completely.
+        ///
+        /// Default: true
+        pub enable_sort_pushdown: bool, default = true
     }
 }
 
@@ -1710,6 +1773,7 @@ config_field!(bool, value => default_config_transform(value.to_lowercase().as_st
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
+config_field!(u32);
 
 impl ConfigField for u8 {
     fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
@@ -2184,7 +2248,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -2435,7 +2499,7 @@ config_namespace_with_hashmap! {
 
         /// Sets default parquet compression codec for the column path.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None
@@ -2829,6 +2893,14 @@ config_namespace! {
         /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
         pub newlines_in_values: Option<bool>, default = None
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
         pub date_format: Option<String>, default = None
         pub datetime_format: Option<String>, default = None
@@ -2951,6 +3023,14 @@ impl CsvOptions {
         self
     }
 
+    /// Set the compression level for the output file.
+    /// The valid range depends on the compression algorithm.
+    /// If not specified, the default level for the algorithm is used.
+    pub fn with_compression_level(mut self, level: u32) -> Self {
+        self.compression_level = Some(level);
+        self
+    }
+
     /// The delimiter character.
     pub fn delimiter(&self) -> u8 {
         self.delimiter
@@ -2976,6 +3056,14 @@ config_namespace! {
     /// Options controlling JSON format
     pub struct JsonOptions {
         pub compression: CompressionTypeVariant, default = CompressionTypeVariant::UNCOMPRESSED
+        /// Compression level for the output file. The valid range depends on the
+        /// compression algorithm:
+        /// - ZSTD: 1 to 22 (default: 3)
+        /// - GZIP: 0 to 9 (default: 6)
+        /// - BZIP2: 0 to 9 (default: 6)
+        /// - XZ: 0 to 9 (default: 6)
+        /// If not specified, the default level for the compression algorithm is used.
+        pub compression_level: Option<u32>, default = None
         pub schema_infer_max_rec: Option<usize>, default = None
     }
 }
@@ -3386,5 +3474,38 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_writer_version_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetWriterVersion};
+
+        let mut config = ConfigOptions::default();
+
+        // Valid values should work
+        config
+            .set("datafusion.execution.parquet.writer_version", "1.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V1_0
+        );
+
+        config
+            .set("datafusion.execution.parquet.writer_version", "2.0")
+            .unwrap();
+        assert_eq!(
+            config.execution.parquet.writer_version,
+            DFParquetWriterVersion::V2_0
+        );
+
+        // Invalid value should error immediately at SET time
+        let err = config
+            .set("datafusion.execution.parquet.writer_version", "3.0")
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid or Unsupported Configuration: Invalid parquet writer version: 3.0. Expected one of: 1.0, 2.0"
+        );
     }
 }

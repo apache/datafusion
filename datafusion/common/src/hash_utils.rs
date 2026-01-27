@@ -23,12 +23,14 @@ use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
+use itertools::Itertools;
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
     as_binary_view_array, as_boolean_array, as_fixed_size_list_array,
-    as_generic_binary_array, as_large_list_array, as_list_array, as_map_array,
-    as_string_array, as_string_view_array, as_struct_array, as_union_array,
+    as_generic_binary_array, as_large_list_array, as_large_list_view_array,
+    as_list_array, as_list_view_array, as_map_array, as_string_array,
+    as_string_view_array, as_struct_array, as_union_array,
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
@@ -162,7 +164,7 @@ macro_rules! hash_value {
         })+
     };
 }
-hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64);
+hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128);
 hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
@@ -266,6 +268,127 @@ fn hash_array<T>(
                 *hash = value.hash_one(random_state);
             }
         }
+    }
+}
+
+/// Hash a StringView or BytesView array
+///
+/// Templated to optimize inner loop based on presence of nulls and external buffers.
+///
+/// HAS_NULLS: do we have to check null in the inner loop
+/// HAS_BUFFERS: if true, array has external buffers; if false, all strings are inlined/ less then 12 bytes
+/// REHASH: if true, combining with existing hash, otherwise initializing
+#[inline(never)]
+fn hash_string_view_array_inner<
+    T: ByteViewType,
+    const HAS_NULLS: bool,
+    const HAS_BUFFERS: bool,
+    const REHASH: bool,
+>(
+    array: &GenericByteViewArray<T>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) {
+    assert_eq!(
+        hashes_buffer.len(),
+        array.len(),
+        "hashes_buffer and array should be of equal length"
+    );
+
+    let buffers = array.data_buffers();
+    let view_bytes = |view_len: u32, view: u128| {
+        let view = ByteView::from(view);
+        let offset = view.offset as usize;
+        // SAFETY: view is a valid view as it came from the array
+        unsafe {
+            let data = buffers.get_unchecked(view.buffer_index as usize);
+            data.get_unchecked(offset..offset + view_len as usize)
+        }
+    };
+
+    let hashes_and_views = hashes_buffer.iter_mut().zip(array.views().iter());
+    for (i, (hash, &v)) in hashes_and_views.enumerate() {
+        if HAS_NULLS && array.is_null(i) {
+            continue;
+        }
+        let view_len = v as u32;
+        // all views are inlined, no need to access external buffers
+        if !HAS_BUFFERS || view_len <= 12 {
+            if REHASH {
+                *hash = combine_hashes(v.hash_one(random_state), *hash);
+            } else {
+                *hash = v.hash_one(random_state);
+            }
+            continue;
+        }
+        // view is not inlined, so we need to hash the bytes as well
+        let value = view_bytes(view_len, v);
+        if REHASH {
+            *hash = combine_hashes(value.hash_one(random_state), *hash);
+        } else {
+            *hash = value.hash_one(random_state);
+        }
+    }
+}
+
+/// Builds hash values for array views and writes them into `hashes_buffer`
+/// If `rehash==true` this combines the previous hash value in the buffer
+/// with the new hash using `combine_hashes`
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_generic_byte_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    rehash: bool,
+) {
+    // instantiate the correct version based on presence of nulls and external buffers
+    match (
+        array.null_count() != 0,
+        !array.data_buffers().is_empty(),
+        rehash,
+    ) {
+        // no nulls or buffers ==> hash the inlined views directly
+        // don't call the inner function as Rust seems better able to inline this simpler code (2-3% faster)
+        (false, false, false) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = view.hash_one(random_state);
+            }
+        }
+        (false, false, true) => {
+            for (hash, &view) in hashes_buffer.iter_mut().zip(array.views().iter()) {
+                *hash = combine_hashes(view.hash_one(random_state), *hash);
+            }
+        }
+        (false, true, false) => hash_string_view_array_inner::<T, false, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (false, true, true) => hash_string_view_array_inner::<T, false, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, false) => hash_string_view_array_inner::<T, true, false, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, false, true) => hash_string_view_array_inner::<T, true, false, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, false) => hash_string_view_array_inner::<T, true, true, false>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
+        (true, true, true) => hash_string_view_array_inner::<T, true, true, true>(
+            array,
+            random_state,
+            hashes_buffer,
+        ),
     }
 }
 
@@ -392,24 +515,80 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let values = array.values();
-    let offsets = array.value_offsets();
-    let nulls = array.nulls();
-    let mut values_hashes = vec![0u64; values.len()];
-    create_hashes([values], random_state, &mut values_hashes)?;
-    if let Some(nulls) = nulls {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
-            if nulls.is_valid(i) {
+    // In case values is sliced, hash only the bytes used by the offsets of this ListArray
+    let first_offset = array.value_offsets().first().cloned().unwrap_or_default();
+    let last_offset = array.value_offsets().last().cloned().unwrap_or_default();
+    let value_bytes_len = (last_offset - first_offset).as_usize();
+    let mut values_hashes = vec![0u64; value_bytes_len];
+    create_hashes(
+        [array
+            .values()
+            .slice(first_offset.as_usize(), value_bytes_len)],
+        random_state,
+        &mut values_hashes,
+    )?;
+
+    if array.null_count() > 0 {
+        for (i, (start, stop)) in array.value_offsets().iter().tuple_windows().enumerate()
+        {
+            if array.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+                for values_hash in &values_hashes[(*start - first_offset).as_usize()
+                    ..(*stop - first_offset).as_usize()]
+                {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
             }
         }
     } else {
-        for (i, (start, stop)) in offsets.iter().zip(offsets.iter().skip(1)).enumerate() {
+        for ((start, stop), hash) in array
+            .value_offsets()
+            .iter()
+            .tuple_windows()
+            .zip(hashes_buffer.iter_mut())
+        {
+            for values_hash in &values_hashes
+                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
+            {
+                *hash = combine_hashes(*hash, *values_hash);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "force_hash_collisions"))]
+fn hash_list_view_array<OffsetSize>(
+    array: &GenericListViewArray<OffsetSize>,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+) -> Result<()>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let values = array.values();
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+    let nulls = array.nulls();
+    let mut values_hashes = vec![0u64; values.len()];
+    create_hashes([values], random_state, &mut values_hashes)?;
+    if let Some(nulls) = nulls {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
+            if nulls.is_valid(i) {
+                let hash = &mut hashes_buffer[i];
+                let start = offset.as_usize();
+                let end = start + size.as_usize();
+                for values_hash in &values_hashes[start..end] {
+                    *hash = combine_hashes(*hash, *values_hash);
+                }
+            }
+        }
+    } else {
+        for (i, (offset, size)) in offsets.iter().zip(sizes.iter()).enumerate() {
             let hash = &mut hashes_buffer[i];
-            for values_hash in &values_hashes[start.as_usize()..stop.as_usize()] {
+            let start = offset.as_usize();
+            let end = start + size.as_usize();
+            for values_hash in &values_hashes[start..end] {
                 *hash = combine_hashes(*hash, *values_hash);
             }
         }
@@ -568,10 +747,10 @@ fn hash_single_array(
         DataType::Null => hash_null(random_state, hashes_buffer, rehash),
         DataType::Boolean => hash_array(&as_boolean_array(array)?, random_state, hashes_buffer, rehash),
         DataType::Utf8 => hash_array(&as_string_array(array)?, random_state, hashes_buffer, rehash),
-        DataType::Utf8View => hash_array(&as_string_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::Utf8View => hash_generic_byte_view_array(as_string_view_array(array)?, random_state, hashes_buffer, rehash),
         DataType::LargeUtf8 => hash_array(&as_largestring_array(array), random_state, hashes_buffer, rehash),
         DataType::Binary => hash_array(&as_generic_binary_array::<i32>(array)?, random_state, hashes_buffer, rehash),
-        DataType::BinaryView => hash_array(&as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
+        DataType::BinaryView => hash_generic_byte_view_array(as_binary_view_array(array)?, random_state, hashes_buffer, rehash),
         DataType::LargeBinary => hash_array(&as_generic_binary_array::<i64>(array)?, random_state, hashes_buffer, rehash),
         DataType::FixedSizeBinary(_) => {
             let array: &FixedSizeBinaryArray = array.as_any().downcast_ref().unwrap();
@@ -592,6 +771,14 @@ fn hash_single_array(
         DataType::LargeList(_) => {
             let array = as_large_list_array(array)?;
             hash_list_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::ListView(_) => {
+            let array = as_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
+        }
+        DataType::LargeListView(_) => {
+            let array = as_large_list_view_array(array)?;
+            hash_list_view_array(array, random_state, hashes_buffer)?;
         }
         DataType::Map(_, _) => {
             let array = as_map_array(array)?;
@@ -767,17 +954,12 @@ mod tests {
 
                 let binary_array: ArrayRef =
                     Arc::new(binary.iter().cloned().collect::<$ARRAY>());
-                let ref_array: ArrayRef =
-                    Arc::new(binary.iter().cloned().collect::<BinaryArray>());
 
                 let random_state = RandomState::with_seeds(0, 0, 0, 0);
 
                 let mut binary_hashes = vec![0; binary.len()];
                 create_hashes(&[binary_array], &random_state, &mut binary_hashes)
                     .unwrap();
-
-                let mut ref_hashes = vec![0; binary.len()];
-                create_hashes(&[ref_array], &random_state, &mut ref_hashes).unwrap();
 
                 // Null values result in a zero hash,
                 for (val, hash) in binary.iter().zip(binary_hashes.iter()) {
@@ -786,9 +968,6 @@ mod tests {
                         None => assert_eq!(*hash, 0),
                     }
                 }
-
-                // same logical values should hash to the same hash value
-                assert_eq!(binary_hashes, ref_hashes);
 
                 // Same values should map to same hash values
                 assert_eq!(binary[0], binary[5]);
@@ -801,6 +980,7 @@ mod tests {
     }
 
     create_hash_binary!(binary_array, BinaryArray);
+    create_hash_binary!(large_binary_array, LargeBinaryArray);
     create_hash_binary!(binary_view_array, BinaryViewArray);
 
     #[test]
@@ -1012,6 +1192,130 @@ mod tests {
         assert_eq!(hashes[1], hashes[4]);
         assert_eq!(hashes[2], hashes[3]);
         assert_eq!(hashes[1], hashes[6]); // null vs empty list
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_sliced_list_arrays() {
+        let data = vec![
+            Some(vec![Some(0), Some(1), Some(2)]),
+            None,
+            // Slice from here
+            Some(vec![Some(3), None, Some(5)]),
+            Some(vec![Some(3), None, Some(5)]),
+            None,
+            // To here
+            Some(vec![Some(0), Some(1), Some(2)]),
+            Some(vec![]),
+        ];
+        let list_array =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(data)) as ArrayRef;
+        let list_array = list_array.slice(2, 3);
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_array.len()];
+        create_hashes(&[list_array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes[0], hashes[1]);
+        assert_ne!(hashes[1], hashes[2]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create ListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i32, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i32, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let list_view_array =
+            Arc::new(ListViewArray::new(field, offsets, sizes, values, nulls))
+                as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; list_view_array.len()];
+        create_hashes(&[list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_large_list_view_arrays() {
+        use arrow::buffer::{NullBuffer, ScalarBuffer};
+
+        // Create values array: [0, 1, 2, 3, null, 5]
+        let values = Arc::new(Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+            None,
+            Some(5),
+        ])) as ArrayRef;
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+
+        // Create LargeListView with the following logical structure:
+        // Row 0: [0, 1, 2]        (offset=0, size=3)
+        // Row 1: null             (null bit set)
+        // Row 2: [3, null, 5]     (offset=3, size=3)
+        // Row 3: [3, null, 5]     (offset=3, size=3) - same as row 2
+        // Row 4: null             (null bit set)
+        // Row 5: [0, 1, 2]        (offset=0, size=3) - same as row 0
+        // Row 6: []               (offset=0, size=0) - empty list
+        let offsets = ScalarBuffer::from(vec![0i64, 0, 3, 3, 0, 0, 0]);
+        let sizes = ScalarBuffer::from(vec![3i64, 0, 3, 3, 0, 3, 0]);
+        let nulls = Some(NullBuffer::from(vec![
+            true, false, true, true, false, true, true,
+        ]));
+
+        let large_list_view_array = Arc::new(LargeListViewArray::new(
+            field, offsets, sizes, values, nulls,
+        )) as ArrayRef;
+
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let mut hashes = vec![0; large_list_view_array.len()];
+        create_hashes(&[large_list_view_array], &random_state, &mut hashes).unwrap();
+
+        assert_eq!(hashes[0], hashes[5]); // same content [0, 1, 2]
+        assert_eq!(hashes[1], hashes[4]); // both null
+        assert_eq!(hashes[2], hashes[3]); // same content [3, null, 5]
+        assert_eq!(hashes[1], hashes[6]); // null vs empty list
+
+        // Negative tests: different content should produce different hashes
+        assert_ne!(hashes[0], hashes[2]); // [0, 1, 2] vs [3, null, 5]
+        assert_ne!(hashes[0], hashes[6]); // [0, 1, 2] vs []
+        assert_ne!(hashes[2], hashes[6]); // [3, null, 5] vs []
     }
 
     #[test]

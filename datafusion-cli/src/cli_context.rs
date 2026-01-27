@@ -20,7 +20,7 @@ use std::sync::Arc;
 use datafusion::{
     dataframe::DataFrame,
     error::DataFusionError,
-    execution::{context::SessionState, TaskContext},
+    execution::{TaskContext, context::SessionState},
     logical_expr::LogicalPlan,
     prelude::SessionContext,
 };

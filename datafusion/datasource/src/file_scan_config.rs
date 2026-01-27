@@ -34,25 +34,26 @@ use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
 };
 use datafusion_expr::Operator;
+
+use datafusion_physical_expr::equivalence::project_orderings;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_plan::SortOrderPushdownResult;
+use datafusion_physical_plan::coop::cooperative;
+use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
     filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
 };
-use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
-
-use datafusion_physical_expr::equivalence::project_orderings;
-use datafusion_physical_plan::coop::cooperative;
-use datafusion_physical_plan::execution_plan::SchedulingType;
 use log::{debug, warn};
+use std::{any::Any, fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 
 /// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
@@ -77,7 +78,6 @@ use log::{debug, warn};
 /// # use datafusion_physical_expr::projection::ProjectionExprs;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-/// # use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
@@ -88,7 +88,6 @@ use log::{debug, warn};
 /// #[derive(Clone)]
 /// # struct ParquetSource {
 /// #    table_schema: TableSchema,
-/// #    schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>
 /// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Result<Arc<dyn FileOpener>> { unimplemented!() }
@@ -97,13 +96,11 @@ use log::{debug, warn};
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
 /// #  fn file_type(&self) -> &str { "parquet" }
-/// #  fn with_schema_adapter_factory(&self, factory: Arc<dyn SchemaAdapterFactory>) -> Result<Arc<dyn FileSource>> { Ok(Arc::new(Self {table_schema: self.table_schema.clone(), schema_adapter_factory: Some(factory)} )) }
-/// #  fn schema_adapter_factory(&self) -> Option<Arc<dyn SchemaAdapterFactory>> { self.schema_adapter_factory.clone() }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into(), schema_adapter_factory: None} }
+/// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -155,12 +152,15 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// Whether the scan's limit is order sensitive
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub preserve_order: bool,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
     pub file_compression_type: FileCompressionType,
-    /// Are new lines in values supported for CSVOptions
-    pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
     pub file_source: Arc<dyn FileSource>,
     /// Batch size while creating new batches
@@ -245,12 +245,12 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    preserve_order: bool,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
     output_ordering: Vec<LexOrdering>,
     file_compression_type: Option<FileCompressionType>,
-    new_lines_in_values: Option<bool>,
     batch_size: Option<usize>,
     expr_adapter_factory: Option<Arc<dyn PhysicalExprAdapterFactory>>,
     partitioned_by_file_group: bool,
@@ -274,8 +274,8 @@ impl FileScanConfigBuilder {
             statistics: None,
             output_ordering: vec![],
             file_compression_type: None,
-            new_lines_in_values: None,
             limit: None,
+            preserve_order: false,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -287,6 +287,15 @@ impl FileScanConfigBuilder {
     /// all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set whether the limit should be order-sensitive.
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
+        self.preserve_order = order_sensitive;
         self
     }
 
@@ -413,16 +422,6 @@ impl FileScanConfigBuilder {
         self
     }
 
-    /// Set whether new lines in values are supported for CSVOptions
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
-        self.new_lines_in_values = Some(new_lines_in_values);
-        self
-    }
-
     /// Set the batch_size property
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
         self.batch_size = batch_size;
@@ -467,12 +466,12 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             statistics,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             partitioned_by_file_group,
@@ -484,17 +483,19 @@ impl FileScanConfigBuilder {
         });
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
-        let new_lines_in_values = new_lines_in_values.unwrap_or(false);
+
+        // If there is an output ordering, we should preserve it.
+        let preserve_order = preserve_order || !output_ordering.is_empty();
 
         FileScanConfig {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             output_ordering,
             file_compression_type,
-            new_lines_in_values,
             batch_size,
             expr_adapter_factory: expr_adapter,
             statistics,
@@ -512,8 +513,8 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             statistics: Some(config.statistics),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
-            new_lines_in_values: Some(config.new_lines_in_values),
             limit: config.limit,
+            preserve_order: config.preserve_order,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -730,6 +731,7 @@ impl DataSource for FileScanConfig {
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         if let Some(partition) = partition {
             // Get statistics for a specific partition
+            // Note: FileGroup statistics include partition columns (computed from partition_values)
             if let Some(file_group) = self.file_groups.get(partition)
                 && let Some(stat) = file_group.file_statistics(None)
             {
@@ -844,6 +846,44 @@ impl DataSource for FileScanConfig {
             }
         }
     }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        // Delegate to FileSource to check if reverse scanning can satisfy the request.
+        let pushdown_result = self
+            .file_source
+            .try_reverse_output(order, &self.eq_properties())?;
+
+        match pushdown_result {
+            SortOrderPushdownResult::Exact { inner } => {
+                Ok(SortOrderPushdownResult::Exact {
+                    inner: self.rebuild_with_source(inner, true)?,
+                })
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                Ok(SortOrderPushdownResult::Inexact {
+                    inner: self.rebuild_with_source(inner, false)?,
+                })
+            }
+            SortOrderPushdownResult::Unsupported => {
+                Ok(SortOrderPushdownResult::Unsupported)
+            }
+        }
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        if self.preserve_order == preserve_order {
+            return Some(Arc::new(self.clone()));
+        }
+
+        let new_config = FileScanConfig {
+            preserve_order,
+            ..self.clone()
+        };
+        Some(Arc::new(new_config))
+    }
 }
 
 impl FileScanConfig {
@@ -904,6 +944,22 @@ impl FileScanConfig {
         Ok(())
     }
 
+    /// Returns whether newlines in values are supported.
+    ///
+    /// This method always returns `false`. The actual newlines_in_values setting
+    /// has been moved to [`CsvSource`] and should be accessed via
+    /// [`CsvSource::csv_options()`] instead.
+    ///
+    /// [`CsvSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html
+    /// [`CsvSource::csv_options()`]: https://docs.rs/datafusion/latest/datafusion/datasource/physical_plan/struct.CsvSource.html#method.csv_options
+    #[deprecated(
+        since = "52.0.0",
+        note = "newlines_in_values has moved to CsvSource. Access it via CsvSource::csv_options().newlines_in_values instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
+    )]
+    pub fn newlines_in_values(&self) -> bool {
+        false
+    }
+
     #[deprecated(
         since = "52.0.0",
         note = "This method is no longer used, use eq_properties instead. It will be removed in 58.0.0 or 6 months after 52.0.0 is released, whichever comes first."
@@ -911,17 +967,6 @@ impl FileScanConfig {
     pub fn projected_constraints(&self) -> Constraints {
         let props = self.eq_properties();
         props.constraints().clone()
-    }
-
-    /// Specifies whether newlines in (quoted) values are supported.
-    ///
-    /// Parsing newlines in quoted values may be affected by execution behaviour such as
-    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
-    /// parsed successfully, which may reduce performance.
-    ///
-    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
-    pub fn newlines_in_values(&self) -> bool {
-        self.new_lines_in_values
     }
 
     #[deprecated(
@@ -1105,6 +1150,36 @@ impl FileScanConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.file_source
+    }
+
+    /// Helper: Rebuild FileScanConfig with new file source
+    fn rebuild_with_source(
+        &self,
+        new_file_source: Arc<dyn FileSource>,
+        is_exact: bool,
+    ) -> Result<Arc<dyn DataSource>> {
+        let mut new_config = self.clone();
+
+        // Reverse file groups (FileScanConfig's responsibility)
+        new_config.file_groups = new_config
+            .file_groups
+            .into_iter()
+            .map(|group| {
+                let mut files = group.into_inner();
+                files.reverse();
+                files.into()
+            })
+            .collect();
+
+        new_config.file_source = new_file_source;
+
+        // Phase 1: Clear output_ordering for Inexact
+        // (we're only reversing row groups, not guaranteeing perfect ordering)
+        if !is_exact {
+            new_config.output_ordering = vec![];
+        }
+
+        Ok(Arc::new(new_config))
     }
 }
 
@@ -1620,43 +1695,40 @@ mod tests {
 
         impl From<File> for PartitionedFile {
             fn from(file: File) -> Self {
-                PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(format!(
-                            "data/date={}/{}.parquet",
-                            file.date, file.name
-                        )),
-                        last_modified: chrono::Utc.timestamp_nanos(0),
-                        size: 0,
-                        e_tag: None,
-                        version: None,
-                    },
-                    partition_values: vec![ScalarValue::from(file.date)],
-                    range: None,
-                    statistics: Some(Arc::new(Statistics {
-                        num_rows: Precision::Absent,
-                        total_byte_size: Precision::Absent,
-                        column_statistics: file
-                            .statistics
-                            .into_iter()
-                            .map(|stats| {
-                                stats
-                                    .map(|(min, max)| ColumnStatistics {
-                                        min_value: Precision::Exact(
-                                            ScalarValue::Float64(min),
-                                        ),
-                                        max_value: Precision::Exact(
-                                            ScalarValue::Float64(max),
-                                        ),
-                                        ..Default::default()
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .collect::<Vec<_>>(),
-                    })),
-                    extensions: None,
-                    metadata_size_hint: None,
-                }
+                let object_meta = ObjectMeta {
+                    location: Path::from(format!(
+                        "data/date={}/{}.parquet",
+                        file.date, file.name
+                    )),
+                    last_modified: chrono::Utc.timestamp_nanos(0),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                };
+                let statistics = Arc::new(Statistics {
+                    num_rows: Precision::Absent,
+                    total_byte_size: Precision::Absent,
+                    column_statistics: file
+                        .statistics
+                        .into_iter()
+                        .map(|stats| {
+                            stats
+                                .map(|(min, max)| ColumnStatistics {
+                                    min_value: Precision::Exact(ScalarValue::Float64(
+                                        min,
+                                    )),
+                                    max_value: Precision::Exact(ScalarValue::Float64(
+                                        max,
+                                    )),
+                                    ..Default::default()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>(),
+                });
+                PartitionedFile::new_from_meta(object_meta)
+                    .with_partition_values(vec![ScalarValue::from(file.date)])
+                    .with_statistics(statistics)
             }
         }
     }
@@ -1722,7 +1794,6 @@ mod tests {
                 .into(),
             ])
             .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .with_newlines_in_values(true)
             .build();
 
         // Verify the built config has all the expected values
@@ -1749,7 +1820,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(config.new_lines_in_values);
         assert_eq!(config.output_ordering.len(), 1);
     }
 
@@ -1781,7 +1851,7 @@ mod tests {
         // the new projection won't include the filtered column.
         let exprs = ProjectionExprs::new(vec![ProjectionExpr::new(
             col("c1", &file_schema).unwrap(),
-            "c1".to_string(),
+            "c1",
         )]);
         let data_source = config
             .try_swapping_with_projection(&exprs)
@@ -1844,7 +1914,6 @@ mod tests {
             config.file_compression_type,
             FileCompressionType::UNCOMPRESSED
         );
-        assert!(!config.new_lines_in_values);
         assert!(config.output_ordering.is_empty());
         assert!(config.constraints.is_empty());
 
@@ -1892,7 +1961,6 @@ mod tests {
         .with_limit(Some(10))
         .with_file(file.clone())
         .with_constraints(Constraints::default())
-        .with_newlines_in_values(true)
         .build();
 
         // Create a new builder from the config
@@ -1922,7 +1990,6 @@ mod tests {
             "test_file.parquet"
         );
         assert_eq!(new_config.constraints, Constraints::default());
-        assert!(new_config.new_lines_in_values);
     }
 
     #[test]

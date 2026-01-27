@@ -19,7 +19,7 @@
 //! store, memory manager, disk manager.
 
 #[expect(deprecated)]
-use crate::disk_manager::DiskManagerConfig;
+use crate::disk_manager::{DiskManagerConfig, SpillingProgress};
 use crate::{
     disk_manager::{DiskManager, DiskManagerBuilder, DiskManagerMode},
     memory_pool::{
@@ -101,6 +101,8 @@ fn create_runtime_config_entries(
     max_temp_directory_size: Option<String>,
     temp_directory: Option<String>,
     metadata_cache_limit: Option<String>,
+    list_files_cache_limit: Option<String>,
+    list_files_cache_ttl: Option<String>,
 ) -> Vec<ConfigEntry> {
     vec![
         ConfigEntry {
@@ -122,6 +124,16 @@ fn create_runtime_config_entries(
             key: "datafusion.runtime.metadata_cache_limit".to_string(),
             value: metadata_cache_limit,
             description: "Maximum memory to use for file metadata cache such as Parquet metadata. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_limit".to_string(),
+            value: list_files_cache_limit,
+            description: "Maximum memory to use for list files cache. Supports suffixes K (kilobytes), M (megabytes), and G (gigabytes). Example: '2G' for 2 gigabytes.",
+        },
+        ConfigEntry {
+            key: "datafusion.runtime.list_files_cache_ttl".to_string(),
+            value: list_files_cache_ttl,
+            description: "TTL (time-to-live) of the entries in the list file cache. Supports units m (minutes), and s (seconds). Example: '2m' for 2 minutes.",
         },
     ]
 }
@@ -187,6 +199,11 @@ impl RuntimeEnv {
         self.object_store_registry.get_store(url.as_ref())
     }
 
+    /// Returns the current spilling progress
+    pub fn spilling_progress(&self) -> SpillingProgress {
+        self.disk_manager.spilling_progress()
+    }
+
     /// Register an [`EncryptionFactory`] with an associated identifier that can be later
     /// used to configure encryption when reading or writing Parquet.
     /// If an encryption factory with the same identifier was already registered, it is replaced and returned.
@@ -227,6 +244,14 @@ impl RuntimeEnv {
             }
         }
 
+        fn format_duration(duration: Duration) -> String {
+            let total = duration.as_secs();
+            let mins = total / 60;
+            let secs = total % 60;
+
+            format!("{mins}m{secs}s")
+        }
+
         let memory_limit_value = match self.memory_pool.memory_limit() {
             MemoryLimit::Finite(size) => Some(format_byte_size(
                 size.try_into()
@@ -259,11 +284,25 @@ impl RuntimeEnv {
                 .expect("Metadata cache size conversion failed"),
         );
 
+        let list_files_cache_limit = self.cache_manager.get_list_files_cache_limit();
+        let list_files_cache_value = format_byte_size(
+            list_files_cache_limit
+                .try_into()
+                .expect("List files cache size conversion failed"),
+        );
+
+        let list_files_cache_ttl = self
+            .cache_manager
+            .get_list_files_cache_ttl()
+            .map(format_duration);
+
         create_runtime_config_entries(
             memory_limit_value,
             Some(max_temp_dir_value),
             temp_dir_value,
             Some(metadata_cache_value),
+            Some(list_files_cache_value),
+            list_files_cache_ttl,
         )
     }
 }
@@ -394,7 +433,7 @@ impl RuntimeEnvBuilder {
     }
 
     /// Specifies the duration entries in the object list cache will be considered valid.
-    pub fn with_object_list_cache_ttl(mut self, ttl: Duration) -> Self {
+    pub fn with_object_list_cache_ttl(mut self, ttl: Option<Duration>) -> Self {
         self.cache_manager = self.cache_manager.with_list_files_cache_ttl(ttl);
         self
     }
@@ -473,6 +512,8 @@ impl RuntimeEnvBuilder {
             Some("100G".to_string()),
             None,
             Some("50M".to_owned()),
+            Some("1M".to_owned()),
+            None,
         )
     }
 
