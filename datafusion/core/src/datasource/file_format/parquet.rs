@@ -815,7 +815,7 @@ mod tests {
             .schema()
             .fields()
             .iter()
-            .map(|f| format!("{}: {:?}", f.name(), f.data_type()))
+            .map(|f| format!("{}: {}", f.name(), f.data_type()))
             .collect();
         let y = x.join("\n");
         assert_eq!(expected, y);
@@ -841,7 +841,7 @@ mod tests {
              double_col: Float64\n\
              date_string_col: Binary\n\
              string_col: Binary\n\
-             timestamp_col: Timestamp(Nanosecond, None)";
+             timestamp_col: Timestamp(ns)";
         _run_read_alltypes_plain_parquet(ForceViews::No, no_views).await?;
 
         let with_views = "id: Int32\n\
@@ -854,7 +854,7 @@ mod tests {
              double_col: Float64\n\
              date_string_col: BinaryView\n\
              string_col: BinaryView\n\
-             timestamp_col: Timestamp(Nanosecond, None)";
+             timestamp_col: Timestamp(ns)";
         _run_read_alltypes_plain_parquet(ForceViews::Yes, with_views).await?;
 
         Ok(())

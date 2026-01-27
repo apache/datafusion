@@ -324,7 +324,7 @@ fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
 /// ```
 ///
 /// See `test_adjust_to_local_time()` for example
-fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
+pub fn adjust_to_local_time<T: ArrowTimestampType>(ts: i64, tz: Tz) -> Result<i64> {
     fn convert_timestamp<F>(ts: i64, converter: F) -> Result<DateTime<Utc>>
     where
         F: Fn(i64) -> MappedLocalTime<DateTime<Utc>>,

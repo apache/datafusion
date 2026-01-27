@@ -1068,7 +1068,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(Second, None)"
+            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(s)"
         );
 
         Ok(())

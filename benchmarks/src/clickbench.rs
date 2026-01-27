@@ -29,6 +29,16 @@ use datafusion::{
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
 
+/// SQL to create the hits view with proper EventDate casting.
+///
+/// ClickBench stores EventDate as UInt16 (days since 1970-01-01) for
+/// storage efficiency (2 bytes vs 4-8 bytes for date types).
+/// This view transforms it to SQL DATE type for query compatibility.
+const HITS_VIEW_DDL: &str = r#"CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw"#;
+
 /// Driver program to run the ClickBench benchmark
 ///
 /// The ClickBench[1] benchmarks are widely cited in the industry and
@@ -295,7 +305,7 @@ impl RunOpt {
             // Build CREATE EXTERNAL TABLE DDL with WITH ORDER clause
             // Schema will be automatically inferred from the Parquet file
             let create_table_sql = format!(
-                "CREATE EXTERNAL TABLE hits \
+                "CREATE EXTERNAL TABLE hits_raw \
                  STORED AS PARQUET \
                  LOCATION '{}' \
                  WITH ORDER ({} {})",
@@ -308,20 +318,34 @@ impl RunOpt {
 
             // Execute the CREATE EXTERNAL TABLE statement
             ctx.sql(&create_table_sql).await?.collect().await?;
-
-            Ok(())
         } else {
             // Original registration without sort order
             let options = Default::default();
-            ctx.register_parquet("hits", path, options)
+            ctx.register_parquet("hits_raw", path, options)
                 .await
                 .map_err(|e| {
                     DataFusionError::Context(
-                        format!("Registering 'hits' as {path}"),
+                        format!("Registering 'hits_raw' as {path}"),
                         Box::new(e),
                     )
-                })
+                })?;
         }
+
+        // Create the hits view with EventDate transformation
+        Self::create_hits_view(ctx).await
+    }
+
+    /// Creates the hits view with EventDate transformation from UInt16 to DATE.
+    ///
+    /// ClickBench encodes EventDate as UInt16 days since epoch (1970-01-01).
+    async fn create_hits_view(ctx: &SessionContext) -> Result<()> {
+        ctx.sql(HITS_VIEW_DDL).await?.collect().await.map_err(|e| {
+            DataFusionError::Context(
+                "Creating 'hits' view with EventDate transformation".to_string(),
+                Box::new(e),
+            )
+        })?;
+        Ok(())
     }
 
     fn iterations(&self) -> usize {
