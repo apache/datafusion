@@ -16,12 +16,13 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{DFSchema, Spans, substrait_err};
-use datafusion::logical_expr::expr::{Exists, InSubquery};
-use datafusion::logical_expr::{Expr, Subquery};
+use datafusion::common::{DFSchema, Spans, substrait_datafusion_err, substrait_err};
+use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
+use datafusion::logical_expr::{Expr, Operator, Subquery};
 use std::sync::Arc;
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::subquery::SubqueryType;
+use substrait::proto::expression::subquery::set_comparison::{ComparisonOp, ReductionOp};
 use substrait::proto::expression::subquery::set_predicate::PredicateOp;
 
 pub async fn from_subquery(
@@ -96,8 +97,53 @@ pub async fn from_subquery(
                     ),
                 }
             }
-            other_type => {
-                substrait_err!("Subquery type {other_type:?} not implemented")
+            SubqueryType::SetComparison(comparison) => {
+                let left = comparison.left.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("SetComparison requires a left expression")
+                })?;
+                let right = comparison.right.as_ref().ok_or_else(|| {
+                    substrait_datafusion_err!("SetComparison requires a right relation")
+                })?;
+                let reduction_op = match ReductionOp::try_from(comparison.reduction_op) {
+                    Ok(ReductionOp::Any) => SetQuantifier::Any,
+                    Ok(ReductionOp::All) => SetQuantifier::All,
+                    _ => {
+                        return substrait_err!(
+                            "Unsupported reduction op for SetComparison: {}",
+                            comparison.reduction_op
+                        );
+                    }
+                };
+                let comparison_op = match ComparisonOp::try_from(comparison.comparison_op)
+                {
+                    Ok(ComparisonOp::Eq) => Operator::Eq,
+                    Ok(ComparisonOp::Ne) => Operator::NotEq,
+                    Ok(ComparisonOp::Lt) => Operator::Lt,
+                    Ok(ComparisonOp::Gt) => Operator::Gt,
+                    Ok(ComparisonOp::Le) => Operator::LtEq,
+                    Ok(ComparisonOp::Ge) => Operator::GtEq,
+                    _ => {
+                        return substrait_err!(
+                            "Unsupported comparison op for SetComparison: {}",
+                            comparison.comparison_op
+                        );
+                    }
+                };
+
+                let left_expr = consumer.consume_expression(left, input_schema).await?;
+                let plan = consumer.consume_rel(right).await?;
+                let outer_ref_columns = plan.all_out_ref_exprs();
+
+                Ok(Expr::SetComparison(SetComparison::new(
+                    Box::new(left_expr),
+                    Subquery {
+                        subquery: Arc::new(plan),
+                        outer_ref_columns,
+                        spans: Spans::new(),
+                    },
+                    comparison_op,
+                    reduction_op,
+                )))
             }
         },
         None => {

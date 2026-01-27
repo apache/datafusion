@@ -16,61 +16,157 @@
 // under the License.
 
 use std::any::Any;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayRef, GenericStringBuilder};
-use arrow::datatypes::DataType::{
-    Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Utf8,
-};
+use arrow::array::{Array, ArrayRef, StringArray};
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int8Type, Int16Type, Int32Type,
     Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::Result;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err};
-
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use datafusion_expr_common::signature::TypeSignature::Exact;
+use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_expr::{
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_macros::user_doc;
+
+/// Hex lookup table for fast conversion
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
 fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
-    T::Native: std::fmt::LowerHex,
+    T::Native: ToHex,
 {
     let integer_array = as_primitive_array::<T>(&args[0])?;
+    let len = integer_array.len();
 
-    let mut result = GenericStringBuilder::<i32>::with_capacity(
-        integer_array.len(),
-        // * 8 to convert to bits, / 4 bits per hex char
-        integer_array.len() * (T::Native::get_byte_width() * 8 / 4),
-    );
+    // Max hex string length: 16 chars for u64/i64
+    let max_hex_len = T::Native::get_byte_width() * 2;
 
-    for integer in integer_array {
-        if let Some(value) = integer {
-            if let Some(value_usize) = value.to_usize() {
-                write!(result, "{value_usize:x}")?;
-            } else if let Some(value_isize) = value.to_isize() {
-                write!(result, "{value_isize:x}")?;
-            } else {
-                return exec_err!(
-                    "Unsupported data type {integer:?} for function to_hex"
-                );
-            }
-            result.append_value("");
-        } else {
-            result.append_null();
-        }
+    // Pre-allocate buffers - avoid the builder API overhead
+    let mut offsets: Vec<i32> = Vec::with_capacity(len + 1);
+    let mut values: Vec<u8> = Vec::with_capacity(len * max_hex_len);
+
+    // Reusable buffer for hex conversion
+    let mut hex_buffer = [0u8; 16];
+
+    // Start with offset 0
+    offsets.push(0);
+
+    // Process all values directly (including null slots - we write empty strings for nulls)
+    // The null bitmap will mark which entries are actually null
+    for value in integer_array.values() {
+        let hex_len = value.write_hex_to_buffer(&mut hex_buffer);
+        values.extend_from_slice(&hex_buffer[16 - hex_len..]);
+        offsets.push(values.len() as i32);
     }
 
-    let result = result.finish();
+    // Copy null bitmap from input (nulls pass through unchanged)
+    let nulls = integer_array.nulls().cloned();
+
+    // SAFETY: offsets are valid (monotonically increasing, last value equals values.len())
+    // and values contains valid UTF-8 (only ASCII hex digits)
+    let offsets =
+        unsafe { OffsetBuffer::new_unchecked(Buffer::from_vec(offsets).into()) };
+    let result = StringArray::new(offsets, Buffer::from_vec(values), nulls);
 
     Ok(Arc::new(result) as ArrayRef)
+}
+
+/// Trait for converting integer types to hexadecimal in a buffer
+trait ToHex: ArrowNativeType {
+    /// Write hex representation to buffer and return the number of hex digits written.
+    /// The hex digits are written right-aligned in the buffer (starting from position 16 - len).
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize;
+}
+
+/// Write unsigned value to hex buffer and return the number of digits written.
+/// Digits are written right-aligned in the buffer.
+#[inline]
+fn write_unsigned_hex_to_buffer(value: u64, buffer: &mut [u8; 16]) -> usize {
+    if value == 0 {
+        buffer[15] = b'0';
+        return 1;
+    }
+
+    // Write hex digits from right to left
+    let mut pos = 16;
+    let mut v = value;
+    while v > 0 {
+        pos -= 1;
+        buffer[pos] = HEX_CHARS[(v & 0xf) as usize];
+        v >>= 4;
+    }
+
+    16 - pos
+}
+
+/// Write signed value to hex buffer (two's complement for negative) and return digit count
+#[inline]
+fn write_signed_hex_to_buffer(value: i64, buffer: &mut [u8; 16]) -> usize {
+    // For negative values, use two's complement representation (same as casting to u64)
+    write_unsigned_hex_to_buffer(value as u64, buffer)
+}
+
+impl ToHex for i8 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_signed_hex_to_buffer(self as i64, buffer)
+    }
+}
+
+impl ToHex for i16 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_signed_hex_to_buffer(self as i64, buffer)
+    }
+}
+
+impl ToHex for i32 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_signed_hex_to_buffer(self as i64, buffer)
+    }
+}
+
+impl ToHex for i64 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_signed_hex_to_buffer(self, buffer)
+    }
+}
+
+impl ToHex for u8 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_unsigned_hex_to_buffer(self as u64, buffer)
+    }
+}
+
+impl ToHex for u16 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_unsigned_hex_to_buffer(self as u64, buffer)
+    }
+}
+
+impl ToHex for u32 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_unsigned_hex_to_buffer(self as u64, buffer)
+    }
+}
+
+impl ToHex for u64 {
+    #[inline]
+    fn write_hex_to_buffer(self, buffer: &mut [u8; 16]) -> usize {
+        write_unsigned_hex_to_buffer(self, buffer)
+    }
 }
 
 #[user_doc(
@@ -101,17 +197,8 @@ impl Default for ToHexFunc {
 impl ToHexFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Int8]),
-                    Exact(vec![Int16]),
-                    Exact(vec![Int32]),
-                    Exact(vec![Int64]),
-                    Exact(vec![UInt8]),
-                    Exact(vec![UInt16]),
-                    Exact(vec![UInt32]),
-                    Exact(vec![UInt64]),
-                ],
+            signature: Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Integer)],
                 Volatility::Immutable,
             ),
         }
@@ -131,25 +218,37 @@ impl ScalarUDFImpl for ToHexFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(match arg_types[0] {
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => Utf8,
-            _ => {
-                return plan_err!("The to_hex function can only accept integers.");
-            }
-        })
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Utf8)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args.args[0].data_type() {
-            Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args),
-            UInt64 => make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args),
-            Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args),
-            UInt32 => make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args),
-            Int16 => make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args),
-            UInt16 => make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args),
-            Int8 => make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args),
-            UInt8 => make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args),
+            DataType::Null => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
+            DataType::Int64 => {
+                make_scalar_function(to_hex::<Int64Type>, vec![])(&args.args)
+            }
+            DataType::UInt64 => {
+                make_scalar_function(to_hex::<UInt64Type>, vec![])(&args.args)
+            }
+            DataType::Int32 => {
+                make_scalar_function(to_hex::<Int32Type>, vec![])(&args.args)
+            }
+            DataType::UInt32 => {
+                make_scalar_function(to_hex::<UInt32Type>, vec![])(&args.args)
+            }
+            DataType::Int16 => {
+                make_scalar_function(to_hex::<Int16Type>, vec![])(&args.args)
+            }
+            DataType::UInt16 => {
+                make_scalar_function(to_hex::<UInt16Type>, vec![])(&args.args)
+            }
+            DataType::Int8 => {
+                make_scalar_function(to_hex::<Int8Type>, vec![])(&args.args)
+            }
+            DataType::UInt8 => {
+                make_scalar_function(to_hex::<UInt8Type>, vec![])(&args.args)
+            }
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }

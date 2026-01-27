@@ -85,18 +85,9 @@ make_udaf_expr_and_func!(
 /// If using the distinct variation, the memory usage will be similarly high if the
 /// cardinality is high as it stores all distinct values in memory before computing the
 /// result, but if cardinality is low then memory usage will also be lower.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub struct Median {
     signature: Signature,
-}
-
-impl Debug for Median {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("Median")
-            .field("name", &self.name())
-            .field("signature", &self.signature)
-            .finish()
-    }
 }
 
 impl Default for Median {
@@ -566,10 +557,8 @@ impl<T: ArrowNumericType + Debug> Accumulator for DistinctMedianAccumulator<T> {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut d = std::mem::take(&mut self.distinct_values.values)
-            .into_iter()
-            .map(|v| v.0)
-            .collect::<Vec<_>>();
+        let mut d: Vec<T::Native> =
+            self.distinct_values.values.iter().map(|v| v.0).collect();
         let median = calculate_median::<T>(&mut d);
         ScalarValue::new_primitive::<T>(median, &self.data_type)
     }
@@ -604,9 +593,25 @@ fn calculate_median<T: ArrowNumericType>(values: &mut [T::Native]) -> Option<T::
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
         // Get the maximum of the low (left side after bi-partitioning)
         let left_max = slice_max::<T>(low);
-        let median = left_max
-            .add_wrapping(*high)
-            .div_wrapping(T::Native::usize_as(2));
+        // Calculate median as the average of the two middle values.
+        // Use checked arithmetic to detect overflow and fall back to safe formula.
+        let two = T::Native::usize_as(2);
+        let median = match left_max.add_checked(*high) {
+            Ok(sum) => sum.div_wrapping(two),
+            Err(_) => {
+                // Overflow detected - use safe midpoint formula:
+                // a/2 + b/2 + ((a%2 + b%2) / 2)
+                // This avoids overflow by dividing before adding.
+                let half_left = left_max.div_wrapping(two);
+                let half_right = (*high).div_wrapping(two);
+                let rem_left = left_max.mod_wrapping(two);
+                let rem_right = (*high).mod_wrapping(two);
+                // The sum of remainders (0, 1, or 2 for unsigned; -2 to 2 for signed)
+                // divided by 2 gives the correction factor (0 or 1 for unsigned; -1, 0, or 1 for signed)
+                let correction = rem_left.add_wrapping(rem_right).div_wrapping(two);
+                half_left.add_wrapping(half_right).add_wrapping(correction)
+            }
+        };
         Some(median)
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);

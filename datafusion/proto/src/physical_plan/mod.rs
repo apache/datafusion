@@ -71,16 +71,17 @@ use datafusion_functions_table::generate_series::{
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
-use datafusion_physical_plan::aggregates::AggregateMode;
 use datafusion_physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
+use datafusion_physical_plan::aggregates::{AggregateMode, LimitOptions};
 use datafusion_physical_plan::analyze::AnalyzeExec;
+#[expect(deprecated)]
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::coop::CooperativeExec;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::explain::ExplainExec;
 use datafusion_physical_plan::expressions::PhysicalSortExpr;
-use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, NestedLoopJoinExec, SortMergeJoinExec, StreamJoinPartitionMode,
@@ -358,6 +359,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             );
         }
 
+        #[expect(deprecated)]
         if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>() {
             return protobuf::PhysicalPlanNode::try_from_coalesce_batches_exec(
                 coalesce_batches,
@@ -586,8 +588,10 @@ impl protobuf::PhysicalPlanNode {
             None
         };
 
-        let filter =
-            FilterExec::try_new(predicate, input)?.with_projection(projection)?;
+        let filter = FilterExecBuilder::new(predicate, input)
+            .apply_projection(projection)?
+            .with_batch_size(filter.batch_size as usize)
+            .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
                 filter.with_default_selectivity(filter_selectivity)?,
@@ -821,6 +825,7 @@ impl protobuf::PhysicalPlanNode {
         let input: Arc<dyn ExecutionPlan> =
             into_physical_plan(&coalesce_batches.input, ctx, extension_codec)?;
         Ok(Arc::new(
+            #[expect(deprecated)]
             CoalesceBatchesExec::new(input, coalesce_batches.target_batch_size as usize)
                 .with_fetch(coalesce_batches.fetch.map(|f| f as usize)),
         ))
@@ -1102,11 +1107,6 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let limit = hash_agg
-            .limit
-            .as_ref()
-            .map(|lit_value| lit_value.limit as usize);
-
         let agg = AggregateExec::try_new(
             agg_mode,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
@@ -1116,7 +1116,16 @@ impl protobuf::PhysicalPlanNode {
             physical_schema,
         )?;
 
-        let agg = agg.with_limit(limit);
+        let agg = if let Some(limit_proto) = &hash_agg.limit {
+            let limit = limit_proto.limit as usize;
+            let limit_options = match limit_proto.descending {
+                Some(descending) => LimitOptions::new_with_order(limit, descending),
+                None => LimitOptions::new(limit),
+            };
+            agg.with_limit_options(Some(limit_options))
+        } else {
+            agg
+        };
 
         Ok(Arc::new(agg))
     }
@@ -1236,6 +1245,7 @@ impl protobuf::PhysicalPlanNode {
             projection,
             partition_mode,
             null_equality.into(),
+            hashjoin.null_aware,
         )?))
     }
 
@@ -2112,6 +2122,7 @@ impl protobuf::PhysicalPlanNode {
                     projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
+                    batch_size: exec.batch_size() as u32,
                 },
             ))),
         })
@@ -2229,6 +2240,7 @@ impl protobuf::PhysicalPlanNode {
                     projection: exec.projection.as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
+                    null_aware: exec.null_aware,
                 },
             ))),
         })
@@ -2524,8 +2536,9 @@ impl protobuf::PhysicalPlanNode {
             .map(|expr| serialize_physical_expr(&expr.0, extension_codec))
             .collect::<Result<Vec<_>>>()?;
 
-        let limit = exec.limit().map(|value| protobuf::AggLimit {
-            limit: value as u64,
+        let limit = exec.limit_options().map(|config| protobuf::AggLimit {
+            limit: config.limit() as u64,
+            descending: config.descending(),
         });
 
         Ok(protobuf::PhysicalPlanNode {
@@ -2574,6 +2587,7 @@ impl protobuf::PhysicalPlanNode {
         })
     }
 
+    #[expect(deprecated)]
     fn try_from_coalesce_batches_exec(
         coalesce_batches: &CoalesceBatchesExec,
         extension_codec: &dyn PhysicalExtensionCodec,

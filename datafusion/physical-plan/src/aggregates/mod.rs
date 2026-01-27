@@ -41,7 +41,7 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -64,6 +64,8 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+use topk::hash_table::is_supported_hash_key_type;
+use topk::heap::is_supported_heap_type;
 
 pub mod group_values;
 mod no_grouping;
@@ -71,6 +73,17 @@ pub mod order;
 mod row_hash;
 mod topk;
 mod topk_stream;
+
+/// Returns true if TopK aggregation data structures support the provided key and value types.
+///
+/// This function checks whether both the key type (used for grouping) and value type
+/// (used in min/max aggregation) can be handled by the TopK aggregation heap and hash table.
+/// Supported types include Arrow primitives (integers, floats, decimals, intervals) and
+/// UTF-8 strings (`Utf8`, `LargeUtf8`, `Utf8View`).
+/// ```text
+pub fn topk_types_supported(key_type: &DataType, value_type: &DataType) -> bool {
+    is_supported_hash_key_type(key_type) && is_supported_heap_type(value_type)
+}
 
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: ahash::RandomState =
@@ -489,6 +502,42 @@ enum DynamicFilterAggregateType {
     Max,
 }
 
+/// Configuration for limit-based optimizations in aggregation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitOptions {
+    /// The maximum number of rows to return
+    pub limit: usize,
+    /// Optional ordering direction (true = descending, false = ascending)
+    /// This is used for TopK aggregation to maintain a priority queue with the correct ordering
+    pub descending: Option<bool>,
+}
+
+impl LimitOptions {
+    /// Create a new LimitOptions with a limit and no specific ordering
+    pub fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            descending: None,
+        }
+    }
+
+    /// Create a new LimitOptions with a limit and ordering direction
+    pub fn new_with_order(limit: usize, descending: bool) -> Self {
+        Self {
+            limit,
+            descending: Some(descending),
+        }
+    }
+
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn descending(&self) -> Option<bool> {
+        self.descending
+    }
+}
+
 /// Hash aggregate execution plan
 #[derive(Debug, Clone)]
 pub struct AggregateExec {
@@ -500,8 +549,8 @@ pub struct AggregateExec {
     aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
     /// FILTER (WHERE clause) expression for each aggregate expression
     filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
-    /// Set if the output of this aggregation is truncated by a upstream sort/limit clause
-    limit: Option<usize>,
+    /// Configuration for limit-based optimizations
+    limit_options: Option<LimitOptions>,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied
@@ -545,7 +594,27 @@ impl AggregateExec {
             mode: self.mode,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
-            limit: self.limit,
+            limit_options: self.limit_options,
+            input: Arc::clone(&self.input),
+            schema: Arc::clone(&self.schema),
+            input_schema: Arc::clone(&self.input_schema),
+            dynamic_filter: self.dynamic_filter.clone(),
+        }
+    }
+
+    /// Clone this exec, overriding only the limit hint.
+    pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
+        Self {
+            limit_options,
+            // clone the rest of the fields
+            required_input_ordering: self.required_input_ordering.clone(),
+            metrics: ExecutionPlanMetricsSet::new(),
+            input_order_mode: self.input_order_mode.clone(),
+            cache: self.cache.clone(),
+            mode: self.mode,
+            group_by: self.group_by.clone(),
+            aggr_expr: self.aggr_expr.clone(),
+            filter_expr: self.filter_expr.clone(),
             input: Arc::clone(&self.input),
             schema: Arc::clone(&self.schema),
             input_schema: Arc::clone(&self.input_schema),
@@ -676,7 +745,7 @@ impl AggregateExec {
             input_schema,
             metrics: ExecutionPlanMetricsSet::new(),
             required_input_ordering,
-            limit: None,
+            limit_options: None,
             input_order_mode,
             cache,
             dynamic_filter: None,
@@ -692,11 +761,17 @@ impl AggregateExec {
         &self.mode
     }
 
-    /// Set the `limit` of this AggExec
-    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
-        self.limit = limit;
+    /// Set the limit options for this AggExec
+    pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
+        self.limit_options = limit_options;
         self
     }
+
+    /// Get the limit options (if set)
+    pub fn limit_options(&self) -> Option<LimitOptions> {
+        self.limit_options
+    }
+
     /// Grouping expressions
     pub fn group_expr(&self) -> &PhysicalGroupBy {
         &self.group_by
@@ -727,11 +802,6 @@ impl AggregateExec {
         Arc::clone(&self.input_schema)
     }
 
-    /// number of rows soft limit of the AggregateExec
-    pub fn limit(&self) -> Option<usize> {
-        self.limit
-    }
-
     fn execute_typed(
         &self,
         partition: usize,
@@ -744,11 +814,11 @@ impl AggregateExec {
         }
 
         // grouping by an expression that has a sort/limit upstream
-        if let Some(limit) = self.limit
+        if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
         {
             return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, limit)?,
+                GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
             ));
         }
 
@@ -769,6 +839,13 @@ impl AggregateExec {
     /// This method qualifies the use of the LimitedDistinctAggregation rewrite rule
     /// on an AggregateExec.
     pub fn is_unordered_unfiltered_group_by_distinct(&self) -> bool {
+        if self
+            .limit_options()
+            .and_then(|config| config.descending)
+            .is_some()
+        {
+            return false;
+        }
         // ensure there is a group by
         if self.group_expr().is_empty() && !self.group_expr().has_grouping_set() {
             return false;
@@ -1086,8 +1163,8 @@ impl DisplayAs for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 write!(f, ", aggr=[{}]", a.join(", "))?;
-                if let Some(limit) = self.limit {
-                    write!(f, ", lim=[{limit}]")?;
+                if let Some(config) = self.limit_options {
+                    write!(f, ", lim=[{}]", config.limit)?;
                 }
 
                 if self.input_order_mode != InputOrderMode::Linear {
@@ -1145,6 +1222,9 @@ impl DisplayAs for AggregateExec {
                 }
                 if !a.is_empty() {
                     writeln!(f, "aggr={}", a.join(", "))?;
+                }
+                if let Some(config) = self.limit_options {
+                    writeln!(f, "limit={}", config.limit)?;
                 }
             }
         }
@@ -1214,7 +1294,7 @@ impl ExecutionPlan for AggregateExec {
             Arc::clone(&self.input_schema),
             Arc::clone(&self.schema),
         )?;
-        me.limit = self.limit;
+        me.limit_options = self.limit_options;
         me.dynamic_filter = self.dynamic_filter.clone();
 
         Ok(Arc::new(me))
@@ -1803,7 +1883,6 @@ mod tests {
 
     use super::*;
     use crate::RecordBatchStream;
-    use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
@@ -2601,17 +2680,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_first_last_multi_partitions() -> Result<()> {
-        for use_coalesce_batches in [false, true] {
-            for is_first_acc in [false, true] {
-                for spill in [false, true] {
-                    first_last_multi_partitions(
-                        use_coalesce_batches,
-                        is_first_acc,
-                        spill,
-                        4200,
-                    )
-                    .await?
-                }
+        for is_first_acc in [false, true] {
+            for spill in [false, true] {
+                first_last_multi_partitions(is_first_acc, spill, 4200).await?
             }
         }
         Ok(())
@@ -2654,15 +2725,7 @@ mod tests {
             .map(Arc::new)
     }
 
-    // This function either constructs the physical plan below,
-    //
-    // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
-    // "  CoalesceBatchesExec: target_batch_size=1024",
-    // "    CoalescePartitionsExec",
-    // "      AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[FIRST_VALUE(b)], ordering_mode=None",
-    // "        DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]",
-    //
-    // or
+    // This function constructs the physical plan below,
     //
     // "AggregateExec: mode=Final, gby=[a@0 as a], aggr=[FIRST_VALUE(b)]",
     // "  CoalescePartitionsExec",
@@ -2672,7 +2735,6 @@ mod tests {
     // and checks whether the function `merge_batch` works correctly for
     // FIRST_VALUE and LAST_VALUE functions.
     async fn first_last_multi_partitions(
-        use_coalesce_batches: bool,
         is_first_acc: bool,
         spill: bool,
         max_memory: usize,
@@ -2720,13 +2782,8 @@ mod tests {
             memory_exec,
             Arc::clone(&schema),
         )?);
-        let coalesce = if use_coalesce_batches {
-            let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec));
-            Arc::new(CoalesceBatchesExec::new(coalesce, 1024)) as Arc<dyn ExecutionPlan>
-        } else {
-            Arc::new(CoalescePartitionsExec::new(aggregate_exec))
-                as Arc<dyn ExecutionPlan>
-        };
+        let coalesce = Arc::new(CoalescePartitionsExec::new(aggregate_exec))
+            as Arc<dyn ExecutionPlan>;
         let aggregate_final = Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups,

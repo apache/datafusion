@@ -152,6 +152,11 @@ pub struct FileScanConfig {
     /// The maximum number of records to read from this plan. If `None`,
     /// all records after filtering are returned.
     pub limit: Option<usize>,
+    /// Whether the scan's limit is order sensitive
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub preserve_order: bool,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
     /// File compression type
@@ -240,6 +245,7 @@ pub struct FileScanConfigBuilder {
     object_store_url: ObjectStoreUrl,
     file_source: Arc<dyn FileSource>,
     limit: Option<usize>,
+    preserve_order: bool,
     constraints: Option<Constraints>,
     file_groups: Vec<FileGroup>,
     statistics: Option<Statistics>,
@@ -269,6 +275,7 @@ impl FileScanConfigBuilder {
             output_ordering: vec![],
             file_compression_type: None,
             limit: None,
+            preserve_order: false,
             constraints: None,
             batch_size: None,
             expr_adapter_factory: None,
@@ -280,6 +287,15 @@ impl FileScanConfigBuilder {
     /// all records after filtering are returned.
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
+        self
+    }
+
+    /// Set whether the limit should be order-sensitive.
+    /// When `true`, files must be read in the exact order specified to produce
+    /// correct results (e.g., for `ORDER BY ... LIMIT` queries). When `false`,
+    /// DataFusion may reorder file processing for optimization without affecting correctness.
+    pub fn with_preserve_order(mut self, order_sensitive: bool) -> Self {
+        self.preserve_order = order_sensitive;
         self
     }
 
@@ -450,6 +466,7 @@ impl FileScanConfigBuilder {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             statistics,
@@ -467,10 +484,14 @@ impl FileScanConfigBuilder {
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
+        // If there is an output ordering, we should preserve it.
+        let preserve_order = preserve_order || !output_ordering.is_empty();
+
         FileScanConfig {
             object_store_url,
             file_source,
             limit,
+            preserve_order,
             constraints,
             file_groups,
             output_ordering,
@@ -493,6 +514,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             limit: config.limit,
+            preserve_order: config.preserve_order,
             constraints: Some(config.constraints),
             batch_size: config.batch_size,
             expr_adapter_factory: config.expr_adapter_factory,
@@ -829,23 +851,10 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        let file_ordering = self.output_ordering.first().cloned();
-
-        if file_ordering.is_none() {
-            return Ok(SortOrderPushdownResult::Unsupported);
-        }
-
-        // Use the trait method instead of downcasting
-        // Try to provide file ordering info to the source
-        // If not supported (e.g., CsvSource), fall back to original source
-        let file_source_with_ordering = self
+        // Delegate to FileSource to check if reverse scanning can satisfy the request.
+        let pushdown_result = self
             .file_source
-            .with_file_ordering_info(file_ordering)
-            .unwrap_or_else(|_| Arc::clone(&self.file_source));
-
-        // Try to reverse the datasource with ordering info,
-        // and currently only ParquetSource supports it with inexact reverse with row groups.
-        let pushdown_result = file_source_with_ordering.try_reverse_output(order)?;
+            .try_reverse_output(order, &self.eq_properties())?;
 
         match pushdown_result {
             SortOrderPushdownResult::Exact { inner } => {
@@ -862,6 +871,18 @@ impl DataSource for FileScanConfig {
                 Ok(SortOrderPushdownResult::Unsupported)
             }
         }
+    }
+
+    fn with_preserve_order(&self, preserve_order: bool) -> Option<Arc<dyn DataSource>> {
+        if self.preserve_order == preserve_order {
+            return Some(Arc::new(self.clone()));
+        }
+
+        let new_config = FileScanConfig {
+            preserve_order,
+            ..self.clone()
+        };
+        Some(Arc::new(new_config))
     }
 }
 
@@ -1674,43 +1695,40 @@ mod tests {
 
         impl From<File> for PartitionedFile {
             fn from(file: File) -> Self {
-                PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(format!(
-                            "data/date={}/{}.parquet",
-                            file.date, file.name
-                        )),
-                        last_modified: chrono::Utc.timestamp_nanos(0),
-                        size: 0,
-                        e_tag: None,
-                        version: None,
-                    },
-                    partition_values: vec![ScalarValue::from(file.date)],
-                    range: None,
-                    statistics: Some(Arc::new(Statistics {
-                        num_rows: Precision::Absent,
-                        total_byte_size: Precision::Absent,
-                        column_statistics: file
-                            .statistics
-                            .into_iter()
-                            .map(|stats| {
-                                stats
-                                    .map(|(min, max)| ColumnStatistics {
-                                        min_value: Precision::Exact(
-                                            ScalarValue::Float64(min),
-                                        ),
-                                        max_value: Precision::Exact(
-                                            ScalarValue::Float64(max),
-                                        ),
-                                        ..Default::default()
-                                    })
-                                    .unwrap_or_default()
-                            })
-                            .collect::<Vec<_>>(),
-                    })),
-                    extensions: None,
-                    metadata_size_hint: None,
-                }
+                let object_meta = ObjectMeta {
+                    location: Path::from(format!(
+                        "data/date={}/{}.parquet",
+                        file.date, file.name
+                    )),
+                    last_modified: chrono::Utc.timestamp_nanos(0),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                };
+                let statistics = Arc::new(Statistics {
+                    num_rows: Precision::Absent,
+                    total_byte_size: Precision::Absent,
+                    column_statistics: file
+                        .statistics
+                        .into_iter()
+                        .map(|stats| {
+                            stats
+                                .map(|(min, max)| ColumnStatistics {
+                                    min_value: Precision::Exact(ScalarValue::Float64(
+                                        min,
+                                    )),
+                                    max_value: Precision::Exact(ScalarValue::Float64(
+                                        max,
+                                    )),
+                                    ..Default::default()
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect::<Vec<_>>(),
+                });
+                PartitionedFile::new_from_meta(object_meta)
+                    .with_partition_values(vec![ScalarValue::from(file.date)])
+                    .with_statistics(statistics)
             }
         }
     }

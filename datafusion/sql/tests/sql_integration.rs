@@ -3395,8 +3395,8 @@ fn cross_join_not_to_inner_join() {
         @r"
     Projection: person.id
       Filter: person.id = person.age
-        Cross Join: 
-          Cross Join: 
+        Cross Join:
+          Cross Join:
             TableScan: person
             TableScan: orders
           TableScan: lineitem
@@ -3530,11 +3530,11 @@ fn exists_subquery_schema_outer_schema_overlap() {
         Subquery:
           Projection: person.first_name
             Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)
-              Cross Join: 
+              Cross Join:
                 TableScan: person
                 SubqueryAlias: p2
                   TableScan: person
-        Cross Join: 
+        Cross Join:
           TableScan: person
           SubqueryAlias: p
             TableScan: person
@@ -3619,10 +3619,10 @@ fn scalar_subquery_reference_outer_field() {
           Projection: count(*)
             Aggregate: groupBy=[[]], aggr=[[count(*)]]
               Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id
-                Cross Join: 
+                Cross Join:
                   TableScan: j1
                   TableScan: j3
-        Cross Join: 
+        Cross Join:
           TableScan: j1
           TableScan: j2
     "
@@ -4508,7 +4508,10 @@ fn test_parse_escaped_string_literal_value() {
     let plan = logical_plan(sql).unwrap();
     assert_snapshot!(
         plan,
-        @"Projection: character_length(Utf8(\"%\")) AS len, Utf8(\"K\") AS hex, Utf8(\"\u{1}\") AS unicode\n  EmptyRelation: rows=1"
+        @r#"
+    Projection: character_length(Utf8("%")) AS len, Utf8("K") AS hex, Utf8("") AS unicode
+      EmptyRelation: rows=1
+    "#
     );
 
     let sql = r"SELECT character_length(E'\000') AS len";
@@ -4516,6 +4519,43 @@ fn test_parse_escaped_string_literal_value() {
     assert_snapshot!(
         logical_plan(sql).unwrap_err(),
         @r#"SQL error: TokenizerError("Unterminated encoded string literal at Line: 1, Column: 25")"#
+    );
+}
+
+#[test]
+fn test_parse_quoted_column_name_with_at_sign() {
+    let sql = r"SELECT `@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+
+    let sql = r"SELECT `@quoted_identifier_names_table`.`@column` FROM `@quoted_identifier_names_table`";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: @quoted_identifier_names_table.@column
+      TableScan: @quoted_identifier_names_table
+    "#
+    );
+}
+
+#[test]
+fn test_variable_identifier() {
+    let sql = r"SELECT t_date32 FROM test WHERE t_date32 = @variable";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: test.t_date32
+      Filter: test.t_date32 = @variable
+        TableScan: test
+    "#
     );
 }
 

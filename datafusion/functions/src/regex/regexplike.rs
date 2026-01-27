@@ -31,7 +31,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use std::any::Any;
@@ -158,7 +158,7 @@ impl ScalarUDFImpl for RegexpLikeFunc {
     fn simplify(
         &self,
         mut args: Vec<Expr>,
-        info: &dyn SimplifyInfo,
+        info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
         // Try to simplify regexp_like usage to one of the builtin operators since those have
         // optimized code paths for the case where the regular expression pattern is a scalar.

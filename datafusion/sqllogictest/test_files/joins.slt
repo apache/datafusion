@@ -146,10 +146,10 @@ AS VALUES
 statement ok
 CREATE TABLE test_timestamps_table as
 SELECT
-  arrow_cast(ts::timestamp::bigint, 'Timestamp(Nanosecond, None)') as nanos,
-  arrow_cast(ts::timestamp::bigint / 1000, 'Timestamp(Microsecond, None)') as micros,
-  arrow_cast(ts::timestamp::bigint / 1000000, 'Timestamp(Millisecond, None)') as millis,
-  arrow_cast(ts::timestamp::bigint / 1000000000, 'Timestamp(Second, None)') as secs,
+  arrow_cast(ts::timestamp::bigint, 'Timestamp(ns)') as nanos,
+  arrow_cast(ts::timestamp::bigint / 1000, 'Timestamp(µs)') as micros,
+  arrow_cast(ts::timestamp::bigint / 1000000, 'Timestamp(ms)') as millis,
+  arrow_cast(ts::timestamp::bigint / 1000000000, 'Timestamp(s)') as secs,
   names
 FROM
   test_timestamps_table_source;
@@ -2721,7 +2721,7 @@ logical_plan
 04)--SubqueryAlias: t2
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 physical_plan
-01)SortMergeJoin: join_type=Inner, on=[(c1@0, c1@0)]
+01)SortMergeJoinExec: join_type=Inner, on=[(c1@0, c1@0)]
 02)--SortExec: expr=[c1@0 ASC], preserve_partitioning=[true]
 03)----RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=1
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -2748,7 +2748,7 @@ logical_plan
 05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, c1@5 as c1, c2@6 as c2, c3@7 as c3, c4@8 as c4]
-02)--SortMergeJoin: join_type=Right, on=[(CAST(t1.c3 AS Decimal128(10, 2))@4, c3@2)]
+02)--SortMergeJoinExec: join_type=Right, on=[(CAST(t1.c3 AS Decimal128(10, 2))@4, c3@2)]
 03)----SortExec: expr=[CAST(t1.c3 AS Decimal128(10, 2))@4 ASC], preserve_partitioning=[true]
 04)------RepartitionExec: partitioning=Hash([CAST(t1.c3 AS Decimal128(10, 2))@4], 2), input_partitions=2
 05)--------ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3, c4@3 as c4, CAST(c3@2 AS Decimal128(10, 2)) as CAST(t1.c3 AS Decimal128(10, 2))]
@@ -3157,7 +3157,7 @@ logical_plan
 08)------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
 01)SortPreservingMergeExec: [rn1@5 ASC NULLS LAST]
-02)--SortMergeJoin: join_type=Inner, on=[(a@1, a@1)]
+02)--SortMergeJoinExec: join_type=Inner, on=[(a@1, a@1)]
 03)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
 04)------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
 05)--------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
@@ -3187,7 +3187,7 @@ logical_plan
 08)----------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
 01)SortPreservingMergeExec: [rn1@10 ASC NULLS LAST]
-02)--SortMergeJoin: join_type=Right, on=[(a@1, a@1)]
+02)--SortMergeJoinExec: join_type=Right, on=[(a@1, a@1)]
 03)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
 05)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
@@ -3198,7 +3198,7 @@ physical_plan
 statement ok
 set datafusion.optimizer.prefer_existing_sort = false;
 
-# SortMergeJoin should add ordering equivalences of
+# SortMergeJoinExec should add ordering equivalences of
 # right table as lexicographical append to the global ordering
 # below query shouldn't add any SortExec for order by clause.
 # since its requirement is already satisfied at the output of SortMergeJoinExec
@@ -3224,7 +3224,7 @@ logical_plan
 10)----------TableScan: annotated_data projection=[a0, a, b, c, d]
 physical_plan
 01)SortPreservingMergeExec: [a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, rn1@11 ASC NULLS LAST]
-02)--SortMergeJoin: join_type=Inner, on=[(a@1, a@1)]
+02)--SortMergeJoinExec: join_type=Inner, on=[(a@1, a@1)]
 03)----RepartitionExec: partitioning=Hash([a@1], 2), input_partitions=1, maintains_sort_order=true
 04)------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
 05)--------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Field { "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING], mode=[Sorted]
@@ -3516,7 +3516,6 @@ AS VALUES
 query IT
 SELECT t1_id, t1_name FROM join_test_left WHERE t1_id NOT IN (SELECT t2_id FROM join_test_right) ORDER BY t1_id;
 ----
-NULL e
 
 ####
 # join_partitioned_test
@@ -5198,3 +5197,73 @@ DROP TABLE t1_c;
 
 statement ok
 DROP TABLE t2_c;
+
+# Reproducer of https://github.com/apache/datafusion/issues/19067
+statement count 0
+set datafusion.explain.physical_plan_only = true;
+
+# Setup Left Table with FixedSizeBinary(4)
+statement count 0
+CREATE TABLE issue_19067_left AS
+SELECT
+  column1 as id,
+  arrow_cast(decode(column2, 'hex'), 'FixedSizeBinary(4)') as join_key
+FROM (VALUES
+  (1, 'AAAAAAAA'),
+  (2, 'BBBBBBBB'),
+  (3, 'CCCCCCCC')
+);
+
+# Setup Right Table with FixedSizeBinary(4)
+statement count 0
+CREATE TABLE issue_19067_right AS
+SELECT
+  arrow_cast(decode(column1, 'hex'), 'FixedSizeBinary(4)') as join_key,
+  column2 as value
+FROM (VALUES
+  ('AAAAAAAA', 1000),
+  ('BBBBBBBB', 2000)
+);
+
+# Perform Left Join. Third row should contain NULL in `right_key`.
+query I??I
+SELECT
+  l.id,
+  l.join_key as left_key,
+  r.join_key as right_key,
+  r.value
+FROM issue_19067_left l
+LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
+ORDER BY l.id;
+----
+1 aaaaaaaa aaaaaaaa 1000
+2 bbbbbbbb bbbbbbbb 2000
+3 cccccccc NULL NULL
+
+# Ensure usage of HashJoinExec
+query TT
+EXPLAIN
+SELECT
+  l.id,
+  l.join_key as left_key,
+  r.join_key as right_key,
+  r.value
+FROM issue_19067_left l
+LEFT JOIN issue_19067_right r ON l.join_key = r.join_key
+ORDER BY l.id;
+----
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@2 as id, join_key@3 as left_key, join_key@0 as right_key, value@1 as value]
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(join_key@0, join_key@1)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement count 0
+set datafusion.explain.physical_plan_only = false;
+
+statement count 0
+DROP TABLE issue_19067_left;
+
+statement count 0
+DROP TABLE issue_19067_right;
