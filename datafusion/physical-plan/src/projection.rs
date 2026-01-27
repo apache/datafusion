@@ -254,13 +254,13 @@ impl ProjectionExec {
     ///
     /// This is true when:
     /// - The projection narrows the schema (drops columns) - saves memory, OR
-    /// - Any expression is PlaceAtLeafs (like get_field) - beneficial computation pushdown
+    /// - Any expression is PlaceAtLeaves (like get_field) - beneficial computation pushdown
     ///
     /// Pure Column references that don't narrow the schema are NOT beneficial to push,
     /// as they just rearrange the plan without any gain.
     ///
     /// Note: Projections are split by `try_split_projection` before reaching this function,
-    /// so if any expression is PlaceAtLeafs, all expressions should be leaf-pushable.
+    /// so if any expression is PlaceAtLeaves, all expressions should be leaf-pushable.
     pub fn is_leaf_pushable_or_narrows_schema(&self) -> bool {
         let all_columns = self
             .expr()
@@ -272,7 +272,7 @@ impl ProjectionExec {
         let has_leaf_expressions = self
             .expr()
             .iter()
-            .any(|p| matches!(p.expr.placement(), ExpressionPlacement::PlaceAtLeafs));
+            .any(|p| matches!(p.expr.placement(), ExpressionPlacement::PlaceAtLeaves));
 
         let has_root_expressions = self.expr().iter().any(|p| {
             matches!(
@@ -1152,14 +1152,14 @@ fn try_unifying_projections(
     // Don't merge if:
     // 1. A non-trivial expression is referenced more than once (caching benefit)
     //    See discussion in: https://github.com/apache/datafusion/issues/8296
-    // 2. The child projection has PlaceAtLeafs (like get_field) that should be pushed
+    // 2. The child projection has PlaceAtLeaves (like get_field) that should be pushed
     //    down to the data source separately
     for (column, count) in column_ref_map.iter() {
         let placement = child.expr()[column.index()].expr.placement();
         // Don't merge if multi-referenced root level (caching)
         if (*count > 1 && matches!(placement, ExpressionPlacement::PlaceAtRoot))
-            // Don't merge if child has PlaceAtLeafs (should push to source)
-            || matches!(placement, ExpressionPlacement::PlaceAtLeafs)
+            // Don't merge if child has PlaceAtLeaves (should push to source)
+            || matches!(placement, ExpressionPlacement::PlaceAtLeaves)
         {
             return Ok(None);
         }

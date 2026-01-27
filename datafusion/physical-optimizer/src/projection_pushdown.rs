@@ -132,12 +132,12 @@ fn try_split_projection(
         }
 
         // Only extract from root-level expressions. If the entire expression is
-        // already PlaceAtLeafs (like `get_field(col, 'foo')`), it can be pushed as-is.
+        // already PlaceAtLeaves (like `get_field(col, 'foo')`), it can be pushed as-is.
         // We only need to split when there's a root expression with leaf-pushable
         // sub-expressions (like `get_field(col, 'foo') + 1`).
         if matches!(
             proj_expr.expr.placement(),
-            ExpressionPlacement::PlaceAtLeafs
+            ExpressionPlacement::PlaceAtLeaves
         ) {
             outer_exprs.push(proj_expr.clone());
             continue;
@@ -180,7 +180,7 @@ fn try_split_projection(
 /// Extracts beneficial leaf-pushable sub-expressions from larger expressions.
 ///
 /// Similar to `JoinFilterRewriter`, this struct walks expression trees top-down
-/// and extracts sub-expressions where `placement() == ExpressionPlacement::PlaceAtLeafs`
+/// and extracts sub-expressions where `placement() == ExpressionPlacement::PlaceAtLeaves`
 /// (beneficial leaf-pushable expressions like field accessors).
 ///
 /// The extracted expressions are replaced with column references pointing to
@@ -212,7 +212,7 @@ impl<'a> LeafExpressionExtractor<'a> {
     /// sub-expressions with column references to the inner projection.
     fn extract(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
         // Top-down: check self first, then recurse to children
-        if matches!(expr.placement(), ExpressionPlacement::PlaceAtLeafs) {
+        if matches!(expr.placement(), ExpressionPlacement::PlaceAtLeaves) {
             // Extract this entire sub-tree
             return Ok(self.add_extracted_expr(expr));
         }

@@ -437,13 +437,13 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// Leaf-pushable expressions include:
     /// - Column references (`ExpressionPlacement::Column`)
     /// - Literal values (`ExpressionPlacement::Literal`)
-    /// - Struct field access via `get_field` (`ExpressionPlacement::PlaceAtLeafs`)
+    /// - Struct field access via `get_field` (`ExpressionPlacement::PlaceAtLeaves`)
     /// - Nested combinations of field accessors (e.g., `col['a']['b']`)
     ///
     /// This is used to identify expressions that are cheap to duplicate or
     /// don't benefit from caching/partitioning optimizations.
     ///
-    /// **Performance note**: Expressions marked as `PlaceAtLeafs` may be pushed
+    /// **Performance note**: Expressions marked as `PlaceAtLeaves` may be pushed
     /// below filters during optimization. If an expression does per-row work,
     /// marking it leaf-pushable may slow things down by causing evaluation on more rows.
     fn placement(&self) -> ExpressionPlacement {

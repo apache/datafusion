@@ -61,7 +61,7 @@ pub enum ExpressionPlacement {
     /// leaf-pushable expression, then it would return this variant.
     /// Then `other_leaf_function(get_field(...), 42)` could also be classified as
     /// leaf-pushable using the knowledge that `get_field(...)` is leaf-pushable.
-    PlaceAtLeafs,
+    PlaceAtLeaves,
     /// Argument is a complex expression that should be placed at root nodes.
     /// For example, `min(col1 + col2)` is not leaf-pushable because it requires per-row computation.
     PlaceAtRoot,
