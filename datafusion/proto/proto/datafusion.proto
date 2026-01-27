@@ -1193,6 +1193,7 @@ enum AggregateMode {
   FINAL_PARTITIONED = 2;
   SINGLE = 3;
   SINGLE_PARTITIONED = 4;
+  PARTIAL_REDUCE = 5;
 }
 
 message PartiallySortedInputOrderMode {

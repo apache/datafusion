@@ -981,6 +981,7 @@ impl protobuf::PhysicalPlanNode {
             protobuf::AggregateMode::SinglePartitioned => {
                 AggregateMode::SinglePartitioned
             }
+            protobuf::AggregateMode::PartialReduce => AggregateMode::PartialReduce,
         };
 
         let num_expr = hash_agg.group_expr.len();
@@ -2515,6 +2516,7 @@ impl protobuf::PhysicalPlanNode {
             AggregateMode::SinglePartitioned => {
                 protobuf::AggregateMode::SinglePartitioned
             }
+            AggregateMode::PartialReduce => protobuf::AggregateMode::PartialReduce,
         };
         let input_schema = exec.input_schema();
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
