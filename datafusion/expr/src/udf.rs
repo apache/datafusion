@@ -715,16 +715,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// # Return Value
     ///
     /// Implementations should return a half-open interval: inclusive lower
-    /// bound and exclusive upper bound. Note that this is slightly different
-    /// from normal [`Interval`] semantics where the upper bound is closed. The
-    /// upper endpoint should be adjusted to the next value.
+    /// bound and exclusive upper bound. This is slightly different from normal
+    /// [`Interval`] semantics where the upper bound is closed (inclusive).
+    /// Typically this means the upper endpoint must be adjusted to the next
+    /// value not included in the preimage. See the Half-Open Intervals section
+    /// below for more details.
     ///
     /// # Background
     ///
-    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms
-    /// a predicate containing a function call into a predicate containing an
-    /// equivalent set of input literal (constant) values. The resulting predicate
-    /// is then in a form that can be further optimized by other rewrites.
+    /// Inspired by the [ClickHouse Paper], a "preimage rewrite" transforms a
+    /// predicate containing a function call into a predicate containing an
+    /// equivalent set of input literal (constant) values. The resulting
+    /// predicate can often be further optimized by other rewrites (see
+    /// Examples).
+    ///
     /// From the paper:
     ///
     /// > some functions can compute the preimage of a given function result.
@@ -733,60 +737,68 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// > For example, `toYear(k) = 2024` can be replaced by
     /// > `k >= 2024-01-01 && k < 2025-01-01`
     ///
-    /// As mentioned above, the preimage can be used to simplify certain types of
-    /// expressions such as `date_part` into a form that is more optimizable.
-    ///
     /// For example, given an expression like
     /// ```sql
     /// date_part('YEAR', k) = 2024
     /// ```
     ///
-    /// The interval [`2024-01-01`, `2025-01-01`) contains all possible
-    /// input values (preimage values) for which the function `date_part(YEAR, k)`
-    /// produces the output value `2024` (image value). Using this interval,
-    /// the expression can be rewritten to
+    /// The interval `[2024-01-01, 2025-12-31`]` contains all possible input
+    /// values (preimage values) for which the function `date_part(YEAR, k)`
+    /// produces the output value `2024` (image value). Returning the interval
+    /// (note upper bound adjusted up) `[2024-01-01, 2025-01-01]` the expression
+    /// can be rewritten to
     ///
     /// ```sql
     /// k >= '2024-01-01' AND k < '2025-01-01'
     /// ```
     ///
-   /// which is often more optimizable: the predicate is rewritten into a simpler
-  /// and more canonical form, making it easier for different optimizer passes
-  /// to recognize and apply further transformations. For example:
-  ///
-  /// Case 1:
-  ///
-  /// Original:
-  /// ```sql
-  /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
-  /// ```
-  ///
-  /// After preimage rewrite:
-  /// ```sql
-  /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
-  /// ```
-  ///
-  /// Since this form is much simpler, the optimizer can combine and simplify
-  /// sub-expressions further into:
-  /// ```sql
-  /// k >= '2024-06-01' AND k < '2025-01-01'
-  /// ```
-  ///
-  /// Case 2:
-  ///
-  /// For min/max pruning, simpler predicates such as:
-  /// ```sql
-  /// k >= '2024-01-01' AND k < '2025-01-01'
-  /// ```
-  /// are much easier for the pruner to reason about. See [PruningPredicate]
-  /// for the backgrounds of predicate pruning.
-  ///
-  /// The trade-off is that evaluating the preimage form can be slightly more
-  /// expensive than evaluating the original expression. In practice, this cost
-  /// is usually outweighed by the more aggressive optimization opportunities it
-  /// enables.
-  ///
-  /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
+    /// which is a simpler and a more canonical form, making it easier for other
+    /// optimizer passes to recognize and apply further transformations.
+    ///
+    /// # Examples
+    ///
+    /// Case 1:
+    ///
+    /// Original:
+    /// ```sql
+    /// date_part('YEAR', k) = 2024 AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// After preimage rewrite:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01' AND k >= '2024-06-01'
+    /// ```
+    ///
+    /// Since this form is much simpler, the optimizer can combine and simplify
+    /// sub-expressions further into:
+    /// ```sql
+    /// k >= '2024-06-01' AND k < '2025-01-01'
+    /// ```
+    ///
+    /// Case 2:
+    ///
+    /// For min/max pruning, simpler predicates such as:
+    /// ```sql
+    /// k >= '2024-01-01' AND k < '2025-01-01'
+    /// ```
+    /// are much easier for the pruner to reason about. See [PruningPredicate]
+    /// for the backgrounds of predicate pruning.
+    ///
+    /// The trade-off with the preimage rewrite is that evaluating the rewritten
+    /// form might be slightly more expensive than evaluating the original
+    /// expression. In practice, this cost is usually outweighed by the more
+    /// aggressive optimization opportunities it enables.
+    ///
+    /// # Half-Open Intervals
+    ///
+    /// The preimage API uses half open interval makes the rewrite easier to
+    /// implement by avoiding calculations to adjust the upper bound. For
+    /// example, using a closed interval (including the upper bound), the
+    /// preimage of a function that returns `5 could be represented as `[5, 5]`,
+    /// but then the rewrite would require adjusting the upper bound to `6` to
+    /// create a proper range predicate.
+    ///
+    /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
     /// [image]: https://en.wikipedia.org/wiki/Image_(mathematics)#Image_of_an_element
     /// [preimage]: https://en.wikipedia.org/wiki/Image_(mathematics)#Inverse_image
