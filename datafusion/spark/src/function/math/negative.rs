@@ -188,6 +188,22 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             }
 
             // Decimal types - wrapping negation
+            ScalarValue::Decimal32(Some(v), precision, scale) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Decimal32(
+                    Some(result),
+                    *precision,
+                    *scale,
+                )))
+            }
+            ScalarValue::Decimal64(Some(v), precision, scale) => {
+                let result = v.wrapping_neg();
+                Ok(ColumnarValue::Scalar(ScalarValue::Decimal64(
+                    Some(result),
+                    *precision,
+                    *scale,
+                )))
+            }
             ScalarValue::Decimal128(Some(v), precision, scale) => {
                 let result = v.wrapping_neg();
                 Ok(ColumnarValue::Scalar(ScalarValue::Decimal128(
