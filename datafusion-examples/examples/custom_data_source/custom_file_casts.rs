@@ -156,14 +156,14 @@ impl PhysicalExprAdapterFactory for CustomCastPhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let inner = self
             .inner
-            .create(logical_file_schema, Arc::clone(&physical_file_schema));
-        Arc::new(CustomCastsPhysicalExprAdapter {
+            .create(logical_file_schema, Arc::clone(&physical_file_schema))?;
+        Ok(Arc::new(CustomCastsPhysicalExprAdapter {
             physical_file_schema,
             inner,
-        })
+        }))
     }
 }
 

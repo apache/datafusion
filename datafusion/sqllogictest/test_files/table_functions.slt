@@ -160,17 +160,20 @@ physical_plan LazyMemoryExec: partitions=1, batch_generators=[generate_series: s
 # Test generate_series with invalid arguments
 #
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query I
 SELECT * FROM generate_series(5, 1)
+----
 
-query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+query I
 SELECT * FROM generate_series(-6, 6, -1)
+----
 
 query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM generate_series(-6, 6, 0)
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query I
 SELECT * FROM generate_series(6, -6, 1)
+----
 
 
 statement error DataFusion error: Error during planning: generate_series function requires 1 to 3 arguments
@@ -298,17 +301,20 @@ physical_plan LazyMemoryExec: partitions=1, batch_generators=[range: start=1, en
 # Test range with invalid arguments
 #
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query I
 SELECT * FROM range(5, 1)
+----
 
-query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+query I
 SELECT * FROM range(-6, 6, -1)
+----
 
 query error DataFusion error: Error during planning: Step cannot be zero
 SELECT * FROM range(-6, 6, 0)
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query I
 SELECT * FROM range(6, -6, 1)
+----
 
 
 statement error DataFusion error: Error during planning: range function requires 1 to 3 arguments
@@ -378,11 +384,13 @@ SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00
 2023-01-03T00:00:00
 2023-01-02T00:00:00
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query P
 SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00', INTERVAL '1' DAY)
+----
 
-query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+query P
 SELECT * FROM range(TIMESTAMP '2023-01-01T00:00:00', TIMESTAMP '2023-01-02T00:00:00', INTERVAL '-1' DAY)
+----
 
 query error DataFusion error: Error during planning: range function with timestamps requires exactly 3 arguments
 SELECT * FROM range(TIMESTAMP '2023-01-03T00:00:00', TIMESTAMP '2023-01-01T00:00:00')
@@ -489,11 +497,13 @@ query P
 SELECT * FROM range(DATE '1992-09-01', DATE '1992-10-01', NULL::INTERVAL)
 ----
 
-query error DataFusion error: Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+query P
 SELECT * FROM range(DATE '2023-01-03', DATE '2023-01-01', INTERVAL '1' DAY)
+----
 
-query error DataFusion error: Error during planning: Start is smaller than end, but increment is negative: Cannot generate infinite series
+query P
 SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-02', INTERVAL '-1' DAY)
+----
 
 query error DataFusion error: Error during planning: range function with dates requires exactly 3 arguments
 SELECT * FROM range(DATE '2023-01-01', DATE '2023-01-03')

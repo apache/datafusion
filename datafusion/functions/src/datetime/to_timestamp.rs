@@ -42,7 +42,8 @@ use datafusion_macros::user_doc;
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -96,7 +97,8 @@ pub struct ToTimestampFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -145,7 +147,8 @@ pub struct ToTimestampSecondsFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -194,7 +197,8 @@ pub struct ToTimestampMillisFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone, or UTC if no session time zone is set.
 Integers, unsigned integers, and doubles are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
@@ -243,7 +247,8 @@ pub struct ToTimestampMicrosFunc {
     description = r#"
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000<TZ>`) in the session time zone. Supports strings,
 integer, unsigned integer, and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00')
-if no [Chrono formats] are provided. Strings that parse without a time zone are treated as if they are in the
+if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. 
+Strings that parse without a time zone are treated as if they are in the
 session time zone. Integers, unsigned integers, and doubles are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`).
 
 The session time zone can be set using the statement `SET TIMEZONE = 'desired time zone'`.

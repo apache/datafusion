@@ -346,7 +346,7 @@ impl FileOpener for ParquetOpener {
             // Don't load the page index yet. Since it is not stored inline in
             // the footer, loading the page index if it is not needed will do
             // unnecessary I/O. We decide later if it is needed to evaluate the
-            // pruning predicates. Thus default to not requesting if from the
+            // pruning predicates. Thus default to not requesting it from the
             // underlying reader.
             let mut options = ArrowReaderOptions::new().with_page_index(false);
             #[cfg(feature = "parquet_encryption")]
@@ -412,7 +412,7 @@ impl FileOpener for ParquetOpener {
             let rewriter = expr_adapter_factory.create(
                 Arc::clone(&logical_file_schema),
                 Arc::clone(&physical_file_schema),
-            );
+            )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))
@@ -436,7 +436,7 @@ impl FileOpener for ParquetOpener {
                     reader_metadata,
                     &mut async_file_reader,
                     // Since we're manually loading the page index the option here should not matter but we pass it in for consistency
-                    options.with_page_index(true),
+                    options.with_page_index_policy(PageIndexPolicy::Optional),
                 )
                 .await?;
             }

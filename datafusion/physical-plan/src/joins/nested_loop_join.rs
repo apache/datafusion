@@ -682,10 +682,10 @@ async fn collect_left_input(
     let schema = stream.schema();
 
     // Load all batches and count the rows
-    let (batches, metrics, mut reservation) = stream
+    let (batches, metrics, reservation) = stream
         .try_fold(
             (Vec::new(), join_metrics, reservation),
-            |(mut batches, metrics, mut reservation), batch| async {
+            |(mut batches, metrics, reservation), batch| async {
                 let batch_size = batch.get_array_memory_size();
                 // Reserve memory for incoming batch
                 reservation.try_grow(batch_size)?;

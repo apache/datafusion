@@ -29,6 +29,10 @@ edition = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+core = ["datafusion"]
+
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
 # https://github.com/rust-lang/cargo/issues/13157
@@ -43,6 +47,8 @@ arrow = { workspace = true }
 bigdecimal = { workspace = true }
 chrono = { workspace = true }
 crc32fast = "1.4"
+# Optional dependency for SessionStateBuilderSpark extension trait
+datafusion = { workspace = true, optional = true, default-features = false }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -59,6 +65,8 @@ url = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
+# for SessionStateBuilderSpark tests
+datafusion = { workspace = true, default-features = false }
 
 [[bench]]
 harness = false
