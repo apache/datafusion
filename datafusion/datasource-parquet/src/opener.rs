@@ -412,7 +412,7 @@ impl FileOpener for ParquetOpener {
             let rewriter = expr_adapter_factory.create(
                 Arc::clone(&logical_file_schema),
                 Arc::clone(&physical_file_schema),
-            );
+            )?;
             let simplifier = PhysicalExprSimplifier::new(&physical_file_schema);
             predicate = predicate
                 .map(|p| simplifier.simplify(rewriter.rewrite(p)?))

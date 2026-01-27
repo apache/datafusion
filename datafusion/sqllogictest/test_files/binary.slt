@@ -311,3 +311,13 @@ Foo foo Foo foo
 NULL NULL NULL NULL
 Bar Bar Bar Bar
 FooBar fooBar FooBar fooBar
+
+# show helpful error msg when Binary type is used with string functions
+query error DataFusion error: Error during planning: Function 'split_part' requires TypeSignatureClass::Native\(LogicalType\(Native\(String\), String\)\), but received Binary \(DataType: Binary\)\.\n\nHint: Binary types are not automatically coerced to String\. Use CAST\(column AS VARCHAR\) to convert Binary data to String\.
+SELECT split_part(binary, '~', 2) FROM t WHERE binary IS NOT NULL LIMIT 1;
+
+# ensure the suggested CAST workaround works
+query T
+SELECT split_part(CAST(binary AS VARCHAR), 'o', 2) FROM t WHERE binary = X'466f6f';
+----
+(empty)

@@ -24,6 +24,7 @@ your Rust project. The [Configuration Settings] section lists options that
 control additional aspects DataFusion's runtime behavior.
 
 [configuration settings]: configs.md
+[support for adding dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies
 
 ## Using the nightly DataFusion builds
 

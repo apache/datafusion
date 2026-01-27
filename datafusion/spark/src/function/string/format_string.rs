@@ -1431,7 +1431,7 @@ impl ConversionSpecifier {
                 let value = "null".to_string();
                 self.format_string(string, &value)
             }
-            _ => exec_err!("Invalid scalar value: {:?}", value),
+            _ => exec_err!("Invalid scalar value: {value}"),
         }
     }
 
