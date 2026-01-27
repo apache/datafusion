@@ -709,6 +709,11 @@ jobs:
           ./dev/update_function_docs.sh
           git diff --exit-code
 
+# This job ensures `datafusion-examples/README.md` stays in sync with the source code:
+# 1. Generates README automatically using the Rust examples docs generator
+#    (parsing documentation from `examples/<group>/main.rs`)
+# 2. Formats the generated Markdown using DataFusion's standard Prettier setup
+# 3. Compares the result against the committed README.md and fails if out-of-date
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib
@@ -721,6 +726,16 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
+          
+      - name: Mark repository as safe for git
+        # Required for git commands inside container (avoids "dubious ownership" error)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Node.js (required for prettier)
+        # doc_prettier_check.sh uses npx to run prettier for Markdown formatting
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
       - name: Run examples docs check script
         run: |

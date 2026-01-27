@@ -26,7 +26,9 @@
 //!
 //! Each subcommand runs a corresponding example:
 //! - `all` — run all examples included in this module
-//! - `composed_extension_codec` — example of using multiple extension codecs for serialization / deserialization
+//!
+//! - `composed_extension_codec`
+//!   (file: composed_extension_codec.rs, desc: Use multiple extension codecs for serialization/deserialization)
 
 mod composed_extension_codec;
 

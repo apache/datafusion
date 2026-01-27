@@ -73,8 +73,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand            | File Path                                                                                             | Description                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
 | csv_json_opener       | [`custom_data_source/csv_json_opener.rs`](examples/custom_data_source/csv_json_opener.rs)             | Use low-level FileOpener APIs for CSV/JSON    |
+| csv_sql_streaming     | [`custom_data_source/csv_sql_streaming.rs`](examples/custom_data_source/csv_sql_streaming.rs)         | Run a streaming SQL query against CSV data    |
 | custom_datasource     | [`custom_data_source/custom_datasource.rs`](examples/custom_data_source/custom_datasource.rs)         | Query a custom TableProvider                  |
 | custom_file_casts     | [`custom_data_source/custom_file_casts.rs`](examples/custom_data_source/custom_file_casts.rs)         | Implement custom casting rules                |
 | custom_file_format    | [`custom_data_source/custom_file_format.rs`](examples/custom_data_source/custom_file_format.rs)       | Write to a custom file format                 |
@@ -143,8 +143,8 @@ cargo run --example dataframe -- dataframe
 
 | Subcommand | File Path                                               | Description                                            |
 | ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
-| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | client     | [`flight/client.rs`](examples/flight/client.rs)         | Execute SQL queries via Arrow Flight protocol          |
+| server     | [`flight/server.rs`](examples/flight/server.rs)         | Run DataFusion server accepting FlightSQL/JDBC queries |
 | sql_server | [`flight/sql_server.rs`](examples/flight/sql_server.rs) | Standalone SQL server for JDBC clients                 |
 
 ## Proto Examples
