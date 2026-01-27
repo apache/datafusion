@@ -271,7 +271,15 @@ pub fn validate_struct_compatibility(
     Ok(())
 }
 
-fn validate_field_compatibility(
+/// Validate that a field can be cast from source to target type.
+///
+/// This function checks:
+/// - Nullability compatibility: cannot cast nullable → non-nullable
+/// - Data type castability using Arrow's can_cast_types
+/// - Recursive validation for nested struct types
+///
+/// This validation is used for both top-level fields and nested struct fields.
+pub fn validate_field_compatibility(
     source_field: &Field,
     target_field: &Field,
 ) -> Result<()> {

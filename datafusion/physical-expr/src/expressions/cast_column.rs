@@ -26,7 +26,7 @@ use arrow::{
 use datafusion_common::{
     Result, ScalarValue,
     format::DEFAULT_CAST_OPTIONS,
-    nested_struct::{cast_column, validate_struct_compatibility},
+    nested_struct::{cast_column, validate_field_compatibility, validate_struct_compatibility},
     plan_err,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -99,9 +99,9 @@ fn normalize_cast_options(
 ///
 /// This function checks:
 /// - If the expression is a Column, its index is within the schema bounds
-/// - If the expression is a Column, its data type can be cast to the input field type
-/// - The input field type can be cast to the target field type
-/// - For struct types, field compatibility is validated recursively
+/// - If the expression is a Column, its data type is castable to the input field type
+/// - The input field can be cast to the target field (using validate_field_compatibility)
+/// - For struct types, field compatibility is validated recursively via validate_struct_compatibility
 fn validate_cast_compatibility(
     expr: &Arc<dyn PhysicalExpr>,
     input_field: &FieldRef,
@@ -119,12 +119,8 @@ fn validate_cast_compatibility(
             );
         }
 
-        // Validate that the column's field is compatible with the input_field for casting.
-        // We only check data type compatibility, not name/nullability/metadata, since those
-        // can differ in schema adaptation scenarios where a column from one schema is being
-        // cast to another schema's field type. This is intentionally relaxed compared to
-        // struct field validation (in nested_struct.rs), which enforces strict nullability
-        // rules for nested fields.
+        // Validate that the column's field data type is compatible with the input_field for casting.
+        // We use can_cast_types for this check since schema fields may have different names/metadata.
         let schema_field = &fields[column.index()];
         if schema_field.data_type() != input_field.data_type() {
             let is_compatible =
@@ -141,6 +137,8 @@ fn validate_cast_compatibility(
         }
     }
 
+    // Validate the cast from input_field to target_field using the same logic as nested_struct.
+    // This ensures consistent nullability and data type checking across all field contexts.
     match (input_field.data_type(), target_field.data_type()) {
         (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
             validate_struct_compatibility(source_fields, target_fields)?;
@@ -153,13 +151,9 @@ fn validate_cast_compatibility(
             );
         }
         _ => {
-            if !can_cast_types(input_field.data_type(), target_field.data_type()) {
-                return plan_err!(
-                    "CastColumnExpr cannot cast input type '{}' to target type '{}'",
-                    input_field.data_type(),
-                    target_field.data_type()
-                );
-            }
+            // For non-struct types, use the same field validation as struct fields.
+            // This ensures consistent nullability checking across all contexts.
+            validate_field_compatibility(input_field, target_field)?;
         }
     }
 
@@ -332,7 +326,6 @@ mod tests {
         Result as DFResult, ScalarValue,
         cast::{as_int64_array, as_string_array, as_struct_array, as_uint8_array},
     };
-    use std::collections::HashMap;
 
     fn make_schema(field: &Field) -> SchemaRef {
         Arc::new(Schema::new(vec![field.clone()]))
@@ -580,40 +573,24 @@ mod tests {
 
     #[test]
     fn cast_column_schema_mismatch_nullability_metadata() {
-        // CastColumnExpr allows nullability and metadata mismatches for top-level columns
-        // in schema adaptation scenarios. This differs from struct field validation in
-        // nested_struct.rs which is stricter about nullable -> non-nullable conversions.
-        // At the top level, schema adaptation may require converting between schemas
-        // with different nullability flags.
-        let mut input_metadata = HashMap::new();
-        input_metadata.insert("origin".to_string(), "input".to_string());
-        let input_field =
-            Field::new("a", DataType::Int32, true).with_metadata(input_metadata);
-
-        let mut schema_metadata = HashMap::new();
-        schema_metadata.insert("origin".to_string(), "schema".to_string());
-        let schema_field =
-            Field::new("a", DataType::Int32, false).with_metadata(schema_metadata);
-
-        let target_field = Field::new("a", DataType::Int32, true);
-        let schema = Arc::new(Schema::new(vec![schema_field]));
+        // Now that CastColumnExpr reuses validate_field_compatibility from nested_struct,
+        // it properly rejects nullable -> non-nullable casts to prevent data loss.
+        let input_field = Field::new("a", DataType::Int32, true);  // nullable
+        let target_field = Field::new("a", DataType::Int32, false); // non-nullable
+        let schema = Arc::new(Schema::new(vec![input_field.clone()]));
 
         let column = Arc::new(Column::new("a", 0));
 
-        // This succeeds because CastColumnExpr only validates data type compatibility,
-        // not nullability/metadata, allowing flexible schema adaptation.
-        let expr = CastColumnExpr::new_with_schema(
+        // This now fails due to nullability validation
+        let err = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field),
             Arc::new(target_field),
             None,
             schema,
         )
-        .expect(
-            "should create CastColumnExpr even with nullability/metadata differences",
-        );
+        .expect_err("should reject nullable -> non-nullable cast");
 
-        // Verify the expression was created successfully
-        assert_eq!(expr.input_field().name(), "a");
+        assert!(err.to_string().contains("nullable"));
     }
 }
