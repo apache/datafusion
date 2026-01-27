@@ -1126,22 +1126,22 @@ mod tests {
         Ok(())
     }
 
+    struct MockUdf(Signature);
+
+    impl UDFCoercionExt for MockUdf {
+        fn name(&self) -> &str {
+            "test"
+        }
+        fn signature(&self) -> &Signature {
+            &self.0
+        }
+        fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            unimplemented!()
+        }
+    }
+
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
-        struct MockUdf(Signature);
-
-        impl UDFCoercionExt for MockUdf {
-            fn name(&self) -> &str {
-                "test"
-            }
-            fn signature(&self) -> &Signature {
-                &self.0
-            }
-            fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-                unimplemented!()
-            }
-        }
-
         let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
         // able to coerce for any size
         let current_fields = vec![Arc::new(Field::new(
@@ -1351,11 +1351,11 @@ mod tests {
     #[test]
     fn test_coercible_nulls() -> Result<()> {
         fn null_input(coercion: Coercion) -> Result<Vec<DataType>> {
-            data_types(
-                "field",
-                &[DataType::Null],
-                &Signature::coercible(vec![coercion], Volatility::Immutable),
+            fields_with_udf(
+                &[Field::new("field", DataType::Null, true).into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
             )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
         }
 
         // Casts Null to Int64 if we use TypeSignatureClass::Native
@@ -1390,14 +1390,19 @@ mod tests {
         let dictionary =
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64));
         fn dictionary_input(coercion: Coercion) -> Result<Vec<DataType>> {
-            data_types(
-                "field",
-                &[DataType::Dictionary(
-                    Box::new(DataType::Int8),
-                    Box::new(DataType::Int64),
-                )],
-                &Signature::coercible(vec![coercion], Volatility::Immutable),
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::Int64),
+                    ),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
             )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
         }
 
         // Casts Dictionary to Int64 if we use TypeSignatureClass::Native
@@ -1434,14 +1439,19 @@ mod tests {
             Field::new("values", DataType::Int64, true).into(),
         );
         fn run_end_encoded_input(coercion: Coercion) -> Result<Vec<DataType>> {
-            data_types(
-                "field",
-                &[DataType::RunEndEncoded(
-                    Field::new("run_ends", DataType::Int16, false).into(),
-                    Field::new("values", DataType::Int64, true).into(),
-                )],
-                &Signature::coercible(vec![coercion], Volatility::Immutable),
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int16, false).into(),
+                        Field::new("values", DataType::Int64, true).into(),
+                    ),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
             )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
         }
 
         // Casts REE to Int64 if we use TypeSignatureClass::Native
