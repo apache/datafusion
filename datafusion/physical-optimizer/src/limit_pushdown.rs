@@ -155,10 +155,6 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
         global_state.preserve_order = limit_exec.preserve_order();
-        // Reset satisfied to false because we have a new limit that needs to be
-        // handled.  Without this, if a previous operation set satisfied=true,
-        // this limit would be extracted but never re-added when pushed through
-        // operators that don't support limit pushdown (e.g., joins).
         global_state.satisfied = false;
 
         // Now the global state has the most recent information, we can remove

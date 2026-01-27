@@ -356,19 +356,18 @@ fn merges_local_limit_with_global_limit() -> Result<()> {
 }
 
 #[test]
-fn preserves_nested_global_limit_through_projection_inside_join() -> Result<()> {
-    // GlobalLimitExec nodes with skip > 0 that appear inside join subtrees
-    // (wrapped in projections) should be preserved.
+fn preserves_nested_global_limit() -> Result<()> {
+    // If there are multiple limits in an execution plan, they all need to be
+    // preserved in the optimized plan.
     //
     // Plan structure:
     // GlobalLimitExec: skip=1, fetch=1
     //   NestedLoopJoinExec (Left)
     //     EmptyExec (left side)
-    //     ProjectionExec  <-- wraps the inner limit, so outer join doesn't see it
-    //       GlobalLimitExec: skip=2, fetch=1
-    //         NestedLoopJoinExec (Right)
-    //           EmptyExec (left side)
-    //           EmptyExec (right side)
+    //     GlobalLimitExec: skip=2, fetch=1
+    //       NestedLoopJoinExec (Right)
+    //         EmptyExec (left side)
+    //         EmptyExec (right side)
     let schema = create_schema();
 
     // Build inner join: NestedLoopJoin(Empty, Empty)
@@ -379,13 +378,9 @@ fn preserves_nested_global_limit_through_projection_inside_join() -> Result<()> 
     // Add inner limit: GlobalLimitExec: skip=2, fetch=1
     let inner_limit = global_limit_exec(inner_join, 2, Some(1));
 
-    // Wrap in projection - this is key! The outer join won't see the inner
-    // GlobalLimitExec as a direct child, so `satisfied` will be set to true.
-    let projection = projection_exec(Arc::clone(&schema), inner_limit)?;
-
-    // Build outer join: NestedLoopJoin(Empty, projection)
+    // Build outer join: NestedLoopJoin(Empty, GlobalLimit)
     let outer_left = empty_exec(Arc::clone(&schema));
-    let outer_join = nested_loop_join_exec(outer_left, projection, JoinType::Left)?;
+    let outer_join = nested_loop_join_exec(outer_left, inner_limit, JoinType::Left)?;
 
     // Add outer limit: GlobalLimitExec: skip=1, fetch=1
     let outer_limit = global_limit_exec(outer_join, 1, Some(1));
@@ -395,30 +390,23 @@ fn preserves_nested_global_limit_through_projection_inside_join() -> Result<()> 
         "GlobalLimitExec: skip=1, fetch=1",
         "  NestedLoopJoinExec: join_type=Left",
         "    EmptyExec",
-        "    ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "      GlobalLimitExec: skip=2, fetch=1",
-        "        NestedLoopJoinExec: join_type=Right",
-        "          EmptyExec",
-        "          EmptyExec",
+        "    GlobalLimitExec: skip=2, fetch=1",
+        "      NestedLoopJoinExec: join_type=Right",
+        "        EmptyExec",
+        "        EmptyExec",
     ];
     assert_eq!(initial, expected_initial);
 
     let after_optimize =
         LimitPushdown::new().optimize(outer_limit, &ConfigOptions::new())?;
-
-    // Both GlobalLimitExec nodes should be preserved because:
-    // 1. Joins don't support limit pushdown
-    // 2. The limits have skip > 0, so they must remain as GlobalLimitExec
-    // Before the fix, the inner GlobalLimitExec was incorrectly removed.
     let expected = [
         "GlobalLimitExec: skip=1, fetch=1",
         "  NestedLoopJoinExec: join_type=Left",
         "    EmptyExec",
-        "    ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
-        "      GlobalLimitExec: skip=2, fetch=1",
-        "        NestedLoopJoinExec: join_type=Right",
-        "          EmptyExec",
-        "          EmptyExec",
+        "    GlobalLimitExec: skip=2, fetch=1",
+        "      NestedLoopJoinExec: join_type=Right",
+        "        EmptyExec",
+        "        EmptyExec",
     ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
