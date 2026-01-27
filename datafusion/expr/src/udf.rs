@@ -738,7 +738,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// For example, given an expression like
     /// ```sql
-    /// date_part(YEAR, k) = 2024
+    /// date_part('YEAR', k) = 2024
     /// ```
     ///
     /// The interval [`2024-01-01`, `2025-01-01`) contains all possible
