@@ -791,12 +791,14 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     ///
     /// # Half-Open Intervals
     ///
-    /// The preimage API uses half open interval makes the rewrite easier to
-    /// implement by avoiding calculations to adjust the upper bound. For
-    /// example, using a closed interval (including the upper bound), the
-    /// preimage of a function that returns `5 could be represented as `[5, 5]`,
-    /// but then the rewrite would require adjusting the upper bound to `6` to
-    /// create a proper range predicate.
+    /// The preimage API uses half-open intervals, which makes the rewrite
+    /// easier to implement by avoiding calculations to adjust the upper bound.
+    /// For example, if a function returns its input unchanged and the desired
+    /// output is the single value `5`, a closed interval could be represented
+    /// as `[5, 5]`, but then the rewrite would require adjusting the upper
+    /// bound to `6` to create a proper range predicate. With a half-open
+    /// interval, the same range is represented as `[5, 6)`, which already
+    /// forms a valid predicate.
     ///
     /// [PruningPredicate]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/pruning/struct.PruningPredicate.html
     /// [ClickHouse Paper]:  https://www.vldb.org/pvldb/vol17/p3731-schulze.pdf
