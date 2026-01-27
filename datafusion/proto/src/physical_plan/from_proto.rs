@@ -777,6 +777,46 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
     }
 }
 
+// ============================================================================
+// String Interning for ArrowFormatOptions Lifetime Compatibility
+// ============================================================================
+//
+// PROBLEM:
+// Arrow's `FormatOptions<'a>` requires borrowed strings with a specific lifetime,
+// but Arrow also requires `&'static str` in many cases (like in CastOptions).
+// Protobuf deserialization produces owned `String` values with a limited lifetime
+// tied to the protobuf message. We cannot safely cast these short-lived `&str`
+// references to `&'static str`.
+//
+// WHY THIS IS NECESSARY:
+// 1. Flight SQL and Substrait require serializing/deserializing physical plans
+//    including CastColumnExpr with format options
+// 2. Arrow 57.0.0+ changed FormatOptions from owned String to borrowed &'a str
+//    for performance (reduces allocations)
+// 3. The combination creates an incompatibility:
+//    - Protobuf gives us: String or &'short_lived str
+//    - Arrow requires: &'static str
+//    - No way to safely bridge this gap without leaking memory
+//
+// SOLUTION:
+// String interning with a bounded cache:
+// - Leak strings to get `&'static str` (controlled memory leak)
+// - Cache leaked strings to enable reuse and deduplication
+// - Bound cache size to prevent unbounded growth
+//
+// ALTERNATIVES CONSIDERED (and why they don't work):
+// - Use owned String: Arrow's API explicitly requires &'a str, not String
+// - Regular borrowing: Borrowed data dies when proto message is dropped
+// - Change Arrow API: External dependency, not under our control
+// - Don't serialize FormatOptions: Breaks Flight SQL/Substrait distributed execution
+//
+// See PROTO_STRING_INTERNING_ISSUE.md for full details and historical context.
+// ============================================================================
+
+/// Interned format strings with `'static` lifetime for use in `ArrowFormatOptions`.
+///
+/// All strings are permanently leaked and cached to satisfy Arrow's lifetime requirements
+/// while enabling reuse across multiple deserializations.
 struct InternedFormatStrings {
     null: &'static str,
     date_format: Option<&'static str>,
@@ -823,6 +863,10 @@ fn format_options_from_proto(
     options: &protobuf::FormatOptions,
 ) -> Result<ArrowFormatOptions<'static>> {
     let duration_format = duration_format_from_proto(options.duration_format)?;
+    // Convert all protobuf strings to `&'static str` via string interning.
+    // This is required because Arrow's FormatOptions<'static> needs static
+    // lifetime references, but protobuf deserialization only gives us strings
+    // with a limited lifetime tied to the proto message.
     let interned = intern_format_strings(options)?;
     Ok(ArrowFormatOptions::new()
         .with_display_error(options.safe)
@@ -883,6 +927,19 @@ fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
 /// The cache owns leaked strings to provide `&'static str` values for
 /// `ArrowFormatOptions`, so keeping the cache bounded avoids unbounded
 /// growth in the common case.
+///
+/// WHY DIFFERENT LIMITS FOR TEST VS PRODUCTION:
+/// - Test limit (8): Intentionally tight to catch accidental unbounded format
+///   string generation during development. If tests exceed this, it indicates
+///   a code path that might cause memory issues in production.
+/// - Production limit (1024): Covers realistic scenarios where there are many
+///   distinct format patterns (e.g., different date formats per table/column)
+///   while still preventing pathological unbounded growth.
+///
+/// MEMORY IMPACT:
+/// - Best case: All deserializations use same format string → 1 leak (~10 bytes)
+/// - Typical case: 50 distinct format strings → 50 leaks (~500 bytes)
+/// - Worst case: Cache limit exceeded → deserialization fails with clear error
 #[cfg(test)]
 const FORMAT_STRING_CACHE_LIMIT: usize = 8;
 #[cfg(not(test))]
@@ -929,6 +986,27 @@ fn format_string_cache() -> &'static Mutex<FormatStringCache> {
     FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(FormatStringCache::default()))
 }
 
+/// Intern a format string to obtain a `&'static str` reference.
+///
+/// This function leaks memory by design to satisfy Arrow's lifetime requirements.
+/// The leaked strings are cached and reused across multiple deserializations,
+/// so the same format string is only leaked once.
+///
+/// # How It Works
+/// 1. Check cache for existing interned string (O(1) HashMap lookup)
+/// 2. If found, return cached `&'static str` (no new allocation)
+/// 3. If not found and cache not full:
+///    - Leak the string using `Box::leak` to get `&'static str`
+///    - Store in cache for future reuse
+///    - Return the leaked reference
+/// 4. If cache is full, return error to prevent unbounded growth
+///
+/// # Thread Safety
+/// This function uses a global mutex-protected cache, so it's safe to call
+/// from multiple threads concurrently. The mutex ensures no data races.
+///
+/// # Errors
+/// Returns error if cache limit is reached and the string is not already cached.
 fn intern_format_str(value: &str) -> Result<&'static str> {
     let mut cache = format_string_cache()
         .lock()
