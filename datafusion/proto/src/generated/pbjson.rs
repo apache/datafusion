@@ -14481,6 +14481,7 @@ impl serde::Serialize for PartitionMode {
             Self::CollectLeft => "COLLECT_LEFT",
             Self::Partitioned => "PARTITIONED",
             Self::Auto => "AUTO",
+            Self::LazyPartitioned => "LAZY_PARTITIONED",
         };
         serializer.serialize_str(variant)
     }
@@ -14495,6 +14496,7 @@ impl<'de> serde::Deserialize<'de> for PartitionMode {
             "COLLECT_LEFT",
             "PARTITIONED",
             "AUTO",
+            "LAZY_PARTITIONED",
         ];
 
         struct GeneratedVisitor;
@@ -14538,6 +14540,7 @@ impl<'de> serde::Deserialize<'de> for PartitionMode {
                     "COLLECT_LEFT" => Ok(PartitionMode::CollectLeft),
                     "PARTITIONED" => Ok(PartitionMode::Partitioned),
                     "AUTO" => Ok(PartitionMode::Auto),
+                    "LAZY_PARTITIONED" => Ok(PartitionMode::LazyPartitioned),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

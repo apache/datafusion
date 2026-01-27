@@ -89,6 +89,15 @@ pub enum PartitionMode {
     /// mode(Partitioned/CollectLeft) is optimal based on statistics. It will
     /// also consider swapping the left and right inputs for the Join
     Auto,
+    /// Lazy partitioning: build side is not pre-partitioned by RepartitionExec.
+    /// Instead, each join partition reads all build partitions and filters rows
+    /// by computing `hash % num_partitions` during hash table construction.
+    /// The probe side is still hash-partitioned to ensure correct matching.
+    ///
+    /// This mode reduces overhead for wide build tables by avoiding the column
+    /// copies that occur in RepartitionExec, at the cost of each partition
+    /// reading the entire build side and filtering locally.
+    LazyPartitioned,
 }
 
 /// Partitioning mode to use for symmetric hash join
