@@ -158,6 +158,18 @@ impl AggregateMode {
             AggregateMode::Final | AggregateMode::FinalPartitioned => false,
         }
     }
+
+    /// Checks whether this aggregation step produces final output values
+    /// (as opposed to intermediate accumulator state).
+    pub fn is_last_stage(&self) -> bool {
+        match self {
+            AggregateMode::Final
+            | AggregateMode::FinalPartitioned
+            | AggregateMode::Single
+            | AggregateMode::SinglePartitioned => true,
+            AggregateMode::Partial => false,
+        }
+    }
 }
 
 /// Represents `GROUP BY` clause in the plan (including the more general GROUPING SET)
@@ -1477,21 +1489,15 @@ fn create_schema(
     let mut fields = Vec::with_capacity(group_by.num_output_exprs() + aggr_expr.len());
     fields.extend(group_by.output_fields(input_schema)?);
 
-    match mode {
-        AggregateMode::Partial => {
-            // in partial mode, the fields of the accumulator's state
-            for expr in aggr_expr {
-                fields.extend(expr.state_fields()?.iter().cloned());
-            }
+    if mode.is_last_stage() {
+        // in final mode, the field with the final result of the accumulator
+        for expr in aggr_expr {
+            fields.push(expr.field())
         }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
-            // in final mode, the field with the final result of the accumulator
-            for expr in aggr_expr {
-                fields.push(expr.field())
-            }
+    } else {
+        // in partial mode, the fields of the accumulator's state
+        for expr in aggr_expr {
+            fields.extend(expr.state_fields()?.iter().cloned());
         }
     }
 
@@ -1696,10 +1702,8 @@ pub fn aggregate_expressions(
     mode: &AggregateMode,
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
-    match mode {
-        AggregateMode::Partial
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => Ok(aggr_expr
+    if mode.is_first_stage() {
+        Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let mut result = agg.expressions();
@@ -1709,19 +1713,18 @@ pub fn aggregate_expressions(
                 result.extend(agg.order_bys().iter().map(|item| Arc::clone(&item.expr)));
                 result
             })
-            .collect()),
-        // In this mode, we build the merge expressions of the aggregation.
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
-            let mut col_idx_base = col_idx_base;
-            aggr_expr
-                .iter()
-                .map(|agg| {
-                    let exprs = merge_expressions(col_idx_base, agg)?;
-                    col_idx_base += exprs.len();
-                    Ok(exprs)
-                })
-                .collect()
-        }
+            .collect())
+    } else {
+        // In merge mode, we build the merge expressions of the aggregation.
+        let mut col_idx_base = col_idx_base;
+        aggr_expr
+            .iter()
+            .map(|agg| {
+                let exprs = merge_expressions(col_idx_base, agg)?;
+                col_idx_base += exprs.len();
+                Ok(exprs)
+            })
+            .collect()
     }
 }
 
@@ -1759,31 +1762,25 @@ pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
 ) -> Result<Vec<ArrayRef>> {
-    match mode {
-        AggregateMode::Partial => {
-            // Build the vector of states
-            accumulators
-                .iter_mut()
-                .map(|accumulator| {
-                    accumulator.state().and_then(|e| {
-                        e.iter()
-                            .map(|v| v.to_array())
-                            .collect::<Result<Vec<ArrayRef>>>()
-                    })
+    if mode.is_last_stage() {
+        // Merge the state to the final value
+        accumulators
+            .iter_mut()
+            .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
+            .collect()
+    } else {
+        // Build the vector of states
+        accumulators
+            .iter_mut()
+            .map(|accumulator| {
+                accumulator.state().and_then(|e| {
+                    e.iter()
+                        .map(|v| v.to_array())
+                        .collect::<Result<Vec<ArrayRef>>>()
                 })
-                .flatten_ok()
-                .collect()
-        }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
-            // Merge the state to the final value
-            accumulators
-                .iter_mut()
-                .map(|accumulator| accumulator.evaluate().and_then(|v| v.to_array()))
-                .collect()
-        }
+            })
+            .flatten_ok()
+            .collect()
     }
 }
 
