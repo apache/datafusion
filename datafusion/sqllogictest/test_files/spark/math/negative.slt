@@ -94,6 +94,12 @@ SELECT negative(-1.5::double);
 query R
 SELECT negative(0.0::float);
 ----
+-0.0
+
+# Test negative with negative zero float
+query R
+SELECT negative(-0.0::float);
+----
 0.0
 
 # Test negative with decimal
@@ -147,29 +153,54 @@ SELECT negative(1234567890.123456::double);
 ----
 -1234567890.123456
 
-# Test wrap-around: negative of minimum int (should overflow)
+# Test wrap-around: negative of minimum int (should wrap to same value)
+# Using table to avoid constant folding overflow during optimization
+statement ok
+CREATE TABLE min_values_int AS VALUES (-2147483648);
+
 query I
-SELECT negative(-2147483648::int);
+SELECT negative(column1::int) FROM min_values_int;
 ----
 -2147483648
 
-# Test wrap-around: negative of minimum bigint (should overflow)
+statement ok
+DROP TABLE min_values_int;
+
+# Test wrap-around: negative of minimum bigint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_bigint AS VALUES (-9223372036854775808);
+
 query I
-SELECT negative(-9223372036854775808::bigint);
+SELECT negative(column1::bigint) FROM min_values_bigint;
 ----
 -9223372036854775808
 
-# Test wrap-around: negative of minimum smallint (should overflow)
+statement ok
+DROP TABLE min_values_bigint;
+
+# Test wrap-around: negative of minimum smallint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_smallint AS VALUES (-32768);
+
 query I
-SELECT negative(-32768::smallint);
+SELECT negative(column1::smallint) FROM min_values_smallint;
 ----
 -32768
 
-# Test wrap-around: negative of minimum tinyint (should overflow)
+statement ok
+DROP TABLE min_values_smallint;
+
+# Test wrap-around: negative of minimum tinyint (should wrap to same value)
+statement ok
+CREATE TABLE min_values_tinyint AS VALUES (-128);
+
 query I
-SELECT negative(-128::tinyint);
+SELECT negative(column1::tinyint) FROM min_values_tinyint;
 ----
 -128
+
+statement ok
+DROP TABLE min_values_tinyint;
 
 # Test overflow: negative of positive infinity (float)
 query R
@@ -211,13 +242,13 @@ NaN
 query R
 SELECT negative(3.4028235e38::float);
 ----
--3.4028235e38
+-340282350000000000000000000000000000000
 
 # Test overflow: negative of minimum float value
 query R
 SELECT negative(-3.4028235e38::float);
 ----
-3.4028235e38
+340282350000000000000000000000000000000
 
 # Test overflow: negative of maximum double value
 query R
