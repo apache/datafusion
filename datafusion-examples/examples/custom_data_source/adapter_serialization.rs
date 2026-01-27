@@ -234,10 +234,10 @@ impl PhysicalExprAdapterFactory for MetadataAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let inner = DefaultPhysicalExprAdapterFactory
-            .create(logical_file_schema, physical_file_schema);
-        Arc::new(MetadataAdapter { inner })
+            .create(logical_file_schema, physical_file_schema)?;
+        Ok(Arc::new(MetadataAdapter { inner }))
     }
 }
 
