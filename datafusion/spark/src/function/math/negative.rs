@@ -17,14 +17,15 @@
 
 use arrow::array::types::*;
 use arrow::array::*;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
+use bigdecimal::num_traits::WrappingNeg;
 
 /// Spark-compatible `negative` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#negative>
@@ -159,6 +160,36 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
+            // interval type
+            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth) => {
+                let array = array.as_primitive::<IntervalYearMonthType>();
+                let result: PrimitiveArray<IntervalYearMonthType> =
+                    array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime) => {
+                let array = array.as_primitive::<IntervalDayTimeType>();
+                let result: PrimitiveArray<IntervalDayTimeType> =
+                array.unary(|x| {
+                    IntervalDayTime {
+                        days: x.days.wrapping_neg(),
+                        milliseconds: x.milliseconds.wrapping_neg()
+                    }
+                });
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano) => {
+                let array = array.as_primitive::<IntervalMonthDayNanoType>();
+                let result: PrimitiveArray<IntervalMonthDayNanoType> = array.unary(|x| {
+                    IntervalMonthDayNano {
+                        months: x.months.wrapping_neg(),
+                        days: x.days.wrapping_neg(),
+                        nanoseconds: x.nanoseconds.wrapping_neg()
+                    }
+                });
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+
             dt => not_impl_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
         },
         ColumnarValue::Scalar(sv) => match sv {
@@ -226,6 +257,30 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     *precision,
                     *scale,
                 )))
+            }
+
+            //interval type
+            ScalarValue::IntervalYearMonth(Some(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(Some(
+                    v.wrapping_neg()
+                ))))
+            }
+            ScalarValue::IntervalDayTime(Some(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
+                    IntervalDayTime {
+                        days: v.days.wrapping_neg(),
+                        milliseconds: v.milliseconds.wrapping_neg()
+                    }
+                ))))
+            }
+            ScalarValue::IntervalMonthDayNano(Some(v)) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::IntervalMonthDayNano(
+                    Some(IntervalMonthDayNano {
+                        months: v.months.wrapping_neg(),
+                        days: v.days.wrapping_neg(),
+                        nanoseconds: v.nanoseconds.wrapping_neg()
+                    }
+                ))))
             }
 
             dt => not_impl_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
