@@ -34,7 +34,7 @@ LOCATION 'test_files/scratch/sort_pushdown/sorted_data.parquet'
 WITH ORDER (id ASC);
 
 # Test 1.1: Sort pushdown with DESC (opposite of ASC)
-# Should show reverse_row_groups=true
+# Should show reverse_row_groups=true, reverse_pages=true
 query TT
 EXPLAIN SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3;
 ----
@@ -43,7 +43,7 @@ logical_plan
 02)--TableScan: sorted_parquet projection=[id, value, name]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 # Test 1.2: Verify results are correct
 query IIT
@@ -91,7 +91,7 @@ logical_plan
 physical_plan
 01)GlobalLimitExec: skip=2, fetch=3
 02)--SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_data.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query IIT
 SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
@@ -101,7 +101,7 @@ SELECT * FROM sorted_parquet ORDER BY id DESC LIMIT 3 OFFSET 2;
 6 600 f
 
 # Test 1.6: Reverse scan with row selection (page index pruning)
-# This tests that when reverse_row_groups=true, the RowSelection is also properly reversed
+# This tests that when reverse_row_groups=true, reverse_pages=true, the RowSelection is also properly reversed
 
 # Create a dataset with multiple row groups and enable page index
 statement ok
@@ -155,7 +155,7 @@ logical_plan
 03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
 
 # Verify the results are correct despite reverse scanning with row selection
 # Expected: gamma values (6, 5) then alpha values (2, 1), in DESC order by id
@@ -272,7 +272,7 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [id@0 DESC], fetch=3
 02)--SortExec: TopK(fetch=3), expr=[id@0 DESC], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/sorted_multi/part3.parquet]]}, projection=[id, value, name], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 # Verify correctness with repartitioning and multiple files
 query IIT
@@ -381,7 +381,7 @@ logical_plan
 03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("quarterly")]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[period_end@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = quarterly AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= quarterly AND quarterly <= timeframe_max@1, required_guarantees=[timeframe in (quarterly)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = quarterly AND DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= quarterly AND quarterly <= timeframe_max@1, required_guarantees=[timeframe in (quarterly)]
 
 # Test 2.2: Verify the results are correct
 query TIR
@@ -478,7 +478,7 @@ SET datafusion.optimizer.enable_sort_pushdown = true;
 # Note: IN clause with multiple values means timeframe is NOT constant
 # (could be 'daily' or 'weekly'), so the first sort column cannot be eliminated.
 # Without a constant first column, we cannot reverse scan based on just period_end DESC.
-# The physical plan should NOT show reverse_row_groups=true
+# The physical plan should NOT show reverse_row_groups=true, reverse_pages=true
 query TT
 EXPLAIN SELECT * FROM timeseries_parquet
 WHERE timeframe IN ('daily', 'weekly')
@@ -511,7 +511,7 @@ logical_plan
 03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("monthly")]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[period_end@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = monthly AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= monthly AND monthly <= timeframe_max@1, required_guarantees=[timeframe in (monthly)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=timeframe@0 = monthly AND DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true, pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= monthly AND monthly <= timeframe_max@1, required_guarantees=[timeframe in (monthly)]
 
 # Verify results
 query TIR
@@ -540,7 +540,7 @@ logical_plan
 03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.period_end = Int32(2)]
 physical_plan
 01)SortExec: expr=[timeframe@0 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=period_end@1 = 2, reverse_row_groups=true, pruning_predicate=period_end_null_count@2 != row_count@3 AND period_end_min@0 <= 2 AND 2 <= period_end_max@1, required_guarantees=[period_end in (2)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], file_type=parquet, predicate=period_end@1 = 2, reverse_row_groups=true, reverse_pages=true, pruning_predicate=period_end_null_count@2 != row_count@3 AND period_end_min@0 <= 2 AND 2 <= period_end_max@1, required_guarantees=[period_end in (2)]
 
 # Cleanup
 statement ok
@@ -589,7 +589,7 @@ WITH ORDER (ts ASC);
 # Query with ORDER BY ts DESC
 # File ordering: [ts ASC]
 # Request: [ts DESC]
-# This should trigger reverse_row_groups=true
+# This should trigger reverse_row_groups=true, reverse_pages=true
 query TT
 EXPLAIN SELECT * FROM timestamp_parquet
 ORDER BY ts DESC
@@ -600,7 +600,7 @@ logical_plan
 02)--TableScan: timestamp_parquet projection=[id, ts, volume, price]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[ts@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 # Verify results
 query IPIR
@@ -626,7 +626,7 @@ logical_plan
 02)--TableScan: timestamp_parquet projection=[id, ts, volume, price]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[date_trunc(day, ts@1) DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timestamp_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 # Verify results (descending day)
 query IPIR
@@ -675,7 +675,7 @@ WITH ORDER (ts ASC);
 # Test 3.3a: Request ORDER BY ts DESC (opposite direction)
 # File: [ts ASC]
 # Request: [ts DESC]
-# Should trigger reverse_row_groups=true
+# Should trigger reverse_row_groups=true, reverse_pages=true
 query TT
 EXPLAIN SELECT * FROM multi_month_parquet
 ORDER BY ts DESC
@@ -686,7 +686,7 @@ logical_plan
 02)--TableScan: multi_month_parquet projection=[id, ts, volume, price]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[ts@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query IPIR
 SELECT * FROM multi_month_parquet
@@ -712,7 +712,7 @@ logical_plan
 02)--TableScan: multi_month_parquet projection=[id, ts, volume, price]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[date_trunc(month, ts@1) DESC, ts@1 DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_month_sorted.parquet]]}, projection=[id, ts, volume, price], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query IPIR
 SELECT * FROM multi_month_parquet
@@ -754,7 +754,7 @@ logical_plan
 02)--TableScan: int_parquet projection=[id, small_val, big_val]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[CAST(small_val@1 AS Int64) DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/int_sorted.parquet]]}, projection=[id, small_val, big_val], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/int_sorted.parquet]]}, projection=[id, small_val, big_val], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query III
 SELECT * FROM int_parquet
@@ -796,7 +796,7 @@ logical_plan
 02)--TableScan: float_parquet projection=[id, value]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[ceil(value@1) DESC], preserve_partitioning=[false]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/float_sorted.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/float_sorted.parquet]]}, projection=[id, value], file_type=parquet, predicate=DynamicFilter [ empty ], reverse_row_groups=true, reverse_pages=true
 
 query IR
 SELECT * FROM float_parquet
@@ -884,3 +884,4 @@ DROP TABLE signed_parquet;
 
 statement ok
 SET datafusion.optimizer.enable_sort_pushdown = true;
+
