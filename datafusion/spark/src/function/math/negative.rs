@@ -161,6 +161,12 @@ pub fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusio
             DataType::Float64 => simple_negative_array!(array, Float64Array),
 
             // Decimal types - wrapping negation
+            DataType::Decimal32(_, _) => {
+                wrapping_negative_array!(array, Decimal32Array)
+            }
+            DataType::Decima64(_, _) => {
+                wrapping_negative_array!(array, Decimal64Array)
+            }
             DataType::Decimal128(_, _) => {
                 wrapping_negative_array!(array, Decimal128Array)
             }
