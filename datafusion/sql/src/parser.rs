@@ -658,7 +658,7 @@ impl<'a> DFParser<'a> {
                     }
                 }
             } else {
-                let token = self.parser.next_token();
+                let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
@@ -1079,7 +1079,7 @@ impl<'a> DFParser<'a> {
                     }
                 }
             } else {
-                let token = self.parser.next_token();
+                let token = self.parser.peek_token();
                 if token == Token::EOF || token == Token::SemiColon {
                     break;
                 } else {
@@ -2023,6 +2023,48 @@ mod tests {
         assert_contains!(
             err.to_string(),
             "SQL error: RecursionLimitExceeded (current limit: 1)"
+        );
+    }
+
+    #[test]
+    fn test_multistatement() {
+        let sql = "COPY foo TO bar STORED AS CSV; \
+             CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'; \
+             RESET var;";
+        let statements = DFParser::parse_sql(sql).unwrap();
+        assert_eq!(
+            statements,
+            vec![
+                Statement::CopyTo(CopyToStatement {
+                    source: object_name("foo"),
+                    target: "bar".to_string(),
+                    partitioned_by: vec![],
+                    stored_as: Some("CSV".to_owned()),
+                    options: vec![],
+                }),
+                {
+                    let name = ObjectName::from(vec![Ident::from("t")]);
+                    let display = None;
+                    Statement::CreateExternalTable(CreateExternalTable {
+                        name: name.clone(),
+                        columns: vec![make_column_def("c1", DataType::Int(display))],
+                        file_type: "CSV".to_string(),
+                        location: "foo.csv".into(),
+                        table_partition_cols: vec![],
+                        order_exprs: vec![],
+                        if_not_exists: false,
+                        or_replace: false,
+                        temporary: false,
+                        unbounded: false,
+                        options: vec![],
+                        constraints: vec![],
+                    })
+                },
+                {
+                    let name = ObjectName::from(vec![Ident::from("var")]);
+                    Statement::Reset(ResetStatement::Variable(name))
+                }
+            ]
         );
     }
 

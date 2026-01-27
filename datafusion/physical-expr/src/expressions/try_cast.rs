@@ -72,7 +72,7 @@ impl TryCastExpr {
 
 impl fmt::Display for TryCastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "TRY_CAST({} AS {:?})", self.expr, self.cast_type)
+        write!(f, "TRY_CAST({} AS {})", self.expr, self.cast_type)
     }
 }
 
@@ -180,7 +180,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
@@ -231,7 +231,7 @@ mod tests {
 
             // verify that its display is correct
             assert_eq!(
-                format!("TRY_CAST(a@0 AS {:?})", $TYPE),
+                format!("TRY_CAST(a@0 AS {})", $TYPE),
                 format!("{}", expression)
             );
 
