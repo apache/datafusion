@@ -712,6 +712,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// Returns a single contiguous preimage for this function and the specified
     /// scalar expression, if any.
     ///
+    /// Currently only applies to `=, !=, >, >=, <, <=, is distinct from, is not distinct from` predicates
     /// # Return Value
     ///
     /// Implementations should return a half-open interval: inclusive lower
