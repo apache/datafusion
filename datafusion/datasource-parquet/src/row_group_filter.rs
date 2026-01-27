@@ -341,7 +341,7 @@ impl RowGroupAccessPlanFilter {
             return;
         };
 
-        let Ok(inverted_predicate) = PruningPredicate::try_new(
+        let Ok(inverted_predicate) = PruningPredicate::try_new_with_config(
             inverted_expr,
             Arc::clone(predicate.schema()),
             pruning_predicate_config,
@@ -740,7 +740,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -791,7 +791,7 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
         let expr = col("c1").gt(lit(15));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -840,7 +840,7 @@ mod tests {
         ]));
         let expr = col("c1").gt(lit(15)).and(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -885,7 +885,7 @@ mod tests {
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").rem(lit(2)).eq(lit(0)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -917,7 +917,7 @@ mod tests {
         ]));
         let expr = col("c1").gt(lit(0));
         let expr = logical2physical(&expr, &table_schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             table_schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1000,7 +1000,7 @@ mod tests {
         let schema_descr = ArrowSchemaConverter::new().convert(&schema).unwrap();
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1037,7 +1037,7 @@ mod tests {
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1081,7 +1081,7 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").gt(lit(ScalarValue::Decimal128(Some(500), 9, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1158,7 +1158,7 @@ mod tests {
             Decimal128(11, 2),
         ));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1256,7 +1256,7 @@ mod tests {
         let schema_descr = get_test_schema_descr(vec![field]);
         let expr = col("c1").lt(lit(ScalarValue::Decimal128(Some(500), 18, 2)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1323,7 +1323,7 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1407,7 +1407,7 @@ mod tests {
         let left = cast(col("c1"), Decimal128(28, 3));
         let expr = left.eq(lit(ScalarValue::Decimal128(Some(100000), 28, 3)));
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             schema.clone(),
             &PruningPredicateConfig::default(),
@@ -1584,7 +1584,7 @@ mod tests {
             false,
         );
         let expr = logical2physical(&expr, &schema);
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             expr,
             Arc::new(schema),
             &PruningPredicateConfig::default(),
@@ -1811,7 +1811,7 @@ mod tests {
             let data = bytes::Bytes::from(std::fs::read(path).unwrap());
 
             let expr = logical2physical(&expr, &schema);
-            let pruning_predicate = PruningPredicate::try_new(
+            let pruning_predicate = PruningPredicate::try_new_with_config(
                 expr,
                 Arc::new(schema),
                 &PruningPredicateConfig::default(),

@@ -195,7 +195,7 @@ fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate 
     let df_schema = DFSchema::try_from(Arc::clone(schema)).unwrap();
     let props = ExecutionProps::new();
     let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
-    PruningPredicate::try_new(
+    PruningPredicate::try_new_with_config(
         physical_expr,
         Arc::clone(schema),
         &PruningPredicateConfig::default(),

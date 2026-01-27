@@ -367,7 +367,7 @@ impl ParquetMetadataIndex {
     ) -> Result<Vec<(&str, u64)>> {
         // Use the PruningPredicate API to determine which files can not
         // possibly have any relevant data.
-        let pruning_predicate = PruningPredicate::try_new(
+        let pruning_predicate = PruningPredicate::try_new_with_config(
             predicate,
             self.schema().clone(),
             &PruningPredicateConfig::default(),

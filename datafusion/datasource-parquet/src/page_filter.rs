@@ -128,7 +128,7 @@ impl PagePruningAccessPlanFilter {
         let predicates = split_conjunction(expr)
             .into_iter()
             .filter_map(|predicate| {
-                let pp = match PruningPredicate::try_new(
+                let pp = match PruningPredicate::try_new_with_config(
                     Arc::clone(predicate),
                     Arc::clone(&schema),
                     config,

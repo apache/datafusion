@@ -106,7 +106,7 @@ use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 /// C: true  (rows might match x = 5)
 /// ```
 ///
-/// See [`PruningPredicate::try_new`] and [`PruningPredicate::prune`] for more information.
+/// See [`PruningPredicate::try_new_with_config`] and [`PruningPredicate::prune`] for more information.
 ///
 /// # Background
 ///
@@ -400,7 +400,11 @@ pub fn build_pruning_predicate(
     predicate_creation_errors: &Count,
     config: &PruningPredicateConfig,
 ) -> Option<Arc<PruningPredicate>> {
-    match PruningPredicate::try_new(predicate, Arc::clone(file_schema), config) {
+    match PruningPredicate::try_new_with_config(
+        predicate,
+        Arc::clone(file_schema),
+        config,
+    ) {
         Ok(pruning_predicate) => {
             if !pruning_predicate.always_true() {
                 return Some(Arc::new(pruning_predicate));
@@ -445,6 +449,10 @@ impl UnhandledPredicateHook for ConstantUnhandledPredicateHook {
 }
 
 impl PruningPredicate {
+    pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: SchemaRef) -> Result<Self> {
+        Self::try_new_with_config(expr, schema, &PruningPredicateConfig::default())
+    }
+
     /// Try to create a new instance of [`PruningPredicate`]
     ///
     /// This will translate the provided `expr` filter expression into
@@ -473,7 +481,7 @@ impl PruningPredicate {
     /// returns a new expression.
     /// It is recommended that you pass the expressions through [`PhysicalExprSimplifier`]
     /// before calling this method to make sure the expressions can be used for pruning.
-    pub fn try_new(
+    pub fn try_new_with_config(
         mut expr: Arc<dyn PhysicalExpr>,
         schema: SchemaRef,
         config: &PruningPredicateConfig,
@@ -2400,7 +2408,7 @@ mod tests {
         ]));
         let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
         let expr = logical2physical(&expr, &schema);
-        let p = PruningPredicate::try_new(
+        let p = PruningPredicate::try_new_with_config(
             expr,
             Arc::clone(&schema),
             &PruningPredicateConfig::default(),
@@ -3046,7 +3054,7 @@ mod tests {
             dynamic_phys_expr.with_new_children(remapped_expr).unwrap();
         // After substitution the expression is c1 > 5 AND part = "B" which should prune the file since the partition value is "A"
         let expected = &[false];
-        let p = PruningPredicate::try_new(
+        let p = PruningPredicate::try_new_with_config(
             dynamic_filter_expr,
             Arc::clone(&schema),
             &PruningPredicateConfig::default(),
@@ -5419,7 +5427,7 @@ mod tests {
     ) {
         println!("Pruning with expr: {expr}");
         let expr = logical2physical(&expr, schema);
-        let p = PruningPredicate::try_new(
+        let p = PruningPredicate::try_new_with_config(
             expr,
             Arc::<Schema>::clone(schema),
             &PruningPredicateConfig::default(),
@@ -5439,7 +5447,7 @@ mod tests {
         let expr = logical2physical(&expr, schema);
         let simplifier = PhysicalExprSimplifier::new(schema);
         let expr = simplifier.simplify(expr).unwrap();
-        let p = PruningPredicate::try_new(
+        let p = PruningPredicate::try_new_with_config(
             expr,
             Arc::<Schema>::clone(schema),
             &PruningPredicateConfig::default(),
