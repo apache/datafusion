@@ -368,7 +368,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
         let arg_placements: Vec<ExpressionPlacement> =
             self.args.iter().map(|arg| arg.placement()).collect();
 
-        self.fun.placement_with_args(&arg_placements)
+        self.fun.placement(&arg_placements)
     }
 }
 
