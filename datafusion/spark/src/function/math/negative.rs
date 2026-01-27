@@ -137,13 +137,8 @@ macro_rules! wrapping_negative_decimal_scalar {
 }
 
 /// Core implementation of Spark's negative function
-pub fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
-    if args.len() != 1 {
-        return internal_err!(
-            "negative takes exactly 1 argument, but got: {}",
-            args.len()
-        );
-    }
+fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let [arg] = take_function_args("negative", args)?;
 
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
