@@ -45,7 +45,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
-    expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
+    expr::{Alias, Exists, InList, ScalarFunction, SetQuantifier, Sort, WindowFunction},
 };
 use sqlparser::ast::helpers::attached_token::AttachedToken;
 use sqlparser::tokenizer::Span;
@@ -392,6 +392,33 @@ impl Unparser<'_> {
                     subquery: sub_query,
                     negated: insubq.negated,
                 })
+            }
+            Expr::SetComparison(set_cmp) => {
+                let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
+                let sub_statement =
+                    self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
+                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
+                {
+                    inner_query
+                } else {
+                    return plan_err!(
+                        "Subquery must be a Query, but found {sub_statement:?}"
+                    );
+                };
+                let compare_op = self.op_to_sql(&set_cmp.op)?;
+                match set_cmp.quantifier {
+                    SetQuantifier::Any => Ok(ast::Expr::AnyOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                        is_some: false,
+                    }),
+                    SetQuantifier::All => Ok(ast::Expr::AllOp {
+                        left,
+                        compare_op,
+                        right: Box::new(ast::Expr::Subquery(sub_query)),
+                    }),
+                }
             }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;

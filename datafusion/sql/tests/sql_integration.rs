@@ -3395,8 +3395,8 @@ fn cross_join_not_to_inner_join() {
         @r"
     Projection: person.id
       Filter: person.id = person.age
-        Cross Join: 
-          Cross Join: 
+        Cross Join:
+          Cross Join:
             TableScan: person
             TableScan: orders
           TableScan: lineitem
@@ -3530,11 +3530,11 @@ fn exists_subquery_schema_outer_schema_overlap() {
         Subquery:
           Projection: person.first_name
             Filter: person.id = p2.id AND person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)
-              Cross Join: 
+              Cross Join:
                 TableScan: person
                 SubqueryAlias: p2
                   TableScan: person
-        Cross Join: 
+        Cross Join:
           TableScan: person
           SubqueryAlias: p
             TableScan: person
@@ -3619,10 +3619,10 @@ fn scalar_subquery_reference_outer_field() {
           Projection: count(*)
             Aggregate: groupBy=[[]], aggr=[[count(*)]]
               Filter: outer_ref(j2.j2_id) = j1.j1_id AND j1.j1_id = j3.j3_id
-                Cross Join: 
+                Cross Join:
                   TableScan: j1
                   TableScan: j3
-        Cross Join: 
+        Cross Join:
           TableScan: j1
           TableScan: j2
     "

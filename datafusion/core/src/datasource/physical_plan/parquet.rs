@@ -995,6 +995,7 @@ mod tests {
         assert_eq!(read, 1, "Expected 1 rows to match the predicate");
         assert_eq!(get_value(&metrics, "row_groups_pruned_statistics"), 0);
         assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        assert_eq!(get_value(&metrics, "page_index_pages_pruned"), 1);
         assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
         // If we filter with a value that is completely out of the range of the data
         // we prune at the row group level.
@@ -1168,10 +1169,16 @@ mod tests {
         // There are 4 rows pruned in each of batch2, batch3, and
         // batch4 for a total of 12. batch1 had no pruning as c2 was
         // filled in as null
-        let (page_index_pruned, page_index_matched) =
+        let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
-        assert_eq!(page_index_pruned, 12);
-        assert_eq!(page_index_matched, 6);
+        assert_eq!(page_index_rows_pruned, 12);
+        assert_eq!(page_index_rows_matched, 6);
+
+        // each page has 2 rows, so the num of pages is 1/2 the number of rows
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 6);
+        assert_eq!(page_index_pages_matched, 3);
     }
 
     #[tokio::test]
@@ -1734,6 +1741,7 @@ mod tests {
             Some(3),
             Some(4),
             Some(5),
+            Some(6), // last page with only one row
         ]));
         let batch1 = create_batch(vec![("int", c1.clone())]);
 
@@ -1742,7 +1750,7 @@ mod tests {
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_page_index_predicate()
-            .round_trip(vec![batch1])
+            .round_trip(vec![batch1.clone()])
             .await;
 
         let metrics = rt.parquet_exec.metrics().unwrap();
@@ -1755,14 +1763,40 @@ mod tests {
         | 5   |
         +-----+
         ");
-        let (page_index_pruned, page_index_matched) =
+        let (page_index_rows_pruned, page_index_rows_matched) =
             get_pruning_metric(&metrics, "page_index_rows_pruned");
-        assert_eq!(page_index_pruned, 4);
-        assert_eq!(page_index_matched, 2);
+        assert_eq!(page_index_rows_pruned, 5);
+        assert_eq!(page_index_rows_matched, 2);
         assert!(
             get_value(&metrics, "page_index_eval_time") > 0,
             "no eval time in metrics: {metrics:#?}"
         );
+
+        // each page has 2 rows, so the num of pages is 1/2 the number of rows
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 3);
+        assert_eq!(page_index_pages_matched, 1);
+
+        // test with a filter that matches the page with one row
+        let filter = col("int").eq(lit(6_i32));
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_page_index_predicate()
+            .round_trip(vec![batch1])
+            .await;
+
+        let metrics = rt.parquet_exec.metrics().unwrap();
+
+        let (page_index_rows_pruned, page_index_rows_matched) =
+            get_pruning_metric(&metrics, "page_index_rows_pruned");
+        assert_eq!(page_index_rows_pruned, 6);
+        assert_eq!(page_index_rows_matched, 1);
+
+        let (page_index_pages_pruned, page_index_pages_matched) =
+            get_pruning_metric(&metrics, "page_index_pages_pruned");
+        assert_eq!(page_index_pages_pruned, 3);
+        assert_eq!(page_index_pages_matched, 1);
     }
 
     /// Returns a string array with contents:

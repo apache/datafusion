@@ -161,6 +161,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNull(_)
             | Expr::Exists { .. }
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_)
@@ -329,6 +330,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNotFalse(_)
             | Expr::IsNotUnknown(_)
             | Expr::Exists { .. } => Ok(false),
+            Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, .. }) => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
@@ -563,6 +565,7 @@ impl ExprSchemable for Expr {
             | Expr::TryCast(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
+            | Expr::SetComparison(_)
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
@@ -596,7 +599,16 @@ impl ExprSchemable for Expr {
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
 
-        if can_cast_types(&this_type, cast_to_type) {
+        // Special handling for struct-to-struct casts with name-based field matching
+        let can_cast = match (&this_type, cast_to_type) {
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                // Always allow struct-to-struct casts; field matching happens at runtime
+                true
+            }
+            _ => can_cast_types(&this_type, cast_to_type),
+        };
+
+        if can_cast {
             match self {
                 Expr::ScalarSubquery(subquery) => {
                     Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))

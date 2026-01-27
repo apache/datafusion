@@ -757,7 +757,7 @@ config_namespace! {
         /// (writing) Sets best effort maximum size of data page in bytes
         pub data_pagesize_limit: usize, default = 1024 * 1024
 
-        /// (writing) Sets write_batch_size in bytes
+        /// (writing) Sets write_batch_size in rows
         pub write_batch_size: usize, default = 1024
 
         /// (writing) Sets parquet writer version
@@ -772,7 +772,7 @@ config_namespace! {
 
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         ///
@@ -2248,7 +2248,7 @@ impl TableOptions {
 /// Options that control how Parquet files are read, including global options
 /// that apply to all columns and optional column-specific overrides
 ///
-/// Closely tied to [`ParquetWriterOptions`](crate::file_options::parquet_writer::ParquetWriterOptions).
+/// Closely tied to `ParquetWriterOptions` (see `crate::file_options::parquet_writer::ParquetWriterOptions` when the "parquet" feature is enabled).
 /// Properties not included in [`TableParquetOptions`] may not be configurable at the external API
 /// (e.g. sorting_columns).
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -2499,7 +2499,7 @@ config_namespace_with_hashmap! {
 
         /// Sets default parquet compression codec for the column path.
         /// Valid values are: uncompressed, snappy, gzip(level),
-        /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
+        /// brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub compression: Option<String>, transform = str::to_lowercase, default = None

@@ -16,7 +16,7 @@
 // under the License.
 
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, PruningMetrics,
+    Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, MetricType, PruningMetrics,
     RatioMergeStrategy, RatioMetrics, Time,
 };
 
@@ -45,9 +45,11 @@ pub struct ParquetFileMetrics {
     pub files_ranges_pruned_statistics: PruningMetrics,
     /// Number of times the predicate could not be evaluated
     pub predicate_evaluation_errors: Count,
-    /// Number of row groups whose bloom filters were checked, tracked with matched/pruned counts
+    /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_bloom_filter: PruningMetrics,
-    /// Number of row groups whose statistics were checked, tracked with matched/pruned counts
+    /// Number of row groups pruned due to limit pruning.
+    pub limit_pruned_row_groups: PruningMetrics,
+    /// Number of row groups pruned by statistics
     pub row_groups_pruned_statistics: PruningMetrics,
     /// Total number of bytes scanned
     pub bytes_scanned: Count,
@@ -63,19 +65,32 @@ pub struct ParquetFileMetrics {
     pub bloom_filter_eval_time: Time,
     /// Total rows filtered or matched by parquet page index
     pub page_index_rows_pruned: PruningMetrics,
+    /// Total pages filtered or matched by parquet page index
+    pub page_index_pages_pruned: PruningMetrics,
     /// Total time spent evaluating parquet page index filters
     pub page_index_eval_time: Time,
     /// Total time spent reading and parsing metadata from the footer
     pub metadata_load_time: Time,
     /// Scan Efficiency Ratio, calculated as bytes_scanned / total_file_size
     pub scan_efficiency_ratio: RatioMetrics,
-    /// Predicate Cache: number of records read directly from the inner reader.
-    /// This is the number of rows decoded while evaluating predicates
-    pub predicate_cache_inner_records: Count,
+    /// Predicate Cache: Total number of rows physically read and decoded from the Parquet file.
+    ///
+    /// This metric tracks "cache misses" in the predicate pushdown optimization.
+    /// When the specialized predicate reader cannot find the requested data in its cache,
+    /// it must fall back to the "inner reader" to physically decode the data from the
+    /// Parquet.
+    ///
+    /// This is the expensive path (IO + Decompression + Decoding).
+    ///
+    /// We use a Gauge here as arrow-rs reports absolute numbers rather
+    /// than incremental readings, we want a `set` operation here rather
+    /// than `add`. Earlier it was `Count`, which led to this issue:
+    /// github.com/apache/datafusion/issues/19334
+    pub predicate_cache_inner_records: Gauge,
     /// Predicate Cache: number of records read from the cache. This is the
     /// number of rows that were stored in the cache after evaluating predicates
     /// reused for the output.
-    pub predicate_cache_records: Count,
+    pub predicate_cache_records: Gauge,
 }
 
 impl ParquetFileMetrics {
@@ -93,6 +108,11 @@ impl ParquetFileMetrics {
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("row_groups_pruned_bloom_filter", partition);
 
+        let limit_pruned_row_groups = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .pruning_metrics("limit_pruned_row_groups", partition);
+
         let row_groups_pruned_statistics = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
@@ -102,6 +122,11 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("page_index_rows_pruned", partition);
+
+        let page_index_pages_pruned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .with_type(MetricType::SUMMARY)
+            .pruning_metrics("page_index_pages_pruned", partition);
 
         let bytes_scanned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
@@ -156,22 +181,24 @@ impl ParquetFileMetrics {
 
         let predicate_cache_inner_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("predicate_cache_inner_records", partition);
+            .gauge("predicate_cache_inner_records", partition);
 
         let predicate_cache_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
-            .counter("predicate_cache_records", partition);
+            .gauge("predicate_cache_records", partition);
 
         Self {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
             row_groups_pruned_bloom_filter,
             row_groups_pruned_statistics,
+            limit_pruned_row_groups,
             bytes_scanned,
             pushdown_rows_pruned,
             pushdown_rows_matched,
             row_pushdown_eval_time,
             page_index_rows_pruned,
+            page_index_pages_pruned,
             statistics_eval_time,
             bloom_filter_eval_time,
             page_index_eval_time,
