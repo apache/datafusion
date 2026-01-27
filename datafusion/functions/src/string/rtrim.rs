@@ -41,7 +41,7 @@ fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         args.to_owned()
     };
-    general_trim::<T>(&args, TrimType::Right, use_string_view)
+    general_trim::<T, TrimRight>(&args, use_string_view)
 }
 
 #[user_doc(

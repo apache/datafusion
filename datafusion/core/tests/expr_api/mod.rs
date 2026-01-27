@@ -24,7 +24,6 @@ use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::ExprFunctionExt;
-use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::NullTreatment;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_functions::core::expr_ext::FieldAccessor;
@@ -422,9 +421,7 @@ fn create_simplified_expr_test(expr: Expr, expected_expr: &str) {
     let df_schema = DFSchema::try_from(batch.schema()).unwrap();
 
     // Simplify the expression first
-    let props = ExecutionProps::new();
-    let simplify_context =
-        SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+    let simplify_context = SimplifyContext::default().with_schema(Arc::new(df_schema));
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr).unwrap();
     create_expr_test(simplified, expected_expr);

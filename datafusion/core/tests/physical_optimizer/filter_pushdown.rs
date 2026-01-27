@@ -56,23 +56,21 @@ use datafusion_physical_optimizer::{
 use datafusion_physical_plan::{
     ExecutionPlan,
     aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy},
-    coalesce_batches::CoalesceBatchesExec,
     coalesce_partitions::CoalescePartitionsExec,
     collect,
-    filter::FilterExec,
+    filter::{FilterExec, FilterExecBuilder},
+    projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
 };
 
+use super::pushdown_utils::{
+    OptimizationTest, TestNode, TestScanBuilder, TestSource, format_plan_for_test,
+};
 use datafusion_physical_plan::union::UnionExec;
 use futures::StreamExt;
 use object_store::{ObjectStore, memory::InMemory};
 use regex::Regex;
-use util::{OptimizationTest, TestNode, TestScanBuilder, format_plan_for_test};
-
-use crate::physical_optimizer::filter_pushdown::util::TestSource;
-
-mod util;
 
 #[test]
 fn test_pushdown_into_scan() {
@@ -234,6 +232,7 @@ async fn test_dynamic_filter_pushdown_through_hash_join_with_topk() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -355,6 +354,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -419,6 +419,7 @@ async fn test_static_filter_pushdown_through_hash_join() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -478,9 +479,10 @@ fn test_filter_with_projection() {
     let projection = vec![1, 0];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, Arc::clone(&scan))
+        FilterExecBuilder::new(predicate, Arc::clone(&scan))
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
 
@@ -503,9 +505,10 @@ fn test_filter_with_projection() {
     let projection = vec![1];
     let predicate = col_lit_predicate("a", "foo", &schema());
     let plan = Arc::new(
-        FilterExec::try_new(predicate, scan)
+        FilterExecBuilder::new(predicate, scan)
+            .apply_projection(Some(projection))
             .unwrap()
-            .with_projection(Some(projection))
+            .build()
             .unwrap(),
     );
     insta::assert_snapshot!(
@@ -527,9 +530,8 @@ fn test_filter_with_projection() {
 fn test_push_down_through_transparent_nodes() {
     // expect the predicate to be pushed down into the DataSource
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
-    let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 1));
     let predicate = col_lit_predicate("a", "foo", &schema());
-    let filter = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
+    let filter = Arc::new(FilterExec::try_new(predicate, scan).unwrap());
     let repartition = Arc::new(
         RepartitionExec::try_new(filter, Partitioning::RoundRobinBatch(1)).unwrap(),
     );
@@ -545,13 +547,11 @@ fn test_push_down_through_transparent_nodes() {
         - FilterExec: b@1 = bar
         -   RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=1
         -     FilterExec: a@0 = foo
-        -       CoalesceBatchesExec: target_batch_size=1
-        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
           - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=1
-          -   CoalesceBatchesExec: target_batch_size=1
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -564,10 +564,11 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     // 2. An outer filter (b@1 = bar) above the aggregate - also gets pushed through because 'b' is a grouping column
     let scan = TestScanBuilder::new(schema()).with_support(true).build();
 
-    let coalesce = Arc::new(CoalesceBatchesExec::new(scan, 10));
-
     let filter = Arc::new(
-        FilterExec::try_new(col_lit_predicate("a", "foo", &schema()), coalesce).unwrap(),
+        FilterExecBuilder::new(col_lit_predicate("a", "foo", &schema()), scan)
+            .with_batch_size(10)
+            .build()
+            .unwrap(),
     );
 
     let aggregate_expr = vec![
@@ -594,10 +595,13 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
         .unwrap(),
     );
 
-    let coalesce = Arc::new(CoalesceBatchesExec::new(aggregate, 100));
-
     let predicate = col_lit_predicate("b", "bar", &schema());
-    let plan = Arc::new(FilterExec::try_new(predicate, coalesce).unwrap());
+    let plan = Arc::new(
+        FilterExecBuilder::new(predicate, aggregate)
+            .with_batch_size(100)
+            .build()
+            .unwrap(),
+    );
 
     // Both filters should be pushed down to the DataSource since both reference grouping columns
     insta::assert_snapshot!(
@@ -606,17 +610,13 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     OptimizationTest:
       input:
         - FilterExec: b@1 = bar
-        -   CoalesceBatchesExec: target_batch_size=100
-        -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
-        -       FilterExec: a@0 = foo
-        -         CoalesceBatchesExec: target_batch_size=10
-        -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
+        -     FilterExec: a@0 = foo
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - CoalesceBatchesExec: target_batch_size=100
-          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
-          -     CoalesceBatchesExec: target_batch_size=10
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
+          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -922,61 +922,6 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
 }
 
 #[tokio::test]
-async fn test_topk_filter_passes_through_coalesce_batches() {
-    let batches = vec![
-        record_batch!(
-            ("a", Utf8, ["aa", "ab"]),
-            ("b", Utf8, ["bd", "bc"]),
-            ("c", Float64, [1.0, 2.0])
-        )
-        .unwrap(),
-        record_batch!(
-            ("a", Utf8, ["ac", "ad"]),
-            ("b", Utf8, ["bb", "ba"]),
-            ("c", Float64, [2.0, 1.0])
-        )
-        .unwrap(),
-    ];
-
-    let scan = TestScanBuilder::new(schema())
-        .with_support(true)
-        .with_batches(batches)
-        .build();
-
-    let coalesce_batches =
-        Arc::new(CoalesceBatchesExec::new(scan, 1024)) as Arc<dyn ExecutionPlan>;
-
-    // Add SortExec with TopK
-    let plan = Arc::new(
-        SortExec::new(
-            LexOrdering::new(vec![PhysicalSortExpr::new(
-                col("b", &schema()).unwrap(),
-                SortOptions::new(true, false),
-            )])
-            .unwrap(),
-            coalesce_batches,
-        )
-        .with_fetch(Some(1)),
-    ) as Arc<dyn ExecutionPlan>;
-
-    insta::assert_snapshot!(
-        OptimizationTest::new(Arc::clone(&plan), FilterPushdown::new_post_optimization(), true),
-        @r"
-    OptimizationTest:
-      input:
-        - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
-        -   CoalesceBatchesExec: target_batch_size=1024
-        -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-      output:
-        Ok:
-          - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
-          -   CoalesceBatchesExec: target_batch_size=1024
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
-    "
-    );
-}
-
-#[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown() {
     use datafusion_common::JoinType;
     use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
@@ -1040,6 +985,7 @@ async fn test_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1118,22 +1064,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // | plan_type     | plan                                                       |
     // +---------------+------------------------------------------------------------+
     // | physical_plan | ┌───────────────────────────┐                              |
-    // |               | │    CoalesceBatchesExec    │                              |
-    // |               | │    --------------------   │                              |
-    // |               | │     target_batch_size:    │                              |
-    // |               | │            8192           │                              |
-    // |               | └─────────────┬─────────────┘                              |
-    // |               | ┌─────────────┴─────────────┐                              |
     // |               | │        HashJoinExec       │                              |
     // |               | │    --------------------   ├──────────────┐               |
     // |               | │        on: (k = k)        │              │               |
     // |               | └─────────────┬─────────────┘              │               |
-    // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
-    // |               | │    CoalesceBatchesExec    ││    CoalesceBatchesExec    │ |
-    // |               | │    --------------------   ││    --------------------   │ |
-    // |               | │     target_batch_size:    ││     target_batch_size:    │ |
-    // |               | │            8192           ││            8192           │ |
-    // |               | └─────────────┬─────────────┘└─────────────┬─────────────┘ |
     // |               | ┌─────────────┴─────────────┐┌─────────────┴─────────────┐ |
     // |               | │      RepartitionExec      ││      RepartitionExec      │ |
     // |               | │    --------------------   ││    --------------------   │ |
@@ -1194,7 +1128,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
 
-    // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    // Build side: DataSource -> RepartitionExec (Hash)
     let build_hash_exprs = vec![
         col("a", &build_side_schema).unwrap(),
         col("b", &build_side_schema).unwrap(),
@@ -1206,9 +1140,8 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         )
         .unwrap(),
     );
-    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
-    // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    // Probe side: DataSource -> RepartitionExec (Hash)
     let probe_hash_exprs = vec![
         col("a", &probe_side_schema).unwrap(),
         col("b", &probe_side_schema).unwrap(),
@@ -1220,7 +1153,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         )
         .unwrap(),
     );
-    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec with partitioned inputs
     let on = vec![
@@ -1235,23 +1167,21 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     ];
     let hash_join = Arc::new(
         HashJoinExec::try_new(
-            build_coalesce,
-            probe_coalesce,
+            build_repartition,
+            probe_repartition,
             on,
             None,
             &JoinType::Inner,
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
 
-    // Top-level CoalesceBatchesExec
-    let cb =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
     // Top-level CoalescePartitionsExec
-    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
     // Add a sort for deterministic output
     let plan = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr::new(
@@ -1270,26 +1200,20 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
         -   CoalescePartitionsExec
-        -     CoalesceBatchesExec: target_batch_size=8192
-        -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -         CoalesceBatchesExec: target_batch_size=8192
-        -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -         CoalesceBatchesExec: target_batch_size=8192
-        -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+        -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
       output:
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
-          -     CoalesceBatchesExec: target_batch_size=8192
-          -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -         CoalesceBatchesExec: target_batch_size=8192
-          -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -         CoalesceBatchesExec: target_batch_size=8192
-          -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
     "
     );
 
@@ -1319,14 +1243,11 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         @r"
     - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
     -   CoalescePartitionsExec
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -         CoalesceBatchesExec: target_batch_size=8192
-    -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    -         CoalesceBatchesExec: target_batch_size=8192
-    -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 2 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 4 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
     "
     );
 
@@ -1340,14 +1261,11 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
         @r"
     - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
     -   CoalescePartitionsExec
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -         CoalesceBatchesExec: target_batch_size=8192
-    -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    -         CoalesceBatchesExec: target_batch_size=8192
-    -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -     HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
@@ -1418,7 +1336,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
 
-    // Probe side: DataSource -> RepartitionExec(Hash) -> CoalesceBatchesExec
+    // Probe side: DataSource -> RepartitionExec(Hash)
     let probe_hash_exprs = vec![
         col("a", &probe_side_schema).unwrap(),
         col("b", &probe_side_schema).unwrap(),
@@ -1430,7 +1348,6 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         )
         .unwrap(),
     );
-    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     let on = vec![
         (
@@ -1445,22 +1362,20 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     let hash_join = Arc::new(
         HashJoinExec::try_new(
             build_scan,
-            probe_coalesce,
+            probe_repartition,
             on,
             None,
             &JoinType::Inner,
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
 
-    // Top-level CoalesceBatchesExec
-    let cb =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
     // Top-level CoalescePartitionsExec
-    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
     // Add a sort for deterministic output
     let plan = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr::new(
@@ -1479,22 +1394,18 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
       input:
         - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
         -   CoalescePartitionsExec
-        -     CoalesceBatchesExec: target_batch_size=8192
-        -       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-        -         CoalesceBatchesExec: target_batch_size=8192
-        -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-        -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
+        -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+        -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+        -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+        -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true
       output:
         Ok:
           - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
-          -     CoalesceBatchesExec: target_batch_size=8192
-          -       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-          -         CoalesceBatchesExec: target_batch_size=8192
-          -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
     "
     );
 
@@ -1523,12 +1434,10 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
         @r"
     - SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
     -   CoalescePartitionsExec
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
-    -         CoalesceBatchesExec: target_batch_size=8192
-    -           RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -             DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+    -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
@@ -1629,6 +1538,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1648,6 +1558,7 @@ async fn test_nested_hashjoin_dynamic_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     ) as Arc<dyn ExecutionPlan>;
@@ -1763,6 +1674,7 @@ async fn test_hashjoin_parent_filter_pushdown() {
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
@@ -1850,15 +1762,17 @@ STORED AS PARQUET;
     .unwrap();
 
     // Create a TopK query that will use dynamic filter pushdown
+    // Note that we use t * t as the order by expression to avoid
+    // the order pushdown optimizer from optimizing away the TopK.
     let df = ctx
-        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t LIMIT 10;")
+        .sql(r"EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t * t LIMIT 10;")
         .await
         .unwrap();
     let batches = df.collect().await.unwrap();
     let explain = format!("{}", pretty_format_batches(&batches).unwrap());
 
     assert!(explain.contains("output_rows=128")); // Read 1 row group
-    assert!(explain.contains("t@0 < 1372708809")); // Dynamic filter was applied
+    assert!(explain.contains("t@0 < 1884329474306198481")); // Dynamic filter was applied
     assert!(
         explain.contains("pushdown_rows_matched=128, pushdown_rows_pruned=99.87 K"),
         "{explain}"
@@ -1909,6 +1823,234 @@ static TEST_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
 
 fn schema() -> SchemaRef {
     Arc::clone(&TEST_SCHEMA)
+}
+
+struct ProjectionDynFilterTestCase {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    projection: Vec<(Arc<dyn PhysicalExpr>, String)>,
+    sort_expr: PhysicalSortExpr,
+    expected_plans: Vec<String>,
+}
+
+async fn run_projection_dyn_filter_case(case: ProjectionDynFilterTestCase) {
+    let ProjectionDynFilterTestCase {
+        schema,
+        batches,
+        projection,
+        sort_expr,
+        expected_plans,
+    } = case;
+
+    let scan = TestScanBuilder::new(Arc::clone(&schema))
+        .with_support(true)
+        .with_batches(batches)
+        .build();
+
+    let projection_exec = Arc::new(ProjectionExec::try_new(projection, scan).unwrap());
+
+    let sort = Arc::new(
+        SortExec::new(LexOrdering::new(vec![sort_expr]).unwrap(), projection_exec)
+            .with_fetch(Some(2)),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+
+    let optimized_plan = FilterPushdown::new_post_optimization()
+        .optimize(Arc::clone(&sort), &config)
+        .unwrap();
+
+    pretty_assertions::assert_eq!(
+        format_plan_for_test(&optimized_plan).trim(),
+        expected_plans[0].trim()
+    );
+
+    let config = SessionConfig::new().with_batch_size(2);
+    let session_ctx = SessionContext::new_with_config(config);
+    session_ctx.register_object_store(
+        ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+        Arc::new(InMemory::new()),
+    );
+    let state = session_ctx.state();
+    let task_ctx = state.task_ctx();
+    let mut stream = optimized_plan.execute(0, Arc::clone(&task_ctx)).unwrap();
+    for (idx, expected_plan) in expected_plans.iter().enumerate().skip(1) {
+        stream.next().await.unwrap().unwrap();
+        let formatted_plan = format_plan_for_test(&optimized_plan);
+        pretty_assertions::assert_eq!(
+            formatted_plan.trim(),
+            expected_plan.trim(),
+            "Mismatch at iteration {}",
+            idx
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_topk_with_projection_transformation_on_dyn_filter() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("b", DataType::Utf8, false),
+        Field::new("c", DataType::Float64, false),
+    ]));
+    let simple_abc = vec![
+        record_batch!(
+            ("a", Int32, [1, 2, 3]),
+            ("b", Utf8, ["x", "y", "z"]),
+            ("c", Float64, [1.0, 2.0, 3.0])
+        )
+        .unwrap(),
+    ];
+
+    // Case 1: Reordering [b, a]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("b", &schema).unwrap(), "b".to_string()),
+            (col("a", &schema).unwrap(), "a".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 1)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+r#"  - SortExec: TopK(fetch=2), expr=[a@1 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[b@1 as b, a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+r#"  - SortExec: TopK(fetch=2), expr=[a@1 ASC], preserve_partitioning=[false], filter=[a@1 IS NULL OR a@1 < 2]
+  -   ProjectionExec: expr=[b@1 as b, a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string()]
+    })
+    .await;
+
+    // Case 2: Pruning [a]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![(col("a", &schema).unwrap(), "a".to_string())],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 2]
+  -   ProjectionExec: expr=[a@0 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 3: Identity [a, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("a", &schema).unwrap(), "a".to_string()),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 2]
+  -   ProjectionExec: expr=[a@0 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 4: Expressions [a + 1, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    col("a", &schema).unwrap(),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                "a_plus_1".to_string(),
+            ),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a_plus_1", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a_plus_1@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 + 1 as a_plus_1, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a_plus_1@0 ASC], preserve_partitioning=[false], filter=[a_plus_1@0 IS NULL OR a_plus_1@0 < 3]
+  -   ProjectionExec: expr=[a@0 + 1 as a_plus_1, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 + 1 IS NULL OR a@0 + 1 < 3 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 5: [a as b, b as a] (swapped columns)
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (col("a", &schema).unwrap(), "b".to_string()),
+            (col("b", &schema).unwrap(), "a".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("b", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[b@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 as b, b@1 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[b@0 ASC], preserve_partitioning=[false], filter=[b@0 IS NULL OR b@0 < 2]
+  -   ProjectionExec: expr=[a@0 as b, b@1 as a]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 IS NULL OR a@0 < 2 ]"#.to_string(),
+        ],
+    })
+    .await;
+
+    // Case 6: Confusing expr [a + 1 as a, b]
+    run_projection_dyn_filter_case(ProjectionDynFilterTestCase {
+        schema: Arc::clone(&schema),
+        batches: simple_abc.clone(),
+        projection: vec![
+            (
+                Arc::new(BinaryExpr::new(
+                    col("a", &schema).unwrap(),
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                )),
+                "a".to_string(),
+            ),
+            (col("b", &schema).unwrap(), "b".to_string()),
+        ],
+        sort_expr: PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            SortOptions::default(),
+        ),
+        expected_plans: vec![
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false]
+  -   ProjectionExec: expr=[a@0 + 1 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]"#.to_string(),
+            r#"  - SortExec: TopK(fetch=2), expr=[a@0 ASC], preserve_partitioning=[false], filter=[a@0 IS NULL OR a@0 < 3]
+  -   ProjectionExec: expr=[a@0 + 1 as a, b@1 as b]
+  -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 + 1 IS NULL OR a@0 + 1 < 3 ]"#.to_string(),
+        ],
+    })
+    .await;
 }
 
 /// Returns a predicate that is a binary expression col = lit
@@ -2835,7 +2977,6 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         )
         .unwrap(),
     );
-    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
     let probe_hash_exprs = vec![
         col("a", &probe_side_schema).unwrap(),
@@ -2848,7 +2989,6 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
         )
         .unwrap(),
     );
-    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec
     let on = vec![
@@ -2861,22 +3001,20 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
             col("b", &probe_side_schema).unwrap(),
         ),
     ];
-    let hash_join = Arc::new(
+    let plan = Arc::new(
         HashJoinExec::try_new(
-            build_coalesce,
-            probe_coalesce,
+            build_repartition,
+            probe_repartition,
             on,
             None,
             &JoinType::Inner,
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
-
-    let plan =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
     // Apply the filter pushdown optimizer
     let mut config = SessionConfig::new();
@@ -2887,14 +3025,11 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - CoalesceBatchesExec: target_batch_size=8192
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
     "
     );
 
@@ -2915,14 +3050,11 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - CoalesceBatchesExec: target_batch_size=8192
-    -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-    -     CoalesceBatchesExec: target_batch_size=8192
-    -       RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
+    - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
     "
     );
 }
@@ -2998,7 +3130,7 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
             col("b", &probe_side_schema).unwrap(),
         ),
     ];
-    let hash_join = Arc::new(
+    let plan = Arc::new(
         HashJoinExec::try_new(
             build_scan,
             Arc::clone(&probe_scan),
@@ -3008,12 +3140,10 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
-
-    let plan =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
     // Apply the filter pushdown optimizer
     let mut config = SessionConfig::new();
@@ -3024,10 +3154,9 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - CoalesceBatchesExec: target_batch_size=8192
-    -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
     "
     );
 
@@ -3048,10 +3177,9 @@ async fn test_hashjoin_dynamic_filter_with_nulls() {
     insta::assert_snapshot!(
         format_plan_for_test(&plan),
         @r"
-    - CoalesceBatchesExec: target_batch_size=8192
-    -   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= 1 AND b@1 <= 2 AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:1}, {c0:,c1:2}, {c0:ab,c1:}]) ]
+    - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
+    -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= 1 AND b@1 <= 2 AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:1}, {c0:,c1:2}, {c0:ab,c1:}]) ]
     "
     );
 
@@ -3116,7 +3244,7 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
 
-    // Build side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    // Build side: DataSource -> RepartitionExec (Hash)
     let build_hash_exprs = vec![
         col("a", &build_side_schema).unwrap(),
         col("b", &build_side_schema).unwrap(),
@@ -3128,9 +3256,8 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         )
         .unwrap(),
     );
-    let build_coalesce = Arc::new(CoalesceBatchesExec::new(build_repartition, 8192));
 
-    // Probe side: DataSource -> RepartitionExec (Hash) -> CoalesceBatchesExec
+    // Probe side: DataSource -> RepartitionExec (Hash)
     let probe_hash_exprs = vec![
         col("a", &probe_side_schema).unwrap(),
         col("b", &probe_side_schema).unwrap(),
@@ -3142,7 +3269,6 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
         )
         .unwrap(),
     );
-    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     // Create HashJoinExec with partitioned inputs
     let on = vec![
@@ -3157,23 +3283,21 @@ async fn test_hashjoin_hash_table_pushdown_partitioned() {
     ];
     let hash_join = Arc::new(
         HashJoinExec::try_new(
-            build_coalesce,
-            probe_coalesce,
+            build_repartition,
+            probe_repartition,
             on,
             None,
             &JoinType::Inner,
             None,
             PartitionMode::Partitioned,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
 
-    // Top-level CoalesceBatchesExec
-    let cb =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
     // Top-level CoalescePartitionsExec
-    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
     // Add a sort for deterministic output
     let plan = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr::new(
@@ -3285,7 +3409,7 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     // Create RepartitionExec nodes for both sides with hash partitioning on join keys
     let partition_count = 12;
 
-    // Probe side: DataSource -> RepartitionExec(Hash) -> CoalesceBatchesExec
+    // Probe side: DataSource -> RepartitionExec(Hash)
     let probe_hash_exprs = vec![
         col("a", &probe_side_schema).unwrap(),
         col("b", &probe_side_schema).unwrap(),
@@ -3297,7 +3421,6 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
         )
         .unwrap(),
     );
-    let probe_coalesce = Arc::new(CoalesceBatchesExec::new(probe_repartition, 8192));
 
     let on = vec![
         (
@@ -3312,22 +3435,20 @@ async fn test_hashjoin_hash_table_pushdown_collect_left() {
     let hash_join = Arc::new(
         HashJoinExec::try_new(
             build_scan,
-            probe_coalesce,
+            probe_repartition,
             on,
             None,
             &JoinType::Inner,
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
 
-    // Top-level CoalesceBatchesExec
-    let cb =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
     // Top-level CoalescePartitionsExec
-    let cp = Arc::new(CoalescePartitionsExec::new(cb)) as Arc<dyn ExecutionPlan>;
+    let cp = Arc::new(CoalescePartitionsExec::new(hash_join)) as Arc<dyn ExecutionPlan>;
     // Add a sort for deterministic output
     let plan = Arc::new(SortExec::new(
         LexOrdering::new(vec![PhysicalSortExpr::new(
@@ -3446,7 +3567,7 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
             col("id2", &probe_side_schema).unwrap(),
         ),
     ];
-    let hash_join = Arc::new(
+    let plan = Arc::new(
         HashJoinExec::try_new(
             build_scan,
             Arc::clone(&probe_scan),
@@ -3456,12 +3577,10 @@ async fn test_hashjoin_hash_table_pushdown_integer_keys() {
             None,
             PartitionMode::CollectLeft,
             datafusion_common::NullEquality::NullEqualsNothing,
+            false,
         )
         .unwrap(),
     );
-
-    let plan =
-        Arc::new(CoalesceBatchesExec::new(hash_join, 8192)) as Arc<dyn ExecutionPlan>;
 
     // Apply optimization with forced HashTable strategy
     let session_config = SessionConfig::default()
@@ -3567,6 +3686,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_is_used() {
                 None,
                 PartitionMode::CollectLeft,
                 datafusion_common::NullEquality::NullEqualsNothing,
+                false,
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;

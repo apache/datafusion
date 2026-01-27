@@ -180,7 +180,7 @@ impl RowCursorStream {
         self.rows.save(stream_idx, &rows);
 
         // track the memory in the newly created Rows.
-        let mut rows_reservation = self.reservation.new_empty();
+        let rows_reservation = self.reservation.new_empty();
         rows_reservation.try_grow(rows.size())?;
         Ok(RowValues::new(rows, rows_reservation))
     }
@@ -246,7 +246,7 @@ impl<T: CursorArray> FieldCursorStream<T> {
         let array = value.into_array(batch.num_rows())?;
         let size_in_mem = array.get_buffer_memory_size();
         let array = array.as_any().downcast_ref::<T>().expect("field values");
-        let mut array_reservation = self.reservation.new_empty();
+        let array_reservation = self.reservation.new_empty();
         array_reservation.try_grow(size_in_mem)?;
         Ok(ArrayValues::new(
             self.sort.options,
