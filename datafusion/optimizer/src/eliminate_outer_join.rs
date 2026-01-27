@@ -290,8 +290,8 @@ fn extract_non_nullable_columns(
                 false,
             )
         }
-        Expr::Cast(Cast { expr, data_type: _ })
-        | Expr::TryCast(TryCast { expr, data_type: _ }) => extract_non_nullable_columns(
+        Expr::Cast(Cast { expr, field: _ })
+        | Expr::TryCast(TryCast { expr, field: _ }) => extract_non_nullable_columns(
             expr,
             non_nullable_cols,
             left_schema,
