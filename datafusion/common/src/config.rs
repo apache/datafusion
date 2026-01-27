@@ -669,6 +669,17 @@ config_namespace! {
         /// # Default
         /// `false` — ANSI SQL mode is disabled by default.
         pub enable_ansi_mode: bool, default = false
+
+        /// How many bytes to buffer in the probe side of hash joins while the build side is
+        /// concurrently being built.
+        ///
+        /// Without this, hash joins will wait until the full materialization of the build side
+        /// before polling the probe side. This is useful in scenarios where the query is not
+        /// completely CPU bounded, allowing to do some early work concurrently and reducing the
+        /// latency of the query.
+        ///
+        /// 1Mb by default. Set to 0 for disabling it.
+        pub hash_join_buffering_capacity: usize, default = 1024 * 1024
     }
 }
 
