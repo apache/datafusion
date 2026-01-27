@@ -97,7 +97,7 @@ LOCATION 'test_files/scratch/projection_pushdown/nullable.parquet';
 #####################
 
 ###
-# Test 2.1: Simple s['value'] - pushed into DataSourceExec
+# Test 2.1: Simple s['value']
 ###
 
 query TT
@@ -119,7 +119,7 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id;
 5 250
 
 ###
-# Test 2.2: Multiple get_field expressions - all pushed
+# Test 2.2: Multiple get_field expressions
 ###
 
 query TT
@@ -141,7 +141,7 @@ SELECT id, s['value'], s['label'] FROM simple_struct ORDER BY id;
 5 250 epsilon
 
 ###
-# Test 2.3: Nested s['outer']['inner'] - pushed
+# Test 2.3: Nested s['outer']['inner']
 ###
 
 query TT
@@ -161,7 +161,7 @@ SELECT id, nested['outer']['inner'] FROM nested_struct ORDER BY id;
 3 30
 
 ###
-# Test 2.4: s['value'] + 1 - entire expression pushed (directly above scan)
+# Test 2.4: s['value'] + 1
 ###
 
 query TT
@@ -183,7 +183,7 @@ SELECT id, s['value'] + 1 FROM simple_struct ORDER BY id;
 5 251
 
 ###
-# Test 2.5: s['label'] || '_suffix' - pushed (directly above scan)
+# Test 2.5: s['label'] || '_suffix'
 ###
 
 query TT
@@ -210,7 +210,7 @@ SELECT id, s['label'] || '_suffix' FROM simple_struct ORDER BY id;
 #####################
 
 ###
-# Test 3.1: Simple get_field through Filter - pushed
+# Test 3.1: Simple get_field through Filter
 ###
 
 query TT
@@ -234,7 +234,7 @@ SELECT id, s['value'] FROM simple_struct WHERE id > 2 ORDER BY id;
 5 250
 
 ###
-# Test 3.2: s['value'] + 1 through Filter - get_field extracted and pushed
+# Test 3.2: s['value'] + 1 through Filter
 ###
 
 query TT
@@ -287,7 +287,7 @@ SELECT id, s['label'] FROM simple_struct WHERE s['value'] > 150 ORDER BY id;
 #####################
 
 ###
-# Test 4.1: Simple get_field through Sort - pushed
+# Test 4.1: Simple get_field through Sort
 ###
 
 query TT
@@ -363,7 +363,6 @@ SELECT id, s['value'] FROM simple_struct ORDER BY s['value'];
 
 ###
 # Test 4.4: Projection with duplicate column through Sort
-# Tests that projections with duplicate columns can be pushed through Sort.
 # The projection expands the logical output (3→4 columns) but reduces physical columns
 # since the duplicate column reuses an existing source column.
 ###
@@ -413,7 +412,7 @@ DROP TABLE three_cols;
 #####################
 
 ###
-# Test 5.1: Simple get_field through TopK - pushed (trivial)
+# Test 5.1: Simple get_field through TopK
 ###
 
 query TT
@@ -436,7 +435,7 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id LIMIT 3;
 3 150
 
 ###
-# Test 5.2: s['value'] + 1 through TopK - pushed (narrows schema from 2 to 2 cols)
+# Test 5.2: s['value'] + 1 through TopK
 ###
 
 query TT
@@ -459,7 +458,7 @@ SELECT id, s['value'] + 1 FROM simple_struct ORDER BY id LIMIT 3;
 3 151
 
 ###
-# Test 5.3: Multiple get_field through TopK - all pushed
+# Test 5.3: Multiple get_field through TopK
 ###
 
 query TT
@@ -482,7 +481,7 @@ SELECT id, s['value'], s['label'] FROM simple_struct ORDER BY id LIMIT 3;
 3 150 gamma
 
 ###
-# Test 5.4: Nested get_field through TopK - pushed
+# Test 5.4: Nested get_field through TopK
 ###
 
 query TT
@@ -504,7 +503,7 @@ SELECT id, nested['outer']['inner'] FROM nested_struct ORDER BY id LIMIT 2;
 2 20
 
 ###
-# Test 5.5: String concat through TopK - pushed (narrows schema)
+# Test 5.5: String concat through TopK
 ###
 
 query TT
@@ -856,7 +855,7 @@ SELECT id, s['value'], s['value'] + 10, s['label'] FROM simple_struct ORDER BY i
 3 150 160 gamma
 
 ###
-# Test 8.4: Literal projection through TopK - pushed (narrows schema)
+# Test 8.4: Literal projection through TopK
 ###
 
 query TT
@@ -906,8 +905,7 @@ SELECT id FROM simple_struct ORDER BY id LIMIT 3;
 #####################
 
 ###
-# Test 9.1: TopK with computed projection - pushed (narrows schema)
-# The projection outputs fewer columns than the source, so it narrows the schema
+# Test 9.1: TopK with computed projection
 ###
 
 query TT
@@ -959,7 +957,6 @@ SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 2 ORDER 
 
 ###
 # Test 9.3: Projection with only get_field expressions through Filter
-# All TrivialExpr projection that can be pushed through filter
 ###
 
 query TT
@@ -1087,17 +1084,6 @@ SELECT id, s['value'] + 100, s['label'] || '_test' FROM simple_struct ORDER BY i
 # Section 11: FilterExec Projection Pushdown - Handling Predicate Column Requirements
 #####################
 
-# When pushing a projection down through FilterExec, the optimizer must ensure the projection
-# includes all columns referenced in the filter predicate. If columns are missing, the optimizer
-# augments (adds) them to the projection, filters the data, then removes them from output.
-# These tests verify: column augmentation, complex predicates, column reuse, and index remapping.
-
-###
-# Test 11.1: Baseline - No augmentation needed
-# When the projection includes 'id' and the predicate references 'id', no extra columns
-# are added. The projection pushes down directly: FilterExec -> DataSourceExec with [id, s['value']].
-###
-
 query TT
 EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 1;
 ----
@@ -1116,13 +1102,6 @@ SELECT id, s['value'] FROM simple_struct WHERE id > 1 ORDER BY id LIMIT 2;
 ----
 2 200
 3 150
-
-###
-# Test 11.2: Complex predicate with multiple logical branches
-# Query projects only s['value'], but predicate uses 'id' in multiple conditions:
-# (id > 1 AND (id < 4 OR id = 5)). The optimizer adds 'id' for filtering, then removes it.
-# Verifies all column references in AND/OR branches are correctly handled.
-###
 
 query TT
 EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND (id < 4 OR id = 5);
@@ -1145,12 +1124,6 @@ SELECT s['value'] FROM simple_struct WHERE id > 1 AND (id < 4 OR id = 5) ORDER B
 200
 250
 
-###
-# Test 11.3: Column reused in multiple conditions
-# When 'id' appears multiple times (id > 1 AND id < 5), it's added to the projection
-# only once, and all predicate references point to the same column index.
-###
-
 query TT
 EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND id < 5;
 ----
@@ -1171,15 +1144,6 @@ SELECT s['value'] FROM simple_struct WHERE id > 1 AND id < 5 ORDER BY s['value']
 200
 300
 
-###
-# Test 11.4: Core augmentation with column reordering
-# Projects: s['value'], s['label'], id (note 'id' is LAST in the SELECT list)
-# Predicate: id > 1
-# When 'id' is added for filtering, columns are reordered to match input schema order.
-# Result: 'id' moves from SELECT position 3 to physical plan index 2.
-# Physical plan shows: FilterExec: id@2 > 1 (note the index after reordering).
-###
-
 query TT
 EXPLAIN SELECT s['value'], s['label'], id FROM simple_struct WHERE id > 1;
 ----
@@ -1199,13 +1163,6 @@ SELECT s['value'], s['label'], id FROM simple_struct WHERE id > 1 ORDER BY id LI
 200 beta 2
 150 gamma 3
 300 delta 4
-
-###
-# Test 11.5: Function calls on already-projected fields
-# Projects s['value'], predicate uses length(s['label']).
-# Both expressions reference the base struct 's', which is already in the projection,
-# so no augmentation is needed. FilterExec applies directly to the projected column.
-###
 
 query TT
 EXPLAIN SELECT s['value'] FROM simple_struct WHERE length(s['label']) > 4;
@@ -1231,14 +1188,12 @@ SELECT s['value'] FROM simple_struct WHERE length(s['label']) > 4 ORDER BY s['va
 300
 
 #####################
-# Section 11a: SortExec Pushdown with Missing Sort Columns
-# Tests cases where the projection drops columns needed by sort expressions
+# Section 11a: ProjectionExec on top of a SortExec with missing Sort Columns
 #####################
 
 ###
 # Test 11a.1: Sort by dropped column
 # Selects only id, drops s entirely, but sorts by s['value']
-# Projection must be pushed below sort in a way that preserves sort columns
 ###
 
 query TT
@@ -1345,9 +1300,8 @@ SELECT id FROM simple_struct ORDER BY s['value'] * 2;
 4
 
 ###
-# Test 11a.5: All sort columns selected (regression test)
+# Test 11a.5: All sort columns selected
 # All columns needed for sorting are included in projection
-# Baseline case ensuring optimization still works when no columns are missing
 ###
 
 query TT
