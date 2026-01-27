@@ -142,7 +142,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Null => Ok(args[0].clone()),
+            DataType::Null | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => Ok(args[0].clone()),
 
             // Signed integers - use wrapping negation (Spark legacy mode behavior)
             DataType::Int8 => wrapping_negative_array!(array, Int8Array),
