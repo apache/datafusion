@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::*;
 use arrow::array::types::*;
+use arrow::array::*;
 use arrow::datatypes::DataType;
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::take_function_args;
 
 /// Spark-compatible `negative` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#negative>
@@ -82,17 +82,20 @@ impl ScalarUDFImpl for SparkNegative {
     }
 }
 
-
 /// Core implementation of Spark's negative function
 fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [arg] = take_function_args("negative", args)?;
+    let [_] = take_function_args("negative", args)?;
 
     match &args[0] {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Null | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => Ok(args[0].clone()),
+            DataType::Null
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => Ok(args[0].clone()),
 
             // Signed integers - use wrapping negation (Spark legacy mode behavior)
-            DataType::Int8 =>  {
+            DataType::Int8 => {
                 let array = array.as_primitive::<Int8Type>();
                 let result: PrimitiveArray<Int8Type> = array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
@@ -133,22 +136,26 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             // Decimal types - wrapping negation
             DataType::Decimal32(_, _) => {
                 let array = array.as_primitive::<Decimal32Type>();
-                let result: PrimitiveArray<Decimal32Type> = array.unary(|x| x.wrapping_neg());
+                let result: PrimitiveArray<Decimal32Type> =
+                    array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal64(_, _) => {
                 let array = array.as_primitive::<Decimal64Type>();
-                let result: PrimitiveArray<Decimal64Type> = array.unary(|x| x.wrapping_neg());
+                let result: PrimitiveArray<Decimal64Type> =
+                    array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal128(_, _) => {
                 let array = array.as_primitive::<Decimal128Type>();
-                let result: PrimitiveArray<Decimal128Type> = array.unary(|x| x.wrapping_neg());
+                let result: PrimitiveArray<Decimal128Type> =
+                    array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal256(_, _) => {
                 let array = array.as_primitive::<Decimal256Type>();
-                let result: PrimitiveArray<Decimal256Type> = array.unary(|x| x.wrapping_neg());
+                let result: PrimitiveArray<Decimal256Type> =
+                    array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
@@ -213,7 +220,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 )))
             }
             ScalarValue::Decimal256(Some(v), precision, scale) => {
-               let result = v.wrapping_neg();
+                let result = v.wrapping_neg();
                 Ok(ColumnarValue::Scalar(ScalarValue::Decimal256(
                     Some(result),
                     *precision,
