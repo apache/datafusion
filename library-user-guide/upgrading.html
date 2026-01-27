@@ -516,6 +516,55 @@
 <p>The builder pattern is more efficient as it computes properties once during <code class="docutils literal notranslate"><span class="pre">build()</span></code> rather than recomputing them for each method call.</p>
 <p>Note: <code class="docutils literal notranslate"><span class="pre">with_default_selectivity()</span></code> is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.</p>
 </section>
+<section id="protobuf-conversion-trait-added">
+<h3>Protobuf conversion trait added<a class="headerlink" href="#protobuf-conversion-trait-added" title="Link to this heading">#</a></h3>
+<p>A new trait, <code class="docutils literal notranslate"><span class="pre">PhysicalProtoConverterExtension</span></code>, has been added to the <code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>
+crate. This is used for controlling the process of conversion of physical plans and
+expressions to and from their protobuf equivalents. The methods for conversion now
+require an additional parameter.</p>
+<p>The primary APIs for interacting with this crate have not been modified, so most users
+should not need to make any changes. If you do require this trait, you can use the
+<code class="docutils literal notranslate"><span class="pre">DefaultPhysicalProtoConverter</span></code> implementation.</p>
+<p>For example, to convert a sort expression protobuf node you can make the following
+updates:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">sort_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_proto</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">converter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DefaultPhysicalProtoConverter</span><span class="w"> </span><span class="p">{};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sort_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">parse_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_proto</span><span class="p">,</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">,</span>
+<span class="w">    </span><span class="n">input_schema</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">converter</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p>Similarly to convert from a physical sort expression into a protobuf node:</p>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">sort_proto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serialize_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_expr</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">converter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DefaultPhysicalProtoConverter</span><span class="w"> </span><span class="p">{};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">sort_proto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serialize_physical_sort_expr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">sort_expr</span><span class="p">,</span>
+<span class="w">    </span><span class="n">codec</span><span class="p">,</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">converter</span><span class="p">,</span>
+<span class="p">);</span>
+</pre></div>
+</div>
+</section>
 <section id="generate-series-and-range-table-functions-changed">
 <h3><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed<a class="headerlink" href="#generate-series-and-range-table-functions-changed" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions now return an empty set when the interval is invalid, instead of an error.
@@ -2258,6 +2307,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protobuf-conversion-trait-added">Protobuf conversion trait added</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generate-series-and-range-table-functions-changed"><code class="docutils literal notranslate"><span class="pre">generate_series</span></code> and <code class="docutils literal notranslate"><span class="pre">range</span></code> table functions changed</a></li>
 </ul>
 </li>
