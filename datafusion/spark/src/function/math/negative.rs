@@ -18,7 +18,7 @@
 use arrow::array::*;
 use arrow::array::types::*;
 use arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -82,24 +82,6 @@ impl ScalarUDFImpl for SparkNegative {
     }
 }
 
-/// Helper macro to generate wrapping negation for array types
-macro_rules! wrapping_negative_array {
-    ($INPUT:expr, $TYPE:ty) => {{
-        let array = $INPUT.as_primitive::<$TYPE>();
-        let result: PrimitiveArray<$TYPE> = array.unary(|x| x.wrapping_neg());
-        Ok(ColumnarValue::Array(Arc::new(result)))
-    }};
-}
-
-/// Helper macro to generate simple negation for floating point array types
-macro_rules! simple_negative_array {
-    ($INPUT:expr, $TYPE:ident) => {{
-        let array = $INPUT.as_primitive::<$TYPE>();
-        let result: PrimitiveArray<$TYPE> = array.unary(|x| -x);
-        Ok(ColumnarValue::Array(Arc::new(result)))
-    }};
-}
-
 /// Helper macro to generate wrapping negation for scalar types
 macro_rules! wrapping_negative_scalar {
     ($INPUT:ident, $SCALAR_TYPE:ident) => {{
@@ -131,28 +113,64 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             DataType::Null | DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => Ok(args[0].clone()),
 
             // Signed integers - use wrapping negation (Spark legacy mode behavior)
-            DataType::Int8 => wrapping_negative_array!(array, Int8Type),
-            DataType::Int16 => wrapping_negative_array!(array, Int16Type),
-            DataType::Int32 => wrapping_negative_array!(array, Int32Type),
-            DataType::Int64 => wrapping_negative_array!(array, Int64Type),
+            DataType::Int8 =>  {
+                let array = array.as_primitive::<Int8Type>();
+                let result: PrimitiveArray<Int8Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Int16 => {
+                let array = array.as_primitive::<Int16Type>();
+                let result: PrimitiveArray<Int16Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Int32 => {
+                let array = array.as_primitive::<Int32Type>();
+                let result: PrimitiveArray<Int32Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Int64 => {
+                let array = array.as_primitive::<Int64Type>();
+                let result: PrimitiveArray<Int64Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
 
             // Floating point - simple negation (no overflow possible)
-            DataType::Float16 => simple_negative_array!(array, Float16Type),
-            DataType::Float32 => simple_negative_array!(array, Float32Type),
-            DataType::Float64 => simple_negative_array!(array, Float64Type),
+            DataType::Float16 => {
+                let array = array.as_primitive::<Float16Type>();
+                let result: PrimitiveArray<Float16Type> = array.unary(|x| -x);
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Float32 => {
+                let array = array.as_primitive::<Float32Type>();
+                let result: PrimitiveArray<Float32Type> = array.unary(|x| -x);
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            DataType::Float64 => {
+                let array = array.as_primitive::<Float64Type>();
+                let result: PrimitiveArray<Float64Type> = array.unary(|x| -x);
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
 
             // Decimal types - wrapping negation
             DataType::Decimal32(_, _) => {
-                wrapping_negative_array!(array, Decimal32Type)
+                let array = array.as_primitive::<Decimal32Type>();
+                let result: PrimitiveArray<Decimal32Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal64(_, _) => {
-                wrapping_negative_array!(array, Decimal64Type)
+                let array = array.as_primitive::<Decimal64Type>();
+                let result: PrimitiveArray<Decimal64Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal128(_, _) => {
-                wrapping_negative_array!(array, Decimal128Type)
+                let array = array.as_primitive::<Decimal128Type>();
+                let result: PrimitiveArray<Decimal128Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
             DataType::Decimal256(_, _) => {
-                wrapping_negative_array!(array, Decimal256Type)
+                let array = array.as_primitive::<Decimal256Type>();
+                let result: PrimitiveArray<Decimal256Type> = array.unary(|x| x.wrapping_neg());
+                Ok(ColumnarValue::Array(Arc::new(result)))
             }
 
             dt => internal_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
