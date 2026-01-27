@@ -64,15 +64,13 @@ use datafusion_physical_plan::{
     sorts::sort::SortExec,
 };
 
+use super::pushdown_utils::{
+    OptimizationTest, TestNode, TestScanBuilder, TestSource, format_plan_for_test,
+};
 use datafusion_physical_plan::union::UnionExec;
 use futures::StreamExt;
 use object_store::{ObjectStore, memory::InMemory};
 use regex::Regex;
-use util::{OptimizationTest, TestNode, TestScanBuilder, format_plan_for_test};
-
-use crate::physical_optimizer::filter_pushdown::util::TestSource;
-
-mod util;
 
 #[test]
 fn test_pushdown_into_scan() {
