@@ -918,15 +918,15 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     /// # Example
     ///
     /// - `get_field(struct_col, 'field_name')` with a literal key is leaf-pushable as it
-    ///    performs metadata only (cheap) extraction of a sub-array from a struct column.
-    ///    Thus, it can be placed near the data source to minimize data early.
+    ///   performs metadata only (cheap) extraction of a sub-array from a struct column.
+    ///   Thus, it can be placed near the data source to minimize data early.
     /// - `string_col like '%foo%'` performs expensive per-row computation and should be placed
-    ///    further up the tree so that it can be run after filtering, sorting, etc.
+    ///   further up the tree so that it can be run after filtering, sorting, etc.
     ///
     /// # Arguments
     ///
     /// * `args` - Classification of each argument's placement, collected from the expression tree
-    ///    by the caller.
+    ///   by the caller.
     fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
         ExpressionPlacement::PlaceAtRoot
     }
