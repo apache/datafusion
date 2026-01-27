@@ -118,11 +118,6 @@ impl ParquetFileMetrics {
             .with_type(MetricType::SUMMARY)
             .pruning_metrics("row_groups_pruned_statistics", partition);
 
-        let page_index_rows_pruned = MetricBuilder::new(metrics)
-            .with_new_label("filename", filename.to_string())
-            .with_type(MetricType::SUMMARY)
-            .pruning_metrics("page_index_rows_pruned", partition);
-
         let page_index_pages_pruned = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .with_type(MetricType::SUMMARY)
@@ -178,6 +173,10 @@ impl ParquetFileMetrics {
         let page_index_eval_time = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
             .subset_time("page_index_eval_time", partition);
+
+        let page_index_rows_pruned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .pruning_metrics("page_index_rows_pruned", partition);
 
         let predicate_cache_inner_records = MetricBuilder::new(metrics)
             .with_new_label("filename", filename.to_string())
