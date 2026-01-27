@@ -17,9 +17,9 @@
 
 use std::any::Any;
 
-use crate::utils::{calculate_binary_decimal_math, calculate_binary_math};
+use crate::utils::{calculate_binary_math_decimal, calculate_binary_math_numeric};
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType::{
     Decimal32, Decimal64, Decimal128, Decimal256, Float32, Float64,
 };
@@ -233,25 +233,33 @@ fn round_columnar(
     let both_scalars = matches!(value, ColumnarValue::Scalar(_))
         && matches!(decimal_places, ColumnarValue::Scalar(_));
 
+    let out_type = value_array.data_type();
+
+    // Safety: all `dec_scale.expect` calls below are infallible since the left argument
+    // is decimal array as per `calculate_binary_math` contract.
     let arr: ArrayRef = match value_array.data_type() {
         Float64 => {
-            let result = calculate_binary_math::<Float64Type, Int32Type, Float64Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f64>,
-            )?;
+            let result =
+                calculate_binary_math_numeric::<Float64Type, Int32Type, Float64Type, _>(
+                    value_array.as_ref(),
+                    decimal_places,
+                    |l, r, _| round_float::<f64>(l, r),
+                    out_type,
+                )?;
             result as _
         }
         Float32 => {
-            let result = calculate_binary_math::<Float32Type, Int32Type, Float32Type, _>(
-                value_array.as_ref(),
-                decimal_places,
-                round_float::<f32>,
-            )?;
+            let result =
+                calculate_binary_math_numeric::<Float32Type, Int32Type, Float32Type, _>(
+                    value_array.as_ref(),
+                    decimal_places,
+                    |l, r, _| round_float::<f32>(l, r),
+                    out_type,
+                )?;
             result as _
         }
-        Decimal32(precision, scale) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal32(_, _) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal32Type,
                 Int32Type,
                 Decimal32Type,
@@ -259,14 +267,15 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
-                *precision,
-                *scale,
+                |v, dp, dec_scale| {
+                    round_decimal(v, dec_scale.expect("value is decimal").1, dp)
+                },
+                out_type,
             )?;
             result as _
         }
-        Decimal64(precision, scale) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal64(_, _) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal64Type,
                 Int32Type,
                 Decimal64Type,
@@ -274,14 +283,15 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
-                *precision,
-                *scale,
+                |v, dp, dec_scale| {
+                    round_decimal(v, dec_scale.expect("value is decimal").1, dp)
+                },
+                out_type,
             )?;
             result as _
         }
-        Decimal128(precision, scale) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal128(_, _) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal128Type,
                 Int32Type,
                 Decimal128Type,
@@ -289,14 +299,15 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
-                *precision,
-                *scale,
+                |v, dp, dec_scale| {
+                    round_decimal(v, dec_scale.expect("value is decimal").1, dp)
+                },
+                out_type,
             )?;
             result as _
         }
-        Decimal256(precision, scale) => {
-            let result = calculate_binary_decimal_math::<
+        Decimal256(_, _) => {
+            let result = calculate_binary_math_decimal::<
                 Decimal256Type,
                 Int32Type,
                 Decimal256Type,
@@ -304,9 +315,10 @@ fn round_columnar(
             >(
                 value_array.as_ref(),
                 decimal_places,
-                |v, dp| round_decimal(v, *scale, dp),
-                *precision,
-                *scale,
+                |v, dp, dec_scale| {
+                    round_decimal(v, dec_scale.expect("value is decimal").1, dp)
+                },
+                out_type,
             )?;
             result as _
         }
