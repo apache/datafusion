@@ -228,7 +228,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 )))
             }
 
-            dt => internal_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
+            dt => not_impl_err!("Not supported datatype for Spark NEGATIVE: {dt}"),
         },
     }
 }
