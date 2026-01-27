@@ -122,7 +122,9 @@ fn validate_cast_compatibility(
         // Validate that the column's field is compatible with the input_field for casting.
         // We only check data type compatibility, not name/nullability/metadata, since those
         // can differ in schema adaptation scenarios where a column from one schema is being
-        // cast to another schema's field type.
+        // cast to another schema's field type. This is intentionally relaxed compared to
+        // struct field validation (in nested_struct.rs), which enforces strict nullability
+        // rules for nested fields.
         let schema_field = &fields[column.index()];
         if schema_field.data_type() != input_field.data_type() {
             let is_compatible =
@@ -578,9 +580,11 @@ mod tests {
 
     #[test]
     fn cast_column_schema_mismatch_nullability_metadata() {
-        // With the new validation logic, mismatches in nullability/metadata are allowed
-        // as long as the data types are compatible. This test now verifies that
-        // a CastColumnExpr can be created even when nullability/metadata differ.
+        // CastColumnExpr allows nullability and metadata mismatches for top-level columns
+        // in schema adaptation scenarios. This differs from struct field validation in
+        // nested_struct.rs which is stricter about nullable -> non-nullable conversions.
+        // At the top level, schema adaptation may require converting between schemas
+        // with different nullability flags.
         let mut input_metadata = HashMap::new();
         input_metadata.insert("origin".to_string(), "input".to_string());
         let input_field =
@@ -596,7 +600,8 @@ mod tests {
 
         let column = Arc::new(Column::new("a", 0));
 
-        // This should now succeed since Int32 -> Int32 is compatible
+        // This succeeds because CastColumnExpr only validates data type compatibility,
+        // not nullability/metadata, allowing flexible schema adaptation.
         let expr = CastColumnExpr::new_with_schema(
             column,
             Arc::new(input_field),
