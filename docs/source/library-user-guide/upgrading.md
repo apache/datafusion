@@ -185,7 +185,7 @@ let target_field = Field::new("target_col",
 
 1. **Safety:** Field names are now the primary contract for struct compatibility
 2. **Explicitness:** Prevents silent data misalignment caused by positional assumptions
-3. **Consistency:** Aligns with DuckDB and other SQL engines that enforce name-based matching
+3. **Consistency:** Matches DuckDB's behavior and aligns with other SQL engines that enforce name-based matching
 4. **Debuggability:** Errors now appear at plan time rather than as silent data corruption
 
 See [Issue #19841](https://github.com/apache/datafusion/issues/19841) and [PR #19955](https://github.com/apache/datafusion/pull/19955) for more details.
