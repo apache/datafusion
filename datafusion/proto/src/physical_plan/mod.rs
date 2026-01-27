@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
@@ -135,7 +136,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         self.try_into_physical_plan_with_converter(
             ctx,
             codec,
-            &DefaultPhysicalProtoConverter {},
+            &DefaultPhysicalProtoConverter::new(),
         )
     }
 
@@ -149,7 +150,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
         Self::try_from_physical_plan_with_converter(
             plan,
             codec,
-            &DefaultPhysicalProtoConverter {},
+            &DefaultPhysicalProtoConverter::new(),
         )
     }
 }
@@ -2991,6 +2992,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_arc_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3076,6 +3078,7 @@ impl protobuf::PhysicalPlanNode {
                     nulls_first: expr.options.nulls_first,
                 });
                 Ok(protobuf::PhysicalExprNode {
+                    expr_arc_id: None,
                     expr_type: Some(ExprType::Sort(sort_expr)),
                 })
             })
@@ -3661,7 +3664,44 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
-pub struct DefaultPhysicalProtoConverter;
+/// Default implementation of [`PhysicalProtoConverterExtension`] that provides
+/// expression deduplication during deserialization.
+///
+/// During serialization, the Arc pointer address of each expression is embedded
+/// in the protobuf as `expr_arc_id`. During deserialization, if an expression
+/// with the same `expr_arc_id` has been seen before, the cached Arc is returned
+/// instead of creating a new one. This enables expression sharing and can
+/// significantly reduce memory usage for plans with duplicate expressions
+/// (e.g., large IN lists).
+///
+/// # Important: Scope of Deduplication
+///
+/// The `expr_arc_id` is only valid as a deduplication key **within a single
+/// serialized plan from a single process**. Arc pointer addresses can collide:
+/// - Different processes may allocate Arcs at the same address
+/// - The same process may reuse addresses after deallocation
+///
+/// Therefore, you **must create a fresh `DefaultPhysicalProtoConverter` instance
+/// for each plan you deserialize**. Do not reuse the same converter instance
+/// across multiple plans from different sources, as this could incorrectly
+/// deduplicate unrelated expressions that happen to share the same pointer address.
+#[derive(Default)]
+pub struct DefaultPhysicalProtoConverter {
+    /// Cache for expression deduplication during deserialization.
+    /// Maps expr_arc_id (the original Arc pointer address) to the deserialized expression.
+    ///
+    /// This cache should only be used for a single plan deserialization.
+    /// Create a new converter instance for each plan to avoid cross-plan collisions.
+    dedup_cache: RwLock<HashMap<u64, Arc<dyn PhysicalExpr>>>,
+}
+
+impl DefaultPhysicalProtoConverter {
+    /// Creates a new `DefaultPhysicalProtoConverter` with an empty dedup cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     fn proto_to_execution_plan(
         &self,
@@ -3697,8 +3737,36 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     where
         Self: Sized,
     {
-        // Default implementation calls the free function
-        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        // Check if we've seen this expr_arc_id before (deduplication)
+        if let Some(arc_id) = proto.expr_arc_id {
+            // Try to get from cache first
+            {
+                let cache = self.dedup_cache.read().unwrap();
+                if let Some(cached) = cache.get(&arc_id) {
+                    return Ok(Arc::clone(cached));
+                }
+            }
+
+            // Not in cache, deserialize the expression
+            let expr = parse_physical_expr_with_converter(
+                proto,
+                ctx,
+                input_schema,
+                codec,
+                self,
+            )?;
+
+            // Cache it for future lookups
+            {
+                let mut cache = self.dedup_cache.write().unwrap();
+                cache.insert(arc_id, Arc::clone(&expr));
+            }
+
+            Ok(expr)
+        } else {
+            // No arc_id, just deserialize normally (backward compatibility)
+            parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        }
     }
 
     fn physical_expr_to_proto(
@@ -3706,7 +3774,11 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        serialize_physical_expr_with_converter(expr, codec, self)
+        let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
+        // Set the expr_arc_id to the Arc pointer address for deduplication
+        // Cast through a thin pointer to get a unique identifier for this Arc
+        proto.expr_arc_id = Some(Arc::as_ptr(expr) as *const () as u64);
+        Ok(proto)
     }
 }
 

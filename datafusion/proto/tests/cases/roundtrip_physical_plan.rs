@@ -134,7 +134,7 @@ use crate::cases::{
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
     Ok(())
 }
@@ -181,7 +181,7 @@ fn roundtrip_test_with_context(
     ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     roundtrip_test_and_return(exec_plan, ctx, &codec, &proto_converter)?;
     Ok(())
 }
@@ -190,7 +190,7 @@ fn roundtrip_test_with_context(
 /// query results are identical.
 async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
 
     roundtrip_test_and_return(initial_plan, ctx, &codec, &proto_converter)?;
@@ -1100,7 +1100,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         exec_plan,
         &ctx,
         &CustomPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter {},
+        &DefaultPhysicalProtoConverter::new(),
     )?;
     Ok(())
 }
@@ -1307,7 +1307,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1355,7 +1355,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1427,7 +1427,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1552,7 +1552,7 @@ fn roundtrip_csv_sink() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
 
     let roundtrip_plan = roundtrip_test_and_return(
         Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
@@ -2558,6 +2558,181 @@ fn custom_proto_converter_intercepts() -> Result<()> {
     assert_eq!(*proto_converter.num_physical_exprs.read().unwrap(), 2);
     assert_eq!(*proto_converter.num_proto_plans.read().unwrap(), 2);
     assert_eq!(*proto_converter.num_physical_plans.read().unwrap(), 2);
+
+    Ok(())
+}
+
+/// Test that expression deduplication works during deserialization.
+/// When the same expression Arc is serialized multiple times, it should be
+/// deduplicated on deserialization (sharing the same Arc).
+#[test]
+fn test_expression_deduplication() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Create a shared expression that will be used multiple times
+    let shared_col: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    // Create an InList expression that uses the same column Arc multiple times
+    // This simulates a real-world scenario where expressions are shared
+    let in_list_expr = in_list(
+        Arc::clone(&shared_col),
+        vec![lit(1i64), lit(2i64), lit(3i64)],
+        &false,
+        &schema,
+    )?;
+
+    // Create a binary expression that uses the shared column and the in_list result
+    let binary_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::clone(&shared_col),
+        Operator::Eq,
+        lit(42i64),
+    ));
+
+    // Create a plan that has both expressions (they share the `shared_col` Arc)
+    let input = Arc::new(EmptyExec::new(schema.clone()));
+    let filter = FilterExecBuilder::new(in_list_expr, input).build()?;
+    let projection_exprs = vec![ProjectionExpr {
+        expr: binary_expr,
+        alias: "result".to_string(),
+    }];
+    let exec_plan =
+        Arc::new(ProjectionExec::try_new(projection_exprs, Arc::new(filter))?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
+
+    // Perform roundtrip
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
+        &codec,
+        &proto_converter,
+    )?;
+
+    // Create a new converter for deserialization (fresh cache)
+    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let result_plan = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    // Verify the plan structure is correct
+    pretty_assertions::assert_eq!(format!("{exec_plan:?}"), format!("{result_plan:?}"));
+
+    Ok(())
+}
+
+/// Test that expression deduplication correctly shares Arcs for identical expressions.
+/// This test verifies the core deduplication behavior.
+#[test]
+fn test_expression_deduplication_arc_sharing() -> Result<()> {
+    use datafusion_proto::bytes::{
+        physical_plan_from_bytes_with_proto_converter,
+        physical_plan_to_bytes_with_proto_converter,
+    };
+
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Create a column expression
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    // Create a projection that uses the SAME Arc twice
+    // After roundtrip, both should point to the same Arc
+    let projection_exprs = vec![
+        ProjectionExpr {
+            expr: Arc::clone(&col_expr),
+            alias: "a1".to_string(),
+        },
+        ProjectionExpr {
+            expr: Arc::clone(&col_expr), // Same Arc!
+            alias: "a2".to_string(),
+        },
+    ];
+
+    let input = Arc::new(EmptyExec::new(schema));
+    let exec_plan = Arc::new(ProjectionExec::try_new(projection_exprs, input)?);
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
+
+    // Serialize
+    let bytes = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
+        &codec,
+        &proto_converter,
+    )?;
+
+    // Deserialize with a fresh converter
+    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let result_plan = physical_plan_from_bytes_with_proto_converter(
+        bytes.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    // Get the projection from the result
+    let projection = result_plan
+        .as_any()
+        .downcast_ref::<ProjectionExec>()
+        .expect("Expected ProjectionExec");
+
+    let exprs: Vec<_> = projection.expr().iter().collect();
+    assert_eq!(exprs.len(), 2);
+
+    // The key test: both expressions should point to the same Arc after deduplication
+    // This is because they were the same Arc before serialization
+    assert!(
+        Arc::ptr_eq(&exprs[0].expr, &exprs[1].expr),
+        "Expected both expressions to share the same Arc after deduplication"
+    );
+
+    Ok(())
+}
+
+/// Test backward compatibility: protos without expr_arc_id should still deserialize correctly.
+#[test]
+fn test_backward_compatibility_no_expr_arc_id() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Manually create a proto without expr_arc_id set
+    let proto = PhysicalExprNode {
+        expr_arc_id: None, // Simulating old proto without this field
+        expr_type: Some(
+            datafusion_proto::protobuf::physical_expr_node::ExprType::Column(
+                datafusion_proto::protobuf::PhysicalColumn {
+                    name: "a".to_string(),
+                    index: 0,
+                },
+            ),
+        ),
+    };
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter::new();
+
+    // Should deserialize without error
+    let result = proto_converter.proto_to_physical_expr(
+        &proto,
+        ctx.task_ctx().as_ref(),
+        &schema,
+        &codec,
+    )?;
+
+    // Verify the result is correct
+    let col = result
+        .as_any()
+        .downcast_ref::<Column>()
+        .expect("Expected Column");
+    assert_eq!(col.name(), "a");
+    assert_eq!(col.index(), 0);
 
     Ok(())
 }
