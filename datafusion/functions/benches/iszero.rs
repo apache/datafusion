@@ -23,6 +23,7 @@ use arrow::{
     util::bench_util::create_primitive_array,
 };
 use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::math::iszero;
@@ -31,6 +32,8 @@ use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let iszero = iszero();
+    let config_options = Arc::new(ConfigOptions::default());
+
     for size in [1024, 4096, 8192] {
         let f32_array = Arc::new(create_primitive_array::<Float32Type>(size, 0.2));
         let batch_len = f32_array.len();
@@ -43,7 +46,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
             .collect::<Vec<_>>();
         let return_field = Arc::new(Field::new("f", DataType::Boolean, true));
-        let config_options = Arc::new(ConfigOptions::default());
 
         c.bench_function(&format!("iszero f32 array: {size}"), |b| {
             b.iter(|| {
@@ -60,6 +62,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 )
             })
         });
+
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let batch_len = f64_array.len();
         let f64_args = vec![ColumnarValue::Array(f64_array)];
@@ -88,6 +91,46 @@ fn criterion_benchmark(c: &mut Criterion) {
             })
         });
     }
+
+    // Scalar benchmarks - run once since size doesn't affect scalar performance
+    let scalar_f32_args = vec![ColumnarValue::Scalar(ScalarValue::Float32(Some(1.0)))];
+    let scalar_f32_arg_fields = vec![Field::new("a", DataType::Float32, false).into()];
+    let return_field_scalar = Arc::new(Field::new("f", DataType::Boolean, false));
+
+    c.bench_function("iszero f32 scalar", |b| {
+        b.iter(|| {
+            black_box(
+                iszero
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: scalar_f32_args.clone(),
+                        arg_fields: scalar_f32_arg_fields.clone(),
+                        number_rows: 1,
+                        return_field: Arc::clone(&return_field_scalar),
+                        config_options: Arc::clone(&config_options),
+                    })
+                    .unwrap(),
+            )
+        })
+    });
+
+    let scalar_f64_args = vec![ColumnarValue::Scalar(ScalarValue::Float64(Some(1.0)))];
+    let scalar_f64_arg_fields = vec![Field::new("a", DataType::Float64, false).into()];
+
+    c.bench_function("iszero f64 scalar", |b| {
+        b.iter(|| {
+            black_box(
+                iszero
+                    .invoke_with_args(ScalarFunctionArgs {
+                        args: scalar_f64_args.clone(),
+                        arg_fields: scalar_f64_arg_fields.clone(),
+                        number_rows: 1,
+                        return_field: Arc::clone(&return_field_scalar),
+                        config_options: Arc::clone(&config_options),
+                    })
+                    .unwrap(),
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

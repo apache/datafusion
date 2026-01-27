@@ -17,6 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -1236,28 +1237,121 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
 
 fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
+            // Field count must match for coercion
             if lhs_fields.len() != rhs_fields.len() {
                 return None;
             }
 
-            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
-                .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
-                .collect::<Option<Vec<DataType>>>()?;
+            // If the two structs have exactly the same set of field names (possibly in
+            // different order), prefer name-based coercion. Otherwise fall back to
+            // positional coercion which preserves backward compatibility.
+            //
+            // Name-based coercion is used in:
+            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
+            // 2. UNION operations: different field orders unified by name
+            // 3. VALUES clauses: heterogeneous struct rows unified by field name
+            // 4. JOIN conditions: structs with matching field names
+            // 5. Window functions: partitions/orders by struct fields
+            // 6. Aggregate functions: collecting structs with reordered fields
+            //
+            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
+            if fields_have_same_names(lhs_fields, rhs_fields) {
+                return coerce_struct_by_name(lhs_fields, rhs_fields);
+            }
 
-            // preserve the field name and nullability
-            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
-
-            let fields: Vec<FieldRef> = coerced_types
-                .into_iter()
-                .zip(orig_fields)
-                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-                .collect();
-            Some(Struct(fields.into()))
+            coerce_struct_by_position(lhs_fields, rhs_fields)
         }
         _ => None,
     }
+}
+
+/// Return true if every left-field name exists in the right fields (and lengths are equal).
+///
+/// # Assumptions
+/// **This function assumes field names within each struct are unique.** This assumption is safe
+/// because field name uniqueness is enforced at multiple levels:
+/// - **Arrow level:** `StructType` construction enforces unique field names at the schema level
+/// - **DataFusion level:** SQL parser rejects duplicate field names in `CREATE TABLE` and struct type definitions
+/// - **Runtime level:** `StructArray::try_new()` validates field uniqueness
+///
+/// Therefore, we don't need to handle degenerate cases like:
+/// - `struct<c1 int> -> struct<c1 int, c1 int>` (target has duplicate field names)
+/// - `struct<c1 int, c1 int> -> struct<c1 int>` (source has duplicate field names)
+fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
+    // Debug assertions: field names should be unique within each struct
+    #[cfg(debug_assertions)]
+    {
+        let lhs_names: HashSet<_> = lhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            lhs_names.len(),
+            lhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+
+        let rhs_names_check: HashSet<_> = rhs_fields.iter().map(|f| f.name()).collect();
+        assert_eq!(
+            rhs_names_check.len(),
+            rhs_fields.len(),
+            "Struct has duplicate field names (should be caught by Arrow schema validation)"
+        );
+    }
+
+    let rhs_names: HashSet<&str> = rhs_fields.iter().map(|f| f.name().as_str()).collect();
+    lhs_fields
+        .iter()
+        .all(|lf| rhs_names.contains(lf.name().as_str()))
+}
+
+/// Coerce two structs by matching fields by name. Assumes the name-sets match.
+fn coerce_struct_by_name(lhs_fields: &Fields, rhs_fields: &Fields) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    let rhs_by_name: HashMap<&str, &FieldRef> =
+        rhs_fields.iter().map(|f| (f.name().as_str(), f)).collect();
+
+    let mut coerced: Vec<FieldRef> = Vec::with_capacity(lhs_fields.len());
+
+    for lhs in lhs_fields.iter() {
+        let rhs = rhs_by_name.get(lhs.name().as_str()).unwrap(); // safe: caller ensured names match
+        let coerced_type = comparison_coercion(lhs.data_type(), rhs.data_type())?;
+        let is_nullable = lhs.is_nullable() || rhs.is_nullable();
+        coerced.push(Arc::new(Field::new(
+            lhs.name().clone(),
+            coerced_type,
+            is_nullable,
+        )));
+    }
+
+    Some(Struct(coerced.into()))
+}
+
+/// Coerce two structs positionally (left-to-right). This preserves field names from
+/// the left struct and uses the combined nullability.
+fn coerce_struct_by_position(
+    lhs_fields: &Fields,
+    rhs_fields: &Fields,
+) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    // First coerce individual types; fail early if any pair cannot be coerced.
+    let coerced_types: Vec<DataType> = lhs_fields
+        .iter()
+        .zip(rhs_fields.iter())
+        .map(|(l, r)| comparison_coercion(l.data_type(), r.data_type()))
+        .collect::<Option<Vec<DataType>>>()?;
+
+    // Build final fields preserving left-side names and combined nullability.
+    let orig_pairs = lhs_fields.iter().zip(rhs_fields.iter());
+    let fields: Vec<FieldRef> = coerced_types
+        .into_iter()
+        .zip(orig_pairs)
+        .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+        .collect();
+
+    Some(Struct(fields.into()))
 }
 
 /// returns the result of coercing two fields to a common type

@@ -108,7 +108,7 @@ async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
 bzip2 = "0.6.1"
-chrono = { version = "0.4.42", default-features = false }
+chrono = { version = "0.4.43", default-features = false }
 criterion = "0.8"
 ctor = "0.6.3"
 dashmap = "6.0.1"
@@ -188,6 +188,7 @@ tempfile = "3"
 testcontainers-modules = { version = "0.14" }
 tokio = { version = "1.48", features = ["macros", "rt", "sync"] }
 url = "2.5.7"
+uuid = "1.20"
 zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.clippy]
