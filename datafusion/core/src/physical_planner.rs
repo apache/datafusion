@@ -2753,7 +2753,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
             && !is_allowed_schema_change(previous_schema.as_ref(), plan.schema().as_ref())
         {
             internal_err!(
-                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                "PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {}, got new schema: {}",
                 self.rule.name(),
                 previous_schema,
                 plan.schema()
