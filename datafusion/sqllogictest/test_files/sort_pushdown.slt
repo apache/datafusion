@@ -151,8 +151,8 @@ ORDER BY id DESC LIMIT 5;
 ----
 logical_plan
 01)Sort: multi_rg_sorted.id DESC NULLS FIRST, fetch=5
-02)--Filter: multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")
-03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[multi_rg_sorted.category = Utf8View("alpha") OR multi_rg_sorted.category = Utf8View("gamma")]
+02)--Filter: (multi_rg_sorted.category = Utf8View("alpha")) OR (multi_rg_sorted.category = Utf8View("gamma"))
+03)----TableScan: multi_rg_sorted projection=[id, category, value], partial_filters=[(multi_rg_sorted.category = Utf8View("alpha")) OR (multi_rg_sorted.category = Utf8View("gamma"))]
 physical_plan
 01)SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/multi_rg_sorted.parquet]]}, projection=[id, category, value], file_type=parquet, predicate=(category@1 = alpha OR category@1 = gamma) AND DynamicFilter [ empty ], reverse_row_groups=true, pruning_predicate=category_null_count@2 != row_count@3 AND category_min@0 <= alpha AND alpha <= category_max@1 OR category_null_count@2 != row_count@3 AND category_min@0 <= gamma AND gamma <= category_max@1, required_guarantees=[category in (alpha, gamma)]
@@ -487,8 +487,8 @@ LIMIT 3;
 ----
 logical_plan
 01)Sort: timeseries_parquet.period_end DESC NULLS FIRST, fetch=3
-02)--Filter: timeseries_parquet.timeframe = Utf8View("daily") OR timeseries_parquet.timeframe = Utf8View("weekly")
-03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[timeseries_parquet.timeframe = Utf8View("daily") OR timeseries_parquet.timeframe = Utf8View("weekly")]
+02)--Filter: (timeseries_parquet.timeframe = Utf8View("daily")) OR (timeseries_parquet.timeframe = Utf8View("weekly"))
+03)----TableScan: timeseries_parquet projection=[timeframe, period_end, value], partial_filters=[(timeseries_parquet.timeframe = Utf8View("daily")) OR (timeseries_parquet.timeframe = Utf8View("weekly"))]
 physical_plan
 01)SortExec: TopK(fetch=3), expr=[period_end@1 DESC], preserve_partitioning=[false]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/sort_pushdown/timeseries_sorted.parquet]]}, projection=[timeframe, period_end, value], output_ordering=[timeframe@0 ASC NULLS LAST, period_end@1 ASC NULLS LAST], file_type=parquet, predicate=(timeframe@0 = daily OR timeframe@0 = weekly) AND DynamicFilter [ empty ], pruning_predicate=timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= daily AND daily <= timeframe_max@1 OR timeframe_null_count@2 != row_count@3 AND timeframe_min@0 <= weekly AND weekly <= timeframe_max@1, required_guarantees=[timeframe in (daily, weekly)]

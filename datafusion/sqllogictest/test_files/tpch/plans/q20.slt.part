@@ -78,7 +78,7 @@ logical_plan
 20)--------------Projection: Float64(0.5) * CAST(sum(lineitem.l_quantity) AS Float64), lineitem.l_partkey, lineitem.l_suppkey
 21)----------------Aggregate: groupBy=[[lineitem.l_partkey, lineitem.l_suppkey]], aggr=[[sum(lineitem.l_quantity)]]
 22)------------------Projection: lineitem.l_partkey, lineitem.l_suppkey, lineitem.l_quantity
-23)--------------------Filter: lineitem.l_shipdate >= Date32("1994-01-01") AND lineitem.l_shipdate < Date32("1995-01-01")
+23)--------------------Filter: (lineitem.l_shipdate >= Date32("1994-01-01")) AND (lineitem.l_shipdate < Date32("1995-01-01"))
 24)----------------------TableScan: lineitem projection=[l_partkey, l_suppkey, l_quantity, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1994-01-01"), lineitem.l_shipdate < Date32("1995-01-01")]
 physical_plan
 01)SortPreservingMergeExec: [s_name@0 ASC NULLS LAST]

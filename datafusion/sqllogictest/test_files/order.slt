@@ -592,7 +592,7 @@ ORDER BY result;
 ----
 logical_plan
 01)Sort: result ASC NULLS LAST
-02)--Projection: multiple_ordered_table.b + multiple_ordered_table.a + multiple_ordered_table.c AS result
+02)--Projection: (multiple_ordered_table.b + multiple_ordered_table.a) + multiple_ordered_table.c AS result
 03)----TableScan: multiple_ordered_table projection=[a, b, c]
 physical_plan
 01)SortPreservingMergeExec: [result@0 ASC NULLS LAST]

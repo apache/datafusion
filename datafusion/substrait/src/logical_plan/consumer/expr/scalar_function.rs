@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn arg_list_to_binary_op_tree_3_args() -> Result<()> {
         let expr = arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3]))?;
-        assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3)");
+        assert_snapshot!(expr.to_string(), @"Int64(1) OR (Int64(2) OR Int64(3))");
         Ok(())
     }
 
@@ -443,7 +443,7 @@ mod tests {
     fn arg_list_to_binary_op_tree_4_args() -> Result<()> {
         let expr =
             arg_list_to_binary_op_tree(Operator::Or, int64_literals(&[1, 2, 3, 4]))?;
-        assert_snapshot!(expr.to_string(), @"Int64(1) OR Int64(2) OR Int64(3) OR Int64(4)");
+        assert_snapshot!(expr.to_string(), @"(Int64(1) OR Int64(2)) OR (Int64(3) OR Int64(4))");
         Ok(())
     }
 

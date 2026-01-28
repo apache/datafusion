@@ -400,8 +400,8 @@ mod tests {
             ))?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Filter: t1.b > UInt32(10) OR t1.c < UInt32(20)
+        assert_optimized_plan_equal!(plan, @"
+        Filter: (t1.b > UInt32(10)) OR (t1.c < UInt32(20))
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
@@ -428,8 +428,8 @@ mod tests {
             ))?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Filter: t1.b > UInt32(10) AND t2.c < UInt32(20)
+        assert_optimized_plan_equal!(plan, @"
+        Filter: (t1.b > UInt32(10)) AND (t2.c < UInt32(20))
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2
@@ -456,8 +456,8 @@ mod tests {
             ))?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Filter: CAST(t1.b AS Int64) > UInt32(10) AND TRY_CAST(t2.c AS Int64) < UInt32(20)
+        assert_optimized_plan_equal!(plan, @"
+        Filter: (CAST(t1.b AS Int64) > UInt32(10)) AND (TRY_CAST(t2.c AS Int64) < UInt32(20))
           Inner Join: t1.a = t2.a
             TableScan: t1
             TableScan: t2

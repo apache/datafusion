@@ -632,12 +632,12 @@ async fn roundtrip_inlist_5() -> Result<()> {
     plan,
     @r#"
     Projection: data.a, data.f
-      Filter: data.f = Utf8("a") OR data.f = Utf8("b") OR data.f = Utf8("c") OR data2.mark
+      Filter: (((data.f = Utf8("a")) OR (data.f = Utf8("b"))) OR (data.f = Utf8("c"))) OR data2.mark
         LeftMark Join: data.a = data2.a
           TableScan: data projection=[a, f]
           Projection: data2.a
-            Filter: data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")
-              TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")]
+            Filter: ((data2.f = Utf8("b")) OR (data2.f = Utf8("c"))) OR (data2.f = Utf8("d"))
+              TableScan: data2 projection=[a, f], partial_filters=[((data2.f = Utf8("b")) OR (data2.f = Utf8("c"))) OR (data2.f = Utf8("d"))]
     "#
             );
     Ok(())

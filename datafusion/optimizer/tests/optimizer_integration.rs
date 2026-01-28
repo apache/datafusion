@@ -134,7 +134,7 @@ fn subquery_filter_with_cast() -> Result<()> {
         SubqueryAlias: __scalar_sq_1
           Aggregate: groupBy=[[]], aggr=[[avg(CAST(test.col_int32 AS Float64))]]
             Projection: test.col_int32
-              Filter: __common_expr_4 >= Date32("2002-05-08") AND __common_expr_4 <= Date32("2002-05-13")
+              Filter: (__common_expr_4 >= Date32("2002-05-08")) AND (__common_expr_4 <= Date32("2002-05-13"))
                 Projection: CAST(test.col_utf8 AS Date32) AS __common_expr_4, test.col_int32
                   TableScan: test projection=[col_int32, col_utf8]
     "#
@@ -295,7 +295,7 @@ fn between_date32_plus_interval() -> Result<()> {
     @r#"
     Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
       Projection:
-        Filter: test.col_date32 >= Date32("1998-03-18") AND test.col_date32 <= Date32("1998-06-16")
+        Filter: (test.col_date32 >= Date32("1998-03-18")) AND (test.col_date32 <= Date32("1998-06-16"))
           TableScan: test projection=[col_date32]
     "#
     );
@@ -313,7 +313,7 @@ fn between_date64_plus_interval() -> Result<()> {
     @r#"
     Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
       Projection:
-        Filter: test.col_date64 >= Date64("1998-03-18") AND test.col_date64 <= Date64("1998-06-16")
+        Filter: (test.col_date64 >= Date64("1998-03-18")) AND (test.col_date64 <= Date64("1998-06-16"))
           TableScan: test projection=[col_date64]
     "#
     );
@@ -383,10 +383,10 @@ fn push_down_filter_groupby_expr_contains_alias() {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
+    @"
     Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)
       Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]
-        Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)
+        Filter: (CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)) > Int64(3)
           TableScan: test projection=[col_int32, col_uint32]
     "
     );

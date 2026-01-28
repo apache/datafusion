@@ -841,7 +841,7 @@ LEFT JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)Left Join:  Filter: e.name = Utf8View("Alice") OR e.name = Utf8View("Bob")
+01)Left Join:  Filter: (e.name = Utf8View("Alice")) OR (e.name = Utf8View("Bob"))
 02)--SubqueryAlias: e
 03)----TableScan: employees projection=[emp_id, name]
 04)--SubqueryAlias: d
@@ -929,7 +929,7 @@ ON (e.name = 'Alice' OR e.name = 'Bob');
 logical_plan
 01)Cross Join: 
 02)--SubqueryAlias: e
-03)----Filter: employees.name = Utf8View("Alice") OR employees.name = Utf8View("Bob")
+03)----Filter: (employees.name = Utf8View("Alice")) OR (employees.name = Utf8View("Bob"))
 04)------TableScan: employees projection=[emp_id, name]
 05)--SubqueryAlias: d
 06)----TableScan: department projection=[dept_name]
@@ -973,11 +973,11 @@ ON e.emp_id = d.emp_id
 WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
 ----
 logical_plan
-01)Filter: d.dept_name != Utf8View("Engineering") AND e.name = Utf8View("Alice") OR e.name = Utf8View("Carol")
+01)Filter: ((d.dept_name != Utf8View("Engineering")) AND (e.name = Utf8View("Alice"))) OR (e.name = Utf8View("Carol"))
 02)--Projection: e.emp_id, e.name, d.dept_name
 03)----Left Join: e.emp_id = d.emp_id
 04)------SubqueryAlias: e
-05)--------Filter: employees.name = Utf8View("Alice") OR employees.name = Utf8View("Carol")
+05)--------Filter: (employees.name = Utf8View("Alice")) OR (employees.name = Utf8View("Carol"))
 06)----------TableScan: employees projection=[emp_id, name]
 07)------SubqueryAlias: d
 08)--------TableScan: department projection=[emp_id, dept_name]
@@ -1168,7 +1168,7 @@ WHERE t0.v1 = t1.v0;
 ----
 logical_plan
 01)Projection: t1.v0, t1.v1, t5.v2, t5.v3, t5.v4, t0.v0, t0.v1
-02)--Inner Join: CAST(t1.v0 AS Float64) = t0.v1 Filter: t0.v1 + CAST(t5.v0 AS Float64) > Float64(0)
+02)--Inner Join: CAST(t1.v0 AS Float64) = t0.v1 Filter: (t0.v1 + CAST(t5.v0 AS Float64)) > Float64(0)
 03)----Projection: t1.v0, t1.v1, t5.v0, t5.v2, t5.v3, t5.v4
 04)------Inner Join: t1.v0 = t5.v0, t1.v1 = t5.v1
 05)--------TableScan: t1 projection=[v0, v1]

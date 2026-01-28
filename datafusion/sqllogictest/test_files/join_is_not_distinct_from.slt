@@ -136,7 +136,7 @@ JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val + 1) IS NOT
 logical_plan
 01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
 02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1)
-03)----Filter: CAST(t1.val AS Int64) + Int64(1) IS NOT DISTINCT FROM Int64(11)
+03)----Filter: (CAST(t1.val AS Int64) + Int64(1)) IS NOT DISTINCT FROM Int64(11)
 04)------TableScan: t1 projection=[id, val]
 05)----TableScan: t2 projection=[id, val]
 physical_plan
@@ -165,7 +165,7 @@ JOIN t2 ON ((t1.val+1) IS NOT DISTINCT FROM (t2.val+1)) AND ((t1.val % 3) IS DIS
 ----
 logical_plan
 01)Projection: t1.id AS t1_id, t2.id AS t2_id, t1.val, t2.val
-02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1) Filter: CAST(t1.val AS Int64) % Int64(3) IS DISTINCT FROM CAST(t2.val AS Int64) % Int64(3)
+02)--Inner Join: CAST(t1.val AS Int64) + Int64(1) = CAST(t2.val AS Int64) + Int64(1) Filter: (CAST(t1.val AS Int64) % Int64(3)) IS DISTINCT FROM (CAST(t2.val AS Int64) % Int64(3))
 03)----TableScan: t1 projection=[id, val]
 04)----TableScan: t2 projection=[id, val]
 physical_plan

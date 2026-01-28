@@ -356,8 +356,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Left Join:  Filter: t1.a + Int64(10) >= t2.a * UInt32(2) AND t1.b < Int32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            @"
+        Left Join:  Filter: ((t1.a + Int64(10)) >= (t2.a * UInt32(2))) AND (t1.b < Int32(100)) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
           TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -417,8 +417,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Left Join: t1.a = t2.a, t1.b = t2.b Filter: t1.c = t2.c OR t1.a + t1.b > t2.b + t2.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            @"
+        Left Join: t1.a = t2.a, t1.b = t2.b Filter: (t1.c = t2.c) OR ((t1.a + t1.b) > (t2.b + t2.c)) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
           TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
           TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -456,10 +456,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Left Join: t1.a = t2.a Filter: t1.c + t2.c + t3.c < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+            @"
+        Left Join: t1.a = t2.a Filter: ((t1.c + t2.c) + t3.c) < UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]
           TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-          Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          Left Join: t2.a = t3.a Filter: (t2.a + t3.b) > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
         "
@@ -493,10 +493,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Left Join: t1.a = t2.a Filter: t2.c = t3.c [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32;N, b:UInt32;N, c:UInt32;N]
           TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
-          Left Join: t2.a = t3.a Filter: t2.a + t3.b > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+          Left Join: t2.a = t3.a Filter: (t2.a + t3.b) > UInt32(100) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
             TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
             TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
         "

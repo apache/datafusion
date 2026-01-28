@@ -62,7 +62,7 @@ logical_plan
 09)----------------Inner Join: customer.c_custkey = orders.o_custkey
 10)------------------TableScan: customer projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment]
 11)------------------Projection: orders.o_orderkey, orders.o_custkey
-12)--------------------Filter: orders.o_orderdate >= Date32("1993-10-01") AND orders.o_orderdate < Date32("1994-01-01")
+12)--------------------Filter: (orders.o_orderdate >= Date32("1993-10-01")) AND (orders.o_orderdate < Date32("1994-01-01"))
 13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1993-10-01"), orders.o_orderdate < Date32("1994-01-01")]
 14)--------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
 15)----------------Filter: lineitem.l_returnflag = Utf8View("R")

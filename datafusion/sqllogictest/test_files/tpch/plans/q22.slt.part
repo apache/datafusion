@@ -71,7 +71,7 @@ logical_plan
 13)------------SubqueryAlias: __scalar_sq_2
 14)--------------Aggregate: groupBy=[[]], aggr=[[avg(customer.c_acctbal)]]
 15)----------------Projection: customer.c_acctbal
-16)------------------Filter: customer.c_acctbal > Decimal128(Some(0),15,2) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
+16)------------------Filter: (customer.c_acctbal > Decimal128(Some(0),15,2)) AND substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])
 17)--------------------TableScan: customer projection=[c_phone, c_acctbal], partial_filters=[customer.c_acctbal > Decimal128(Some(0),15,2), substr(customer.c_phone, Int64(1), Int64(2)) IN ([Utf8View("13"), Utf8View("31"), Utf8View("23"), Utf8View("29"), Utf8View("30"), Utf8View("18"), Utf8View("17")])]
 physical_plan
 01)SortPreservingMergeExec: [cntrycode@0 ASC NULLS LAST]
