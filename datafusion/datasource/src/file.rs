@@ -195,7 +195,7 @@ pub trait FileSource: Send + Sync {
         order: &[PhysicalSortExpr],
         eq_properties: &EquivalenceProperties,
     ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         self.try_reverse_output(order, eq_properties)
     }
 
