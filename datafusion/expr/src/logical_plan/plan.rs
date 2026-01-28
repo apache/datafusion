@@ -1973,13 +1973,16 @@ impl LogicalPlan {
                         };
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(
-                                    f,
-                                    "{} Join: {}{}",
-                                    join_type,
-                                    join_expr.join(", "),
-                                    filter_expr
-                                )
+                                write!(f, "{join_type} Join:",)?;
+                                if !join_expr.is_empty() || !filter_expr.is_empty() {
+                                    write!(
+                                        f,
+                                        " {}{}",
+                                        join_expr.join(", "),
+                                        filter_expr
+                                    )?;
+                                }
+                                Ok(())
                             }
                             JoinConstraint::Using => {
                                 write!(

@@ -114,7 +114,7 @@ impl Display for CastColumnExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "CAST_COLUMN({} AS {:?})",
+            "CAST_COLUMN({} AS {})",
             self.expr,
             self.target_field.data_type()
         )

@@ -43,6 +43,7 @@ use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, lead, row_number};
 use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
+use rstest::rstest;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -4801,7 +4802,7 @@ async fn unnest_with_redundant_columns() -> Result<()> {
         @r"
     Projection: shapes.shape_id [shape_id:UInt32]
       Unnest: lists[shape_id2|depth=1] structs[] [shape_id:UInt32, shape_id2:UInt32;N]
-        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(Field { data_type: UInt32, nullable: true });N]
+        Aggregate: groupBy=[[shapes.shape_id]], aggr=[[array_agg(shapes.shape_id) AS shape_id2]] [shape_id:UInt32, shape_id2:List(UInt32);N]
           TableScan: shapes projection=[shape_id] [shape_id:UInt32]
     "
     );
@@ -5615,30 +5616,33 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
     Ok(())
 }
 
+#[rstest]
+#[case(DataType::Utf8)]
+#[case(DataType::LargeUtf8)]
+#[case(DataType::Utf8View)]
 #[tokio::test]
-async fn write_partitioned_parquet_results() -> Result<()> {
-    // create partitioned input file and context
-    let tmp_dir = TempDir::new()?;
-
-    let ctx = SessionContext::new();
-
+async fn write_partitioned_parquet_results(#[case] string_type: DataType) -> Result<()> {
     // Create an in memory table with schema C1 and C2, both strings
     let schema = Arc::new(Schema::new(vec![
-        Field::new("c1", DataType::Utf8, false),
-        Field::new("c2", DataType::Utf8, false),
+        Field::new("c1", string_type.clone(), false),
+        Field::new("c2", string_type.clone(), false),
     ]));
 
-    let record_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(StringArray::from(vec!["abc", "def"])),
-            Arc::new(StringArray::from(vec!["123", "456"])),
-        ],
-    )?;
+    let columns = [
+        Arc::new(StringArray::from(vec!["abc", "def"])) as ArrayRef,
+        Arc::new(StringArray::from(vec!["123", "456"])) as ArrayRef,
+    ]
+    .map(|col| arrow::compute::cast(&col, &string_type).unwrap())
+    .to_vec();
+
+    let record_batch = RecordBatch::try_new(schema.clone(), columns)?;
 
     let mem_table = Arc::new(MemTable::try_new(schema, vec![vec![record_batch]])?);
 
     // Register the table in the context
+    // create partitioned input file and context
+    let tmp_dir = TempDir::new()?;
+    let ctx = SessionContext::new();
     ctx.register_table("test", mem_table)?;
 
     let local = Arc::new(LocalFileSystem::new_with_prefix(&tmp_dir)?);
@@ -5665,6 +5669,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the c2 column is gone and that c1 is abc.
     let results = filter_df.collect().await?;
+    insta::allow_duplicates! {
     assert_snapshot!(
        batches_to_string(&results),
         @r"
@@ -5674,7 +5679,7 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     | abc |
     +-----+
     "
-    );
+    )};
 
     // Read the entire set of parquet files
     let df = ctx
@@ -5687,9 +5692,10 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the df has the entire set of data
     let results = df.collect().await?;
-    assert_snapshot!(
-        batches_to_sort_string(&results),
-        @r"
+    insta::allow_duplicates! {
+        assert_snapshot!(
+            batches_to_sort_string(&results),
+            @r"
     +-----+-----+
     | c1  | c2  |
     +-----+-----+
@@ -5697,7 +5703,8 @@ async fn write_partitioned_parquet_results() -> Result<()> {
     | def | 456 |
     +-----+-----+
     "
-    );
+        )
+    };
 
     Ok(())
 }
