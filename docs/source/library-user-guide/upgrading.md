@@ -154,6 +154,99 @@ The builder pattern is more efficient as it computes properties once during `bui
 
 Note: `with_default_selectivity()` is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.
 
+### Protobuf conversion trait added
+
+A new trait, `PhysicalProtoConverterExtension`, has been added to the `datafusion-proto`
+crate. This is used for controlling the process of conversion of physical plans and
+expressions to and from their protobuf equivalents. The methods for conversion now
+require an additional parameter.
+
+The primary APIs for interacting with this crate have not been modified, so most users
+should not need to make any changes. If you do require this trait, you can use the
+`DefaultPhysicalProtoConverter` implementation.
+
+For example, to convert a sort expression protobuf node you can make the following
+updates:
+
+**Before:**
+
+```rust,ignore
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+);
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+    &converter
+);
+```
+
+Similarly to convert from a physical sort expression into a protobuf node:
+
+**Before:**
+
+```rust,ignore
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+);
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+    &converter,
+);
+```
+
+### `generate_series` and `range` table functions changed
+
+The `generate_series` and `range` table functions now return an empty set when the interval is invalid, instead of an error.
+This behavior is consistent with systems like PostgreSQL.
+
+Before:
+
+```sql
+> select * from generate_series(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+
+> select * from range(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+```
+
+Now:
+
+```sql
+> select * from generate_series(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+
+> select * from range(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+```
+
 ## DataFusion `52.0.0`
 
 ### Changes to DFSchema API
