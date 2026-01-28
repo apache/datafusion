@@ -2582,6 +2582,7 @@ dependencies = [
  "percent-encoding",
  "rand 0.9.2",
  "sha1",
+ "sha2",
  "url",
 ]
 
