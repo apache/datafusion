@@ -278,18 +278,18 @@ impl PhysicalExprAdapterFactory for DefaultValuePhysicalExprAdapterFactory {
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
+    ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let default_factory = DefaultPhysicalExprAdapterFactory;
         let default_adapter = default_factory.create(
             Arc::clone(&logical_file_schema),
             Arc::clone(&physical_file_schema),
-        );
+        )?;
 
-        Arc::new(DefaultValuePhysicalExprAdapter {
+        Ok(Arc::new(DefaultValuePhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
             default_adapter,
-        })
+        }))
     }
 }
 

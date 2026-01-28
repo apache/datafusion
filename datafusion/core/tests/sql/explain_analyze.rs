@@ -879,12 +879,13 @@ async fn parquet_explain_analyze() {
     let i_rowgroup_stat = formatted.find("row_groups_pruned_statistics").unwrap();
     let i_rowgroup_bloomfilter =
         formatted.find("row_groups_pruned_bloom_filter").unwrap();
-    let i_page = formatted.find("page_index_rows_pruned").unwrap();
+    let i_page_rows = formatted.find("page_index_rows_pruned").unwrap();
+    let i_page_pages = formatted.find("page_index_pages_pruned").unwrap();
 
     assert!(
         (i_file < i_rowgroup_stat)
             && (i_rowgroup_stat < i_rowgroup_bloomfilter)
-            && (i_rowgroup_bloomfilter < i_page),
+            && (i_rowgroup_bloomfilter < i_page_pages && i_page_pages < i_page_rows),
         "The parquet pruning metrics should be displayed in an order of: file range -> row group statistics -> row group bloom filter -> page index."
     );
 }
