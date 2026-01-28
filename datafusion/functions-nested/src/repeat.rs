@@ -30,7 +30,7 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{Result, exec_err, utils::take_function_args};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -195,10 +195,9 @@ fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
     count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
+    // Build offsets and take_indices
     let total_repeated_values: usize =
         count_array.values().iter().map(|&c| c as usize).sum();
-
-    // Build offsets and take_indices
     let mut take_indices = Vec::with_capacity(total_repeated_values);
     let mut offsets = Vec::with_capacity(count_array.len() + 1);
     offsets.push(O::zero());
@@ -211,12 +210,14 @@ fn general_repeat<O: OffsetSizeTrait>(
         take_indices.extend(std::iter::repeat_n(idx as u64, count))
     }
 
+    // Build the flattened values
     let repeated_values = compute::take(
         array.as_ref(),
         &UInt64Array::from_iter_values(take_indices),
         None,
     )?;
 
+    // Construct final ListArray
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
