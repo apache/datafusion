@@ -2040,7 +2040,11 @@ impl TreeNodeRewriter for Simplifier<'_> {
             }
             // For case:
             // date_part('YEAR', expr) IN (literal1, literal2, ...)
-            Expr::InList(InList { expr, list, negated }) => {
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
                 if list.len() > THRESHOLD_INLINE_INLIST || list.iter().any(is_null) {
                     return Ok(Transformed::no(Expr::InList(InList {
                         expr,
@@ -2061,11 +2065,8 @@ impl TreeNodeRewriter for Simplifier<'_> {
                         })));
                     };
 
-                    let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) = if negated {
-                        (NotEq, and)
-                    } else {
-                        (Eq, or)
-                    };
+                    let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) =
+                        if negated { (NotEq, and) } else { (Eq, or) };
 
                     let range_expr = rewrite_with_preimage(*interval, op, expr)?.data;
                     rewritten = Some(match rewritten {

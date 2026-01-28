@@ -76,8 +76,8 @@ mod test {
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, and, binary_expr, col, lit, preimage::PreimageResult,
-        or, simplify::SimplifyContext,
+        Signature, Volatility, and, binary_expr, col, lit, or, preimage::PreimageResult,
+        simplify::SimplifyContext,
     };
 
     use super::Interval;
