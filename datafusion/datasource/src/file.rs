@@ -189,7 +189,21 @@ pub trait FileSource: Send + Sync {
     /// * `Inexact` - Created a source optimized for ordering (e.g., reversed row groups) but not perfectly sorted
     /// * `Unsupported` - Cannot optimize for this ordering
     ///
-    /// Default implementation returns `Unsupported`.
+    /// Default implementation delegates to [`Self::try_reverse_output`].
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+        eq_properties: &EquivalenceProperties,
+    ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+        #[allow(deprecated)]
+        self.try_reverse_output(order, eq_properties)
+    }
+
+    /// Deprecated: Renamed to [`Self::try_pushdown_sort`].
+    #[deprecated(
+        since = "52.0.0",
+        note = "Renamed to try_pushdown_sort. This method was never limited to reversing output."
+    )]
     fn try_reverse_output(
         &self,
         _order: &[PhysicalSortExpr],
