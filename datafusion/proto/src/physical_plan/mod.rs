@@ -3746,12 +3746,11 @@ impl DeduplicatingSerializer {
 impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
     fn proto_to_execution_plan(
         &self,
-        ctx: &TaskContext,
-        codec: &dyn PhysicalExtensionCodec,
-        proto: &protobuf::PhysicalPlanNode,
+        _ctx: &TaskContext,
+        _codec: &dyn PhysicalExtensionCodec,
+        _proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Delegate to default - serializer shouldn't be used for deserialization
-        proto.try_into_physical_plan_with_converter(ctx, codec, self)
+        internal_err!("DeduplicatingSerializer cannot deserialize execution plans")
     }
 
     fn execution_plan_to_proto(
@@ -3771,15 +3770,15 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
 
     fn proto_to_physical_expr(
         &self,
-        proto: &protobuf::PhysicalExprNode,
-        ctx: &TaskContext,
-        input_schema: &Schema,
-        codec: &dyn PhysicalExtensionCodec,
+        _proto: &protobuf::PhysicalExprNode,
+        _ctx: &TaskContext,
+        _input_schema: &Schema,
+        _codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn PhysicalExpr>>
     where
         Self: Sized,
     {
-        parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
+        internal_err!("DeduplicatingSerializer cannot deserialize physical expressions")
     }
 
     fn physical_expr_to_proto(
@@ -3787,14 +3786,19 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
+        use std::hash::{Hash, Hasher};
+
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
 
-        // XOR session_id with pointer address and process ID to create salted expr_id.
-        // Including the process ID prevents collisions if serialized data from different
-        // processes is merged, or if the serializer is somehow shared across processes.
-        let ptr = Arc::as_ptr(expr) as *const () as u64;
-        let pid = std::process::id() as u64;
-        proto.expr_id = Some(self.session_id ^ ptr ^ (pid << 48));
+        // Hash session_id, pointer address, and process ID together to create expr_id.
+        // - session_id: random per serializer, prevents collisions when merging serializations
+        // - ptr: unique address per Arc within a process
+        // - pid: prevents collisions if serializer is shared across processes
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.session_id.hash(&mut hasher);
+        (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
+        std::process::id().hash(&mut hasher);
+        proto.expr_id = Some(hasher.finish());
 
         Ok(proto)
     }
@@ -3827,18 +3831,13 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 
     fn execution_plan_to_proto(
         &self,
-        plan: &Arc<dyn ExecutionPlan>,
-        codec: &dyn PhysicalExtensionCodec,
+        _plan: &Arc<dyn ExecutionPlan>,
+        _codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalPlanNode>
     where
         Self: Sized,
     {
-        // Delegate - deserializer shouldn't be used for serialization
-        protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(
-            Arc::clone(plan),
-            codec,
-            self,
-        )
+        internal_err!("DeduplicatingDeserializer cannot serialize execution plans")
     }
 
     fn proto_to_physical_expr(
@@ -3874,11 +3873,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 
     fn physical_expr_to_proto(
         &self,
-        expr: &Arc<dyn PhysicalExpr>,
-        codec: &dyn PhysicalExtensionCodec,
+        _expr: &Arc<dyn PhysicalExpr>,
+        _codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        // Just delegate - no expr_id needed
-        serialize_physical_expr_with_converter(expr, codec, self)
+        internal_err!("DeduplicatingDeserializer cannot serialize physical expressions")
     }
 }
 
