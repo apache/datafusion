@@ -3717,7 +3717,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
 /// Internal serializer that adds expr_id to expressions.
 /// Created fresh for each serialization operation.
 struct DeduplicatingSerializer {
-    /// Random salt XORed with pointer addresses to create globally unique expr_ids.
+    /// Random salt combined with pointer addresses and process ID to create globally unique expr_ids.
     session_id: u64,
 }
 
