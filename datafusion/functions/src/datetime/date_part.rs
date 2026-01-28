@@ -19,6 +19,7 @@ use std::any::Any;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow::array::timezone::Tz;
 use arrow::array::{Array, ArrayRef, Float64Array, Int32Array};
 use arrow::compute::kernels::cast_utils::IntervalUnit;
 use arrow::compute::{DatePart, binary, date_part};
@@ -29,10 +30,8 @@ use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
 };
-use arrow::temporal_conversions::{
-    MICROSECONDS_IN_DAY, MILLISECONDS_IN_DAY, NANOSECONDS_IN_DAY, SECONDS_IN_DAY,
-};
-use chrono::{Datelike, NaiveDate};
+use arrow::temporal_conversions::MILLISECONDS_IN_DAY;
+use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use datafusion_common::types::{NativeType, logical_date};
 
 use datafusion_common::{
@@ -286,17 +285,20 @@ impl ScalarUDFImpl for DatePartFunc {
         };
 
         // Compute the Interval bounds
-        let start_time =
-            NaiveDate::from_ymd_opt(year, 1, 1).expect("Expect computed start time");
-        let end_time = start_time
-            .with_year(year + 1)
-            .expect("Expect computed end time");
+        let Some(start_time) = NaiveDate::from_ymd_opt(year, 1, 1) else {
+            return Ok(PreimageResult::None);
+        };
+        let Some(end_time) = start_time.with_year(year + 1) else {
+            return Ok(PreimageResult::None);
+        };
 
         // Convert to ScalarValues
-        let lower = date_to_scalar(start_time, target_type)
-            .expect("Expect preimage interval lower bound");
-        let upper = date_to_scalar(end_time, target_type)
-            .expect("Expect preimage interval upper bound");
+        let (Some(lower), Some(upper)) = (
+            date_to_scalar(start_time, target_type),
+            date_to_scalar(end_time, target_type),
+        ) else {
+            return Ok(PreimageResult::None);
+        };
         let interval = Box::new(interval_arithmetic::Interval::try_new(lower, upper)?);
 
         Ok(PreimageResult::Range {
