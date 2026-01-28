@@ -116,8 +116,9 @@ use datafusion_proto::bytes::{
 use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalExtensionCodec, DefaultPhysicalProtoConverter,
-    PhysicalExtensionCodec, PhysicalProtoConverterExtension,
+    AsExecutionPlan, DeduplicatingProtoConverter, DefaultPhysicalExtensionCodec,
+    DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
@@ -134,7 +135,7 @@ use crate::cases::{
 fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(exec_plan, &ctx, &codec, &proto_converter)?;
     Ok(())
 }
@@ -181,7 +182,7 @@ fn roundtrip_test_with_context(
     ctx: &SessionContext,
 ) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(exec_plan, ctx, &codec, &proto_converter)?;
     Ok(())
 }
@@ -190,7 +191,7 @@ fn roundtrip_test_with_context(
 /// query results are identical.
 async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
 
     roundtrip_test_and_return(initial_plan, ctx, &codec, &proto_converter)?;
@@ -1100,7 +1101,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         exec_plan,
         &ctx,
         &CustomPhysicalExtensionCodec {},
-        &DefaultPhysicalProtoConverter::new(),
+        &DefaultPhysicalProtoConverter {},
     )?;
     Ok(())
 }
@@ -1307,7 +1308,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1355,7 +1356,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(window, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1427,7 +1428,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
     )?);
 
     let ctx = SessionContext::new();
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
     roundtrip_test_and_return(aggregate, &ctx, &UDFExtensionCodec, &proto_converter)?;
     Ok(())
 }
@@ -1552,7 +1553,7 @@ fn roundtrip_csv_sink() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
 
     let roundtrip_plan = roundtrip_test_and_return(
         Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
@@ -2601,7 +2602,7 @@ fn test_expression_deduplication() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter::new();
 
     // Perform roundtrip
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2611,7 +2612,7 @@ fn test_expression_deduplication() -> Result<()> {
     )?;
 
     // Create a new converter for deserialization (fresh cache)
-    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter::new();
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2658,7 +2659,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter::new();
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2668,7 +2669,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
     )?;
 
     // Deserialize with a fresh converter
-    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter::new();
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2695,15 +2696,15 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
     Ok(())
 }
 
-/// Test backward compatibility: protos without expr_arc_id should still deserialize correctly.
+/// Test backward compatibility: protos without expr_id should still deserialize correctly.
 #[test]
-fn test_backward_compatibility_no_expr_arc_id() -> Result<()> {
+fn test_backward_compatibility_no_expr_id() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a]));
 
-    // Manually create a proto without expr_arc_id set
+    // Manually create a proto without expr_id set
     let proto = PhysicalExprNode {
-        expr_arc_id: None, // Simulating old proto without this field
+        expr_id: None, // Simulating old proto without this field
         expr_type: Some(
             datafusion_proto::protobuf::physical_expr_node::ExprType::Column(
                 datafusion_proto::protobuf::PhysicalColumn {
@@ -2716,7 +2717,7 @@ fn test_backward_compatibility_no_expr_arc_id() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DefaultPhysicalProtoConverter {};
 
     // Should deserialize without error
     let result = proto_converter.proto_to_physical_expr(
@@ -2768,7 +2769,7 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter::new();
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2778,7 +2779,7 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
     )?;
 
     // Create a single converter and reuse it for multiple deserializations
-    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter::new();
 
     // Verify cache starts empty
     assert_eq!(deser_converter.cache_size(), 0, "Cache should start empty");
@@ -2865,13 +2866,13 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter::new();
 
     // Serialize the expression
     let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
 
     // Create a single converter and reuse it for multiple deserializations
-    let deser_converter = DefaultPhysicalProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter::new();
 
     // Verify cache starts empty
     assert_eq!(deser_converter.cache_size(), 0, "Cache should start empty");
@@ -2935,6 +2936,113 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
         !Arc::ptr_eq(binary1.right(), binary2.right()),
         "Expected expressions from different deserializations to be different Arcs"
     );
+
+    Ok(())
+}
+
+/// Test that session_id rotates between top-level serialization operations.
+/// This verifies that each top-level serialization gets a fresh session_id,
+/// which prevents cross-process collisions when serialized plans are merged.
+#[test]
+fn test_session_id_rotation_between_serializations() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let _schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Create a simple expression
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DeduplicatingProtoConverter::new();
+
+    // First serialization
+    let proto1 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
+    let expr_id1 = proto1.expr_id.expect("Expected expr_id to be set");
+
+    // Second serialization with the same converter
+    // The session_id should have rotated, so the expr_id should be different
+    // even though we're serializing the same expression (same pointer address)
+    let proto2 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
+    let expr_id2 = proto2.expr_id.expect("Expected expr_id to be set");
+
+    // The expr_ids should be different because session_id rotated
+    assert_ne!(
+        expr_id1, expr_id2,
+        "Expected different expr_ids due to session_id rotation between serializations"
+    );
+
+    // Also test that serializing the same expression multiple times within
+    // the same top-level operation would give the same expr_id (not testable
+    // here directly since each physical_expr_to_proto is a top-level operation,
+    // but the deduplication tests verify this indirectly)
+
+    Ok(())
+}
+
+/// Test that session_id rotation works correctly with execution plans.
+/// This verifies the end-to-end behavior with plan serialization.
+#[test]
+fn test_session_id_rotation_with_execution_plans() -> Result<()> {
+    use datafusion_proto::bytes::physical_plan_to_bytes_with_proto_converter;
+
+    let field_a = Field::new("a", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a]));
+
+    // Create a simple plan
+    let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let projection_exprs = vec![ProjectionExpr {
+        expr: Arc::clone(&col_expr),
+        alias: "a1".to_string(),
+    }];
+    let exec_plan = Arc::new(ProjectionExec::try_new(
+        projection_exprs.clone(),
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+    )?);
+
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DeduplicatingProtoConverter::new();
+
+    // First serialization
+    let bytes1 = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
+        &codec,
+        &proto_converter,
+    )?;
+
+    // Second serialization with the same converter
+    let bytes2 = physical_plan_to_bytes_with_proto_converter(
+        Arc::clone(&exec_plan) as Arc<dyn ExecutionPlan>,
+        &codec,
+        &proto_converter,
+    )?;
+
+    // The serialized bytes should be different due to different session_ids
+    // (specifically, the expr_id values embedded in the protobuf will differ)
+    assert_ne!(
+        bytes1.as_ref(),
+        bytes2.as_ref(),
+        "Expected different serialized bytes due to session_id rotation"
+    );
+
+    // But both should deserialize correctly
+    let ctx = SessionContext::new();
+    let deser_converter = DeduplicatingProtoConverter::new();
+
+    let plan1 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
+        bytes1.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    let plan2 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
+        bytes2.as_ref(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &deser_converter,
+    )?;
+
+    // Verify both plans have the expected structure
+    assert_eq!(plan1.schema(), plan2.schema());
 
     Ok(())
 }

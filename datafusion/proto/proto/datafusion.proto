@@ -850,7 +850,7 @@ message PhysicalExprNode {
   // in different processes, or even within the same process over time).
   //
   // The deserializer should use a fresh dedup cache for each plan it deserializes.
-  optional uint64 expr_arc_id = 30;
+  optional uint64 expr_id = 30;
 
   oneof ExprType {
     // column references

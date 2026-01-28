@@ -240,7 +240,7 @@ pub fn parse_physical_expr(
         ctx,
         input_schema,
         codec,
-        &DefaultPhysicalProtoConverter::new(),
+        &DefaultPhysicalProtoConverter {},
     )
 }
 

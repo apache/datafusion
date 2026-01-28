@@ -1290,7 +1290,7 @@ pub struct PhysicalExprNode {
     ///
     /// The deserializer should use a fresh dedup cache for each plan it deserializes.
     #[prost(uint64, optional, tag = "30")]
-    pub expr_arc_id: ::core::option::Option<u64>,
+    pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
         tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
