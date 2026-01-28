@@ -3689,6 +3689,14 @@ struct RecursionGuard {
     state: Arc<DeserializationState>,
 }
 
+impl RecursionGuard {
+    /// Creates a new RecursionGuard, incrementing the depth.
+    fn new(state: Arc<DeserializationState>) -> Self {
+        state.depth.fetch_add(1, Ordering::SeqCst);
+        Self { state }
+    }
+}
+
 impl Drop for RecursionGuard {
     fn drop(&mut self) {
         let prev = self.state.depth.fetch_sub(1, Ordering::SeqCst);
@@ -3753,14 +3761,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Track depth at the plan level, not expression level.
-        // This ensures the cache is only cleared when the entire plan
-        // deserialization is complete, not after each expression.
-        self.state.depth.fetch_add(1, Ordering::SeqCst);
-        let _guard = RecursionGuard {
-            state: Arc::clone(&self.state),
-        };
-
+        let _guard = RecursionGuard::new(Arc::clone(&self.state));
         proto.try_into_physical_plan_with_converter(ctx, codec, self)
     }
 
@@ -3789,13 +3790,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     where
         Self: Sized,
     {
-        // Track depth for expressions too, in case this is called directly
-        // (not through proto_to_execution_plan). This ensures the cache is
-        // cleared when the top-level expression deserialization completes.
-        self.state.depth.fetch_add(1, Ordering::SeqCst);
-        let _guard = RecursionGuard {
-            state: Arc::clone(&self.state),
-        };
+        let _guard = RecursionGuard::new(Arc::clone(&self.state));
 
         // Check if we've seen this expr_arc_id before (deduplication)
         if let Some(arc_id) = proto.expr_arc_id {
