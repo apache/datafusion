@@ -19,13 +19,13 @@
 
 use crate::{expressions::Column, physical_expr::PhysicalExpr};
 use arrow::{
-    compute::{CastOptions, can_cast_types},
+    compute::can_cast_types,
     datatypes::{DataType, FieldRef, Schema},
     record_batch::RecordBatch,
 };
 use datafusion_common::{
     Result, ScalarValue,
-    format::DEFAULT_CAST_OPTIONS,
+    format::OwnedCastOptions,
     nested_struct::{
         cast_column, validate_field_compatibility, validate_struct_compatibility,
     },
@@ -59,8 +59,8 @@ pub struct CastColumnExpr {
     input_field: FieldRef,
     /// The field metadata describing the desired output column.
     target_field: FieldRef,
-    /// Options forwarded to [`cast_column`].
-    cast_options: CastOptions<'static>,
+    /// Options forwarded to [`cast_column`] (owned, allowing dynamic format strings).
+    cast_options: OwnedCastOptions,
     /// Schema used to resolve expression data types during construction.
     input_schema: Arc<Schema>,
 }
@@ -86,15 +86,9 @@ impl Hash for CastColumnExpr {
 }
 
 fn normalize_cast_options(
-    cast_options: Option<CastOptions<'static>>,
-) -> CastOptions<'static> {
-    match cast_options {
-        Some(cast_options) => cast_options,
-        None => CastOptions {
-            format_options: DEFAULT_CAST_OPTIONS.format_options.clone(),
-            ..DEFAULT_CAST_OPTIONS
-        },
-    }
+    cast_options: Option<OwnedCastOptions>,
+) -> OwnedCastOptions {
+    cast_options.unwrap_or_default()
 }
 
 /// Validates that a cast is compatible between input and target fields.
@@ -167,7 +161,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<CastOptions<'static>>,
+        cast_options: Option<OwnedCastOptions>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         let cast_options = normalize_cast_options(cast_options);
@@ -195,7 +189,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<CastOptions<'static>>,
+        cast_options: Option<OwnedCastOptions>,
     ) -> Result<Self> {
         let input_schema = Schema::new(vec![input_field.as_ref().clone()]);
         Self::build(
@@ -215,7 +209,7 @@ impl CastColumnExpr {
         expr: Arc<dyn PhysicalExpr>,
         input_field: FieldRef,
         target_field: FieldRef,
-        cast_options: Option<CastOptions<'static>>,
+        cast_options: Option<OwnedCastOptions>,
         input_schema: Arc<Schema>,
     ) -> Result<Self> {
         Self::build(expr, input_field, target_field, cast_options, input_schema)
@@ -237,7 +231,7 @@ impl CastColumnExpr {
     }
 
     /// Options forwarded to [`cast_column`].
-    pub fn cast_options(&self) -> &CastOptions<'static> {
+    pub fn cast_options(&self) -> &OwnedCastOptions {
         &self.cast_options
     }
 }
@@ -268,10 +262,12 @@ impl PhysicalExpr for CastColumnExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        // Convert OwnedCastOptions to arrow's CastOptions for the computation
+        let arrow_options = self.cast_options.as_arrow_options();
         match value {
             ColumnarValue::Array(array) => {
                 let casted =
-                    cast_column(&array, self.target_field.as_ref(), &self.cast_options)?;
+                    cast_column(&array, self.target_field.as_ref(), &arrow_options)?;
                 Ok(ColumnarValue::Array(casted))
             }
             ColumnarValue::Scalar(scalar) => {
@@ -279,7 +275,7 @@ impl PhysicalExpr for CastColumnExpr {
                 let casted = cast_column(
                     &as_array,
                     self.target_field.as_ref(),
-                    &self.cast_options,
+                    &arrow_options,
                 )?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;
                 Ok(ColumnarValue::Scalar(result))

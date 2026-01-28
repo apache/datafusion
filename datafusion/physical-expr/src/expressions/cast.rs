@@ -22,25 +22,27 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::compute::{CastOptions, can_cast_types};
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::format::{DEFAULT_CAST_OPTIONS, OwnedCastOptions};
 use datafusion_common::nested_struct::validate_struct_compatibility;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
-const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
-    safe: false,
-    format_options: DEFAULT_FORMAT_OPTIONS,
-};
+// Default cast options using owned strings.
+// These are created once and cloned as needed - the cloning is cheap
+// since it only clones small String values (typically empty for null
+// and None for optional format fields).
+fn default_cast_options() -> OwnedCastOptions {
+    OwnedCastOptions::default()
+}
 
-const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
-    safe: true,
-    format_options: DEFAULT_FORMAT_OPTIONS,
-};
+fn default_safe_cast_options() -> OwnedCastOptions {
+    OwnedCastOptions::new(true)
+}
 
 /// Check if struct-to-struct casting is allowed by validating field compatibility.
 ///
@@ -65,8 +67,8 @@ pub struct CastExpr {
     pub expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
-    /// Cast options
-    cast_options: CastOptions<'static>,
+    /// Cast options (owned, allowing dynamic format strings without leaks)
+    cast_options: OwnedCastOptions,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -91,12 +93,12 @@ impl CastExpr {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         cast_type: DataType,
-        cast_options: Option<CastOptions<'static>>,
+        cast_options: Option<OwnedCastOptions>,
     ) -> Self {
         Self {
             expr,
             cast_type,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options: cast_options.unwrap_or_else(default_cast_options),
         }
     }
 
@@ -110,8 +112,8 @@ impl CastExpr {
         &self.cast_type
     }
 
-    /// The cast options
-    pub fn cast_options(&self) -> &CastOptions<'static> {
+    /// The cast options (owned, with ephemeral borrowing for Arrow functions)
+    pub fn cast_options(&self) -> &OwnedCastOptions {
         &self.cast_options
     }
 
@@ -166,7 +168,11 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        value.cast_to(&self.cast_type, Some(&self.cast_options))
+        // Convert OwnedCastOptions to arrow's CastOptions for the computation
+        // This is ephemeral borrowing - the borrowed references are only
+        // valid during this call and are dropped immediately after
+        let arrow_options = self.cast_options.as_arrow_options();
+        value.cast_to(&self.cast_type, Some(&arrow_options))
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -195,8 +201,10 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        // Cast current node's interval to the right type:
-        children[0].cast_to(&self.cast_type, &self.cast_options)
+        // Cast current node's interval to the right type.
+        // Convert OwnedCastOptions to arrow's CastOptions for the computation.
+        let arrow_options = self.cast_options.as_arrow_options();
+        children[0].cast_to(&self.cast_type, &arrow_options)
     }
 
     fn propagate_constraints(
@@ -207,9 +215,9 @@ impl PhysicalExpr for CastExpr {
         let child_interval = children[0];
         // Get child's datatype:
         let cast_type = child_interval.data_type();
-        Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
-        ]))
+        let safe_options = default_safe_cast_options();
+        let arrow_options = safe_options.as_arrow_options();
+        Ok(Some(vec![interval.cast_to(&cast_type, &arrow_options)?]))
     }
 
     /// A [`CastExpr`] preserves the ordering of its child if the cast is done
@@ -247,7 +255,7 @@ pub fn cast_with_options(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
     cast_type: DataType,
-    cast_options: Option<CastOptions<'static>>,
+    cast_options: Option<OwnedCastOptions>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {

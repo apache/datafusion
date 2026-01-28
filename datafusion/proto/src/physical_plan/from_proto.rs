@@ -17,8 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
@@ -29,11 +28,12 @@ use datafusion_expr::dml::InsertOp;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 
-use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
-use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
-use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use arrow::util::display::DurationFormat;
+use datafusion_common::{
+    DataFusionError, Result, OwnedCastOptions, OwnedFormatOptions,
+    internal_datafusion_err, not_impl_err
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -347,7 +347,7 @@ pub fn parse_physical_expr(
             convert_required!(e.arrow_type)?,
             cast_options_from_proto(
                 e.cast_options.as_ref(),
-                DEFAULT_CAST_OPTIONS.safe,
+                false,
                 None,
             )?,
         )),
@@ -774,140 +774,72 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
         })
-    }
 }
 
 // ============================================================================
-// String Interning for ArrowFormatOptions Lifetime Compatibility
+// Deserialization of Cast Options
 // ============================================================================
 //
-// PROBLEM:
-// Arrow's `FormatOptions<'a>` requires borrowed strings with a specific lifetime,
-// but Arrow also requires `&'static str` in many cases (like in CastOptions).
-// Protobuf deserialization produces owned `String` values with a limited lifetime
-// tied to the protobuf message. We cannot safely cast these short-lived `&str`
-// references to `&'static str`.
+// With the introduction of OwnedCastOptions and OwnedFormatOptions in DataFusion,
+// the lifetime mismatch between Arrow's `CastOptions<'static>` and Protobuf's
+// owned `String` values is now resolved elegantly:
 //
-// WHY THIS IS NECESSARY:
-// 1. Flight SQL and Substrait require serializing/deserializing physical plans
-//    including CastColumnExpr with format options
-// 2. Arrow 57.0.0+ changed FormatOptions from owned String to borrowed &'a str
-//    for performance (reduces allocations)
-// 3. The combination creates an incompatibility:
-//    - Protobuf gives us: String or &'short_lived str
-//    - Arrow requires: &'static str
-//    - No way to safely bridge this gap without leaking memory
+// 1. Protobuf provides owned `String` values (no lifetime constraints)
+// 2. OwnedCastOptions stores these as owned `String` values
+// 3. When executing, CastExpr/CastColumnExpr use ephemeral borrowing to convert
+//    to Arrow's `CastOptions<'a>` with borrowed `&str` references for compute kernels
+// 4. Strings are properly dropped when the expression is dropped - no leaks!
 //
-// SOLUTION:
-// String interning with a bounded cache:
-// - Leak strings to get `&'static str` (controlled memory leak)
-// - Cache leaked strings to enable reuse and deduplication
-// - Bound cache size to prevent unbounded growth
-//
-// ALTERNATIVES CONSIDERED (and why they don't work):
-// - Use owned String: Arrow's API explicitly requires &'a str, not String
-// - Regular borrowing: Borrowed data dies when proto message is dropped
-// - Change Arrow API: External dependency, not under our control
-// - Don't serialize FormatOptions: Breaks Flight SQL/Substrait distributed execution
-//
-// See PROTO_STRING_INTERNING_ISSUE.md for full details and historical context.
-// ============================================================================
+// This replaces the previous string interning approach which used a bounded cache
+// to leak strings for `'static` lifetime compatibility.
 
-/// Interned format strings with `'static` lifetime for use in `ArrowFormatOptions`.
-///
-/// All strings are permanently leaked and cached to satisfy Arrow's lifetime requirements
-/// while enabling reuse across multiple deserializations.
-struct InternedFormatStrings {
-    null: &'static str,
-    date_format: Option<&'static str>,
-    datetime_format: Option<&'static str>,
-    timestamp_format: Option<&'static str>,
-    timestamp_tz_format: Option<&'static str>,
-    time_format: Option<&'static str>,
-}
-
-fn intern_format_strings(
+/// Convert protobuf format options to owned format options.
+fn format_options_from_proto(
     options: &protobuf::FormatOptions,
-) -> Result<InternedFormatStrings> {
-    Ok(InternedFormatStrings {
-        null: intern_format_str(&options.null)?,
-        date_format: options
-            .date_format
-            .as_deref()
-            .map(intern_format_str)
-            .transpose()?,
-        datetime_format: options
-            .datetime_format
-            .as_deref()
-            .map(intern_format_str)
-            .transpose()?,
-        timestamp_format: options
-            .timestamp_format
-            .as_deref()
-            .map(intern_format_str)
-            .transpose()?,
-        timestamp_tz_format: options
-            .timestamp_tz_format
-            .as_deref()
-            .map(intern_format_str)
-            .transpose()?,
-        time_format: options
-            .time_format
-            .as_deref()
-            .map(intern_format_str)
-            .transpose()?,
+) -> Result<OwnedFormatOptions> {
+    let duration_format = duration_format_from_proto(options.duration_format)?;
+    Ok(OwnedFormatOptions {
+        null: options.null.clone(),
+        date_format: options.date_format.clone(),
+        datetime_format: options.datetime_format.clone(),
+        timestamp_format: options.timestamp_format.clone(),
+        timestamp_tz_format: options.timestamp_tz_format.clone(),
+        time_format: options.time_format.clone(),
+        duration_format,
+        types_info: options.types_info,
     })
 }
 
-fn format_options_from_proto(
-    options: &protobuf::FormatOptions,
-) -> Result<ArrowFormatOptions<'static>> {
-    let duration_format = duration_format_from_proto(options.duration_format)?;
-    // Convert all protobuf strings to `&'static str` via string interning.
-    // This is required because Arrow's FormatOptions<'static> needs static
-    // lifetime references, but protobuf deserialization only gives us strings
-    // with a limited lifetime tied to the proto message.
-    let interned = intern_format_strings(options)?;
-    Ok(ArrowFormatOptions::new()
-        .with_display_error(options.safe)
-        .with_null(interned.null)
-        .with_date_format(interned.date_format)
-        .with_datetime_format(interned.datetime_format)
-        .with_timestamp_format(interned.timestamp_format)
-        .with_timestamp_tz_format(interned.timestamp_tz_format)
-        .with_time_format(interned.time_format)
-        .with_duration_format(duration_format)
-        .with_types_info(options.types_info))
-}
-
+/// Convert protobuf cast options to owned cast options.
 fn cast_options_from_proto(
     cast_options: Option<&protobuf::PhysicalCastOptions>,
     legacy_safe: bool,
     legacy_format_options: Option<&protobuf::FormatOptions>,
-) -> Result<Option<CastOptions<'static>>> {
+) -> Result<Option<OwnedCastOptions>> {
     if let Some(cast_options) = cast_options {
         let format_options = cast_options
             .format_options
             .as_ref()
             .map(format_options_from_proto)
             .transpose()?
-            .unwrap_or_else(|| DEFAULT_CAST_OPTIONS.format_options.clone());
-        return Ok(Some(CastOptions {
+            .unwrap_or_default();
+        return Ok(Some(OwnedCastOptions {
             safe: cast_options.safe,
             format_options,
         }));
     }
 
-    if legacy_safe == DEFAULT_CAST_OPTIONS.safe && legacy_format_options.is_none() {
+    // Handle legacy fields for backward compatibility with DataFusion < 43.0
+    if legacy_safe == false && legacy_format_options.is_none() {
         return Ok(None);
     }
 
     let format_options = legacy_format_options
         .map(format_options_from_proto)
         .transpose()?
-        .unwrap_or_else(|| DEFAULT_CAST_OPTIONS.format_options.clone());
+        .unwrap_or_default();
 
-    Ok(Some(CastOptions {
+    Ok(Some(OwnedCastOptions {
         safe: legacy_safe,
         format_options,
     }))
@@ -920,98 +852,6 @@ fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
         | Ok(protobuf::DurationFormat::Unspecified)
         | Err(_) => DurationFormat::ISO8601,
     })
-}
-
-/// Maximum number of unique format strings to cache.
-///
-/// The cache owns leaked strings to provide `&'static str` values for
-/// `ArrowFormatOptions`, so keeping the cache bounded avoids unbounded
-/// growth in the common case.
-///
-/// WHY DIFFERENT LIMITS FOR TEST VS PRODUCTION:
-/// - Test limit (8): Intentionally tight to catch accidental unbounded format
-///   string generation during development. If tests exceed this, it indicates
-///   a code path that might cause memory issues in production.
-/// - Production limit (1024): Covers realistic scenarios where there are many
-///   distinct format patterns (e.g., different date formats per table/column)
-///   while still preventing pathological unbounded growth.
-///
-/// MEMORY IMPACT:
-/// - Best case: All deserializations use same format string → 1 leak (~10 bytes)
-/// - Typical case: 50 distinct format strings → 50 leaks (~500 bytes)
-/// - Worst case: Cache limit exceeded → deserialization fails with clear error
-#[cfg(test)]
-const FORMAT_STRING_CACHE_LIMIT: usize = 8;
-#[cfg(not(test))]
-const FORMAT_STRING_CACHE_LIMIT: usize = 1024;
-
-/// Cache for interned format strings.
-///
-/// We leak strings to satisfy the `'static` lifetime required by
-/// `ArrowFormatOptions` in cast options. To avoid unbounded growth,
-/// once the cache reaches the limit we only allow lookups for strings
-/// that are already interned.
-static FORMAT_STRING_CACHE: OnceLock<Mutex<FormatStringCache>> = OnceLock::new();
-
-#[derive(Default)]
-struct FormatStringCache {
-    entries: HashMap<String, &'static str>,
-}
-
-impl FormatStringCache {
-    fn get(&mut self, value: &str) -> Option<&'static str> {
-        self.entries.get(value).copied()
-    }
-
-    fn insert(&mut self, value: &str) -> Result<&'static str> {
-        if let Some(existing) = self.get(value) {
-            return Ok(existing);
-        }
-
-        if self.entries.len() >= FORMAT_STRING_CACHE_LIMIT {
-            return Err(internal_datafusion_err!(
-                "Format string cache limit ({}) reached; cannot intern new format string {value:?}",
-                FORMAT_STRING_CACHE_LIMIT
-            ));
-        }
-
-        let leaked = Box::leak(value.to_owned().into_boxed_str());
-        let key = value.to_owned();
-        self.entries.insert(key.clone(), leaked);
-        Ok(leaked)
-    }
-}
-
-fn format_string_cache() -> &'static Mutex<FormatStringCache> {
-    FORMAT_STRING_CACHE.get_or_init(|| Mutex::new(FormatStringCache::default()))
-}
-
-/// Intern a format string to obtain a `&'static str` reference.
-///
-/// This function leaks memory by design to satisfy Arrow's lifetime requirements.
-/// The leaked strings are cached and reused across multiple deserializations,
-/// so the same format string is only leaked once.
-///
-/// # How It Works
-/// 1. Check cache for existing interned string (O(1) HashMap lookup)
-/// 2. If found, return cached `&'static str` (no new allocation)
-/// 3. If not found and cache not full:
-///    - Leak the string using `Box::leak` to get `&'static str`
-///    - Store in cache for future reuse
-///    - Return the leaked reference
-/// 4. If cache is full, return error to prevent unbounded growth
-///
-/// # Thread Safety
-/// This function uses a global mutex-protected cache, so it's safe to call
-/// from multiple threads concurrently. The mutex ensures no data races.
-///
-/// # Errors
-/// Returns error if cache limit is reached and the string is not already cached.
-fn intern_format_str(value: &str) -> Result<&'static str> {
-    let mut cache = format_string_cache()
-        .lock()
-        .expect("format string cache lock poisoned");
-    cache.insert(value)
 }
 
 #[cfg(test)]
@@ -1041,204 +881,6 @@ mod tests {
         assert_eq!(pf2.object_meta.location, pf.object_meta.location);
         assert_eq!(pf2.object_meta.size, pf.object_meta.size);
         assert_eq!(pf2.object_meta.last_modified, pf.object_meta.last_modified);
-    }
-
-    #[test]
-    fn format_string_cache_reuses_strings() {
-        // Helper to generate unique strings not already in the cache
-        let unique_value = |prefix: &str| {
-            let mut counter = 0;
-            loop {
-                let candidate = format!("{prefix}-{counter}");
-                let cache = format_string_cache()
-                    .lock()
-                    .expect("format string cache lock poisoned");
-                if !cache.entries.contains_key(candidate.as_str()) {
-                    return candidate;
-                }
-                counter += 1;
-            }
-        };
-
-        // Check if cache has room for at least 2 new entries
-        let cache_len = format_string_cache()
-            .lock()
-            .expect("format string cache lock poisoned")
-            .entries
-            .len();
-
-        if cache_len + 2 > FORMAT_STRING_CACHE_LIMIT {
-            // Cache is too full to run this test reliably, skip it
-            // The limit behavior is tested in format_string_cache_stops_interning_after_limit
-            return;
-        }
-
-        // Generate unique strings for testing
-        let unique_null = unique_value("test-reuse-null");
-        let unique_date = unique_value("test-reuse-date");
-
-        let first = protobuf::FormatOptions {
-            safe: true,
-            null: unique_null.clone(),
-            date_format: Some(unique_date.clone()),
-            datetime_format: None,
-            timestamp_format: None,
-            timestamp_tz_format: None,
-            time_format: None,
-            duration_format: protobuf::DurationFormat::Pretty as i32,
-            types_info: false,
-        };
-
-        // Test that the same FormatOptions produces pointer-equal interned strings
-        // Skip test if cache is too full (can happen when running in parallel with other tests)
-        let first_result = format_options_from_proto(&first);
-        if first_result.is_err() {
-            // Cache is full, skip this test
-            return;
-        }
-        first_result.unwrap();
-
-        let second_result = format_options_from_proto(&first);
-        if second_result.is_err() {
-            return;
-        }
-        second_result.unwrap();
-
-        let first_interned = match intern_format_strings(&first) {
-            Ok(interned) => interned,
-            Err(_) => return, // Cache filled by another test, skip
-        };
-        let second_interned = match intern_format_strings(&first) {
-            Ok(interned) => interned,
-            Err(_) => return,
-        };
-        assert!(
-            std::ptr::eq(first_interned.null, second_interned.null),
-            "Same null string should return same pointer"
-        );
-        assert!(
-            std::ptr::eq(
-                first_interned.date_format.unwrap(),
-                second_interned.date_format.unwrap()
-            ),
-            "Same date_format string should return same pointer"
-        );
-
-        // Test that different strings produce different pointers (if cache has room)
-        let cache_len = format_string_cache()
-            .lock()
-            .expect("format string cache lock poisoned")
-            .entries
-            .len();
-
-        if cache_len + 2 <= FORMAT_STRING_CACHE_LIMIT {
-            let unique_null_2 = unique_value("test-reuse-null2");
-            let unique_date_2 = unique_value("test-reuse-date2");
-
-            let second = protobuf::FormatOptions {
-                safe: true,
-                null: unique_null_2,
-                date_format: Some(unique_date_2),
-                datetime_format: None,
-                timestamp_format: None,
-                timestamp_tz_format: None,
-                time_format: None,
-                duration_format: protobuf::DurationFormat::Pretty as i32,
-                types_info: false,
-            };
-
-            // Try to test different strings, but skip if cache fills up
-            if format_options_from_proto(&second).is_ok()
-                && let Ok(second_interned) = intern_format_strings(&second)
-            {
-                assert!(
-                    !std::ptr::eq(first_interned.null, second_interned.null),
-                    "Different null strings should return different pointers"
-                );
-                assert!(
-                    !std::ptr::eq(
-                        first_interned.date_format.unwrap(),
-                        second_interned.date_format.unwrap()
-                    ),
-                    "Different date_format strings should return different pointers"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn format_string_cache_stops_interning_after_limit() {
-        let unique_value = |prefix: &str| {
-            let mut counter = 0;
-            loop {
-                let candidate = format!("{prefix}-{counter}");
-                let cache = format_string_cache()
-                    .lock()
-                    .expect("format string cache lock poisoned");
-                if !cache.entries.contains_key(candidate.as_str()) {
-                    return candidate;
-                }
-                counter += 1;
-            }
-        };
-
-        // Fill the cache to the limit by adding unique strings until we hit the limit
-        let current_len = format_string_cache()
-            .lock()
-            .expect("format string cache lock poisoned")
-            .entries
-            .len();
-        let to_fill = FORMAT_STRING_CACHE_LIMIT.saturating_sub(current_len);
-        for _ in 0..to_fill {
-            let value = unique_value("unit-test-fill");
-            // Intern may fail if another thread filled the cache concurrently, which is fine
-            let _ = intern_format_str(&value);
-        }
-
-        let cache_len = format_string_cache()
-            .lock()
-            .expect("format string cache lock poisoned")
-            .entries
-            .len();
-        assert!(
-            cache_len >= FORMAT_STRING_CACHE_LIMIT,
-            "expected cache size to reach limit for test (current: {}, limit: {})",
-            cache_len,
-            FORMAT_STRING_CACHE_LIMIT
-        );
-
-        let overflow_value = unique_value("unit-test-overflow");
-        let overflow_options = protobuf::FormatOptions {
-            safe: true,
-            null: overflow_value,
-            date_format: None,
-            datetime_format: None,
-            timestamp_format: None,
-            timestamp_tz_format: None,
-            time_format: None,
-            duration_format: protobuf::DurationFormat::Pretty as i32,
-            types_info: false,
-        };
-        let error = format_options_from_proto(&overflow_options).unwrap_err();
-        assert!(
-            error.to_string().contains("Format string cache limit"),
-            "unexpected error: {error}"
-        );
-
-        let existing_value = format_string_cache()
-            .lock()
-            .expect("format string cache lock poisoned")
-            .entries
-            .keys()
-            .next()
-            .cloned()
-            .expect("cache should have entries after fill");
-        let existing = intern_format_str(&existing_value).unwrap();
-        let again = intern_format_str(&existing_value).unwrap();
-        assert!(
-            std::ptr::eq(existing, again),
-            "cache should reuse existing strings after the limit"
-        );
     }
 
     #[test]
