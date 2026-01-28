@@ -2602,7 +2602,7 @@ fn test_expression_deduplication() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // Perform roundtrip
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2612,7 +2612,7 @@ fn test_expression_deduplication() -> Result<()> {
     )?;
 
     // Create a new converter for deserialization (fresh cache)
-    let deser_converter = DeduplicatingProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter {};
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2659,7 +2659,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2669,7 +2669,7 @@ fn test_expression_deduplication_arc_sharing() -> Result<()> {
     )?;
 
     // Deserialize with a fresh converter
-    let deser_converter = DeduplicatingProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter {};
     let result_plan = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
@@ -2769,7 +2769,7 @@ fn test_deduplication_within_plan_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // Serialize
     let bytes = physical_plan_to_bytes_with_proto_converter(
@@ -2849,7 +2849,7 @@ fn test_deduplication_within_expr_deserialization() -> Result<()> {
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // Serialize the expression
     let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
@@ -2915,7 +2915,7 @@ fn test_session_id_rotation_between_serializations() -> Result<()> {
     let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
 
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // First serialization
     let proto1 = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
@@ -2962,7 +2962,7 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
     )?);
 
     let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DeduplicatingProtoConverter::new();
+    let proto_converter = DeduplicatingProtoConverter {};
 
     // First serialization
     let bytes1 = physical_plan_to_bytes_with_proto_converter(
@@ -2988,7 +2988,7 @@ fn test_session_id_rotation_with_execution_plans() -> Result<()> {
 
     // But both should deserialize correctly
     let ctx = SessionContext::new();
-    let deser_converter = DeduplicatingProtoConverter::new();
+    let deser_converter = DeduplicatingProtoConverter {};
 
     let plan1 = datafusion_proto::bytes::physical_plan_from_bytes_with_proto_converter(
         bytes1.as_ref(),

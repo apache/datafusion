@@ -3792,17 +3792,10 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
 
 /// Internal deserializer that caches expressions by expr_id.
 /// Created fresh for each deserialization operation.
+#[derive(Default)]
 struct DeduplicatingDeserializer {
     /// Cache mapping expr_id to deserialized expressions.
     cache: RefCell<HashMap<u64, Arc<dyn PhysicalExpr>>>,
-}
-
-impl DeduplicatingDeserializer {
-    fn new() -> Self {
-        Self {
-            cache: RefCell::new(HashMap::new()),
-        }
-    }
 }
 
 impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
@@ -3882,14 +3875,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
 ///
 /// [`DynamicFilterPhysicalExpr`]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/expressions/struct.DynamicFilterPhysicalExpr.html
 #[derive(Debug, Default, Clone, Copy)]
-pub struct DeduplicatingProtoConverter;
-
-impl DeduplicatingProtoConverter {
-    /// Creates a new `DeduplicatingProtoConverter`.
-    pub fn new() -> Self {
-        Self
-    }
-}
+pub struct DeduplicatingProtoConverter {}
 
 impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     fn proto_to_execution_plan(
@@ -3898,7 +3884,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
         codec: &dyn PhysicalExtensionCodec,
         proto: &protobuf::PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let deserializer = DeduplicatingDeserializer::new();
+        let deserializer = DeduplicatingDeserializer::default();
         proto.try_into_physical_plan_with_converter(ctx, codec, &deserializer)
     }
 
@@ -3928,7 +3914,7 @@ impl PhysicalProtoConverterExtension for DeduplicatingProtoConverter {
     where
         Self: Sized,
     {
-        let deserializer = DeduplicatingDeserializer::new();
+        let deserializer = DeduplicatingDeserializer::default();
         deserializer.proto_to_physical_expr(proto, ctx, input_schema, codec)
     }
 
