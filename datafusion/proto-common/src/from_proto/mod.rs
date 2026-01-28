@@ -28,7 +28,12 @@ use arrow::datatypes::{
     DataType, Field, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema,
     TimeUnit, UnionFields, UnionMode, i256,
 };
-use arrow::ipc::{reader::read_record_batch, root_as_message};
+use arrow::ipc::{
+    convert::fb_to_schema,
+    reader::{read_dictionary, read_record_batch},
+    root_as_message,
+    writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
+};
 
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
@@ -406,6 +411,35 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     ));
                 };
 
+                // IPC dictionary batch IDs are assigned when encoding the schema, but our protobuf
+                // `Schema` doesn't preserve those IDs. Reconstruct them deterministically by
+                // round-tripping the schema through IPC.
+                let schema: Schema = {
+                    let ipc_gen = IpcDataGenerator {};
+                    let write_options = IpcWriteOptions::default();
+                    let mut dict_tracker = DictionaryTracker::new(false);
+                    let encoded_schema = ipc_gen.schema_to_bytes_with_dictionary_tracker(
+                        &schema,
+                        &mut dict_tracker,
+                        &write_options,
+                    );
+                    let message =
+                        root_as_message(encoded_schema.ipc_message.as_slice()).map_err(
+                            |e| {
+                                Error::General(format!(
+                                    "Error IPC schema message while deserializing ScalarValue::List: {e}"
+                                ))
+                            },
+                        )?;
+                    let ipc_schema = message.header_as_schema().ok_or_else(|| {
+                        Error::General(
+                            "Unexpected message type deserializing ScalarValue::List schema"
+                                .to_string(),
+                        )
+                    })?;
+                    fb_to_schema(ipc_schema)
+                };
+
                 let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                     Error::General(format!(
                         "Error IPC message while deserializing ScalarValue::List: {e}"
@@ -420,7 +454,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     )
                 })?;
 
-                let dict_by_id: HashMap<i64,ArrayRef> = dictionaries.iter().map(|protobuf::scalar_nested_value::Dictionary { ipc_message, arrow_data }| {
+                let mut dict_by_id: HashMap<i64, ArrayRef> = HashMap::new();
+                for protobuf::scalar_nested_value::Dictionary {
+                    ipc_message,
+                    arrow_data,
+                } in dictionaries
+                {
                     let message = root_as_message(ipc_message.as_slice()).map_err(|e| {
                         Error::General(format!(
                             "Error IPC message while deserializing ScalarValue::List dictionary message: {e}"
@@ -434,22 +473,16 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                                 .to_string(),
                         )
                     })?;
-
-                    let id = dict_batch.id();
-
-                    let record_batch = read_record_batch(
+                    read_dictionary(
                         &buffer,
-                        dict_batch.data().unwrap(),
-                        Arc::new(schema.clone()),
-                        &Default::default(),
-                        None,
+                        dict_batch,
+                        &schema,
+                        &mut dict_by_id,
                         &message.version(),
-                    )?;
-
-                    let values: ArrayRef = Arc::clone(record_batch.column(0));
-
-                    Ok((id, values))
-                }).collect::<datafusion_common::Result<HashMap<_, _>>>()?;
+                    )
+                    .map_err(|e| arrow_datafusion_err!(e))
+                    .map_err(|e| e.context("Decoding ScalarValue::List dictionary"))?;
+                }
 
                 let record_batch = read_record_batch(
                     &buffer,

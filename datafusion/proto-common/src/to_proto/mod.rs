@@ -1025,6 +1025,13 @@ fn encode_scalar_nested_value(
     let ipc_gen = IpcDataGenerator {};
     let mut dict_tracker = DictionaryTracker::new(false);
     let write_options = IpcWriteOptions::default();
+    // The IPC writer requires pre-allocated dictionary IDs (normally assigned when
+    // serializing the schema). Populate `dict_tracker` by encoding the schema first.
+    ipc_gen.schema_to_bytes_with_dictionary_tracker(
+        batch.schema().as_ref(),
+        &mut dict_tracker,
+        &write_options,
+    );
     let mut compression_context = CompressionContext::default();
     let (encoded_dictionaries, encoded_message) = ipc_gen
         .encode(
