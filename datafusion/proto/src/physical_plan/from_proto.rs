@@ -777,18 +777,15 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
 // Deserialization of Cast Options
 // ============================================================================
 //
-// With the introduction of OwnedCastOptions and OwnedFormatOptions in DataFusion,
-// the lifetime mismatch between Arrow's `CastOptions<'static>` and Protobuf's
-// owned `String` values is now resolved elegantly:
+// OwnedCastOptions and OwnedFormatOptions resolve the lifetime
+// mismatch between Arrow's `CastOptions<'static>` and Protobuf's
+// owned `String` values
 //
 // 1. Protobuf provides owned `String` values (no lifetime constraints)
 // 2. OwnedCastOptions stores these as owned `String` values
 // 3. When executing, CastExpr/CastColumnExpr use ephemeral borrowing to convert
 //    to Arrow's `CastOptions<'a>` with borrowed `&str` references for compute kernels
 // 4. Strings are properly dropped when the expression is dropped - no leaks!
-//
-// This replaces the previous string interning approach which used a bounded cache
-// to leak strings for `'static` lifetime compatibility.
 
 /// Convert protobuf format options to owned format options.
 fn format_options_from_proto(
