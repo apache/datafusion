@@ -93,7 +93,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             | DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
-            | DataType::UInt64 => Ok(args[0].clone()),
+            | DataType::UInt64 => Ok(arg.clone()),
 
             // Signed integers - use wrapping negation (Spark legacy mode behavior)
             DataType::Int8 => {
@@ -190,8 +190,12 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             dt => not_impl_err!("Not supported datatype for Spark negative(): {dt}"),
         },
         ColumnarValue::Scalar(sv) => match sv {
-            ScalarValue::Null => Ok(args[0].clone()),
-            sv if sv.is_null() => Ok(args[0].clone()),
+            ScalarValue::Null
+            | ScalarValue::UInt8(_)
+            | ScalarValue::UInt16(_)
+            | ScalarValue::UInt32(_)
+            | ScalarValue::UInt64(_) => Ok(arg.clone()),
+            sv if sv.is_null() => Ok(arg.clone()),
 
             // Signed integers - wrapping negation
             ScalarValue::Int8(Some(v)) => {
