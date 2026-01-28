@@ -19,7 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray, make_view};
+use arrow::array::{Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
 use datafusion_common::Result;
@@ -103,21 +103,6 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         self.do_equal_to_inner::<true, true>(lhs_row, array, rhs_row)
     }
 
-    fn append_val_inner(&mut self, array: &ArrayRef, row: usize) {
-        let arr = array.as_byte_view::<B>();
-
-        // Null row case, set and return
-        if arr.is_null(row) {
-            self.nulls.append(true);
-            self.views.push(0);
-            return;
-        }
-
-        // Not null row case
-        self.nulls.append(false);
-        self.do_append_val_inner(arr, row);
-    }
-
     // Don't inline to keep the code small and give LLVM the best chance of
     // vectorizing the inner loop
     #[inline(never)]
@@ -159,16 +144,12 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
 
         match all_null_or_non_null {
             Nulls::Some => {
-                for &row in rows {
-                    self.append_val_inner(array, row);
-                }
+                self.extend_vals_inner::<true>(rows, arr);
             }
 
             Nulls::None => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.do_append_val_inner(arr, row);
-                }
+                self.extend_vals_inner::<false>(rows, arr);
             }
 
             Nulls::All => {
@@ -179,44 +160,53 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
         }
     }
 
-    fn do_append_val_inner(&mut self, array: &GenericByteViewArray<B>, row: usize)
-    where
+    fn extend_vals_inner<const HAS_NULLS: bool>(
+        &mut self,
+        rows: &[usize],
+        array: &GenericByteViewArray<B>,
+    ) where
         B: ByteViewType,
     {
-        let value: &[u8] = array.value(row).as_ref();
+        let Self {
+            views,
+            completed,
+            in_progress,
+            max_block_size,
+            nulls,
+            ..
+        } = self;
 
-        let value_len = value.len();
-        let view = if value_len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure big enough block to hold the value firstly
-            self.ensure_in_progress_big_enough(value_len);
+        views.extend(rows.iter().map(|&row| {
+            if HAS_NULLS {
+                if array.is_null(row) {
+                    nulls.append(true);
+                    return 0;
+                }
+                nulls.append(false);
+            }
+            let view = unsafe { *array.views().get_unchecked(row) };
+            let value_len = view as u32;
 
-            // Append value
-            let buffer_index = self.completed.len();
-            let offset = self.in_progress.len();
-            self.in_progress.extend_from_slice(value);
+            if value_len <= 12 {
+                view
+            } else {
+                let require_cap = in_progress.len() + value_len as usize;
+                if require_cap > *max_block_size {
+                    let flushed_block =
+                        replace(in_progress, Vec::with_capacity(*max_block_size));
+                    completed.push(Buffer::from_vec(flushed_block));
+                }
+                let value = unsafe { array.value_unchecked(row).as_ref() };
+                let buffer_index = completed.len();
+                let offset = in_progress.len();
+                in_progress.extend_from_slice(value);
 
-            make_view(value, buffer_index as u32, offset as u32)
-        };
-
-        // Append view
-        self.views.push(view);
-    }
-
-    fn ensure_in_progress_big_enough(&mut self, value_len: usize) {
-        debug_assert!(value_len > 12);
-        let require_cap = self.in_progress.len() + value_len;
-
-        // If current block isn't big enough, flush it and create a new in progress block
-        if require_cap > self.max_block_size {
-            let flushed_block = replace(
-                &mut self.in_progress,
-                Vec::with_capacity(self.max_block_size),
-            );
-            let buffer = Buffer::from_vec(flushed_block);
-            self.completed.push(buffer);
-        }
+                let mut view = ByteView::from(view);
+                view.offset = offset as u32;
+                view.buffer_index = buffer_index as u32;
+                view.as_u128()
+            }
+        }));
     }
 
     /// Compare the value at `lhs_row` in this builder with
@@ -268,10 +258,8 @@ impl<B: ByteViewType> ByteViewGroupValueBuilder<B> {
             // both inlined, so compare inlined value
             exist_view == input_view
         } else {
-            let exist_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&exist_view, 4) };
-            let input_prefix =
-                unsafe { GenericByteViewArray::<B>::inline_value(&input_view, 4) };
+            let exist_prefix = (exist_view >> 32) as u32;
+            let input_prefix = (input_view >> 32) as u32;
 
             if exist_prefix != input_prefix {
                 return false;
@@ -504,7 +492,7 @@ impl<B: ByteViewType> GroupColumn for ByteViewGroupValueBuilder<B> {
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
-        self.append_val_inner(array, row);
+        self.extend_vals_inner::<true>(&[row], array.as_byte_view::<B>());
         Ok(())
     }
 

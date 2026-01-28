@@ -26,7 +26,6 @@ use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
-use std::iter;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for primitive values
@@ -218,21 +217,19 @@ impl<T: ArrowPrimitiveType, const NULLABLE: bool> GroupColumn
 
             (true, Nulls::None) => {
                 self.nulls.append_n(rows.len(), false);
-                for &row in rows {
-                    self.group_values.push(arr.value(row));
-                }
+                self.group_values
+                    .extend(rows.iter().map(|&row| unsafe { arr.value_unchecked(row) }));
             }
 
             (true, Nulls::All) => {
                 self.nulls.append_n(rows.len(), true);
                 self.group_values
-                    .extend(iter::repeat_n(T::default_value(), rows.len()));
+                    .resize(self.group_values.len() + rows.len(), T::default_value());
             }
 
             (false, _) => {
-                for &row in rows {
-                    self.group_values.push(arr.value(row));
-                }
+                self.group_values
+                    .extend(rows.iter().map(|&row| unsafe { arr.value_unchecked(row) }));
             }
         }
 

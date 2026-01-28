@@ -20,7 +20,7 @@
 use crate::binary_map::OutputType;
 use ahash::RandomState;
 use arrow::array::cast::AsArray;
-use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView, make_view};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, ByteView};
 use arrow::buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow::datatypes::{BinaryViewType, ByteViewType, DataType, StringViewType};
 use datafusion_common::hash_utils::create_hashes;
@@ -32,7 +32,7 @@ use std::sync::Arc;
 /// HashSet optimized for storing string or binary values that can produce that
 /// the final set as a `GenericBinaryViewArray` with minimal copies.
 #[derive(Debug)]
-pub struct ArrowBytesViewSet(ArrowBytesViewMap<()>);
+pub struct ArrowBytesViewSet(ArrowBytesViewMap);
 
 impl ArrowBytesViewSet {
     pub fn new(output_type: OutputType) -> Self {
@@ -41,10 +41,7 @@ impl ArrowBytesViewSet {
 
     /// Inserts each value from `values` into the set
     pub fn insert(&mut self, values: &ArrayRef) {
-        fn make_payload_fn(_value: Option<&[u8]>) {}
-        fn observe_payload_fn(_payload: ()) {}
-        self.0
-            .insert_if_new(values, make_payload_fn, observe_payload_fn);
+        self.0.insert_if_new(values, |_group_idx| {});
     }
 
     /// Return the contents of this map and replace it with a new empty map with
@@ -83,6 +80,9 @@ impl ArrowBytesViewSet {
     }
 }
 
+/// Max size of the in-progress buffer before flushing to completed buffers
+const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
+
 /// Optimized map for storing Arrow "byte view" types (`StringView`, `BinaryView`)
 /// values that can produce the set of keys on
 /// output as `GenericBinaryViewArray` without copies.
@@ -113,17 +113,11 @@ impl ArrowBytesViewSet {
 /// This map is used by the special `COUNT DISTINCT` aggregate function to
 /// store the distinct values, and by the `GROUP BY` operator to store
 /// group values when they are a single string array.
-/// Max size of the in-progress buffer before flushing to completed buffers
-const BYTE_VIEW_MAX_BLOCK_SIZE: usize = 2 * 1024 * 1024;
-
-pub struct ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+pub struct ArrowBytesViewMap {
     /// Should the output be StringView or BinaryView?
     output_type: OutputType,
     /// Underlying hash set for each distinct value
-    map: hashbrown::hash_table::HashTable<Entry<V>>,
+    map: hashbrown::hash_table::HashTable<Entry>,
     /// Total size of the map in bytes
     map_size: usize,
 
@@ -143,16 +137,13 @@ where
     /// `(payload, null_index)` for the 'null' value, if any
     /// NOTE null_index is the logical index in the final array, not the index
     /// in the buffer
-    null: Option<(V, usize)>,
+    null: Option<usize>,
 }
 
 /// The size, in number of entries, of the initial hash table
 const INITIAL_MAP_CAPACITY: usize = 512;
 
-impl<V> ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+impl ArrowBytesViewMap {
     pub fn new(output_type: OutputType) -> Self {
         Self {
             output_type,
@@ -202,32 +193,19 @@ where
     ///
     /// Note that `make_payload_fn` and `observe_payload_fn` are only invoked
     /// with valid values from `values`, not for the `NULL` value.
-    pub fn insert_if_new<MP, OP>(
-        &mut self,
-        values: &ArrayRef,
-        make_payload_fn: MP,
-        observe_payload_fn: OP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
+    pub fn insert_if_new<F>(&mut self, values: &ArrayRef, groups_fn: F)
+    where
+        F: FnMut(usize),
     {
         // Sanity check array type
         match self.output_type {
             OutputType::BinaryView => {
                 assert!(matches!(values.data_type(), DataType::BinaryView));
-                self.insert_if_new_inner::<MP, OP, BinaryViewType>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                self.insert_if_new_inner::<BinaryViewType, F>(values, groups_fn)
             }
             OutputType::Utf8View => {
                 assert!(matches!(values.data_type(), DataType::Utf8View));
-                self.insert_if_new_inner::<MP, OP, StringViewType>(
-                    values,
-                    make_payload_fn,
-                    observe_payload_fn,
-                )
+                self.insert_if_new_inner::<StringViewType, F>(values, groups_fn)
             }
             _ => unreachable!("Utf8/Binary should use `ArrowBytesSet`"),
         };
@@ -241,15 +219,10 @@ where
     /// simpler and understand and reducing code bloat due to duplication.
     ///
     /// See comments on `insert_if_new` for more details
-    fn insert_if_new_inner<MP, OP, B>(
-        &mut self,
-        values: &ArrayRef,
-        mut make_payload_fn: MP,
-        mut observe_payload_fn: OP,
-    ) where
-        MP: FnMut(Option<&[u8]>) -> V,
-        OP: FnMut(V),
+    fn insert_if_new_inner<B, F>(&mut self, values: &ArrayRef, mut groups_fn: F)
+    where
         B: ByteViewType,
+        F: FnMut(usize),
     {
         // step 1: compute hashes
         let batch_hashes = &mut self.hashes_buffer;
@@ -275,17 +248,17 @@ where
 
             // handle null value via validity bitmap check
             if !values.is_valid(i) {
-                let payload = if let Some(&(payload, _offset)) = self.null.as_ref() {
-                    payload
+                let null_index = if let Some(null_index) = self.null {
+                    // already have a null entry, use its index
+                    null_index
                 } else {
-                    let payload = make_payload_fn(None);
                     let null_index = self.views.len();
                     self.views.push(0);
                     self.nulls.push(true);
-                    self.null = Some((payload, null_index));
-                    payload
+                    self.null = Some(null_index);
+                    null_index
                 };
-                observe_payload_fn(payload);
+                groups_fn(null_index);
                 continue;
             }
 
@@ -293,67 +266,78 @@ where
             let len = view_u128 as u32;
 
             // Check if value already exists
-            let maybe_payload = {
+            let existing = {
                 // Borrow completed and in_progress for comparison
                 let completed = &self.completed;
                 let in_progress = &self.in_progress;
 
-                self.map
-                    .find(hash, |header| {
-                        if header.hash != hash {
-                            return false;
-                        }
+                self.map.find(hash, |header| {
+                    if header.hash != hash {
+                        return false;
+                    }
 
-                        // Fast path: inline strings can be compared directly
-                        if len <= 12 {
-                            return header.view == view_u128;
-                        }
+                    let header_view = self.views[header.view_idx];
 
-                        // For larger strings: first compare the 4-byte prefix
-                        let stored_prefix = (header.view >> 32) as u32;
-                        let input_prefix = (view_u128 >> 32) as u32;
-                        if stored_prefix != input_prefix {
-                            return false;
-                        }
+                    // Fast path: inline strings can be compared directly
+                    if len <= 12 {
+                        return header_view == view_u128;
+                    }
 
-                        // Prefix matched - compare full bytes
-                        let byte_view = ByteView::from(header.view);
-                        let stored_len = byte_view.length as usize;
-                        let buffer_index = byte_view.buffer_index as usize;
-                        let offset = byte_view.offset as usize;
+                    // For larger strings: first compare the 4-byte prefix
+                    let stored_prefix = (header_view >> 32) as u32;
+                    let input_prefix = (view_u128 >> 32) as u32;
+                    if stored_prefix != input_prefix {
+                        return false;
+                    }
 
-                        let stored_value = if buffer_index < completed.len() {
-                            &completed[buffer_index].as_slice()
-                                [offset..offset + stored_len]
-                        } else {
-                            &in_progress[offset..offset + stored_len]
-                        };
-                        let input_value: &[u8] = values.value(i).as_ref();
-                        stored_value == input_value
-                    })
-                    .map(|entry| entry.payload)
+                    // Prefix matched - compare full bytes
+                    let byte_view = ByteView::from(header_view);
+                    let stored_len = byte_view.length as usize;
+                    let buffer_index = byte_view.buffer_index as usize;
+                    let offset = byte_view.offset as usize;
+
+                    let stored_value = if buffer_index < completed.len() {
+                        &completed[buffer_index].as_slice()[offset..offset + stored_len]
+                    } else {
+                        &in_progress[offset..offset + stored_len]
+                    };
+                    let input_value: &[u8] = values.value(i).as_ref();
+                    stored_value == input_value
+                })
             };
-
-            let payload = if let Some(payload) = maybe_payload {
-                payload
+            if let Some(existing) = existing {
+                // existing value found, use its index
+                groups_fn(existing.view_idx);
             } else {
                 // no existing value, make a new one
-                let value: &[u8] = values.value(i).as_ref();
-                let payload = make_payload_fn(Some(value));
+                if len <= 12 {
+                    // inline value
+                    self.views.push(view_u128);
+                    self.nulls.push(false);
+                } else {
+                    // out-of-line value
+                    let buffers = values.data_buffers();
+                    let view = ByteView::from(view_u128);
+                    let buffer: &Buffer =
+                        unsafe { buffers.get_unchecked(view.buffer_index as usize) };
+                    let value: &[u8] = unsafe {
+                        buffer.get_unchecked(
+                            view.offset as usize..(view.offset + view.length) as usize,
+                        )
+                    };
 
-                // Create view pointing to our buffers
-                let new_view = self.append_value(value);
+                    self.append_value(view_u128, value);
+                }
                 let new_header = Entry {
-                    view: new_view,
+                    view_idx: self.views.len() - 1,
                     hash,
-                    payload,
                 };
+
+                groups_fn(self.views.len() - 1);
 
                 self.map
                     .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
-                payload
             };
-            observe_payload_fn(payload);
         }
     }
 
@@ -398,30 +382,26 @@ where
     }
 
     /// Append a value to our buffers and return the view pointing to it
-    fn append_value(&mut self, value: &[u8]) -> u128 {
-        let len = value.len();
-        let view = if len <= 12 {
-            make_view(value, 0, 0)
-        } else {
-            // Ensure buffer is big enough
-            if self.in_progress.len() + len > BYTE_VIEW_MAX_BLOCK_SIZE {
-                let flushed = std::mem::replace(
-                    &mut self.in_progress,
-                    Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
-                );
-                self.completed.push(Buffer::from_vec(flushed));
-            }
+    fn append_value(&mut self, view: u128, value: &[u8]) {
+        // Ensure buffer is big enough
+        if self.in_progress.len() + value.len() > BYTE_VIEW_MAX_BLOCK_SIZE {
+            let flushed = std::mem::replace(
+                &mut self.in_progress,
+                Vec::with_capacity(BYTE_VIEW_MAX_BLOCK_SIZE),
+            );
+            self.completed.push(Buffer::from_vec(flushed));
+        }
 
-            let buffer_index = self.completed.len() as u32;
-            let offset = self.in_progress.len() as u32;
-            self.in_progress.extend_from_slice(value);
+        let buffer_index = self.completed.len() as u32;
+        let offset = self.in_progress.len() as u32;
+        self.in_progress.extend_from_slice(value);
 
-            make_view(value, buffer_index, offset)
-        };
-
-        self.views.push(view);
+        let mut view = ByteView::from(view);
+        view.buffer_index = buffer_index;
+        view.offset = offset;
+        let view_u128: u128 = view.into();
+        self.views.push(view_u128);
         self.nulls.push(false);
-        view
     }
 
     /// Total number of entries (including null, if present)
@@ -456,10 +436,7 @@ where
     }
 }
 
-impl<V> Debug for ArrowBytesViewMap<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
+impl Debug for ArrowBytesViewMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
@@ -479,19 +456,11 @@ where
 /// contains the entire value. For out-of-line strings, the view contains
 /// buffer_index and offset pointing directly to our storage.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-struct Entry<V>
-where
-    V: Debug + PartialEq + Eq + Clone + Copy + Default,
-{
-    /// The u128 view pointing to our internal buffers. For inline strings,
-    /// this contains the complete value. For larger strings, this contains
-    /// the buffer_index/offset into our completed/in_progress buffers.
-    view: u128,
+struct Entry {
+    /// The offset to the view in our buffers
+    view_idx: usize,
 
     hash: u64,
-
-    /// value stored by the entry
-    payload: V,
 }
 
 #[cfg(test)]
@@ -686,15 +655,9 @@ mod tests {
         assert_eq!(set.len(), 10);
     }
 
-    #[derive(Debug, PartialEq, Eq, Default, Clone, Copy)]
-    struct TestPayload {
-        // store the string value to check against input
-        index: usize, // store the index of the string (each new string gets the next sequential input)
-    }
-
     /// Wraps an [`ArrowBytesViewMap`], validating its invariants
     struct TestMap {
-        map: ArrowBytesViewMap<TestPayload>,
+        map: ArrowBytesViewMap,
         // stores distinct strings seen, in order
         strings: Vec<Option<String>>,
         // map strings to index in strings
@@ -717,7 +680,6 @@ mod tests {
             let string_array = StringViewArray::from(strings.to_vec());
             let arr: ArrayRef = Arc::new(string_array);
 
-            let mut next_index = self.indexes.len();
             let mut actual_new_strings = vec![];
             let mut actual_seen_indexes = vec![];
             // update self with new values, keeping track of newly added values
@@ -733,26 +695,47 @@ mod tests {
                 actual_seen_indexes.push(index);
             }
 
-            // insert the values into the map, recording what we did
-            let mut seen_new_strings = vec![];
-            let mut seen_indexes = vec![];
-            self.map.insert_if_new(
-                &arr,
-                |s| {
-                    let value = s
-                        .map(|s| String::from_utf8(s.to_vec()).expect("Non utf8 string"));
-                    let index = next_index;
-                    next_index += 1;
-                    seen_new_strings.push(value);
-                    TestPayload { index }
-                },
-                |payload| {
-                    seen_indexes.push(payload.index);
-                },
-            );
+            let mut groups = vec![];
 
-            assert_eq!(actual_seen_indexes, seen_indexes);
-            assert_eq!(actual_new_strings, seen_new_strings);
+            // insert the values into the map, recording what we did
+            self.map.insert_if_new(&arr, |group_idx| {
+                groups.push(group_idx);
+            });
+            assert_eq!(groups, actual_seen_indexes);
+
+            self.map.map.iter().for_each(|entry| {
+                let view_idx = entry.view_idx;
+                let value = self.map.views[view_idx];
+                let bytes = value.to_le_bytes();
+
+                let value_str = if value as u32 <= 12 {
+                    // inline string
+                    let len = value as u32 as usize;
+                    std::str::from_utf8(&bytes[4..4 + len]).unwrap()
+                } else {
+                    // out-of-line string
+                    let byte_view = ByteView::from(value);
+                    let stored_len = byte_view.length as usize;
+                    let buffer_index = byte_view.buffer_index as usize;
+                    let offset = byte_view.offset as usize;
+
+                    let bytes = if buffer_index < self.map.completed.len() {
+                        &self.map.completed[buffer_index].as_slice()
+                            [offset..offset + stored_len]
+                    } else if buffer_index == self.map.completed.len() {
+                        &self.map.in_progress[offset..offset + stored_len]
+                    } else {
+                        panic!("buffer index {buffer_index} out of range");
+                    };
+                    std::str::from_utf8(bytes).unwrap()
+                };
+                let key = Some(value_str.to_string());
+                let expected_index = *self.indexes.get(&key).unwrap();
+                // validate that the payload matches the expected index
+                assert_eq!(
+                    self.strings[expected_index], key,
+                    "payload index {expected_index} does not match expected string {key:?}"                );
+            });
         }
 
         /// Call `self.map.into_array()` validating that the strings are in the same
