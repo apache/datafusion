@@ -19,7 +19,7 @@
 # for the same function).
 
 
-## Begin tests fo rdate_part with columns and timestamp's with timezones
+## Begin tests for date_part with columns and timestamp's with timezones
 
 # Source data table has
 # timestamps with millisecond (very common timestamp precision) and nanosecond (maximum precision) timestamps
