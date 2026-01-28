@@ -130,3 +130,8 @@ pub const FLOAT_16_TYPE_NAME: &str = "fp16";
 ///
 /// [`DataType::Null`]: datafusion::arrow::datatypes::DataType::Null
 pub const NULL_TYPE_NAME: &str = "null";
+
+/// For [`DataType::FixedSizeList`]
+///
+/// [`DataType::FixedSizeList`]: datafusion::arrow::datatypes::DataType::FixedSizeList
+pub const FIXED_SIZE_LIST_TYPE_NAME: &str = "fixed_size_list";
