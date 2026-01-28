@@ -75,7 +75,7 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     let result: Vec<RecordBatch> = df.collect().await?;
 
     let result_str = format_batches(&result)?.to_string();
-    let expected = vec![
+    let expected = [
         "+----+---------+",
         "| id | result  |",
         "+----+---------+",
@@ -132,7 +132,7 @@ async fn test_nested_async_udf() -> Result<()> {
         Ok(batches) => {
             // Check results
             let result_str = format_batches(batches)?.to_string();
-            let expected = vec![
+            let expected = [
                 "+----+---------+",
                 "| id | result  |",
                 "+----+---------+",
