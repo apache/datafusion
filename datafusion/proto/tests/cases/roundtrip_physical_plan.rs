@@ -2738,10 +2738,10 @@ fn test_backward_compatibility_no_expr_id() -> Result<()> {
     Ok(())
 }
 
-/// Test that the dedup cache is automatically cleared after each plan deserialization.
-/// This verifies that the recursion depth tracking and automatic cache clearing works.
+/// Test that deduplication works within a single plan deserialization and that
+/// separate deserializations produce independent expressions (no cross-operation sharing).
 #[test]
-fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
+fn test_deduplication_within_plan_deserialization() -> Result<()> {
     use datafusion_proto::bytes::{
         physical_plan_from_bytes_with_proto_converter,
         physical_plan_to_bytes_with_proto_converter,
@@ -2750,7 +2750,7 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a]));
 
-    // Create a plan with expressions that will be cached
+    // Create a plan with expressions that will be deduplicated
     let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
     let projection_exprs = vec![
         ProjectionExpr {
@@ -2778,18 +2778,12 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
         &proto_converter,
     )?;
 
-    // Create a single converter and reuse it for multiple deserializations
-    let deser_converter = DeduplicatingProtoConverter::new();
-
-    // Verify cache starts empty
-    assert_eq!(deser_converter.cache_size(), 0, "Cache should start empty");
-
     // First deserialization
     let plan1 = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
         &codec,
-        &deser_converter,
+        &proto_converter,
     )?;
 
     // Check that the plan was deserialized correctly with deduplication
@@ -2804,27 +2798,13 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
         "Expected both expressions to share the same Arc after deduplication"
     );
 
-    // Cache should be cleared after deserialization completes
-    assert_eq!(
-        deser_converter.cache_size(),
-        0,
-        "Cache should be cleared after first deserialization"
-    );
-
-    // Second deserialization with same converter should also work
+    // Second deserialization
     let plan2 = physical_plan_from_bytes_with_proto_converter(
         bytes.as_ref(),
         ctx.task_ctx().as_ref(),
         &codec,
-        &deser_converter,
+        &proto_converter,
     )?;
-
-    // Cache should still be cleared
-    assert_eq!(
-        deser_converter.cache_size(),
-        0,
-        "Cache should be cleared after second deserialization"
-    );
 
     // Check that the second plan was also deserialized correctly
     let projection2 = plan2
@@ -2833,8 +2813,12 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
         .expect("Expected ProjectionExec");
     let exprs2: Vec<_> = projection2.expr().iter().collect();
     assert_eq!(exprs2.len(), 2);
+    assert!(
+        Arc::ptr_eq(&exprs2[0].expr, &exprs2[1].expr),
+        "Expected both expressions to share the same Arc after deduplication"
+    );
 
-    // Finally check that there was no deduplication across deserializations
+    // Check that there was no deduplication across deserializations
     assert!(
         !Arc::ptr_eq(&exprs1[0].expr, &exprs2[0].expr),
         "Expected expressions from different deserializations to be different Arcs"
@@ -2847,11 +2831,10 @@ fn test_cache_cleared_after_plan_deserialization() -> Result<()> {
     Ok(())
 }
 
-/// Test that the dedup cache is cleared after direct expression deserialization.
-/// This verifies cache clearing works when proto_to_physical_expr is called directly,
-/// not through proto_to_execution_plan.
+/// Test that deduplication works within direct expression deserialization and that
+/// separate deserializations produce independent expressions (no cross-operation sharing).
 #[test]
-fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
+fn test_deduplication_within_expr_deserialization() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a]));
 
@@ -2871,14 +2854,8 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
     // Serialize the expression
     let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
 
-    // Create a single converter and reuse it for multiple deserializations
-    let deser_converter = DeduplicatingProtoConverter::new();
-
-    // Verify cache starts empty
-    assert_eq!(deser_converter.cache_size(), 0, "Cache should start empty");
-
     // First expression deserialization
-    let expr1 = deser_converter.proto_to_physical_expr(
+    let expr1 = proto_converter.proto_to_physical_expr(
         &proto,
         ctx.task_ctx().as_ref(),
         &schema,
@@ -2895,27 +2872,13 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
         "Expected both sides to share the same Arc after deduplication"
     );
 
-    // Cache should be cleared after expression deserialization completes
-    assert_eq!(
-        deser_converter.cache_size(),
-        0,
-        "Cache should be cleared after first expression deserialization"
-    );
-
-    // Second expression deserialization with same converter
-    let expr2 = deser_converter.proto_to_physical_expr(
+    // Second expression deserialization
+    let expr2 = proto_converter.proto_to_physical_expr(
         &proto,
         ctx.task_ctx().as_ref(),
         &schema,
         &codec,
     )?;
-
-    // Cache should still be cleared
-    assert_eq!(
-        deser_converter.cache_size(),
-        0,
-        "Cache should be cleared after second expression deserialization"
-    );
 
     // Check that the second expression was also deserialized correctly
     let binary2 = expr2
