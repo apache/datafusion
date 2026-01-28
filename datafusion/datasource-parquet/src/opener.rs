@@ -739,6 +739,10 @@ fn constant_value_from_stats(
         && !min.is_null()
         && matches!(column_stats.null_count, Precision::Exact(0))
     {
+        // Cast to the expected data type if needed (e.g., Utf8 -> Dictionary)
+        if min.data_type() != *data_type {
+            return min.cast_to(data_type).ok();
+        }
         return Some(min.clone());
     }
 
