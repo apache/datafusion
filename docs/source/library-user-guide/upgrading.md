@@ -182,7 +182,7 @@ let sort_expr = parse_physical_sort_expr(
 **After:**
 
 ```rust,ignore
-let converter = DefaultPhysicalProtoConverter{};
+let converter = DefaultPhysicalProtoConverter {};
 let sort_expr = parse_physical_sort_expr(
     sort_proto,
     ctx,
@@ -206,7 +206,7 @@ let sort_proto = serialize_physical_sort_expr(
 **After:**
 
 ```rust,ignore
-let converter = DefaultPhysicalProtoConverter{};
+let converter = DefaultPhysicalProtoConverter {};
 let sort_proto = serialize_physical_sort_expr(
     sort_expr,
     codec,
