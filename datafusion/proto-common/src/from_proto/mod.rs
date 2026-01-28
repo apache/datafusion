@@ -423,16 +423,35 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                     let id = dict_batch.id();
 
-                    let record_batch = read_record_batch(
-                        &buffer,
-                        dict_batch.data().unwrap(),
-                        Arc::new(schema.clone()),
-                        &Default::default(),
-                        None,
-                        &message.version(),
-                    )?;
+                    let fields_using_this_dictionary = {
+                        // See https://github.com/apache/datafusion/issues/14173
+                        #[allow(deprecated)]
+                        schema.fields_with_dict_id(id)
+                    };
 
-                    let values: ArrayRef = Arc::clone(record_batch.column(0));
+                    let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
+                        Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
+                    })?;
+                    // Create a schema for the dictionary batch containing just the value type.
+                    // Dictionary batches only contain the dictionary values, not the full schema.
+                    let values: ArrayRef = match first_field.data_type() {
+                        DataType::Dictionary(_, ref value_type) => {
+                            // Make a fake schema for the dictionary batch.
+                            let value = value_type.as_ref().clone();
+                            let dict_schema = Schema::new(vec![Field::new("", value, true)]);
+                            // Read a single column
+                            let record_batch = read_record_batch(
+                                &buffer,
+                                dict_batch.data().unwrap(),
+                                Arc::new(dict_schema),
+                                &Default::default(),
+                                None,
+                                &message.version(),
+                            )?;
+                            Ok(Arc::clone(record_batch.column(0)))
+                        }
+                        _ => Err(Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())),
+                    }?;
 
                     Ok((id, values))
                 }).collect::<datafusion_common::Result<HashMap<_, _>>>()?;
