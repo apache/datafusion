@@ -40,6 +40,13 @@ use datafusion_expr_common::statistics::Distribution;
 
 use itertools::izip;
 
+mod statistics_vectorized;
+
+pub use statistics_vectorized::{
+    ColumnStats, NullPresence, NullStats, PropagatedIntermediate, PruningContext,
+    PruningOutcome, PruningResults, RangeStats,
+};
+
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 
@@ -429,6 +436,28 @@ pub trait PhysicalExpr: Any + Send + Sync + Display + Debug + DynEq + DynHash {
     /// eat the cost of the breaking change and require all implementers to make a choice.
     fn is_volatile_node(&self) -> bool {
         false
+    }
+
+    /// Evaluates statistics propagation in a vectorized way.
+    ///
+    /// This is mainly used for predicate pruning now. See the statistics_vectorized module docs
+    /// for backgrounds.
+    ///
+    /// This default implementation is for `PhysicalExpr`s that have not yet
+    /// implemented pruning; returning `None` signals that no pruning statistics
+    /// are available.
+    ///
+    /// # Returns
+    /// - `None` if the `PhysicalExpr` has not implemented the statistics propagation
+    /// - For predicate expressions (boolean outputs), implementations should return
+    ///   `Some(PropagatedIntermediate::IntermediateResult)`
+    /// - For arithmetic expressions, implementations should propagate stats and
+    ///   return `Some(PropagatedIntermediate::IntermediateStats)`
+    fn evaluate_statistics_vectorized(
+        &self,
+        _ctx: Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        Ok(None)
     }
 }
 

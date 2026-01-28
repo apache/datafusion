@@ -22,14 +22,18 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::array::UInt64Array;
 use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Column as DFColumn, Result, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr_common::physical_expr::{
+    ColumnStats, NullStats, PropagatedIntermediate, PruningContext, RangeStats,
+};
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -141,6 +145,45 @@ impl PhysicalExpr for Column {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
+    }
+
+    /// Read the column statistics from `PruningContext`, transform the input stat
+    /// to the stats in the internal representation (`PropagatedIntermediate`)
+    ///
+    /// The implemented statistics types are:
+    /// - Range stat (min/max)
+    /// - Null stat
+    fn evaluate_statistics_vectorized(
+        &self,
+        ctx: Arc<PruningContext>,
+    ) -> Result<Option<PropagatedIntermediate>> {
+        let pruning_column = DFColumn::from_name(self.name());
+        let stats = ctx.statistics();
+        let num_containers = stats.num_containers();
+
+        // TODO: add `column_exist(col)` API to `PruningStatistics` trait for better
+        // sanity checks
+        let min_values = stats.min_values(&pruning_column);
+        let max_values = stats.max_values(&pruning_column);
+        let range_stats = if min_values.is_some() || max_values.is_some() {
+            Some(RangeStats::new(min_values, max_values, num_containers)?)
+        } else {
+            None
+        };
+
+        let null_counts_arr = stats.null_counts(&pruning_column);
+        let row_counts_arr = stats.row_counts(&pruning_column);
+        let null_counts = null_counts_arr
+            .as_deref()
+            .and_then(|arr| arr.as_any().downcast_ref::<UInt64Array>());
+        let row_counts = row_counts_arr
+            .as_deref()
+            .and_then(|arr| arr.as_any().downcast_ref::<UInt64Array>());
+        let null_stats = NullStats::new(null_counts, row_counts)?;
+
+        Ok(Some(PropagatedIntermediate::IntermediateStats(
+            ColumnStats::new(range_stats, null_stats, num_containers),
+        )))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
