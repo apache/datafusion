@@ -31,8 +31,8 @@ use object_store::path::Path;
 use arrow::datatypes::Schema;
 use arrow::util::display::DurationFormat;
 use datafusion_common::{
-    DataFusionError, Result, OwnedCastOptions, OwnedFormatOptions,
-    internal_datafusion_err, not_impl_err
+    DataFusionError, OwnedCastOptions, OwnedFormatOptions, Result,
+    internal_datafusion_err, not_impl_err,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -345,11 +345,7 @@ pub fn parse_physical_expr(
                 codec,
             )?,
             convert_required!(e.arrow_type)?,
-            cast_options_from_proto(
-                e.cast_options.as_ref(),
-                false,
-                None,
-            )?,
+            cast_options_from_proto(e.cast_options.as_ref(), false, None)?,
         )),
         ExprType::CastColumn(e) => {
             let input_field = e
@@ -774,6 +770,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             keep_partition_by_columns: conf.keep_partition_by_columns,
             file_extension: conf.file_extension.clone(),
         })
+    }
 }
 
 // ============================================================================
@@ -830,7 +827,7 @@ fn cast_options_from_proto(
     }
 
     // Handle legacy fields for backward compatibility with DataFusion < 43.0
-    if legacy_safe == false && legacy_format_options.is_none() {
+    if !legacy_safe && legacy_format_options.is_none() {
         return Ok(None);
     }
 

@@ -85,9 +85,7 @@ impl Hash for CastColumnExpr {
     }
 }
 
-fn normalize_cast_options(
-    cast_options: Option<OwnedCastOptions>,
-) -> OwnedCastOptions {
+fn normalize_cast_options(cast_options: Option<OwnedCastOptions>) -> OwnedCastOptions {
     cast_options.unwrap_or_default()
 }
 
@@ -272,11 +270,8 @@ impl PhysicalExpr for CastColumnExpr {
             }
             ColumnarValue::Scalar(scalar) => {
                 let as_array = scalar.to_array_of_size(1)?;
-                let casted = cast_column(
-                    &as_array,
-                    self.target_field.as_ref(),
-                    &arrow_options,
-                )?;
+                let casted =
+                    cast_column(&as_array, self.target_field.as_ref(), &arrow_options)?;
                 let result = ScalarValue::try_from_array(casted.as_ref(), 0)?;
                 Ok(ColumnarValue::Scalar(result))
             }

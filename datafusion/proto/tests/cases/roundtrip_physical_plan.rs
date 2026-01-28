@@ -28,10 +28,9 @@ use crate::cases::{
 };
 
 use arrow::array::RecordBatch;
-use arrow::compute::CastOptions;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
-use arrow::util::display::{DurationFormat, FormatOptions};
+use arrow::util::display::DurationFormat;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 #[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -108,8 +107,9 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    DataFusionError, NullEquality, Result, UnnestOptions, format::DEFAULT_CAST_OPTIONS,
-    internal_datafusion_err, internal_err, not_impl_err,
+    DataFusionError, NullEquality, OwnedCastOptions, OwnedFormatOptions, Result,
+    UnnestOptions, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err, internal_err,
+    not_impl_err,
 };
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
@@ -260,12 +260,18 @@ fn downcast_cast_expr(expr: &Arc<dyn PhysicalExpr>) -> Result<&CastColumnExpr> {
 #[test]
 fn roundtrip_cast_column_expr() -> Result<()> {
     let (input_field, target_field) = cast_fields("a", DataType::Int32, DataType::Int64);
-    let cast_options = CastOptions {
+    let cast_options = OwnedCastOptions {
         safe: true,
-        format_options: FormatOptions::new()
-            .with_null("NULL")
-            .with_date_format(Some("%Y/%m/%d"))
-            .with_duration_format(DurationFormat::ISO8601),
+        format_options: OwnedFormatOptions {
+            null: "NULL".to_string(),
+            date_format: Some("%Y/%m/%d".to_string()),
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: DurationFormat::ISO8601,
+            types_info: false,
+        },
     };
     let input_schema = Schema::new(vec![input_field.clone()]);
 
@@ -304,9 +310,9 @@ fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
     let input_field = Field::new("a", DataType::Int32, true);
     let target_field = Field::new("a", DataType::Int64, true);
 
-    let cast_options = CastOptions {
+    let cast_options = OwnedCastOptions {
         safe: true,
-        format_options: DEFAULT_CAST_OPTIONS.format_options.clone(),
+        format_options: OwnedFormatOptions::default(),
     };
     let expr: Arc<dyn PhysicalExpr> = Arc::new(CastColumnExpr::new(
         Arc::new(Column::new("a", 0)),
@@ -348,7 +354,7 @@ fn roundtrip_cast_column_expr_with_missing_format_options() -> Result<()> {
 
     assert_eq!(
         cast_expr.cast_options().format_options,
-        DEFAULT_CAST_OPTIONS.format_options
+        OwnedFormatOptions::default()
     );
 
     Ok(())

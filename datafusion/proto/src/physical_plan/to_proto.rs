@@ -18,13 +18,12 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::compute::CastOptions;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::StreamWriter;
 use arrow::util::display::{DurationFormat, FormatOptions as ArrowFormatOptions};
 use datafusion_common::{
-    DataFusionError, Result, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err,
-    internal_err, not_impl_err,
+    DataFusionError, OwnedCastOptions, OwnedFormatOptions, Result,
+    format::DEFAULT_CAST_OPTIONS, internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::file_sink_config::FileSink;
@@ -555,11 +554,27 @@ fn serialize_format_options(
 }
 
 fn serialize_cast_options(
-    options: &CastOptions<'_>,
+    options: &OwnedCastOptions,
 ) -> Result<protobuf::PhysicalCastOptions> {
     Ok(protobuf::PhysicalCastOptions {
         safe: options.safe,
-        format_options: Some(serialize_format_options(&options.format_options)?),
+        format_options: Some(serialize_owned_format_options(&options.format_options)?),
+    })
+}
+
+fn serialize_owned_format_options(
+    options: &OwnedFormatOptions,
+) -> Result<protobuf::FormatOptions> {
+    Ok(protobuf::FormatOptions {
+        safe: false, // safe is stored in CastOptions, not FormatOptions
+        null: options.null.clone(),
+        date_format: options.date_format.clone(),
+        datetime_format: options.datetime_format.clone(),
+        timestamp_format: options.timestamp_format.clone(),
+        timestamp_tz_format: options.timestamp_tz_format.clone(),
+        time_format: options.time_format.clone(),
+        duration_format: duration_format_to_proto(options.duration_format) as i32,
+        types_info: options.types_info,
     })
 }
 

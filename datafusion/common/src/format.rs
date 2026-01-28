@@ -169,7 +169,7 @@ impl Default for OwnedFormatOptions {
 /// let arrow_options = owned_options.as_arrow_options(); // borrows owned strings
 /// arrow::compute::cast(&array, &data_type, Some(&arrow_options))?;
 /// ```
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
 pub struct OwnedCastOptions {
     /// Whether to use safe casting (return errors instead of overflowing)
     pub safe: bool,
@@ -191,23 +191,29 @@ impl OwnedCastOptions {
         Self {
             safe: options.safe,
             format_options: OwnedFormatOptions {
-                null: options.format_options.null.to_string(),
-                date_format: options.format_options.date_format.map(|s| s.to_string()),
+                null: options.format_options.null().to_string(),
+                date_format: options
+                    .format_options
+                    .date_format()
+                    .map(ToString::to_string),
                 datetime_format: options
                     .format_options
-                    .datetime_format
-                    .map(|s| s.to_string()),
+                    .datetime_format()
+                    .map(ToString::to_string),
                 timestamp_format: options
                     .format_options
-                    .timestamp_format
-                    .map(|s| s.to_string()),
+                    .timestamp_format()
+                    .map(ToString::to_string),
                 timestamp_tz_format: options
                     .format_options
-                    .timestamp_tz_format
-                    .map(|s| s.to_string()),
-                time_format: options.format_options.time_format.map(|s| s.to_string()),
-                duration_format: options.format_options.duration_format,
-                types_info: options.format_options.types_info,
+                    .timestamp_tz_format()
+                    .map(ToString::to_string),
+                time_format: options
+                    .format_options
+                    .time_format()
+                    .map(ToString::to_string),
+                duration_format: options.format_options.duration_format(),
+                types_info: options.format_options.types_info(),
             },
         }
     }
@@ -221,15 +227,6 @@ impl OwnedCastOptions {
         CastOptions {
             safe: self.safe,
             format_options: self.format_options.as_arrow_options(),
-        }
-    }
-}
-
-impl Default for OwnedCastOptions {
-    fn default() -> Self {
-        Self {
-            safe: false,
-            format_options: OwnedFormatOptions::default(),
         }
     }
 }

@@ -25,7 +25,7 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DataType::*, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::format::{DEFAULT_CAST_OPTIONS, OwnedCastOptions};
+use datafusion_common::format::OwnedCastOptions;
 use datafusion_common::nested_struct::validate_struct_compatibility;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -482,7 +482,7 @@ mod tests {
             col("a", &schema)?,
             &schema,
             Decimal128(6, 2),
-            Some(DEFAULT_SAFE_CAST_OPTIONS),
+            Some(default_safe_cast_options()),
         )?;
         let result_safe = expression_safe
             .evaluate(&batch)?
