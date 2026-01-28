@@ -28,6 +28,7 @@ use std::ops::Not;
 use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::nested_struct::has_one_of_more_common_fields;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
@@ -654,6 +655,11 @@ impl ConstEvaluator {
                 {
                     // Don't const-fold struct casts with different field counts
                     if source_fields.len() != target_fields.len() {
+                        return false;
+                    }
+
+                    // Skip const-folding when there is no field name overlap
+                    if !has_one_of_more_common_fields(&source_fields, target_fields) {
                         return false;
                     }
 
@@ -5220,7 +5226,7 @@ mod tests {
     #[test]
     fn test_struct_cast_different_names_same_count() {
         // Test struct cast with same field count but different names
-        // Field count matches; simplification should succeed
+        // Field count matches; simplification should be skipped because names do not overlap
 
         let source_fields = Fields::from(vec![
             Arc::new(Field::new("a", DataType::Int32, true)),
@@ -5237,14 +5243,11 @@ mod tests {
         let simplifier =
             ExprSimplifier::new(SimplifyContext::default().with_schema(test_schema()));
 
-        // The cast should be simplified since field counts match
+        // The cast should remain unchanged because there is no name overlap
         let result = simplifier.simplify(expr.clone()).unwrap();
-        // Struct casts with same field count are const-folded to literals
-        assert!(matches!(result, Expr::Literal(_, _)));
-        // Ensure the simplifier made a change (not identical to original)
-        assert_ne!(
+        assert_eq!(
             result, expr,
-            "Struct cast with different names but same field count should be simplified"
+            "Struct cast with different names but same field count should not be simplified"
         );
     }
 

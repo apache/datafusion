@@ -31,7 +31,7 @@ use std::{collections::HashSet, sync::Arc};
 ///
 /// ## Field Matching Strategy
 /// - **By Name**: Source struct fields are matched to target fields by name (case-sensitive)
-/// - **By Position**: When there is no name overlap and the field counts match, fields are cast by index
+/// - **No Positional Mapping**: Structs with no overlapping field names are rejected
 /// - **Type Adaptation**: When a matching field is found, it is recursively cast to the target field's type
 /// - **Missing Fields**: Target fields not present in the source are filled with null values
 /// - **Extra Fields**: Source fields not present in the target are ignored
@@ -67,24 +67,16 @@ fn cast_struct_column(
     if let Some(source_struct) = source_col.as_any().downcast_ref::<StructArray>() {
         let source_fields = source_struct.fields();
         validate_struct_compatibility(source_fields, target_fields)?;
-        let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
-
         let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
         let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
         let num_rows = source_col.len();
 
-        // Iterate target fields and pick source child either by name (when fields overlap)
-        // or by position (when there is no name overlap).
-        for (index, target_child_field) in target_fields.iter().enumerate() {
+        // Iterate target fields and pick source child by name when present.
+        for target_child_field in target_fields.iter() {
             fields.push(Arc::clone(target_child_field));
 
-            // Determine the source child column: by name when overlapping names exist,
-            // otherwise by position.
-            let source_child_opt: Option<&ArrayRef> = if has_overlap {
-                source_struct.column_by_name(target_child_field.name())
-            } else {
-                Some(source_struct.column(index))
-            };
+            let source_child_opt =
+                source_struct.column_by_name(target_child_field.name());
 
             match source_child_opt {
                 Some(source_child_col) => {
@@ -230,20 +222,11 @@ pub fn validate_struct_compatibility(
 ) -> Result<()> {
     let has_overlap = has_one_of_more_common_fields(source_fields, target_fields);
     if !has_overlap {
-        if source_fields.len() != target_fields.len() {
-            return _plan_err!(
-                "Cannot cast struct with {} fields to {} fields without name overlap; positional mapping is ambiguous",
-                source_fields.len(),
-                target_fields.len()
-            );
-        }
-
-        for (source_field, target_field) in source_fields.iter().zip(target_fields.iter())
-        {
-            validate_field_compatibility(source_field, target_field)?;
-        }
-
-        return Ok(());
+        return _plan_err!(
+            "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
+            source_fields.len(),
+            target_fields.len()
+        );
     }
 
     // Check compatibility for each target field
@@ -323,7 +306,11 @@ fn validate_field_compatibility(
     Ok(())
 }
 
-fn has_one_of_more_common_fields(
+/// Check if two field lists have at least one common field by name.
+///
+/// This is useful for validating struct compatibility when casting between structs,
+/// ensuring that source and target fields have overlapping names.
+pub fn has_one_of_more_common_fields(
     source_fields: &[FieldRef],
     target_fields: &[FieldRef],
 ) -> bool {
@@ -546,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_compatibility_positional_no_overlap_mismatch_len() {
+    fn test_validate_struct_compatibility_no_overlap_mismatch_len() {
         let source_fields = vec![
             arc_field("left", DataType::Int32),
             arc_field("right", DataType::Int32),
@@ -556,7 +543,7 @@ mod tests {
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert!(error_msg.contains("positional mapping is ambiguous"));
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]
@@ -665,21 +652,21 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_struct_compatibility_positional_with_type_mismatch() {
-        // Source struct: {left: Struct} - nested struct
-        let source_fields =
-            vec![arc_struct_field("left", vec![field("x", DataType::Int32)])];
+    fn test_validate_struct_compatibility_no_overlap_equal_len() {
+        let source_fields = vec![
+            arc_field("left", DataType::Int32),
+            arc_field("right", DataType::Utf8),
+        ];
 
-        // Target struct: {alpha: Int32} (no name overlap, incompatible type at position 0)
-        let target_fields = vec![arc_field("alpha", DataType::Int32)];
+        let target_fields = vec![
+            arc_field("alpha", DataType::Int32),
+            arc_field("beta", DataType::Utf8),
+        ];
 
         let result = validate_struct_compatibility(&source_fields, &target_fields);
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
-        assert_contains!(
-            error_msg,
-            "Cannot cast struct field 'alpha' from type Struct(\"x\": Int32) to type Int32"
-        );
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]
@@ -948,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_struct_positional_when_no_overlap() {
+    fn test_cast_struct_no_overlap_rejected() {
         let first = Arc::new(Int32Array::from(vec![Some(10), Some(20)])) as ArrayRef;
         let second =
             Arc::new(StringArray::from(vec![Some("alpha"), Some("beta")])) as ArrayRef;
@@ -964,17 +951,10 @@ mod tests {
             vec![field("a", DataType::Int64), field("b", DataType::Utf8)],
         );
 
-        let result =
-            cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS).unwrap();
-        let struct_array = result.as_any().downcast_ref::<StructArray>().unwrap();
-
-        let a_col = get_column_as!(&struct_array, "a", Int64Array);
-        assert_eq!(a_col.value(0), 10);
-        assert_eq!(a_col.value(1), 20);
-
-        let b_col = get_column_as!(&struct_array, "b", StringArray);
-        assert_eq!(b_col.value(0), "alpha");
-        assert_eq!(b_col.value(1), "beta");
+        let result = cast_column(&source_col, &target_field, &DEFAULT_CAST_OPTIONS);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_contains!(error_msg, "no field name overlap");
     }
 
     #[test]

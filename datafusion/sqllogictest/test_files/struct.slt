@@ -38,9 +38,9 @@ CREATE TABLE struct_values (
     s1 struct<INT>,
     s2 struct<a INT,b VARCHAR>
 ) AS VALUES
-  (struct(1), struct(1, 'string1')),
-  (struct(2), struct(2, 'string2')),
-  (struct(3), struct(3, 'string3'))
+  (struct(1), struct(1 AS a, 'string1' AS b)),
+  (struct(2), struct(2 AS a, 'string2' AS b)),
+  (struct(3), struct(3 AS a, 'string3' AS b))
 ;
 
 query ??
@@ -397,7 +397,8 @@ drop view complex_view;
 
 # struct with different keys r1 and r2 is not valid
 statement ok
-create table t(a struct<r1 varchar, c int>, b struct<r2 varchar, c float>) as values (struct('red', 1), struct('blue', 2.3));
+create table t(a struct<r1 varchar, c int>, b struct<r2 varchar, c float>) as values
+  (struct('red' AS r1, 1 AS c), struct('blue' AS r2, 2.3 AS c));
 
 # Expect same keys for struct type but got mismatched pair r1,c and r2,c
 query error
@@ -408,7 +409,8 @@ drop table t;
 
 # struct with the same key
 statement ok
-create table t(a struct<r varchar, c int>, b struct<r varchar, c float>) as values (struct('red', 1), struct('blue', 2.3));
+create table t(a struct<r varchar, c int>, b struct<r varchar, c float>) as values
+  (struct('red' AS r, 1 AS c), struct('blue' AS r, 2.3 AS c));
 
 query T
 select arrow_typeof([a, b]) from t;
@@ -442,9 +444,9 @@ CREATE TABLE struct_values (
     s1 struct(a int, b varchar),
     s2 struct(a int, b varchar)
 ) AS VALUES
-  (row(1, 'red'), row(1, 'string1')),
-  (row(2, 'blue'), row(2, 'string2')),
-  (row(3, 'green'), row(3, 'string3'))
+  ({a: 1, b: 'red'}, {a: 1, b: 'string1'}),
+  ({a: 2, b: 'blue'}, {a: 2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 3, b: 'string3'})
 ;
 
 statement ok
@@ -452,8 +454,8 @@ drop table struct_values;
 
 statement ok
 create table t (c1 struct(r varchar, b int), c2 struct(r varchar, b float)) as values (
-    row('red', 2),
-    row('blue', 2.3)
+    {r: 'red', b: 2},
+    {r: 'blue', b: 2.3}
 );
 
 query ??
@@ -501,9 +503,9 @@ CREATE TABLE t (
     s1 struct(a int, b varchar),
     s2 struct(a float, b varchar)
 ) AS VALUES
-  (row(1, 'red'), row(1.1, 'string1')),
-  (row(2, 'blue'), row(2.2, 'string2')),
-  (row(3, 'green'), row(33.2, 'string3'))
+  ({a: 1, b: 'red'}, {a: 1.1, b: 'string1'}),
+  ({a: 2, b: 'blue'}, {a: 2.2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 33.2, b: 'string3'})
 ;
 
 query ?
@@ -528,9 +530,9 @@ CREATE TABLE t (
     s1 struct(a int, b varchar),
     s2 struct(a float, b varchar)
 ) AS VALUES
-  (row(1, 'red'), row(1.1, 'string1')),
-  (null, row(2.2, 'string2')),
-  (row(3, 'green'), row(33.2, 'string3'))
+  ({a: 1, b: 'red'}, {a: 1.1, b: 'string1'}),
+  (null, {a: 2.2, b: 'string2'}),
+  ({a: 3, b: 'green'}, {a: 33.2, b: 'string3'})
 ;
 
 query ?
@@ -553,8 +555,8 @@ drop table t;
 # row() with incorrect order - row() is positional, not name-based
 statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Cast error: Cannot cast string 'blue' to value of Float32 type
 create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values
-    (row('red', 1), row(2.3, 'blue')),
-    (row('purple', 1), row('green', 2.3));
+  ({r: 'red', c: 1}, {r: 2.3, c: 'blue'}),
+  ({r: 'purple', c: 1}, {r: 'green', c: 2.3});
 
 
 ##################################
@@ -568,7 +570,7 @@ select [{r: 'a', c: 1}, {r: 'b', c: 2}];
 
 
 statement ok
-create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values (row('a', 1), row('b', 2.3));
+create table t(a struct(r varchar, c int), b struct(r varchar, c float)) as values ({r: 'a', c: 1}, {r: 'b', c: 2.3});
 
 query T
 select arrow_typeof([a, b]) from t;
@@ -580,7 +582,7 @@ drop table t;
 
 
 statement ok
-create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values (row('a', 1, 2.3), row('b', 2.3, 2));
+create table t(a struct(r varchar, c int, g float), b struct(r varchar, c float, g int)) as values ({r: 'a', c: 1, g: 2.3}, {r: 'b', c: 2.3, g: 2});
 
 # type of each column should not coerced but preserve as it is
 query T
@@ -602,7 +604,7 @@ drop table t;
 # This tests accessing struct fields using the subscript notation with string literals
 
 statement ok
-create table test (struct_field struct(substruct int)) as values (struct(1));
+create table test (struct_field struct(substruct int)) as values ({substruct: 1});
 
 query ??
 select *
@@ -615,7 +617,7 @@ statement ok
 DROP TABLE test;
 
 statement ok
-create table test (struct_field struct(substruct struct(subsubstruct int))) as values (struct(struct(1)));
+create table test (struct_field struct(substruct struct(subsubstruct int))) as values ({substruct: {subsubstruct: 1}});
 
 query ??
 select *
@@ -823,9 +825,9 @@ SELECT CAST({b: 3, a: 4} AS STRUCT(a BIGINT, b INT));
 ----
 {a: 4, b: 3}
 
-# Test positional casting when there is no name overlap
+# Test casting with explicit field names
 query ?
-SELECT CAST(struct(1, 'x') AS STRUCT(a INT, b VARCHAR));
+SELECT CAST({a: 1, b: 'x'} AS STRUCT(a INT, b VARCHAR));
 ----
 {a: 1, b: x}
 
@@ -859,9 +861,9 @@ statement ok
 CREATE TABLE struct_reorder_test (
   data STRUCT(b INT, a VARCHAR)
 ) AS VALUES
-  (struct(100, 'first')),
-  (struct(200, 'second')),
-  (struct(300, 'third'))
+  ({b: 100, a: 'first'}),
+  ({b: 200, a: 'second'}),
+  ({b: 300, a: 'third'})
 ;
 
 query ?
