@@ -455,7 +455,7 @@ fn push_down_all_join(
         }
     }
 
-    // For infer predicates, if they can not push through join, just drop them
+    // Push predicates inferred from the join expression
     for predicate in inferred_join_predicates {
         if checker.is_left_only(&predicate) {
             left_push.push(predicate);
