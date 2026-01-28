@@ -412,3 +412,46 @@ fn preserves_nested_global_limit() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn preserves_skip_before_sort() -> Result<()> {
+    // If there's a limit with skip before a node that (1) supports fetch but
+    // (2) does not support limit pushdown, that limit should not be removed.
+    //
+    // Plan structure:
+    // GlobalLimitExec: skip=1, fetch=None
+    //   SortExec: TopK(fetch=4)
+    //     EmptyExec
+    let schema = create_schema();
+
+    let empty = empty_exec(Arc::clone(&schema));
+
+    let ordering = [PhysicalSortExpr {
+        expr: col("c1", &schema)?,
+        options: SortOptions::default(),
+    }];
+    let sort = sort_exec(ordering.into(), empty)
+        .with_fetch(Some(4))
+        .unwrap();
+
+    let outer_limit = global_limit_exec(sort, 1, None);
+
+    let initial = get_plan_string(&outer_limit);
+    let expected_initial = [
+        "GlobalLimitExec: skip=1, fetch=None",
+        "  SortExec: TopK(fetch=4), expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "    EmptyExec",
+    ];
+    assert_eq!(initial, expected_initial);
+
+    let after_optimize =
+        LimitPushdown::new().optimize(outer_limit, &ConfigOptions::new())?;
+    let expected = [
+        "GlobalLimitExec: skip=1, fetch=3",
+        "  SortExec: TopK(fetch=4), expr=[c1@0 ASC], preserve_partitioning=[false]",
+        "    EmptyExec",
+    ];
+    assert_eq!(get_plan_string(&after_optimize), expected);
+
+    Ok(())
+}

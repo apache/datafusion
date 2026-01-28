@@ -173,7 +173,7 @@ pub fn pushdown_limit_helper(
     // If we have a non-limit operator with fetch capability, update global
     // state as necessary:
     if pushdown_plan.fetch().is_some() {
-        if global_state.fetch.is_none() {
+        if global_state.skip == 0 {
             global_state.satisfied = true;
         }
         (global_state.skip, global_state.fetch) = combine_limit(
