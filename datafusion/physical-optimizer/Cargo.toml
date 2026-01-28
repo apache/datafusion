@@ -50,6 +50,7 @@ datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-pruning = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 recursive = { workspace = true, optional = true }
 
