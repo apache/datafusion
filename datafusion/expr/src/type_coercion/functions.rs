@@ -933,7 +933,10 @@ mod tests {
 
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::{assert_contains, types::logical_binary};
+    use datafusion_common::{
+        assert_contains,
+        types::{logical_binary, logical_int64},
+    };
     use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
     #[test]
@@ -1123,22 +1126,22 @@ mod tests {
         Ok(())
     }
 
+    struct MockUdf(Signature);
+
+    impl UDFCoercionExt for MockUdf {
+        fn name(&self) -> &str {
+            "test"
+        }
+        fn signature(&self) -> &Signature {
+            &self.0
+        }
+        fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
+            unimplemented!()
+        }
+    }
+
     #[test]
     fn test_fixed_list_wildcard_coerce() -> Result<()> {
-        struct MockUdf(Signature);
-
-        impl UDFCoercionExt for MockUdf {
-            fn name(&self) -> &str {
-                "test"
-            }
-            fn signature(&self) -> &Signature {
-                &self.0
-            }
-            fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-                unimplemented!()
-            }
-        }
-
         let inner = Arc::new(Field::new_list_field(DataType::Int32, false));
         // able to coerce for any size
         let current_fields = vec![Arc::new(Field::new(
@@ -1341,6 +1344,140 @@ mod tests {
                 DataType::new_list(DataType::new_large_list(DataType::Int64, true), true),
             ]]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_nulls() -> Result<()> {
+        fn null_input(coercion: Coercion) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new("field", DataType::Null, true).into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        // Casts Null to Int64 if we use TypeSignatureClass::Native
+        let output = null_input(Coercion::new_exact(TypeSignatureClass::Native(
+            logical_int64(),
+        )))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        let output = null_input(Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // Null gets passed through if we use TypeSignatureClass apart from Native
+        let output = null_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![DataType::Null], output);
+
+        let output = null_input(Coercion::new_implicit(
+            TypeSignatureClass::Integer,
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![DataType::Null], output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_dictionary() -> Result<()> {
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int64));
+        fn dictionary_input(coercion: Coercion) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::Dictionary(
+                        Box::new(DataType::Int8),
+                        Box::new(DataType::Int64),
+                    ),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        // Casts Dictionary to Int64 if we use TypeSignatureClass::Native
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Native(
+            logical_int64(),
+        )))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        let output = dictionary_input(Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // Dictionary gets passed through if we use TypeSignatureClass apart from Native
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![dictionary.clone()], output);
+
+        let output = dictionary_input(Coercion::new_implicit(
+            TypeSignatureClass::Integer,
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![dictionary.clone()], output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_run_end_encoded() -> Result<()> {
+        let run_end_encoded = DataType::RunEndEncoded(
+            Field::new("run_ends", DataType::Int16, false).into(),
+            Field::new("values", DataType::Int64, true).into(),
+        );
+        fn run_end_encoded_input(coercion: Coercion) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::RunEndEncoded(
+                        Field::new("run_ends", DataType::Int16, false).into(),
+                        Field::new("values", DataType::Int64, true).into(),
+                    ),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        // Casts REE to Int64 if we use TypeSignatureClass::Native
+        let output = run_end_encoded_input(Coercion::new_exact(
+            TypeSignatureClass::Native(logical_int64()),
+        ))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        let output = run_end_encoded_input(Coercion::new_implicit(
+            TypeSignatureClass::Native(logical_int64()),
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // REE gets passed through if we use TypeSignatureClass apart from Native
+        let output =
+            run_end_encoded_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![run_end_encoded.clone()], output);
+
+        let output = run_end_encoded_input(Coercion::new_implicit(
+            TypeSignatureClass::Integer,
+            vec![],
+            NativeType::Int64,
+        ))?;
+        assert_eq!(vec![run_end_encoded.clone()], output);
 
         Ok(())
     }
