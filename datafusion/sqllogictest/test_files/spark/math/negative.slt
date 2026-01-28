@@ -48,6 +48,85 @@ SELECT negative(0::int);
 ----
 0
 
+# Test negative with unsigned integers (should return as-is)
+query I
+SELECT negative(10::tinyint unsigned);
+----
+10
+
+query I
+SELECT negative(255::tinyint unsigned);
+----
+255
+
+query I
+SELECT negative(0::tinyint unsigned);
+----
+0
+
+query I
+SELECT negative(1000::smallint unsigned);
+----
+1000
+
+query I
+SELECT negative(65535::smallint unsigned);
+----
+65535
+
+query I
+SELECT negative(0::smallint unsigned);
+----
+0
+
+query I
+SELECT negative(100000::int unsigned);
+----
+100000
+
+query I
+SELECT negative(4294967295::int unsigned);
+----
+4294967295
+
+query I
+SELECT negative(0::int unsigned);
+----
+0
+
+query I
+SELECT negative(1000000000::bigint unsigned);
+----
+1000000000
+
+query I
+SELECT negative(18446744073709551615::bigint unsigned);
+----
+18446744073709551615
+
+query I
+SELECT negative(0::bigint unsigned);
+----
+0
+
+# Test negative with unsigned values from table
+statement ok
+CREATE TABLE test_unsigned AS VALUES
+  (10::tinyint unsigned, 1000::smallint unsigned, 100000::int unsigned, 1000000000::bigint unsigned),
+  (0::tinyint unsigned, 0::smallint unsigned, 0::int unsigned, 0::bigint unsigned),
+  (255::tinyint unsigned, 65535::smallint unsigned, 4294967295::int unsigned, 18446744073709551615::bigint unsigned);
+
+query IIII rowsort
+SELECT negative(column1), negative(column2), negative(column3), negative(column4) FROM test_unsigned;
+----
+0 0 0 0
+10 1000 100000 1000000000
+255 65535 4294967295 18446744073709551615
+
+statement ok
+DROP TABLE test_unsigned;
+
+
 # Test negative with bigint
 query I
 SELECT negative(9223372036854775807::bigint);
@@ -261,3 +340,39 @@ query R
 SELECT negative(-1.7976931348623157e308::double);
 ----
 1.7976931348623157e308
+
+# Test negative with CalendarIntervalType (IntervalMonthDayNano)
+# Spark make_interval creates CalendarInterval
+query ?
+SELECT negative(make_interval(1, 2, 3, 4, 5, 6, 7.5));
+----
+0 years -14 mons -25 days -5 hours -6 mins -7.500 secs
+
+# Test negative with negative CalendarIntervalType
+query ?
+SELECT negative(make_interval(-2, -5, -1, -10, -3, -30, -15.25));
+----
+0 years 29 mons 17 days 3 hours 30 mins 15.250 secs
+
+# Test negative with zero interval
+query ?
+SELECT negative(make_interval(0, 0, 0, 0, 0, 0, 0.0));
+----
+0 years 0 mons 0 days 0 hours 0 mins 0.00 secs
+
+# Test negative with CalendarInterval from table
+statement ok
+CREATE TABLE interval_test AS VALUES
+  (make_interval(1, 2, 0, 5, 0, 0, 0.0)),
+  (make_interval(-3, -1, 0, -2, 0, 0, 0.0)),
+  (make_interval(0, 0, 0, 0, 0, 0, 0.0));
+
+query ? rowsort
+SELECT negative(column1) FROM interval_test;
+----
+0 years -14 mons -5 days 0 hours 0 mins 0.00 secs
+0 years 0 mons 0 days 0 hours 0 mins 0.00 secs
+0 years 37 mons 2 days 0 hours 0 mins 0.00 secs
+
+statement ok
+DROP TABLE interval_test;
