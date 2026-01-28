@@ -19,8 +19,7 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, BooleanBufferBuilder, GenericListArray
-    , OffsetSizeTrait, UInt64Array,
+    Array, ArrayRef, BooleanBufferBuilder, GenericListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute;
@@ -31,7 +30,7 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
-use datafusion_common::{exec_err, utils::take_function_args, Result};
+use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -212,8 +211,11 @@ fn general_repeat<O: OffsetSizeTrait>(
         take_indices.extend(std::iter::repeat_n(idx as u64, count))
     }
 
-    let repeated_values =
-        compute::take(array.as_ref(), &UInt64Array::from_iter_values(take_indices), None)?;
+    let repeated_values = compute::take(
+        array.as_ref(),
+        &UInt64Array::from_iter_values(take_indices),
+        None,
+    )?;
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.data_type().to_owned(), true)),
@@ -242,7 +244,8 @@ fn general_list_repeat<O: OffsetSizeTrait>(
 
     // calculate capacities for pre-allocation
     let outer_total = counts.iter().map(|&c| c as usize).sum();
-    let inner_total = counts.iter()
+    let inner_total = counts
+        .iter()
         .enumerate()
         .filter(|&(i, _)| !list_array.is_null(i))
         .map(|(i, &c)| {

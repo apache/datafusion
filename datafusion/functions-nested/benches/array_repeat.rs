@@ -318,8 +318,12 @@ fn bench_array_repeat_nested_string_list(c: &mut Criterion) {
                             udf.invoke_with_args(ScalarFunctionArgs {
                                 args: args.clone(),
                                 arg_fields: vec![
-                                    Field::new("element", list_array.data_type().clone(), false)
-                                        .into(),
+                                    Field::new(
+                                        "element",
+                                        list_array.data_type().clone(),
+                                        false,
+                                    )
+                                    .into(),
                                     Field::new("count", DataType::UInt64, false).into(),
                                 ],
                                 number_rows: num_rows,
@@ -331,16 +335,15 @@ fn bench_array_repeat_nested_string_list(c: &mut Criterion) {
                                     ))),
                                     false,
                                 )
-                                    .into(),
+                                .into(),
                                 config_options: Arc::new(ConfigOptions::default()),
                             })
-                                .unwrap(),
+                            .unwrap(),
                         )
                     })
                 },
             );
         }
-
     }
 
     group.finish();
