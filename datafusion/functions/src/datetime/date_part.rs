@@ -329,23 +329,44 @@ fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue
     Some(match target_type {
         Date32 => ScalarValue::Date32(Some(days as i32)),
         Date64 => ScalarValue::Date64(Some(days * MILLISECONDS_IN_DAY)),
-        Timestamp(unit, tz) => match unit {
-            Second => {
-                ScalarValue::TimestampSecond(Some(days * SECONDS_IN_DAY), tz.clone())
+
+        Timestamp(unit, tz_opt) => {
+            let naive_midnight = date.and_hms_opt(0, 0, 0)?;
+
+            let utc_dt = if let Some(tz_str) = tz_opt {
+                let tz: Tz = tz_str.parse().ok()?;
+
+                let local = tz.from_local_datetime(&naive_midnight);
+
+                let local_dt = match local {
+                    chrono::offset::LocalResult::Single(dt) => dt,
+                    chrono::offset::LocalResult::Ambiguous(dt1, _dt2) => dt1,
+                    chrono::offset::LocalResult::None => local.earliest()?,
+                };
+
+                local_dt.with_timezone(&Utc)
+            } else {
+                Utc.from_utc_datetime(&naive_midnight)
+            };
+
+            match unit {
+                Second => {
+                    ScalarValue::TimestampSecond(Some(utc_dt.timestamp()), tz_opt.clone())
+                }
+                Millisecond => ScalarValue::TimestampMillisecond(
+                    Some(utc_dt.timestamp_millis()),
+                    tz_opt.clone(),
+                ),
+                Microsecond => ScalarValue::TimestampMicrosecond(
+                    Some(utc_dt.timestamp_micros()),
+                    tz_opt.clone(),
+                ),
+                Nanosecond => ScalarValue::TimestampNanosecond(
+                    Some(utc_dt.timestamp_nanos_opt()?),
+                    tz_opt.clone(),
+                ),
             }
-            Millisecond => ScalarValue::TimestampMillisecond(
-                Some(days * MILLISECONDS_IN_DAY),
-                tz.clone(),
-            ),
-            Microsecond => ScalarValue::TimestampMicrosecond(
-                Some(days * MICROSECONDS_IN_DAY),
-                tz.clone(),
-            ),
-            Nanosecond => ScalarValue::TimestampNanosecond(
-                Some(days * NANOSECONDS_IN_DAY),
-                tz.clone(),
-            ),
-        },
+        }
         _ => return None,
     })
 }
