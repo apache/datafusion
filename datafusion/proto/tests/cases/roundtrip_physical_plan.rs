@@ -49,7 +49,6 @@ use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{JoinType, Operator, Volatility, create_udf};
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
-use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::expressions::Literal;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{
@@ -59,8 +58,6 @@ use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
-#[expect(deprecated)]
-use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 #[expect(deprecated)]
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -75,7 +72,6 @@ use datafusion::physical_plan::joins::{
     StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::metrics::MetricType;
 use datafusion::physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -99,13 +95,11 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     DataFusionError, NullEquality, OwnedCastOptions, OwnedFormatOptions, Result,
-    UnnestOptions, format::DEFAULT_CAST_OPTIONS, internal_datafusion_err, internal_err,
-    not_impl_err,
+    UnnestOptions, exec_datafusion_err, format::DEFAULT_CAST_OPTIONS,
+    internal_datafusion_err, internal_err, not_impl_err,
 };
 use datafusion_datasource::TableSchema;
-use datafusion_datasource::TableSchema;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion_expr::dml::InsertOp;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue,
@@ -113,11 +107,8 @@ use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowUDF,
 };
 use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
-use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::average::avg_udaf;
-use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::min_max::max_udaf;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
 use datafusion_functions_aggregate::string_agg::string_agg_udaf;
@@ -133,7 +124,6 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf;
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
-use prost::Message;
 use prost::Message;
 
 use crate::cases::{

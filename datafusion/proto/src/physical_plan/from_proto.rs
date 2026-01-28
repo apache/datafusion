@@ -45,7 +45,6 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
-use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
@@ -56,8 +55,6 @@ use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
@@ -444,6 +441,7 @@ pub fn parse_physical_expr_with_converter(
                     "expr",
                     input_schema,
                     codec,
+                    proto_converter,
                 )?,
                 Arc::new(Field::try_from(input_field)?),
                 Arc::new(Field::try_from(target_field)?),
