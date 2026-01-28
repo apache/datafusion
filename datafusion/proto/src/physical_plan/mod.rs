@@ -3665,21 +3665,7 @@ struct DataEncoderTuple {
     pub blob: Vec<u8>,
 }
 
-/// Default implementation of [`PhysicalProtoConverterExtension`].
-///
-/// Provides basic serialization and deserialization without expression
-/// deduplication. For deduplication support, wrap this converter with
-/// [`DeduplicatingProtoConverter`].
-#[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultPhysicalProtoConverter;
-
-impl DefaultPhysicalProtoConverter {
-    /// Creates a new `DefaultPhysicalProtoConverter`.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     fn proto_to_execution_plan(
         &self,
@@ -3715,6 +3701,7 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
     where
         Self: Sized,
     {
+        // Default implementation calls the free function
         parse_physical_expr_with_converter(proto, ctx, input_schema, codec, self)
     }
 
@@ -3723,7 +3710,6 @@ impl PhysicalProtoConverterExtension for DefaultPhysicalProtoConverter {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        // No expr_id - just serialize the expression
         serialize_physical_expr_with_converter(expr, codec, self)
     }
 }
