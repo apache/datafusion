@@ -219,7 +219,7 @@ struct MetadataAdapterFactory {
     // Rust's dead code analysis doesn't recognize Debug-based field access.
     // In PR #19234, this field is used by `with_partition_values`, but that method
     // doesn't exist in upstream DataFusion's PhysicalExprAdapter trait.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     tag: String,
 }
 
