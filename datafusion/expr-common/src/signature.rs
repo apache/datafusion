@@ -1585,6 +1585,7 @@ mod tests {
                 vec![DataType::UInt16, DataType::UInt16],
                 vec![DataType::UInt32, DataType::UInt32],
                 vec![DataType::UInt64, DataType::UInt64],
+                vec![DataType::Float16, DataType::Float16],
                 vec![DataType::Float32, DataType::Float32],
                 vec![DataType::Float64, DataType::Float64]
             ]
