@@ -455,11 +455,11 @@ fn push_down_all_join(
         }
     }
 
-    // For infer predicates, if they can not push through join, just drop them
+    // Push predicates inferred from the join expression
     for predicate in inferred_join_predicates {
-        if left_preserved && checker.is_left_only(&predicate) {
+        if checker.is_left_only(&predicate) {
             left_push.push(predicate);
-        } else if right_preserved && checker.is_right_only(&predicate) {
+        } else if checker.is_right_only(&predicate) {
             right_push.push(predicate);
         }
     }
@@ -2721,8 +2721,7 @@ mod tests {
         )
     }
 
-    /// post-left-join predicate on a column common to both sides is only pushed to the left side
-    /// i.e. - not duplicated to the right side
+    /// post-left-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_left_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2750,20 +2749,19 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to left side of the join, not the right
+        // filter sent to left side of the join and to the right
         assert_optimized_plan_equal!(
             plan,
             @r"
         Left Join: Using test.a = test2.a
           TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
-            TableScan: test2
+            TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
         )
     }
 
-    /// post-right-join predicate on a column common to both sides is only pushed to the right side
-    /// i.e. - not duplicated to the left side.
+    /// post-right-join predicate on a column common to both sides is pushed to both sides
     #[test]
     fn filter_using_right_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2791,12 +2789,12 @@ mod tests {
               TableScan: test2
         ",
         );
-        // filter sent to right side of join, not duplicated to the left
+        // filter sent to right side of join, sent to the left as well
         assert_optimized_plan_equal!(
             plan,
             @r"
         Right Join: Using test.a = test2.a
-          TableScan: test
+          TableScan: test, full_filters=[test.a <= Int64(1)]
           Projection: test2.a
             TableScan: test2, full_filters=[test2.a <= Int64(1)]
         "
@@ -2978,7 +2976,7 @@ mod tests {
           Projection: test.a, test.b, test.c
             TableScan: test
           Projection: test2.a, test2.b, test2.c
-            TableScan: test2, full_filters=[test2.c > UInt32(4)]
+            TableScan: test2, full_filters=[test2.a > UInt32(1), test2.c > UInt32(4)]
         "
         )
     }
