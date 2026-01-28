@@ -22,9 +22,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::SessionContext;
-use datafusion::prelude::*;
 use datafusion_common::test_util::format_batches;
-use datafusion_common::{Result, assert_batches_eq};
+use datafusion_common::Result;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -145,7 +144,7 @@ async fn test_nested_async_udf() -> Result<()> {
             assert_eq!(result_str.trim(), expected.trim());
         }
         Err(e) => {
-            panic!("Nested async UDF failed: {}", e);
+            panic!("Nested async UDF failed: {e}");
         }
     }
 
