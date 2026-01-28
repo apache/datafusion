@@ -38,10 +38,10 @@ mod tests {
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use crate::test::object_store::local_unpartitioned_file;
     use arrow::array::{
-        ArrayRef, AsArray, Date64Array, Int8Array, Int32Array, Int64Array, StringArray,
-        StringViewArray, StructArray, TimestampNanosecondArray,
+        ArrayRef, AsArray, Date64Array, DictionaryArray, Int8Array, Int32Array,
+        Int64Array, StringArray, StringViewArray, StructArray, TimestampNanosecondArray,
     };
-    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder, UInt16Type};
     use arrow::record_batch::RecordBatch;
     use arrow::util::pretty::pretty_format_batches;
     use arrow_schema::{SchemaRef, TimeUnit};
@@ -2259,6 +2259,48 @@ mod tests {
         +---------------------+----+--------+
         | {id: 4, name: aaa2} | 2  | test02 |
         +---------------------+----+--------+
+        ");
+        Ok(())
+    }
+
+    /// Tests that constant dictionary columns (where min == max in statistics)
+    /// are correctly handled. This reproduced a bug where the constant value
+    /// from statistics had type Utf8 but the schema expected Dictionary.
+    #[tokio::test]
+    async fn test_constant_dictionary_column_parquet() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().to_str().unwrap().to_string() + "/test.parquet";
+
+        // Write parquet with dictionary column where all values are the same
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "status",
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+            false,
+        )]));
+        let status: DictionaryArray<UInt16Type> =
+            vec!["active", "active"].into_iter().collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(status)])?;
+        let file = File::create(&path)?;
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
+            .build();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        // Query the constant dictionary column
+        let ctx = SessionContext::new();
+        ctx.register_parquet("t", &path, ParquetReadOptions::default())
+            .await?;
+        let result = ctx.sql("SELECT status FROM t").await?.collect().await?;
+
+        insta::assert_snapshot!(batches_to_string(&result),@r"
+        +--------+
+        | status |
+        +--------+
+        | active |
+        | active |
+        +--------+
         ");
         Ok(())
     }
