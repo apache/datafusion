@@ -2293,7 +2293,15 @@ mod tests {
         ctx.register_parquet("t", &path, ParquetReadOptions::default())
             .await?;
         let result = ctx.sql("SELECT status FROM t").await?.collect().await?;
-        assert_eq!(result[0].num_rows(), 2);
+
+        insta::assert_snapshot!(batches_to_string(&result),@r"
+        +--------+
+        | status |
+        +--------+
+        | active |
+        | active |
+        +--------+
+        ");
         Ok(())
     }
 
