@@ -1528,3 +1528,196 @@ logical_plan
 20)--------SubqueryAlias: set_cmp_s
 21)----------Projection: column1 AS v
 22)------------Values: (Int64(5)), (Int64(NULL))
+
+#############
+## Multi-column IN (LeftSemi) Tests
+#############
+## These tests verify that multi-column IN subqueries work correctly
+## Multi-column IN uses LeftSemi join (not null-aware)
+
+#############
+## Test 1: Basic two-column IN
+#############
+
+statement ok
+CREATE TABLE multi_in_left(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'match'),
+(3, 4, 'no_match'),
+(5, 6, 'match');
+
+statement ok
+CREATE TABLE multi_in_right(x INT, y INT) AS VALUES
+(1, 2),
+(5, 6);
+
+# Should return rows where (a, b) matches (x, y)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+1 2 match
+5 6 match
+
+#############
+## Test 2: Multi-column IN with no matches
+#############
+
+statement ok
+CREATE TABLE multi_in_right_no_match(x INT, y INT) AS VALUES
+(10, 20),
+(30, 40);
+
+# Should return empty result
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_no_match);
+----
+
+#############
+## Test 3: Multi-column IN with NULL values
+#############
+## Note: Unlike NOT IN, regular IN does NOT use null-aware semantics
+## NULL = NULL is always FALSE (not unknown) in regular semi joins
+
+statement ok
+CREATE TABLE multi_in_left_null(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, NULL, 'y'),
+(NULL, 6, 'z');
+
+statement ok
+CREATE TABLE multi_in_right_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+# Should return only (1, 2, 'x')
+# (3, NULL, 'y') doesn't match because NULL doesn't equal anything
+# (NULL, 6, 'z') doesn't match because NULL doesn't equal anything
+query IIT rowsort
+SELECT * FROM multi_in_left_null
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_null);
+----
+1 2 x
+
+#############
+## Test 4: Three-column IN
+#############
+
+statement ok
+CREATE TABLE three_col_left(a INT, b INT, c INT, value TEXT) AS VALUES
+(1, 2, 3, 'match1'),
+(4, 5, 6, 'no_match'),
+(7, 8, 9, 'match2');
+
+statement ok
+CREATE TABLE three_col_right(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(7, 8, 9);
+
+# Should return rows with matching three-column tuples
+query IIIT rowsort
+SELECT * FROM three_col_left
+WHERE (a, b, c) IN (SELECT x, y, z FROM three_col_right);
+----
+1 2 3 match1
+7 8 9 match2
+
+#############
+## Test 5: Correlated multi-column IN
+#############
+
+statement ok
+CREATE TABLE correlated_outer(id INT, a INT, b INT) AS VALUES
+(1, 10, 20),
+(2, 30, 40),
+(3, 10, 20);
+
+statement ok
+CREATE TABLE correlated_inner(id INT, x INT, y INT) AS VALUES
+(1, 10, 20),
+(1, 30, 40),
+(2, 50, 60),
+(3, 10, 20);
+
+# Should return outer rows where (a, b) matches (x, y) for the same id
+query III rowsort
+SELECT * FROM correlated_outer o
+WHERE (a, b) IN (
+    SELECT x, y FROM correlated_inner i WHERE i.id = o.id
+);
+----
+1 10 20
+3 10 20
+
+#############
+## Test 6: Verify logical plan shows LeftSemi join with multiple conditions
+#############
+
+query TT
+EXPLAIN SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right);
+----
+logical_plan
+01)LeftSemi Join: multi_in_left.a = __correlated_sq_1.x, multi_in_left.b = __correlated_sq_1.y
+02)--TableScan: multi_in_left projection=[a, b, value]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: multi_in_right projection=[x, y]
+
+#############
+## Test 7: Multi-column IN with empty subquery
+#############
+
+statement ok
+CREATE TABLE multi_in_right_empty(x INT, y INT);
+
+# Should return empty result (empty subquery)
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right_empty);
+----
+
+#############
+## Test 8: Multi-column IN with WHERE clause in subquery
+#############
+
+# Should return only rows matching filtered subquery
+query IIT rowsort
+SELECT * FROM multi_in_left
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right WHERE x > 0 AND y < 10);
+----
+1 2 match
+5 6 match
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE multi_in_left;
+
+statement ok
+DROP TABLE multi_in_right;
+
+statement ok
+DROP TABLE multi_in_right_no_match;
+
+statement ok
+DROP TABLE multi_in_left_null;
+
+statement ok
+DROP TABLE multi_in_right_null;
+
+statement ok
+DROP TABLE three_col_left;
+
+statement ok
+DROP TABLE three_col_right;
+
+statement ok
+DROP TABLE correlated_outer;
+
+statement ok
+DROP TABLE correlated_inner;
+
+statement ok
+DROP TABLE multi_in_right_empty;
