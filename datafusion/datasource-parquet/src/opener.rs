@@ -581,7 +581,7 @@ impl FileOpener for ParquetOpener {
 
             // ----------------------------------------------------------
             // Step: potentially reverse the access plan for performance.
-            // See `ParquetSource::try_reverse_output` for the rationale.
+            // See `ParquetSource::try_pushdown_sort` for the rationale.
             // ----------------------------------------------------------
             if reverse_row_groups {
                 prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
