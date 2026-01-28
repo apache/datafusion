@@ -26,7 +26,7 @@ use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, snapshot_gene
 use datafusion_physical_plan::metrics::Count;
 use log::debug;
 
-use crate::build_pruning_predicate;
+use crate::{PruningPredicateConfig, build_pruning_predicate};
 
 /// Prune based on file-level statistics.
 ///
@@ -40,6 +40,7 @@ pub struct FilePruner {
     file_schema: SchemaRef,
     file_stats_pruning: PrunableStatistics,
     predicate_creation_errors: Count,
+    pruning_predicate_config: PruningPredicateConfig,
 }
 
 impl FilePruner {
@@ -54,12 +55,14 @@ impl FilePruner {
         _partition_fields: Vec<FieldRef>,
         partitioned_file: PartitionedFile,
         predicate_creation_errors: Count,
+        pruning_predicate_config: PruningPredicateConfig,
     ) -> Result<Self> {
         Self::try_new(
             predicate,
             logical_file_schema,
             &partitioned_file,
             predicate_creation_errors,
+            pruning_predicate_config,
         )
         .ok_or_else(|| {
             internal_datafusion_err!(
@@ -76,6 +79,7 @@ impl FilePruner {
         file_schema: &SchemaRef,
         partitioned_file: &PartitionedFile,
         predicate_creation_errors: Count,
+        pruning_predicate_config: PruningPredicateConfig,
     ) -> Option<Self> {
         let file_stats = partitioned_file.statistics.as_ref()?;
         let file_stats_pruning =
@@ -86,6 +90,7 @@ impl FilePruner {
             file_schema: Arc::clone(file_schema),
             file_stats_pruning,
             predicate_creation_errors,
+            pruning_predicate_config,
         })
     }
 
@@ -110,6 +115,7 @@ impl FilePruner {
             Arc::clone(&self.predicate),
             &self.file_schema,
             &self.predicate_creation_errors,
+            &self.pruning_predicate_config,
         );
         let Some(pruning_predicate) = pruning_predicate else {
             return Ok(false);

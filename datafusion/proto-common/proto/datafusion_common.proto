@@ -518,6 +518,9 @@ message ParquetOptions {
   // Regular fields
   bool enable_page_index = 1; // default = true
   bool pruning = 2; // default = true
+  oneof pruning_max_inlist_limit_opt {
+    uint64 pruning_max_inlist_limit = 35;
+  }
   bool skip_metadata = 3; // default = true
   bool pushdown_filters = 5; // default = false
   bool reorder_filters = 6; // default = false
