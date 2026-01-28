@@ -18,6 +18,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -3772,15 +3773,13 @@ impl PhysicalProtoConverterExtension for DeduplicatingSerializer {
         expr: &Arc<dyn PhysicalExpr>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<protobuf::PhysicalExprNode> {
-        use std::hash::{Hash, Hasher};
-
         let mut proto = serialize_physical_expr_with_converter(expr, codec, self)?;
 
         // Hash session_id, pointer address, and process ID together to create expr_id.
         // - session_id: random per serializer, prevents collisions when merging serializations
         // - ptr: unique address per Arc within a process
         // - pid: prevents collisions if serializer is shared across processes
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = DefaultHasher::new();
         self.session_id.hash(&mut hasher);
         (Arc::as_ptr(expr) as *const () as u64).hash(&mut hasher);
         std::process::id().hash(&mut hasher);
@@ -3834,7 +3833,6 @@ impl PhysicalProtoConverterExtension for DeduplicatingDeserializer {
             if let Some(cached) = self.cache.borrow().get(&expr_id) {
                 return Ok(Arc::clone(cached));
             }
-
             // Deserialize and cache
             let expr = parse_physical_expr_with_converter(
                 proto,
