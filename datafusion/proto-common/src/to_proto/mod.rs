@@ -171,6 +171,12 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::LargeList(item_type) => Self::LargeList(Box::new(protobuf::List {
                 field_type: Some(Box::new(item_type.as_ref().try_into()?)),
             })),
+            DataType::ListView(item_type) => Self::ListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
+            DataType::LargeListView(item_type) => Self::LargeListView(Box::new(protobuf::List {
+                field_type: Some(Box::new(item_type.as_ref().try_into()?)),
+            })),
             DataType::Struct(struct_fields) => Self::Struct(protobuf::Struct {
                 sub_field_types: convert_arc_fields_to_proto_fields(struct_fields)?,
             }),
@@ -219,9 +225,6 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 return Err(Error::General(
                     "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
                 ))
-            }
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
             }
         };
 
@@ -372,6 +375,12 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::FixedSizeList(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::ListView(arr) => {
+                encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
+            }
+            ScalarValue::LargeListView(arr) => {
                 encode_scalar_nested_value(arr.to_owned() as ArrayRef, val)
             }
             ScalarValue::Struct(arr) => {
@@ -1010,7 +1019,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     Ok(protobuf::ScalarValue { value: Some(value) })
 }
 
-// ScalarValue::List / FixedSizeList / LargeList / Struct / Map are serialized using
+// ScalarValue::List / FixedSizeList / LargeList / ListView / LargeListView / Struct / Map are serialized using
 // Arrow IPC messages as a single column RecordBatch
 fn encode_scalar_nested_value(
     arr: ArrayRef,
@@ -1063,6 +1072,16 @@ fn encode_scalar_nested_value(
         }),
         ScalarValue::FixedSizeList(_) => Ok(protobuf::ScalarValue {
             value: Some(protobuf::scalar_value::Value::FixedSizeListValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::ListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::ListViewValue(
+                scalar_list_value,
+            )),
+        }),
+        ScalarValue::LargeListView(_) => Ok(protobuf::ScalarValue {
+            value: Some(protobuf::scalar_value::Value::LargeListViewValue(
                 scalar_list_value,
             )),
         }),

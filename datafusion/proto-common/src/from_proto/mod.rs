@@ -292,6 +292,16 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let list_size = list.list_size;
                 DataType::FixedSizeList(Arc::new(list_type), list_size)
             }
+            arrow_type::ArrowTypeEnum::ListView(list) => {
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::ListView(Arc::new(list_type))
+            }
+            arrow_type::ArrowTypeEnum::LargeListView(list) => {
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::LargeListView(Arc::new(list_type))
+            }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 parse_proto_fields_to_fields(&strct.sub_field_types)?.into(),
             ),
@@ -388,6 +398,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::ListValue(v)
             | Value::FixedSizeListValue(v)
             | Value::LargeListValue(v)
+            | Value::ListViewValue(v)
+            | Value::LargeListViewValue(v)
             | Value::StructValue(v)
             | Value::MapValue(v) => {
                 let protobuf::ScalarNestedValue {
@@ -471,6 +483,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     }
                     Value::FixedSizeListValue(_) => {
                         Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
+                    }
+                    Value::ListViewValue(_) => {
+                        Self::ListView(arr.as_list_view::<i32>().to_owned().into())
+                    }
+                    Value::LargeListViewValue(_) => {
+                        Self::LargeListView(arr.as_list_view::<i64>().to_owned().into())
                     }
                     Value::StructValue(_) => {
                         Self::Struct(arr.as_struct().to_owned().into())

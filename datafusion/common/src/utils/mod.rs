@@ -29,7 +29,8 @@ use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
     cast::AsArray,
 };
-use arrow::buffer::OffsetBuffer;
+use arrow::array::{LargeListViewArray, ListViewArray};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{SortColumn, SortOptions, partition};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 #[cfg(feature = "sql")]
@@ -477,6 +478,32 @@ impl SingleRowListArrayBuilder {
     /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
     pub fn build_fixed_size_list_scalar(self, list_size: usize) -> ScalarValue {
         ScalarValue::FixedSizeList(Arc::new(self.build_fixed_size_list_array(list_size)))
+    }
+
+    /// Build a single element [`ListViewArray`]
+    pub fn build_list_view_array(self) -> ListViewArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = ScalarBuffer::from(vec![0]);
+        let sizes = ScalarBuffer::from(vec![arr.len() as i32]);
+        ListViewArray::new(field, offsets, sizes, arr, None)
+    }
+
+    /// Build a single element [`ListViewArray`] and wrap as [`ScalarValue::ListView`]
+    pub fn build_list_view_scalar(self) -> ScalarValue {
+        ScalarValue::ListView(Arc::new(self.build_list_view_array()))
+    }
+
+    /// Build a single element [`LargeListViewArray`]
+    pub fn build_large_list_view_array(self) -> LargeListViewArray {
+        let (field, arr) = self.into_field_and_arr();
+        let offsets = ScalarBuffer::from(vec![0]);
+        let sizes = ScalarBuffer::from(vec![arr.len() as i64]);
+        LargeListViewArray::new(field, offsets, sizes, arr, None)
+    }
+
+    /// Build a single element [`LargeListViewArray`] and wrap as [`ScalarValue::LargeListView`]
+    pub fn build_large_list_view_scalar(self) -> ScalarValue {
+        ScalarValue::LargeListView(Arc::new(self.build_large_list_view_array()))
     }
 
     /// Helper function: convert this builder into a tuple of field and array

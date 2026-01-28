@@ -1313,6 +1313,8 @@ impl Unparser<'_> {
             ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::ListView(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeListView(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
@@ -1824,7 +1826,7 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use crate::unparser::dialect::SqliteDialect;
-    use arrow::array::{LargeListArray, ListArray};
+    use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
@@ -2335,6 +2337,28 @@ mod tests {
                 Expr::Literal(
                     ScalarValue::LargeList(Arc::new(
                         LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::ListView(Arc::new(
+                        ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                            Some(vec![Some(1), Some(2), Some(3)]),
+                        ]),
+                    )),
+                    None,
+                ),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(
+                    ScalarValue::LargeListView(Arc::new(
+                        LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
                             Some(vec![Some(1), Some(2), Some(3)]),
                         ]),
                     )),

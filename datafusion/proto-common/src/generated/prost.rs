@@ -184,7 +184,7 @@ pub struct Union {
     #[prost(int32, repeated, tag = "3")]
     pub type_ids: ::prost::alloc::vec::Vec<i32>,
 }
-/// Used for List/FixedSizeList/LargeList/Struct/Map
+/// Used for List/FixedSizeList/LargeList/ListView/LargeListView/Struct/Map
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ScalarNestedValue {
     #[prost(bytes = "vec", tag = "1")]
@@ -311,7 +311,7 @@ pub struct ScalarFixedSizeBinary {
 pub struct ScalarValue {
     #[prost(
         oneof = "scalar_value::Value",
-        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 32, 41, 43, 44, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
+        tags = "33, 1, 2, 3, 23, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 45, 46, 32, 41, 43, 44, 20, 39, 21, 24, 35, 36, 37, 38, 26, 27, 28, 29, 22, 30, 25, 31, 34, 42"
     )]
     pub value: ::core::option::Option<scalar_value::Value>,
 }
@@ -362,6 +362,10 @@ pub mod scalar_value {
         ListValue(super::ScalarNestedValue),
         #[prost(message, tag = "18")]
         FixedSizeListValue(super::ScalarNestedValue),
+        #[prost(message, tag = "45")]
+        ListViewValue(super::ScalarNestedValue),
+        #[prost(message, tag = "46")]
+        LargeListViewValue(super::ScalarNestedValue),
         #[prost(message, tag = "32")]
         StructValue(super::ScalarNestedValue),
         #[prost(message, tag = "41")]
@@ -449,7 +453,7 @@ pub struct Decimal256 {
 pub struct ArrowType {
     #[prost(
         oneof = "arrow_type::ArrowTypeEnum",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 40, 41, 24, 36, 25, 26, 27, 28, 29, 30, 33"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 35, 32, 15, 34, 16, 31, 17, 18, 19, 20, 21, 22, 23, 40, 41, 24, 36, 25, 26, 27, 42, 43, 28, 29, 30, 33"
     )]
     pub arrow_type_enum: ::core::option::Option<arrow_type::ArrowTypeEnum>,
 }
@@ -530,6 +534,10 @@ pub mod arrow_type {
         LargeList(::prost::alloc::boxed::Box<super::List>),
         #[prost(message, tag = "27")]
         FixedSizeList(::prost::alloc::boxed::Box<super::FixedSizeList>),
+        #[prost(message, tag = "42")]
+        ListView(::prost::alloc::boxed::Box<super::List>),
+        #[prost(message, tag = "43")]
+        LargeListView(::prost::alloc::boxed::Box<super::List>),
         #[prost(message, tag = "28")]
         Struct(super::Struct),
         #[prost(message, tag = "29")]

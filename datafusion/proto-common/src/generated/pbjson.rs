@@ -264,6 +264,12 @@ impl serde::Serialize for ArrowType {
                 arrow_type::ArrowTypeEnum::FixedSizeList(v) => {
                     struct_ser.serialize_field("FIXEDSIZELIST", v)?;
                 }
+                arrow_type::ArrowTypeEnum::ListView(v) => {
+                    struct_ser.serialize_field("LISTVIEW", v)?;
+                }
+                arrow_type::ArrowTypeEnum::LargeListView(v) => {
+                    struct_ser.serialize_field("LARGELISTVIEW", v)?;
+                }
                 arrow_type::ArrowTypeEnum::Struct(v) => {
                     struct_ser.serialize_field("STRUCT", v)?;
                 }
@@ -329,6 +335,10 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             "LARGELIST",
             "FIXED_SIZE_LIST",
             "FIXEDSIZELIST",
+            "LIST_VIEW",
+            "LISTVIEW",
+            "LARGE_LIST_VIEW",
+            "LARGELISTVIEW",
             "STRUCT",
             "UNION",
             "DICTIONARY",
@@ -371,6 +381,8 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
             List,
             LargeList,
             FixedSizeList,
+            ListView,
+            LargeListView,
             Struct,
             Union,
             Dictionary,
@@ -430,6 +442,8 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                             "LIST" => Ok(GeneratedField::List),
                             "LARGELIST" | "LARGE_LIST" => Ok(GeneratedField::LargeList),
                             "FIXEDSIZELIST" | "FIXED_SIZE_LIST" => Ok(GeneratedField::FixedSizeList),
+                            "LISTVIEW" | "LIST_VIEW" => Ok(GeneratedField::ListView),
+                            "LARGELISTVIEW" | "LARGE_LIST_VIEW" => Ok(GeneratedField::LargeListView),
                             "STRUCT" => Ok(GeneratedField::Struct),
                             "UNION" => Ok(GeneratedField::Union),
                             "DICTIONARY" => Ok(GeneratedField::Dictionary),
@@ -687,6 +701,20 @@ impl<'de> serde::Deserialize<'de> for ArrowType {
                                 return Err(serde::de::Error::duplicate_field("FIXEDSIZELIST"));
                             }
                             arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::FixedSizeList)
+;
+                        }
+                        GeneratedField::ListView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("LISTVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::ListView)
+;
+                        }
+                        GeneratedField::LargeListView => {
+                            if arrow_type_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("LARGELISTVIEW"));
+                            }
+                            arrow_type_enum__ = map_.next_value::<::std::option::Option<_>>()?.map(arrow_type::ArrowTypeEnum::LargeListView)
 ;
                         }
                         GeneratedField::Struct => {
@@ -7553,6 +7581,12 @@ impl serde::Serialize for ScalarValue {
                 scalar_value::Value::FixedSizeListValue(v) => {
                     struct_ser.serialize_field("fixedSizeListValue", v)?;
                 }
+                scalar_value::Value::ListViewValue(v) => {
+                    struct_ser.serialize_field("listViewValue", v)?;
+                }
+                scalar_value::Value::LargeListViewValue(v) => {
+                    struct_ser.serialize_field("largeListViewValue", v)?;
+                }
                 scalar_value::Value::StructValue(v) => {
                     struct_ser.serialize_field("structValue", v)?;
                 }
@@ -7687,6 +7721,10 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             "listValue",
             "fixed_size_list_value",
             "fixedSizeListValue",
+            "list_view_value",
+            "listViewValue",
+            "large_list_view_value",
+            "largeListViewValue",
             "struct_value",
             "structValue",
             "map_value",
@@ -7755,6 +7793,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
             LargeListValue,
             ListValue,
             FixedSizeListValue,
+            ListViewValue,
+            LargeListViewValue,
             StructValue,
             MapValue,
             Decimal32Value,
@@ -7818,6 +7858,8 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                             "largeListValue" | "large_list_value" => Ok(GeneratedField::LargeListValue),
                             "listValue" | "list_value" => Ok(GeneratedField::ListValue),
                             "fixedSizeListValue" | "fixed_size_list_value" => Ok(GeneratedField::FixedSizeListValue),
+                            "listViewValue" | "list_view_value" => Ok(GeneratedField::ListViewValue),
+                            "largeListViewValue" | "large_list_view_value" => Ok(GeneratedField::LargeListViewValue),
                             "structValue" | "struct_value" => Ok(GeneratedField::StructValue),
                             "mapValue" | "map_value" => Ok(GeneratedField::MapValue),
                             "decimal32Value" | "decimal32_value" => Ok(GeneratedField::Decimal32Value),
@@ -7985,6 +8027,20 @@ impl<'de> serde::Deserialize<'de> for ScalarValue {
                                 return Err(serde::de::Error::duplicate_field("fixedSizeListValue"));
                             }
                             value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::FixedSizeListValue)
+;
+                        }
+                        GeneratedField::ListViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("listViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::ListViewValue)
+;
+                        }
+                        GeneratedField::LargeListViewValue => {
+                            if value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("largeListViewValue"));
+                            }
+                            value__ = map_.next_value::<::std::option::Option<_>>()?.map(scalar_value::Value::LargeListViewValue)
 ;
                         }
                         GeneratedField::StructValue => {
