@@ -261,8 +261,11 @@ pub struct PlannerContext {
     /// Map of CTE name to logical plan of the WITH clause.
     /// Use `Arc<LogicalPlan>` to allow cheap cloning
     ctes: HashMap<String, Arc<LogicalPlan>>,
-    /// The query schema of the outer query plan, used to resolve the columns in subquery
-    outer_query_schema: Option<DFSchemaRef>,
+
+    /// The queries schemas of outer query relations, used to resolve the outer referenced
+    /// columns in subquery (recursive aware)
+    outer_queries_schemas_stack: Vec<DFSchemaRef>,
+
     /// The joined schemas of all FROM clauses planned so far. When planning LATERAL
     /// FROM clauses, this should become a suffix of the `outer_query_schema`.
     outer_from_schema: Option<DFSchemaRef>,
@@ -282,7 +285,7 @@ impl PlannerContext {
         Self {
             prepare_param_data_types: Arc::new(vec![]),
             ctes: HashMap::new(),
-            outer_query_schema: None,
+            outer_queries_schemas_stack: vec![],
             outer_from_schema: None,
             create_table_schema: None,
         }
@@ -297,19 +300,26 @@ impl PlannerContext {
         self
     }
 
-    // Return a reference to the outer query's schema
-    pub fn outer_query_schema(&self) -> Option<&DFSchema> {
-        self.outer_query_schema.as_ref().map(|s| s.as_ref())
+    /// Return the stack of outer relations' schemas, the outer most
+    /// relation are at the first entry
+    pub fn outer_queries_schemas(&self) -> Vec<DFSchemaRef> {
+        self.outer_queries_schemas_stack.to_vec()
     }
 
     /// Sets the outer query schema, returning the existing one, if
     /// any
-    pub fn set_outer_query_schema(
-        &mut self,
-        mut schema: Option<DFSchemaRef>,
-    ) -> Option<DFSchemaRef> {
-        std::mem::swap(&mut self.outer_query_schema, &mut schema);
-        schema
+    pub fn append_outer_query_schema(&mut self, schema: DFSchemaRef) {
+        self.outer_queries_schemas_stack.push(schema);
+    }
+
+    /// The schema of the adjacent outer relation
+    pub fn latest_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_queries_schemas_stack.last().cloned()
+    }
+
+    /// Remove the schema of the adjacent outer relation
+    pub fn pop_outer_query_schema(&mut self) -> Option<DFSchemaRef> {
+        self.outer_queries_schemas_stack.pop()
     }
 
     pub fn set_table_schema(
