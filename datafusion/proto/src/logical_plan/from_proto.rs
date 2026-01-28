@@ -57,6 +57,7 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            preserve_empty_as_null: opts.preserve_empty_as_null,
             recursions: opts
                 .recursions
                 .iter()

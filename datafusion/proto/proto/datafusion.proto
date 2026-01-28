@@ -312,6 +312,7 @@ message ColumnUnnestListRecursion {
 message UnnestOptions {
   bool preserve_nulls = 1;
   repeated RecursionUnnestOption recursions = 2;
+  bool preserve_empty_as_null = 3;
 }
 
 message RecursionUnnestOption {
