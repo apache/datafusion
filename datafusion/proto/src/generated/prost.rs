@@ -1277,18 +1277,12 @@ pub struct PhysicalExtensionNode {
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
-    /// Arc pointer address from source plan for deduplication during deserialization.
-    /// When serializing, this is set to Arc::as_ptr(expr) as u64.
+    /// Unique identifier for this expression to do deduplication during deserialization.
+    /// When serializing, this is set to a unique identifier for each combination of
+    /// expression, process and serialization run.
     /// When deserializing, if this ID has been seen before, the cached Arc is returned
-    /// instead of creating a new one, enabling expression sharing.
-    ///
-    /// IMPORTANT: This field is ONLY valid as a deduplication key within a single
-    /// serialized plan from a single process. It MUST NOT be used to deduplicate
-    /// across different plans or across different nodes/processes, as Arc pointer
-    /// addresses can collide (the same address may be reused for different allocations
-    /// in different processes, or even within the same process over time).
-    ///
-    /// The deserializer should use a fresh dedup cache for each plan it deserializes.
+    /// instead of creating a new one, enabling reconstruction of referential integrity
+    /// across serde roundtrips.
     #[prost(uint64, optional, tag = "30")]
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
