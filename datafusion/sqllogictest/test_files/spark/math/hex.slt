@@ -83,3 +83,25 @@ query T
 SELECT arrow_typeof(hex(dict_col)) FROM t_dict_binary LIMIT 1;
 ----
 Dictionary(Int32, Utf8)
+
+query TT
+WITH values AS (
+	SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS column1
+	FROM VALUES ('hi'), ('bye'), (NULL), ('rust')
+) SELECT hex(column1), arrow_typeof(hex(column1)) FROM values
+----
+6869 Utf8
+627965 Utf8
+NULL Utf8
+72757374 Utf8
+
+query TT
+WITH values AS (
+	SELECT arrow_cast(column1, 'Dictionary(Int32, Int64)') AS column1
+	FROM VALUES (1), (2), (NULL), (3)
+) SELECT hex(column1), arrow_typeof(hex(column1)) FROM values
+----
+1 Utf8
+2 Utf8
+NULL Utf8
+3 Utf8
