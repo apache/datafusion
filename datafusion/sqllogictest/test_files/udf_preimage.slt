@@ -504,3 +504,42 @@ logical_plan
 physical_plan
 01)FilterExec: c1_date32@0 < 2024-01-01 OR c1_date32@0 >= 2025-01-01 OR c1_date32@0 IS NULL
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#
+# Preimage with timestamp with America/New_York timezone
+#
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+statement ok
+create table t3(
+    c1_ts_tz timestamptz
+) as VALUES
+    (NULL),
+    ('2024-01-01T04:59:59Z'::timestamptz), -- local 2023-12-31 23:59:59 -05
+    ('2024-01-01T05:00:00Z'::timestamptz), -- local 2024-01-01 00:00:00 -05
+    ('2025-01-01T04:59:59Z'::timestamptz), -- local 2024-12-31 23:59:59 -05
+    ('2025-01-01T05:00:00Z'::timestamptz)  -- local 2025-01-01 00:00:00 -05
+;
+
+query P
+select c1_ts_tz
+from t3
+where extract(year from c1_ts_tz) = 2024
+order by c1_ts_tz
+----
+2024-01-01T00:00:00-05:00
+2024-12-31T23:59:59-05:00
+
+query TT
+explain select c1_ts_tz from t3 where extract(year from c1_ts_tz) = 2024
+----
+logical_plan
+01)Filter: t3.c1_ts_tz >= TimestampNanosecond(1704085200000000000, Some("America/New_York")) AND t3.c1_ts_tz < TimestampNanosecond(1735707600000000000, Some("America/New_York"))
+02)--TableScan: t3 projection=[c1_ts_tz]
+physical_plan
+01)FilterExec: c1_ts_tz@0 >= 1704085200000000000 AND c1_ts_tz@0 < 1735707600000000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.execution.time_zone;
