@@ -15942,7 +15942,7 @@ impl serde::Serialize for PhysicalExprNode {
         if let Some(v) = self.expr_id.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("exprArcId", ToString::to_string(&v).as_str())?;
+            struct_ser.serialize_field("exprId", ToString::to_string(&v).as_str())?;
         }
         if let Some(v) = self.expr_type.as_ref() {
             match v {
@@ -16016,7 +16016,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
     {
         const FIELDS: &[&str] = &[
             "expr_id",
-            "exprArcId",
+            "exprId",
             "column",
             "literal",
             "binary_expr",
@@ -16053,7 +16053,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
-            ExprArcId,
+            ExprId,
             Column,
             Literal,
             BinaryExpr,
@@ -16094,7 +16094,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                         E: serde::de::Error,
                     {
                         match value {
-                            "exprArcId" | "expr_id" => Ok(GeneratedField::ExprArcId),
+                            "exprId" | "expr_id" => Ok(GeneratedField::ExprId),
                             "column" => Ok(GeneratedField::Column),
                             "literal" => Ok(GeneratedField::Literal),
                             "binaryExpr" | "binary_expr" => Ok(GeneratedField::BinaryExpr),
@@ -16137,9 +16137,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalExprNode {
                 let mut expr_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
-                        GeneratedField::ExprArcId => {
+                        GeneratedField::ExprId => {
                             if expr_id__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("exprArcId"));
+                                return Err(serde::de::Error::duplicate_field("exprId"));
                             }
                             expr_id__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
