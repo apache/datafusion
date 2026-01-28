@@ -3694,7 +3694,8 @@ impl Drop for RecursionGuard {
         let prev = self.state.depth.fetch_sub(1, Ordering::SeqCst);
         if prev == 1 {
             // We just decremented from 1 to 0, clear the cache
-            self.state.cache.write().unwrap().clear();
+            let mut guard = self.state.cache.write().unwrap();
+            *guard = HashMap::new();
         }
     }
 }

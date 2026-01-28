@@ -2854,29 +2854,45 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
     let field_a = Field::new("a", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a]));
 
-    // Create a column expression
+    // Create a binary expression where both sides are the same Arc
+    // This allows us to test deduplication within a single deserialization
     let col_expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let binary_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::clone(&col_expr),
+        Operator::Plus,
+        Arc::clone(&col_expr), // Same Arc - will be deduplicated
+    ));
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter::new();
 
     // Serialize the expression
-    let proto = proto_converter.physical_expr_to_proto(&col_expr, &codec)?;
+    let proto = proto_converter.physical_expr_to_proto(&binary_expr, &codec)?;
 
-    // Create a single converter and reuse it for multiple expression deserializations
+    // Create a single converter and reuse it for multiple deserializations
     let deser_converter = DefaultPhysicalProtoConverter::new();
 
     // Verify cache starts empty
     assert_eq!(deser_converter.cache_size(), 0, "Cache should start empty");
 
     // First expression deserialization
-    let _expr1 = deser_converter.proto_to_physical_expr(
+    let expr1 = deser_converter.proto_to_physical_expr(
         &proto,
         ctx.task_ctx().as_ref(),
         &schema,
         &codec,
     )?;
+
+    // Check that deduplication worked within the deserialization
+    let binary1 = expr1
+        .as_any()
+        .downcast_ref::<BinaryExpr>()
+        .expect("Expected BinaryExpr");
+    assert!(
+        Arc::ptr_eq(binary1.left(), binary1.right()),
+        "Expected both sides to share the same Arc after deduplication"
+    );
 
     // Cache should be cleared after expression deserialization completes
     assert_eq!(
@@ -2885,8 +2901,8 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
         "Cache should be cleared after first expression deserialization"
     );
 
-    // Second expression deserialization with same converter should also work
-    let _expr2 = deser_converter.proto_to_physical_expr(
+    // Second expression deserialization with same converter
+    let expr2 = deser_converter.proto_to_physical_expr(
         &proto,
         ctx.task_ctx().as_ref(),
         &schema,
@@ -2898,6 +2914,26 @@ fn test_cache_cleared_after_expr_deserialization() -> Result<()> {
         deser_converter.cache_size(),
         0,
         "Cache should be cleared after second expression deserialization"
+    );
+
+    // Check that the second expression was also deserialized correctly
+    let binary2 = expr2
+        .as_any()
+        .downcast_ref::<BinaryExpr>()
+        .expect("Expected BinaryExpr");
+    assert!(
+        Arc::ptr_eq(binary2.left(), binary2.right()),
+        "Expected both sides to share the same Arc after deduplication"
+    );
+
+    // Check that there was no deduplication across deserializations
+    assert!(
+        !Arc::ptr_eq(binary1.left(), binary2.left()),
+        "Expected expressions from different deserializations to be different Arcs"
+    );
+    assert!(
+        !Arc::ptr_eq(binary1.right(), binary2.right()),
+        "Expected expressions from different deserializations to be different Arcs"
     );
 
     Ok(())
