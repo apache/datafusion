@@ -363,28 +363,49 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # Ok(())
 /// # }
 /// ```
-pub struct DFParserBuilder<'a> {
-    /// The SQL string to parse
-    sql: &'a str,
+pub struct DFParserBuilder<'a, 'b> {
+    /// Parser input: either raw SQL or tokens
+    input: ParserInput<'a>,
     /// The Dialect to use (defaults to [`GenericDialect`]
-    dialect: &'a dyn Dialect,
+    dialect: &'b dyn Dialect,
     /// The recursion limit while parsing
     recursion_limit: usize,
 }
 
-impl<'a> DFParserBuilder<'a> {
+/// Describes a possible input for parser
+pub enum ParserInput<'a> {
+    /// Raw SQL. Tokenization will be performed automatically as a
+    /// part of [`DFParserBuilder::build`]
+    Sql(&'a str),
+    /// Tokens
+    Tokens(Vec<TokenWithSpan>),
+}
+
+impl<'a> From<&'a str> for ParserInput<'a> {
+    fn from(sql: &'a str) -> Self {
+        Self::Sql(sql)
+    }
+}
+
+impl From<Vec<TokenWithSpan>> for ParserInput<'static> {
+    fn from(tokens: Vec<TokenWithSpan>) -> Self {
+        Self::Tokens(tokens)
+    }
+}
+
+impl<'a, 'b> DFParserBuilder<'a, 'b> {
     /// Create a new parser builder for the specified tokens using the
     /// [`GenericDialect`].
-    pub fn new(sql: &'a str) -> Self {
+    pub fn new(input: impl Into<ParserInput<'a>>) -> Self {
         Self {
-            sql,
+            input: input.into(),
             dialect: &DEFAULT_DIALECT,
             recursion_limit: DEFAULT_RECURSION_LIMIT,
         }
     }
 
     /// Adjust the parser builder's dialect. Defaults to [`GenericDialect`]
-    pub fn with_dialect(mut self, dialect: &'a dyn Dialect) -> Self {
+    pub fn with_dialect(mut self, dialect: &'b dyn Dialect) -> Self {
         self.dialect = dialect;
         self
     }
@@ -395,12 +416,18 @@ impl<'a> DFParserBuilder<'a> {
         self
     }
 
-    pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
-        let mut tokenizer = Tokenizer::new(self.dialect, self.sql);
-        // Convert TokenizerError -> ParserError
-        let tokens = tokenizer
-            .tokenize_with_location()
-            .map_err(ParserError::from)?;
+    /// Build resulting parser
+    pub fn build(self) -> Result<DFParser<'b>, DataFusionError> {
+        let tokens = match self.input {
+            ParserInput::Tokens(tokens) => tokens,
+            ParserInput::Sql(sql) => {
+                let mut tokenizer = Tokenizer::new(self.dialect, sql);
+                // Convert TokenizerError -> ParserError
+                tokenizer
+                    .tokenize_with_location()
+                    .map_err(ParserError::from)?
+            }
+        };
 
         Ok(DFParser {
             parser: Parser::new(self.dialect)
@@ -1162,7 +1189,7 @@ mod tests {
         BinaryOperator, DataType, ExactNumberInfo, Expr, Ident, ValueWithSpan,
     };
     use sqlparser::dialect::SnowflakeDialect;
-    use sqlparser::tokenizer::Span;
+    use sqlparser::tokenizer::{Location, Span, Whitespace};
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), DataFusionError> {
         let statements = DFParser::parse_sql(sql)?;
@@ -2066,6 +2093,36 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_custom_tokens() {
+        // Span mock.
+        let span = Span {
+            start: Location { line: 0, column: 0 },
+            end: Location { line: 0, column: 0 },
+        };
+        let tokens = vec![
+            TokenWithSpan {
+                token: Token::make_keyword("SELECT"),
+                span,
+            },
+            TokenWithSpan {
+                token: Token::Whitespace(Whitespace::Space),
+                span,
+            },
+            TokenWithSpan {
+                token: Token::Placeholder("1".to_string()),
+                span,
+            },
+        ];
+
+        let statements = DFParserBuilder::new(tokens)
+            .build()
+            .unwrap()
+            .parse_statements()
+            .unwrap();
+        assert_eq!(statements.len(), 1);
     }
 
     fn expect_parse_expr_ok(sql: &str, expected: ExprWithAlias) {
