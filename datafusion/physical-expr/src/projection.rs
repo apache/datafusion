@@ -21,6 +21,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expression_analyzer::ExpressionAnalyzerRegistry;
 use crate::expressions::{Column, Literal};
 use crate::utils::collect_columns;
 
@@ -660,24 +661,22 @@ impl ProjectionExprs {
                     }
                 }
             } else {
-                // TODO: expressions should compute their own statistics
-                //
-                // For now, try to preserve NDV if the expression references a
-                // single column (as a conservative upper bound).
-                // More accurate NDV propagation would require tracking injectivity
-                // of functions (e.g., `a + 1` preserves NDV exactly, `ABS(a)` may
-                // reduce it, `a % 10` bounds it to 10)
-                let columns = collect_columns(expr);
-                if columns.len() == 1 {
-                    let col_idx = columns.iter().next().unwrap().index();
-                    ColumnStatistics {
-                        distinct_count: stats.column_statistics[col_idx]
-                            .distinct_count
-                            .to_inexact(),
-                        ..ColumnStatistics::new_unknown()
-                    }
-                } else {
-                    ColumnStatistics::new_unknown()
+                // Use ExpressionAnalyzer to estimate NDV for arbitrary expressions
+                // This handles:
+                // - Column references (preserves NDV)
+                // - Literals (NDV = 1)
+                // - Injective functions like UPPER(col) (preserves NDV)
+                // - Non-injective functions like FLOOR(col) (reduces NDV)
+                // - Date/time functions like MONTH(col) (bounded NDV)
+                let registry = ExpressionAnalyzerRegistry::with_builtin_analyzers();
+                let distinct_count = registry
+                    .get_distinct_count(expr, &stats)
+                    .map(Precision::Inexact)
+                    .unwrap_or(Precision::Absent);
+
+                ColumnStatistics {
+                    distinct_count,
+                    ..ColumnStatistics::new_unknown()
                 }
             };
             column_statistics.push(col_stats);
