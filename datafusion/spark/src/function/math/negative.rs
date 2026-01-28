@@ -85,9 +85,9 @@ impl ScalarUDFImpl for SparkNegative {
 
 /// Core implementation of Spark's negative function
 fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let [_] = take_function_args("negative", args)?;
+    let [arg] = take_function_args("negative", args)?;
 
-    match &args[0] {
+    match arg {
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Null
             | DataType::UInt8
