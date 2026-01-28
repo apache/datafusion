@@ -180,7 +180,9 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     UnionMode::Dense => protobuf::UnionMode::Dense,
                 };
                 Self::Union(protobuf::Union {
-                    union_types: convert_arc_fields_to_proto_fields(fields.iter().map(|(_, item)|item))?,
+                    union_types: convert_arc_fields_to_proto_fields(
+                        fields.iter().map(|(_, item)| item),
+                    )?,
                     union_mode: union_mode.into(),
                     type_ids: fields.iter().map(|(x, _)| x as i32).collect(),
                 })
@@ -191,37 +193,44 @@ impl TryFrom<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     value: Some(Box::new(value_type.as_ref().try_into()?)),
                 }))
             }
-            DataType::Decimal32(precision, scale) => Self::Decimal32(protobuf::Decimal32Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal64(precision, scale) => Self::Decimal64(protobuf::Decimal64Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal128(precision, scale) => Self::Decimal128(protobuf::Decimal128Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Decimal256(precision, scale) => Self::Decimal256(protobuf::Decimal256Type {
-                precision: *precision as u32,
-                scale: *scale as i32,
-            }),
-            DataType::Map(field, sorted) => {
-                Self::Map(Box::new(
-                    protobuf::Map {
-                        field_type: Some(Box::new(field.as_ref().try_into()?)),
-                        keys_sorted: *sorted,
-                    }
-                ))
+            DataType::Decimal32(precision, scale) => {
+                Self::Decimal32(protobuf::Decimal32Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
             }
-            DataType::RunEndEncoded(_, _) => {
-                return Err(Error::General(
-                    "Proto serialization error: The RunEndEncoded data type is not yet supported".to_owned()
-                ))
+            DataType::Decimal64(precision, scale) => {
+                Self::Decimal64(protobuf::Decimal64Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal128(precision, scale) => {
+                Self::Decimal128(protobuf::Decimal128Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Decimal256(precision, scale) => {
+                Self::Decimal256(protobuf::Decimal256Type {
+                    precision: *precision as u32,
+                    scale: *scale as i32,
+                })
+            }
+            DataType::Map(field, sorted) => Self::Map(Box::new(protobuf::Map {
+                field_type: Some(Box::new(field.as_ref().try_into()?)),
+                keys_sorted: *sorted,
+            })),
+            DataType::RunEndEncoded(run_ends_field, values_field) => {
+                Self::RunEndEncoded(Box::new(protobuf::RunEndEncoded {
+                    run_ends_field: Some(Box::new(run_ends_field.as_ref().try_into()?)),
+                    values_field: Some(Box::new(values_field.as_ref().try_into()?)),
+                }))
             }
             DataType::ListView(_) | DataType::LargeListView(_) => {
-                return Err(Error::General(format!("Proto serialization error: {val} not yet supported")))
+                return Err(Error::General(format!(
+                    "Proto serialization error: {val} not yet supported"
+                )));
             }
         };
 
@@ -676,6 +685,18 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                         protobuf::ScalarDictionaryValue {
                             index_type: Some(index_type.as_ref().try_into()?),
                             value: Some(Box::new(value)),
+                        },
+                    ))),
+                })
+            }
+
+            ScalarValue::RunEndEncoded(run_ends_field, values_field, val) => {
+                Ok(protobuf::ScalarValue {
+                    value: Some(Value::RunEndEncodedValue(Box::new(
+                        protobuf::ScalarRunEndEncodedValue {
+                            run_ends_field: Some(run_ends_field.as_ref().try_into()?),
+                            values_field: Some(values_field.as_ref().try_into()?),
+                            value: Some(Box::new(val.as_ref().try_into()?)),
                         },
                     ))),
                 })
