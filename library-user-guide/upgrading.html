@@ -409,7 +409,39 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-53-0-0">
 <h2>DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code><a class="headerlink" href="#datafusion-53-0-0" title="Link to this heading">#</a></h2>
-<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.</p>
+<p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code> has not been released yet. The information provided
+*in this section pertains to features and changes that have already been merged
+*to the main branch and are awaiting release in this version. See <a class="reference external" href="https://github.com/apache/datafusion/issues/19692">#19692</a> for
+*more details.</p>
+<section id="filesinkconfig-adds-file-output-mode">
+<h3><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code><a class="headerlink" href="#filesinkconfig-adds-file-output-mode" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">file_output_mode:</span> <span class="pre">FileOutputMode</span></code> field to control
+single-file vs directory output behavior. Any code constructing <code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> via struct
+literals must initialize this field.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">FileOutputMode</span></code> enum has three variants:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Automatic</span></code> (default): Infer output mode from the URL (extension/trailing <code class="docutils literal notranslate"><span class="pre">/</span></code> heuristic)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SingleFile</span></code>: Write to a single file at the exact output path</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Directory</span></code>: Write to a directory with generated filenames</p></li>
+</ul>
+<p><strong>Before:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">FileSinkConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">file_extension</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;parquet&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>After:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion_datasource</span><span class="p">::</span><span class="n">file_sink_config</span><span class="p">::</span><span class="n">FileOutputMode</span><span class="p">;</span>
+
+<span class="n">FileSinkConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="w">    </span><span class="n">file_extension</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;parquet&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">file_output_mode</span><span class="p">:</span><span class="w"> </span><span class="nc">FileOutputMode</span><span class="p">::</span><span class="n">Automatic</span><span class="p">,</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 <section id="simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api">
 <h3><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API<a class="headerlink" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait has been removed and replaced with the concrete <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> struct. This simplifies the expression simplification API and removes the need for trait objects.</p>
@@ -2305,6 +2337,7 @@ take care of constructing the <code class="docutils literal notranslate"><span c
   <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-53-0-0">DataFusion <code class="docutils literal notranslate"><span class="pre">53.0.0</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesinkconfig-adds-file-output-mode"><code class="docutils literal notranslate"><span class="pre">FileSinkConfig</span></code> adds <code class="docutils literal notranslate"><span class="pre">file_output_mode</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifyinfo-trait-removed-simplifycontext-now-uses-builder-style-api"><code class="docutils literal notranslate"><span class="pre">SimplifyInfo</span></code> trait removed, <code class="docutils literal notranslate"><span class="pre">SimplifyContext</span></code> now uses builder-style API</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filterexec-builder-methods-deprecated"><code class="docutils literal notranslate"><span class="pre">FilterExec</span></code> builder methods deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protobuf-conversion-trait-added">Protobuf conversion trait added</a></li>
