@@ -322,7 +322,7 @@ mod tests {
                 assert_eq!(interval.upper().clone(), expected_upper);
             }
             PreimageResult::None => {
-                panic!("Expected Range, got None for input {:?}", input)
+                panic!("Expected Range, got None for input {input:?}")
             }
         }
     }
@@ -337,8 +337,7 @@ mod tests {
         let result = floor_func.preimage(&args, &lit_expr, &info).unwrap();
         assert!(
             matches!(result, PreimageResult::None),
-            "Expected None for input {:?}",
-            input
+            "Expected None for input {input:?}"
         );
     }
 
