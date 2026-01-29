@@ -1127,3 +1127,333 @@ mod tests {
         assert_eq!(result, Some(ordering));
     }
 }
+
+#[cfg(test)]
+mod benchmark_tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use async_trait::async_trait;
+    use datafusion_catalog::Session;
+    use datafusion_datasource::TableSchema;
+    use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_compression_type::FileCompressionType;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+    use object_store::{
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, path::Path,
+    };
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[derive(Debug)]
+    struct MockDelayedStore {
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockDelayedStore {
+        async fn put(
+            &self,
+            _location: &Path,
+            _payload: PutPayload,
+        ) -> object_store::Result<object_store::PutResult> {
+            Ok(object_store::PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+        async fn put_opts(
+            &self,
+            _location: &Path,
+            _payload: PutPayload,
+            _opts: PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            Ok(object_store::PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+        async fn put_multipart(
+            &self,
+            _location: &Path,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            unimplemented!()
+        }
+        async fn put_multipart_opts(
+            &self,
+            _location: &Path,
+            _opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            unimplemented!()
+        }
+        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn get_opts(
+            &self,
+            _location: &Path,
+            _options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn get_range(
+            &self,
+            _location: &Path,
+            _range: std::ops::Range<u64>,
+        ) -> object_store::Result<bytes::Bytes> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+            let delay = self.delay;
+            let prefix = prefix.cloned();
+            let fut = async move {
+                tokio::time::sleep(delay).await;
+                Ok(ObjectMeta {
+                    location: prefix
+                        .unwrap_or_else(|| Path::from("/"))
+                        .child("file.parquet"),
+                    last_modified: chrono::Utc::now(),
+                    size: 1024,
+                    e_tag: None,
+                    version: None,
+                })
+            };
+            stream::once(fut).boxed()
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            tokio::time::sleep(self.delay).await;
+            let prefix_path = prefix.cloned().unwrap_or_else(|| Path::from("/"));
+            Ok(ListResult {
+                objects: vec![ObjectMeta {
+                    location: prefix_path.child("file.parquet"),
+                    last_modified: chrono::Utc::now(),
+                    size: 1024,
+                    e_tag: None,
+                    version: None,
+                }],
+                common_prefixes: vec![],
+            })
+        }
+        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        async fn rename(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        async fn copy_if_not_exists(
+            &self,
+            _from: &Path,
+            _to: &Path,
+        ) -> object_store::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl std::fmt::Display for MockDelayedStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "MockDelayedStore")
+        }
+    }
+
+    use datafusion_common::DFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use futures::{StreamExt, stream};
+    use std::any::Any;
+    use std::collections::HashMap;
+
+    struct MockSession {
+        runtime: Arc<RuntimeEnv>,
+        session_config: datafusion_execution::config::SessionConfig,
+    }
+
+    #[async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn config(&self) -> &datafusion_execution::config::SessionConfig {
+            &self.session_config
+        }
+        async fn create_physical_plan(
+            &self,
+            _plan: &LogicalPlan,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            todo!()
+        }
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _schema: &DFSchema,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            todo!()
+        }
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            todo!()
+        }
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            todo!()
+        }
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            todo!()
+        }
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            &self.runtime
+        }
+        fn execution_props(&self) -> &ExecutionProps {
+            todo!()
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn table_options(&self) -> &datafusion_common::config::TableOptions {
+            todo!()
+        }
+        fn table_options_mut(&mut self) -> &mut datafusion_common::config::TableOptions {
+            todo!()
+        }
+        fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
+            todo!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockFormat;
+    #[async_trait]
+    impl datafusion_datasource::file_format::FileFormat for MockFormat {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        async fn infer_schema(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _objects: &[ObjectMeta],
+        ) -> datafusion_common::Result<SchemaRef> {
+            Ok(Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Int32,
+                false,
+            )])))
+        }
+        async fn infer_stats(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _table_schema: SchemaRef,
+            _object: &ObjectMeta,
+        ) -> datafusion_common::Result<Statistics> {
+            Ok(Statistics::new_unknown(&_table_schema))
+        }
+        async fn create_physical_plan(
+            &self,
+            _state: &dyn Session,
+            _conf: FileScanConfig,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            todo!()
+        }
+        fn file_source(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
+            todo!()
+        }
+        fn get_ext(&self) -> String {
+            "parquet".to_string()
+        }
+        fn get_ext_with_compression(
+            &self,
+            _c: &FileCompressionType,
+        ) -> datafusion_common::Result<String> {
+            Ok("parquet".to_string())
+        }
+        fn compression_type(&self) -> Option<FileCompressionType> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn benchmark_parallel_listing() -> datafusion_common::Result<()> {
+        let delay = Duration::from_millis(100);
+        let num_paths = 10;
+        let store = Arc::new(MockDelayedStore { delay });
+        let runtime = Arc::new(RuntimeEnv::default());
+        let url = url::Url::parse("test://").unwrap();
+        runtime.register_object_store(&url, store.clone());
+
+        let session = MockSession {
+            runtime,
+            session_config: datafusion_execution::config::SessionConfig::default(),
+        };
+
+        let paths: Vec<ListingTableUrl> = (0..num_paths)
+            .map(|i| ListingTableUrl::parse(format!("test:///table/{}", i)).unwrap())
+            .collect();
+
+        let options = ListingOptions::new(Arc::new(MockFormat));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let config = ListingTableConfig::new_with_multi_paths(paths.clone())
+            .with_listing_options(options)
+            .with_schema(schema);
+
+        let table = ListingTable::try_new(config)?;
+
+        let start = Instant::now();
+        let _ = table.list_files_for_scan(&session, &[], None).await?;
+        let duration = start.elapsed();
+
+        println!(
+            "Listing {} paths with {}ms delay took: {:?}",
+            num_paths,
+            delay.as_millis(),
+            duration
+        );
+
+        // If it was sequential, it would take >= num_paths * delay (1000ms).
+        // With JoinSet/concurrent, it should be much closer to 100ms.
+        assert!(
+            duration < Duration::from_millis(500),
+            "Listing took too long: {:?}",
+            duration
+        );
+
+        Ok(())
+    }
+}

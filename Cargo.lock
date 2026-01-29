@@ -1836,6 +1836,8 @@ version = "52.1.0"
 dependencies = [
  "arrow",
  "async-trait",
+ "bytes",
+ "chrono",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-datasource",
@@ -1851,6 +1853,7 @@ dependencies = [
  "log",
  "object_store",
  "tokio",
+ "url",
 ]
 
 [[package]]

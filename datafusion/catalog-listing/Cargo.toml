@@ -46,7 +46,10 @@ futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+bytes = { workspace = true }
 tokio = { workspace = true }
+chrono = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 datafusion-datasource-parquet = { workspace = true }
