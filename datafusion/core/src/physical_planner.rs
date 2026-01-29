@@ -957,57 +957,13 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.schema();
-
-                let runtime_expr =
-                    self.create_physical_expr(predicate, input_dfschema, session_state)?;
-
-                let input_schema = input.schema();
-                let filter = match self.try_plan_async_exprs(
-                    input_schema.fields().len(),
-                    PlannedExprResult::Expr(vec![runtime_expr]),
-                    input_schema.as_arrow(),
-                )? {
-                    PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            physical_input,
-                        )
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
-                    }
-                    PlanAsyncExpr::Async(
-                        async_map,
-                        PlannedExprResult::Expr(runtime_expr),
-                    ) => {
-                        let async_exec = AsyncFuncExec::try_new(
-                            async_map.async_exprs,
-                            physical_input,
-                        )?;
-                        FilterExecBuilder::new(
-                            Arc::clone(&runtime_expr[0]),
-                            Arc::new(async_exec),
-                        )
-                        // project the output columns excluding the async functions
-                        // The async functions are always appended to the end of the schema.
-                        .apply_projection(Some(
-                            (0..input.schema().fields().len()).collect(),
-                        ))?
-                        .with_batch_size(session_state.config().batch_size())
-                        .build()?
-                    }
-                    _ => {
-                        return internal_err!(
-                            "Unexpected result from try_plan_async_exprs"
-                        );
-                    }
-                };
-
-                let selectivity = session_state
-                    .config()
-                    .options()
-                    .optimizer
-                    .default_filter_selectivity;
-                Arc::new(filter.with_default_selectivity(selectivity)?)
+                self.create_filter_exec(
+                    predicate,
+                    physical_input,
+                    input_dfschema,
+                    session_state,
+                    input_dfschema.fields().len(),
+                )?
             }
             LogicalPlan::Repartition(Repartition {
                 input,
@@ -1749,9 +1705,14 @@ impl DefaultPhysicalPlanner {
         if !post_scan_filters.is_empty()
             && let Some(filter_expr) = conjunction(post_scan_filters)
         {
-            let physical_filter =
-                self.create_physical_expr(&filter_expr, &scan_df_schema, session_state)?;
-            plan = Arc::new(FilterExecBuilder::new(physical_filter, plan).build()?);
+            let num_scan_columns = scan_output_schema.fields().len();
+            plan = self.create_filter_exec(
+                &filter_expr,
+                plan,
+                &scan_df_schema,
+                session_state,
+                num_scan_columns,
+            )?;
         }
 
         // Wrap with ProjectionExec if projection is present and differs from scan output
@@ -1765,21 +1726,12 @@ impl DefaultPhysicalPlanner {
                 // Unnormalize projection expressions to match the scan output schema
                 let unnormalized_proj_exprs =
                     unnormalize_cols(proj_exprs.iter().cloned());
-                let physical_exprs: Vec<ProjectionExpr> = unnormalized_proj_exprs
-                    .iter()
-                    .map(|e| {
-                        let physical =
-                            self.create_physical_expr(e, &scan_df_schema, session_state)?;
-                        // Use the original qualified name for the output alias
-                        let name = e.schema_name().to_string();
-                        Ok(ProjectionExpr {
-                            expr: physical,
-                            alias: name,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                plan = Arc::new(ProjectionExec::try_new(physical_exprs, plan)?);
+                plan = self.create_projection_exec(
+                    &unnormalized_proj_exprs,
+                    plan,
+                    &scan_df_schema,
+                    session_state,
+                )?;
             }
         }
 
@@ -2879,6 +2831,113 @@ impl DefaultPhysicalPlanner {
             }
             _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
         }
+    }
+
+    /// Creates a ProjectionExec from logical expressions, handling async UDF expressions.
+    ///
+    /// This method encapsulates the full "logical projection → physical projection" conversion,
+    /// including async expression handling via `try_plan_async_exprs` and `AsyncFuncExec`.
+    /// Output names are derived from each expression's `schema_name()`.
+    fn create_projection_exec(
+        &self,
+        exprs: &[Expr],
+        input: Arc<dyn ExecutionPlan>,
+        input_dfschema: &DFSchema,
+        session_state: &SessionState,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Convert logical expressions to physical expressions with names
+        let physical_exprs: Vec<(Arc<dyn PhysicalExpr>, String)> = exprs
+            .iter()
+            .map(|e| {
+                let physical =
+                    self.create_physical_expr(e, input_dfschema, session_state)?;
+                let name = e.schema_name().to_string();
+                Ok((physical, name))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let num_input_columns = input.schema().fields().len();
+        let input_schema = input.schema();
+
+        match self.try_plan_async_exprs(
+            num_input_columns,
+            PlannedExprResult::ExprWithName(physical_exprs),
+            input_schema.as_ref(),
+        )? {
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => {
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(proj_exprs, input)?))
+            }
+            PlanAsyncExpr::Async(
+                async_map,
+                PlannedExprResult::ExprWithName(physical_exprs),
+            ) => {
+                let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input)?;
+                let proj_exprs: Vec<ProjectionExpr> = physical_exprs
+                    .into_iter()
+                    .map(|(expr, alias)| ProjectionExpr { expr, alias })
+                    .collect();
+                Ok(Arc::new(ProjectionExec::try_new(
+                    proj_exprs,
+                    Arc::new(async_exec),
+                )?))
+            }
+            _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
+        }
+    }
+
+    /// Creates a FilterExec from a logical filter expression, handling async UDF expressions.
+    ///
+    /// This method encapsulates the full "logical filter → physical filter" conversion,
+    /// including async expression handling via `try_plan_async_exprs` and `AsyncFuncExec`.
+    fn create_filter_exec(
+        &self,
+        filter_expr: &Expr,
+        input: Arc<dyn ExecutionPlan>,
+        input_dfschema: &DFSchema,
+        session_state: &SessionState,
+        num_output_columns: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // Convert logical expression to physical expression
+        let runtime_expr =
+            self.create_physical_expr(filter_expr, input_dfschema, session_state)?;
+
+        // Check for async expressions
+        let filter = match self.try_plan_async_exprs(
+            num_output_columns,
+            PlannedExprResult::Expr(vec![runtime_expr]),
+            input_dfschema.as_arrow(),
+        )? {
+            // Sync case - simple FilterExec
+            PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
+                FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), input)
+                    .with_batch_size(session_state.config().batch_size())
+                    .build()?
+            }
+            // Async case - AsyncFuncExec + FilterExec with projection
+            PlanAsyncExpr::Async(async_map, PlannedExprResult::Expr(runtime_expr)) => {
+                let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input)?;
+                FilterExecBuilder::new(Arc::clone(&runtime_expr[0]), Arc::new(async_exec))
+                    // project the output columns excluding the async functions
+                    // The async functions are always appended to the end of the schema.
+                    .apply_projection(Some((0..num_output_columns).collect()))?
+                    .with_batch_size(session_state.config().batch_size())
+                    .build()?
+            }
+            _ => return internal_err!("Unexpected result from try_plan_async_exprs"),
+        };
+
+        // Apply default selectivity from config
+        let selectivity = session_state
+            .config()
+            .options()
+            .optimizer
+            .default_filter_selectivity;
+
+        Ok(Arc::new(filter.with_default_selectivity(selectivity)?))
     }
 
     fn try_plan_async_exprs(

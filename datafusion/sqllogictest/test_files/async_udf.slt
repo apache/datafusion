@@ -65,20 +65,20 @@ physical_plan
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in filter
-query error
+query I
 select * from data where async_abs(x) < 5;
 ----
-DataFusion error: Internal error: async functions should not be called directly.
-This issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues
-
+2
 
 query TT
 explain select * from data where async_abs(x) < 5;
 ----
 logical_plan TableScan: data projection=[x], unsupported_filters=[async_abs(data.x) < Int32(5)]
 physical_plan
-01)FilterExec: async_abs(x@0) < 5
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)FilterExec: __async_fn_0@1 < 5, projection=[x@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----AsyncFuncExec: async_expr=[async_expr(name=__async_fn_0, expr=async_abs(x@0))]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Async udf can be used in projection
 query I rowsort
