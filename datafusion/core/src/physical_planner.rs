@@ -2686,47 +2686,41 @@ impl DefaultPhysicalPlanner {
         schema: &Schema,
     ) -> Result<PlanAsyncExpr> {
         let mut async_map = AsyncMapper::new(num_input_columns);
-        match &physical_expr {
+        let new_physical_expr = match physical_expr {
             PlannedExprResult::ExprWithName(exprs) => {
-                exprs
+                let new_exprs = exprs
                     .iter()
-                    .try_for_each(|(expr, _)| async_map.find_references(expr, schema))?;
+                    .map(|(expr, name)| {
+                        // find_and_map will:
+                        // 1. Identify nested async UDFs bottom-up
+                        // 2. Rewrite them to Columns referencing the async_map
+                        // 3. Return the fully rewritten expression
+                        let new_expr = async_map.find_and_map(expr, schema)?;
+                        Ok((new_expr, name.clone()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                PlannedExprResult::ExprWithName(new_exprs)
             }
             PlannedExprResult::Expr(exprs) => {
-                exprs
-                    .iter()
-                    .try_for_each(|expr| async_map.find_references(expr, schema))?;
-            }
-        }
-
-        if async_map.is_empty() {
-            return Ok(PlanAsyncExpr::Sync(physical_expr));
-        }
-
-        let new_exprs = match physical_expr {
-            PlannedExprResult::ExprWithName(exprs) => PlannedExprResult::ExprWithName(
-                exprs
-                    .iter()
-                    .map(|(expr, column_name)| {
-                        let new_expr = Arc::clone(expr)
-                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
-                        Ok((new_expr.data, column_name.to_string()))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            PlannedExprResult::Expr(exprs) => PlannedExprResult::Expr(
-                exprs
+                let new_exprs = exprs
                     .iter()
                     .map(|expr| {
-                        let new_expr = Arc::clone(expr)
-                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
-                        Ok(new_expr.data)
+                        let new_expr = async_map.find_and_map(expr, schema)?;
+                        Ok(new_expr)
                     })
-                    .collect::<Result<_>>()?,
-            ),
+                    .collect::<Result<Vec<_>>>()?;
+                PlannedExprResult::Expr(new_exprs)
+            }
         };
-        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
-        Ok(PlanAsyncExpr::Async(async_map, new_exprs))
+
+        if async_map.is_empty() {
+            // If no async exprs found, result is the same as input
+            // (though find_and_map returns clones, structural equality holds)
+            return Ok(PlanAsyncExpr::Sync(new_physical_expr));
+        }
+
+        // Pass the rewritten expressions
+        Ok(PlanAsyncExpr::Async(async_map, new_physical_expr))
     }
 }
 
