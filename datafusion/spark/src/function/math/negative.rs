@@ -195,7 +195,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             | ScalarValue::UInt16(_)
             | ScalarValue::UInt32(_)
             | ScalarValue::UInt64(_) => Ok(arg.clone()),
-            sv if sv.is_null() => Ok(arg.clone()),
+            _ if sv.is_null() => Ok(arg.clone()),
 
             // Signed integers - wrapping negation
             ScalarValue::Int8(Some(v)) => {
