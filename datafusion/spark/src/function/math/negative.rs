@@ -56,7 +56,7 @@ impl Default for SparkNegative {
 impl SparkNegative {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::any(1, Volatility::Immutable),
         }
     }
 }
