@@ -67,6 +67,7 @@ jobs:
       - image=ubuntu24-full-x64
       - extras=s3-cache
       - disk=large
+      - tag=datafusion
     container:
       image: amd64/rust
     steps:
