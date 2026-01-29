@@ -1012,10 +1012,10 @@ fn try_unifying_projections(
     // See discussion in: https://github.com/apache/datafusion/issues/8296
     if column_ref_map.iter().any(|(column, count)| {
         *count > 1
-            && matches!(
-                child.expr()[column.index()].expr.placement(),
-                ExpressionPlacement::PlaceAtRoot
-            )
+            && !child.expr()[column.index()]
+                .expr
+                .placement()
+                .should_push_to_leaves()
     }) {
         return Ok(None);
     }

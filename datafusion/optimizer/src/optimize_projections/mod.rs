@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, ExpressionPlacement, Projection, TableScan,
-    Unnest, Window, logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
+    logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -530,12 +530,9 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
         usage > 1
-            && matches!(
-                prev_projection.expr
-                    [prev_projection.schema.index_of_column(col).unwrap()]
-                .placement(),
-                ExpressionPlacement::PlaceAtRoot
-            )
+            && !prev_projection.expr[prev_projection.schema.index_of_column(col).unwrap()]
+                .placement()
+                .should_push_to_leaves()
     }) {
         // no change
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
