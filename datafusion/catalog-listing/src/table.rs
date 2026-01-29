@@ -730,6 +730,9 @@ impl ListingTable {
             let partition_cols = self.options.table_partition_cols.clone();
             let filters = filters.to_vec();
 
+            let meta_fetch_concurrency = config.execution.meta_fetch_concurrency;
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(meta_fetch_concurrency));
+
             for table_path in &self.table_paths {
                 let store = Arc::clone(&store);
                 let table_path = table_path.clone();
@@ -738,8 +741,12 @@ impl ListingTable {
                 let file_extension = file_extension.clone();
                 let partition_cols = partition_cols.clone();
                 let filters = filters.clone();
+                let semaphore = Arc::clone(&semaphore);
 
                 join_set.spawn(async move {
+                    let _permit = semaphore.acquire_owned().await.map_err(|e| {
+                        datafusion_common::DataFusionError::External(Box::new(e))
+                    })?;
                     let stream = pruned_partition_list(
                         &config,
                         &runtime_env,
@@ -1412,14 +1419,50 @@ mod benchmark_tests {
     async fn benchmark_parallel_listing() -> datafusion_common::Result<()> {
         let delay = Duration::from_millis(100);
         let num_paths = 10;
-        let store = Arc::new(MockDelayedStore { delay });
+
+        // 1. Test with high concurrency (should take ~100ms)
+        println!("Running benchmark with high concurrency (32)...");
+        run_parallel_listing_benchmark(
+            num_paths,
+            delay,
+            32,
+            Duration::from_millis(400), // Expect ~100ms
+        )
+        .await?;
+
+        // 2. Test with low concurrency (should take ~500ms because 10 paths / 2 concurrent * 100ms = 500ms)
+        println!("Running benchmark with low concurrency (2)...");
+        run_parallel_listing_benchmark(
+            num_paths,
+            delay,
+            2,
+            Duration::from_millis(800), // Expect ~500ms
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn run_parallel_listing_benchmark(
+        num_paths: usize,
+        delay: Duration,
+        concurrency: usize,
+        max_duration: Duration,
+    ) -> datafusion_common::Result<()> {
+        let delay_store = Arc::new(MockDelayedStore { delay });
         let runtime = Arc::new(RuntimeEnv::default());
         let url = url::Url::parse("test://").unwrap();
-        runtime.register_object_store(&url, store.clone());
+        runtime.register_object_store(&url, delay_store);
+
+        let mut session_config = datafusion_execution::config::SessionConfig::default();
+        session_config
+            .options_mut()
+            .execution
+            .meta_fetch_concurrency = concurrency;
 
         let session = MockSession {
             runtime,
-            session_config: datafusion_execution::config::SessionConfig::default(),
+            session_config,
         };
 
         let paths: Vec<ListingTableUrl> = (0..num_paths)
@@ -1440,16 +1483,23 @@ mod benchmark_tests {
         let duration = start.elapsed();
 
         println!(
-            "Listing {num_paths} paths with {}ms delay took: {duration:?}",
+            "Listing {num_paths} paths with {}ms delay (concurrency={concurrency}) took: {duration:?}",
             delay.as_millis(),
         );
 
-        // If it was sequential, it would take >= num_paths * delay (1000ms).
-        // With JoinSet/concurrent, it should be much closer to 100ms.
         assert!(
-            duration < Duration::from_millis(500),
-            "Listing took too long: {duration:?}"
+            duration < max_duration,
+            "Listing took too long (concurrency={concurrency}): {duration:?} (expected < {max_duration:?})"
         );
+
+        // Also ensure it's not TOO fast (demonstrates it's actually waiting)
+        if concurrency < num_paths {
+            let min_expected = delay * (num_paths / concurrency) as u32;
+            assert!(
+                duration >= min_expected * 8 / 10, // 20% margin
+                "Listing was too fast (concurrency={concurrency}): {duration:?} (expected >= {min_expected:?})"
+            );
+        }
 
         Ok(())
     }
