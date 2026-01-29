@@ -61,7 +61,12 @@ impl ListingTableConfigExt for ListingTableConfig {
             .table_paths
             .first()
             .unwrap()
-            .list_all_files(state, store.as_ref(), "")
+            .list_all_files(
+                state.config_options(),
+                state.runtime_env(),
+                store.as_ref(),
+                "",
+            )
             .await?
             .next()
             .await

@@ -41,7 +41,8 @@ async fn test_pruned_partition_list_empty() {
     ]);
     let filter = Expr::eq(col("mypartition"), lit("val1"));
     let pruned = pruned_partition_list(
-        state.as_ref(),
+        state.config_options(),
+        state.runtime_env(),
         store.as_ref(),
         &ListingTableUrl::parse("file:///tablepath/").unwrap(),
         &[filter],
@@ -68,7 +69,8 @@ async fn test_pruned_partition_list() {
     ]);
     let filter = Expr::eq(col("mypartition"), lit("val1"));
     let pruned = pruned_partition_list(
-        state.as_ref(),
+        state.config_options(),
+        state.runtime_env(),
         store.as_ref(),
         &ListingTableUrl::parse("file:///tablepath/").unwrap(),
         &[filter],
@@ -108,7 +110,8 @@ async fn test_pruned_partition_list_multi() {
     let filter1 = Expr::eq(col("part1"), lit("p1v2"));
     let filter2 = Expr::eq(col("part2"), lit("p2v1"));
     let pruned = pruned_partition_list(
-        state.as_ref(),
+        state.config_options(),
+        state.runtime_env(),
         store.as_ref(),
         &ListingTableUrl::parse("file:///tablepath/").unwrap(),
         &[filter1, filter2],

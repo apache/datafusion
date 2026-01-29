@@ -17,11 +17,12 @@
 
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::TableScopedPath;
 use datafusion_execution::cache::cache_manager::CachedFileList;
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_session::Session;
+use datafusion_execution::runtime_env::RuntimeEnv;
 
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -246,12 +247,13 @@ impl ListingTableUrl {
     /// optionally filtering by a path prefix
     pub async fn list_prefixed_files<'a>(
         &'a self,
-        ctx: &'a dyn Session,
+        config: &'a ConfigOptions,
+        runtime_env: &'a Arc<RuntimeEnv>,
         store: &'a dyn ObjectStore,
         prefix: Option<Path>,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        let exec_options = &ctx.config_options().execution;
+        let exec_options = &config.execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
 
         // Build full_prefix for non-cached path and head() calls
@@ -265,7 +267,7 @@ impl ListingTableUrl {
 
         let list: BoxStream<'a, Result<ObjectMeta>> = if self.is_collection() {
             list_with_cache(
-                ctx,
+                runtime_env,
                 store,
                 self.table_ref.as_ref(),
                 &self.prefix,
@@ -281,7 +283,7 @@ impl ListingTableUrl {
                 // Retry as though it were a prefix (aka a collection)
                 Err(object_store::Error::NotFound { .. }) => {
                     list_with_cache(
-                        ctx,
+                        runtime_env,
                         store,
                         self.table_ref.as_ref(),
                         &self.prefix,
@@ -306,11 +308,12 @@ impl ListingTableUrl {
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
     pub async fn list_all_files<'a>(
         &'a self,
-        ctx: &'a dyn Session,
+        config: &'a ConfigOptions,
+        runtime_env: &'a Arc<RuntimeEnv>,
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        self.list_prefixed_files(ctx, store, None, file_extension)
+        self.list_prefixed_files(config, runtime_env, store, None, file_extension)
             .await
     }
 
@@ -377,7 +380,7 @@ impl ListingTableUrl {
 /// On cache miss, the full table is always listed and cached, ensuring
 /// subsequent prefix queries can be served from cache.
 async fn list_with_cache<'b>(
-    ctx: &'b dyn Session,
+    runtime_env: &'b Arc<RuntimeEnv>,
     store: &'b dyn ObjectStore,
     table_ref: Option<&TableReference>,
     table_base_path: &Path,
@@ -393,7 +396,7 @@ async fn list_with_cache<'b>(
         None => table_base_path.clone(),
     };
 
-    match ctx.runtime_env().cache_manager.get_list_files_cache() {
+    match runtime_env.cache_manager.get_list_files_cache() {
         None => Ok(store
             .list(Some(&full_prefix))
             .map(|res| res.map_err(|e| DataFusionError::ObjectStore(Box::new(e))))
@@ -520,6 +523,7 @@ mod tests {
     use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_session::Session;
     use object_store::{
         GetOptions, GetResult, ListResult, MultipartUpload, PutMultipartOptions,
         PutPayload,
@@ -896,7 +900,13 @@ mod tests {
 
             // Get results WITHOUT cache (sorted for comparison)
             let mut results_no_cache: Vec<String> = url
-                .list_prefixed_files(&session_no_cache, &store, prefix.clone(), "parquet")
+                .list_prefixed_files(
+                    session_no_cache.config().options(),
+                    session_no_cache.runtime_env(),
+                    &store,
+                    prefix.clone(),
+                    "parquet",
+                )
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?
@@ -908,7 +918,8 @@ mod tests {
             // Get results WITH cache (first call - cache miss, sorted for comparison)
             let mut results_with_cache_miss: Vec<String> = url
                 .list_prefixed_files(
-                    &session_with_cache,
+                    session_with_cache.config().options(),
+                    session_with_cache.runtime_env(),
                     &store,
                     prefix.clone(),
                     "parquet",
@@ -923,7 +934,13 @@ mod tests {
 
             // Get results WITH cache (second call - cache hit, sorted for comparison)
             let mut results_with_cache_hit: Vec<String> = url
-                .list_prefixed_files(&session_with_cache, &store, prefix, "parquet")
+                .list_prefixed_files(
+                    session_with_cache.config().options(),
+                    session_with_cache.runtime_env(),
+                    &store,
+                    prefix,
+                    "parquet",
+                )
                 .await?
                 .try_collect::<Vec<_>>()
                 .await?
@@ -971,7 +988,13 @@ mod tests {
 
         // First: query full table (populates cache)
         let full_results: Vec<String> = url
-            .list_prefixed_files(&session, &store, None, "parquet")
+            .list_prefixed_files(
+                session.config().options(),
+                session.runtime_env(),
+                &store,
+                None,
+                "parquet",
+            )
             .await?
             .try_collect::<Vec<_>>()
             .await?
@@ -983,7 +1006,8 @@ mod tests {
         // Second: query with prefix (should be served from cache)
         let mut us_results: Vec<String> = url
             .list_prefixed_files(
-                &session,
+                session.config().options(),
+                session.runtime_env(),
                 &store,
                 Some(Path::from("region=US")),
                 "parquet",
@@ -1004,7 +1028,8 @@ mod tests {
         // Third: different prefix (also from cache)
         let eu_results: Vec<String> = url
             .list_prefixed_files(
-                &session,
+                session.config().options(),
+                session.runtime_env(),
                 &store,
                 Some(Path::from("region=EU")),
                 "parquet",
@@ -1060,9 +1085,11 @@ mod tests {
         file_extension: &str,
     ) -> Result<Vec<String>> {
         let session = MockSession::new();
+        let config = session.config().options();
+        let runtime_env = session.runtime_env();
         let url = ListingTableUrl::parse(url)?;
         let files = url
-            .list_prefixed_files(&session, store, prefix, file_extension)
+            .list_prefixed_files(config, runtime_env, store, prefix, file_extension)
             .await?
             .try_collect::<Vec<_>>()
             .await?

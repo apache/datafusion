@@ -276,7 +276,12 @@ impl ListingOptions {
         let store = state.runtime_env().object_store(table_path)?;
 
         let files: Vec<_> = table_path
-            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .list_all_files(
+                state.config_options(),
+                state.runtime_env(),
+                store.as_ref(),
+                &self.file_extension,
+            )
             .await?
             // Empty files cannot affect schema but may throw when trying to read for it
             .try_filter(|object_meta| future::ready(object_meta.size > 0))
@@ -358,7 +363,12 @@ impl ListingOptions {
         // This can fail to detect inconsistent partition keys
         // A DFS traversal approach of the store can help here
         let files: Vec<_> = table_path
-            .list_all_files(state, store.as_ref(), &self.file_extension)
+            .list_all_files(
+                state.config_options(),
+                state.runtime_env(),
+                store.as_ref(),
+                &self.file_extension,
+            )
             .await?
             .take(10)
             .try_collect()

@@ -45,11 +45,13 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
-use futures::{Stream, StreamExt, TryStreamExt, future, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use object_store::ObjectStore;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::task::JoinSet;
 
 /// Result of a file listing operation from [`ListingTable::list_files_for_scan`].
 #[derive(Debug)]
@@ -641,7 +643,8 @@ impl TableProvider for ListingTable {
         let store = state.runtime_env().object_store(table_path)?;
 
         let file_list_stream = pruned_partition_list(
-            state,
+            state.config_options(),
+            state.runtime_env(),
             store.as_ref(),
             table_path,
             &[],
@@ -713,20 +716,96 @@ impl ListingTable {
             });
         };
         // list files (with partitions)
-        let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
-            pruned_partition_list(
-                ctx,
-                store.as_ref(),
-                table_path,
-                filters,
-                &self.options.file_extension,
-                &self.options.table_partition_cols,
-            )
-        }))
-        .await?;
-        let meta_fetch_concurrency =
-            ctx.config_options().execution.meta_fetch_concurrency;
-        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
+        // For non-WASM targets, use parallel execution with JoinSet.
+        // Note: This implementation collects files into memory per table_path rather than
+        // streaming lazily. This is a trade-off required because JoinSet tasks need 'static
+        // lifetime, which prevents returning borrowed streams directly. For most use cases,
+        // the parallelization benefit outweighs the temporary memory overhead. The WASM
+        // fallback below preserves streaming behavior for memory-constrained environments.
+        #[cfg(not(target_arch = "wasm32"))]
+        let file_list = {
+            let mut join_set = JoinSet::new();
+            let config = ctx.config_options().clone();
+            let runtime_env = Arc::clone(ctx.runtime_env());
+            let file_extension = self.options.file_extension.clone();
+            let partition_cols = self.options.table_partition_cols.clone();
+            let filters = filters.to_vec();
+
+            let meta_fetch_concurrency = config.execution.meta_fetch_concurrency;
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(meta_fetch_concurrency));
+
+            for table_path in &self.table_paths {
+                let store = Arc::clone(&store);
+                let table_path = table_path.clone();
+                let config = config.clone();
+                let runtime_env = Arc::clone(&runtime_env);
+                let file_extension = file_extension.clone();
+                let partition_cols = partition_cols.clone();
+                let filters = filters.clone();
+                let semaphore = Arc::clone(&semaphore);
+
+                join_set.spawn(async move {
+                    let _permit = semaphore.acquire_owned().await.map_err(|e| {
+                        datafusion_common::DataFusionError::External(Box::new(e))
+                    })?;
+                    let stream = pruned_partition_list(
+                        &config,
+                        &runtime_env,
+                        store.as_ref(),
+                        &table_path,
+                        &filters,
+                        &file_extension,
+                        &partition_cols,
+                    )
+                    .await?;
+                    stream.try_collect::<Vec<_>>().await
+                });
+            }
+
+            let mut file_list: Vec<
+                stream::BoxStream<'static, datafusion_common::Result<PartitionedFile>>,
+            > = Vec::with_capacity(self.table_paths.len());
+            while let Some(res) = join_set.join_next().await {
+                match res {
+                    Ok(Ok(files)) => {
+                        file_list.push(stream::iter(files.into_iter().map(Ok)).boxed())
+                    }
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => {
+                        return Err(datafusion_common::DataFusionError::External(
+                            Box::new(e),
+                        ));
+                    }
+                }
+            }
+            let meta_fetch_concurrency =
+                ctx.config_options().execution.meta_fetch_concurrency;
+            stream::iter(file_list).flatten_unordered(meta_fetch_concurrency)
+        };
+
+        // For WASM targets, use sequential execution with try_join_all
+        #[cfg(target_arch = "wasm32")]
+        let file_list = {
+            let config = ctx.config_options();
+            let runtime_env = ctx.runtime_env();
+            let file_list = futures::future::try_join_all(self.table_paths.iter().map(
+                |table_path| {
+                    pruned_partition_list(
+                        config,
+                        runtime_env,
+                        store.as_ref(),
+                        table_path,
+                        filters,
+                        &self.options.file_extension,
+                        &self.options.table_partition_cols,
+                    )
+                },
+            ))
+            .await?;
+            let meta_fetch_concurrency =
+                ctx.config_options().execution.meta_fetch_concurrency;
+            stream::iter(file_list).flatten_unordered(meta_fetch_concurrency)
+        };
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1054,5 +1133,375 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, Some(ordering));
+    }
+}
+
+#[cfg(test)]
+mod benchmark_tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use async_trait::async_trait;
+    use datafusion_catalog::Session;
+    use datafusion_datasource::TableSchema;
+    use datafusion_datasource::file::FileSource;
+    use datafusion_datasource::file_compression_type::FileCompressionType;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
+    use object_store::{
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+        PutMultipartOptions, PutOptions, PutPayload, path::Path,
+    };
+    use std::time::Duration;
+    use tokio::time::Instant;
+
+    #[derive(Debug)]
+    struct MockDelayedStore {
+        delay: Duration,
+    }
+
+    #[async_trait]
+    impl ObjectStore for MockDelayedStore {
+        async fn put(
+            &self,
+            _location: &Path,
+            _payload: PutPayload,
+        ) -> object_store::Result<object_store::PutResult> {
+            Ok(object_store::PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+        async fn put_opts(
+            &self,
+            _location: &Path,
+            _payload: PutPayload,
+            _opts: PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            Ok(object_store::PutResult {
+                e_tag: None,
+                version: None,
+            })
+        }
+        async fn put_multipart(
+            &self,
+            _location: &Path,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            unimplemented!()
+        }
+        async fn put_multipart_opts(
+            &self,
+            _location: &Path,
+            _opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            unimplemented!()
+        }
+        async fn get(&self, _location: &Path) -> object_store::Result<GetResult> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn get_opts(
+            &self,
+            _location: &Path,
+            _options: GetOptions,
+        ) -> object_store::Result<GetResult> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn get_range(
+            &self,
+            _location: &Path,
+            _range: std::ops::Range<u64>,
+        ) -> object_store::Result<bytes::Bytes> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn head(&self, _location: &Path) -> object_store::Result<ObjectMeta> {
+            Err(object_store::Error::NotFound {
+                path: "none".to_string(),
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "none",
+                )),
+            })
+        }
+        async fn delete(&self, _location: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> stream::BoxStream<'static, object_store::Result<ObjectMeta>> {
+            let delay = self.delay;
+            let prefix = prefix.cloned();
+            let fut = async move {
+                tokio::time::sleep(delay).await;
+                Ok(ObjectMeta {
+                    location: prefix
+                        .unwrap_or_else(|| Path::from("/"))
+                        .child("file.parquet"),
+                    last_modified: chrono::Utc::now(),
+                    size: 1024,
+                    e_tag: None,
+                    version: None,
+                })
+            };
+            stream::once(fut).boxed()
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> object_store::Result<ListResult> {
+            tokio::time::sleep(self.delay).await;
+            let prefix_path = prefix.cloned().unwrap_or_else(|| Path::from("/"));
+            Ok(ListResult {
+                objects: vec![ObjectMeta {
+                    location: prefix_path.child("file.parquet"),
+                    last_modified: chrono::Utc::now(),
+                    size: 1024,
+                    e_tag: None,
+                    version: None,
+                }],
+                common_prefixes: vec![],
+            })
+        }
+        async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        async fn rename(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+            Ok(())
+        }
+        async fn copy_if_not_exists(
+            &self,
+            _from: &Path,
+            _to: &Path,
+        ) -> object_store::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl std::fmt::Display for MockDelayedStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "MockDelayedStore")
+        }
+    }
+
+    use datafusion_common::DFSchema;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
+    use futures::{StreamExt, stream};
+    use std::any::Any;
+    use std::collections::HashMap;
+
+    struct MockSession {
+        runtime: Arc<RuntimeEnv>,
+        session_config: datafusion_execution::config::SessionConfig,
+    }
+
+    #[async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn config(&self) -> &datafusion_execution::config::SessionConfig {
+            &self.session_config
+        }
+        async fn create_physical_plan(
+            &self,
+            _plan: &LogicalPlan,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            todo!()
+        }
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _schema: &DFSchema,
+        ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
+            todo!()
+        }
+        fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+            todo!()
+        }
+        fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+            todo!()
+        }
+        fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+            todo!()
+        }
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            &self.runtime
+        }
+        fn execution_props(&self) -> &ExecutionProps {
+            todo!()
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn table_options(&self) -> &datafusion_common::config::TableOptions {
+            todo!()
+        }
+        fn table_options_mut(&mut self) -> &mut datafusion_common::config::TableOptions {
+            todo!()
+        }
+        fn task_ctx(&self) -> Arc<datafusion_execution::TaskContext> {
+            todo!()
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockFormat;
+    #[async_trait]
+    impl datafusion_datasource::file_format::FileFormat for MockFormat {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        async fn infer_schema(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _objects: &[ObjectMeta],
+        ) -> datafusion_common::Result<SchemaRef> {
+            Ok(Arc::new(Schema::new(vec![Field::new(
+                "a",
+                DataType::Int32,
+                false,
+            )])))
+        }
+        async fn infer_stats(
+            &self,
+            _state: &dyn Session,
+            _store: &Arc<dyn ObjectStore>,
+            _table_schema: SchemaRef,
+            _object: &ObjectMeta,
+        ) -> datafusion_common::Result<Statistics> {
+            Ok(Statistics::new_unknown(&_table_schema))
+        }
+        async fn create_physical_plan(
+            &self,
+            _state: &dyn Session,
+            _conf: FileScanConfig,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            todo!()
+        }
+        fn file_source(&self, _schema: TableSchema) -> Arc<dyn FileSource> {
+            todo!()
+        }
+        fn get_ext(&self) -> String {
+            "parquet".to_string()
+        }
+        fn get_ext_with_compression(
+            &self,
+            _c: &FileCompressionType,
+        ) -> datafusion_common::Result<String> {
+            Ok("parquet".to_string())
+        }
+        fn compression_type(&self) -> Option<FileCompressionType> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn benchmark_parallel_listing() -> datafusion_common::Result<()> {
+        let delay = Duration::from_millis(100);
+        let num_paths = 10;
+
+        // 1. Test with high concurrency (should take ~100ms)
+        println!("Running benchmark with high concurrency (32)...");
+        run_parallel_listing_benchmark(
+            num_paths,
+            delay,
+            32,
+            Duration::from_millis(400), // Expect ~100ms
+        )
+        .await?;
+
+        // 2. Test with low concurrency (should take ~500ms because 10 paths / 2 concurrent * 100ms = 500ms)
+        println!("Running benchmark with low concurrency (2)...");
+        run_parallel_listing_benchmark(
+            num_paths,
+            delay,
+            2,
+            Duration::from_millis(800), // Expect ~500ms
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn run_parallel_listing_benchmark(
+        num_paths: usize,
+        delay: Duration,
+        concurrency: usize,
+        max_duration: Duration,
+    ) -> datafusion_common::Result<()> {
+        let delay_store = Arc::new(MockDelayedStore { delay });
+        let runtime = Arc::new(RuntimeEnv::default());
+        let url = url::Url::parse("test://").unwrap();
+        runtime.register_object_store(&url, delay_store);
+
+        let mut session_config = datafusion_execution::config::SessionConfig::default();
+        session_config
+            .options_mut()
+            .execution
+            .meta_fetch_concurrency = concurrency;
+
+        let session = MockSession {
+            runtime,
+            session_config,
+        };
+
+        let paths: Vec<ListingTableUrl> = (0..num_paths)
+            .map(|i| ListingTableUrl::parse(format!("test:///table/{i}")).unwrap())
+            .collect();
+
+        let options = ListingOptions::new(Arc::new(MockFormat));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        let config = ListingTableConfig::new_with_multi_paths(paths.clone())
+            .with_listing_options(options)
+            .with_schema(schema);
+
+        let table = ListingTable::try_new(config)?;
+
+        let start = Instant::now();
+        let _ = table.list_files_for_scan(&session, &[], None).await?;
+        let duration = start.elapsed();
+
+        println!(
+            "Listing {num_paths} paths with {}ms delay (concurrency={concurrency}) took: {duration:?}",
+            delay.as_millis(),
+        );
+
+        assert!(
+            duration < max_duration,
+            "Listing took too long (concurrency={concurrency}): {duration:?} (expected < {max_duration:?})"
+        );
+
+        // Also ensure it's not TOO fast (demonstrates it's actually waiting)
+        if concurrency < num_paths {
+            let min_expected = delay * (num_paths / concurrency) as u32;
+            assert!(
+                duration >= min_expected * 8 / 10, // 20% margin
+                "Listing was too fast (concurrency={concurrency}): {duration:?} (expected >= {min_expected:?})"
+            );
+        }
+
+        Ok(())
     }
 }
