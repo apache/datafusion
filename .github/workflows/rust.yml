@@ -40,63 +40,19 @@ jobs:
   check-files:
     runs-on: ubuntu-latest
     outputs:
-      should_skip: ${{ steps.check.outputs.should_skip }}
+      should_skip: ${{ steps.filter.outputs.code == 'false' }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
         with:
-          fetch-depth: 0  # Need history for comparison
-      - name: Check if only docs were changed
-        id: check
-        env:
-          # Patterns for files that should NOT trigger CI runs
-          SKIP_PATTERNS: |
-            *.md
-            docs/*
-            .github/ISSUE_TEMPLATE/*
-            .github/pull_request_template.md
-        run: |
-          # For non-PR events, never skip
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "Not a PR, never skip"
-            echo "should_skip=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # For PRs, check if only docs/markdown were changed
-          echo "PR detected, checking changed files..."
-
-          # Fetch the base branch to compare against
-          git fetch origin "${{ github.base_ref }}"
-
-          # Get changed files (comparing PR head with base branch)
-          IFS=$'\n' changed_files=($(git --no-pager diff --name-only "origin/${{ github.base_ref }}"...HEAD))
-
-          echo "Changed files:"
-          printf '%s\n' "${changed_files[@]}"
-
-          should_skip=true
-          for file in "${changed_files[@]}"; do
-            file_matches_skip_pattern=false
-
-            # Check against each skip pattern
-            while IFS= read -r pattern; do
-              [[ -z "$pattern" ]] && continue
-              if [[ "$file" == $pattern ]]; then
-                file_matches_skip_pattern=true
-                break
-              fi
-            done <<< "$SKIP_PATTERNS"
-
-            if [ "$file_matches_skip_pattern" = true ]; then
-              echo "  $file - docs/markdown (skip)"
-            else
-              echo "  $file - code (run checks)"
-              should_skip=false
-            fi
-          done
-
-          echo "should_skip=$should_skip" >> $GITHUB_OUTPUT
-          echo "should_skip=$should_skip"
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/pull_request_template.md'
+          predicate-quantifier: 'every'
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -485,6 +441,8 @@ jobs:
   linux-wasm-pack:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup for wasm32
@@ -625,6 +583,8 @@ jobs:
   macos-aarch64:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
