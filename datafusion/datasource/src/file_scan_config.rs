@@ -1161,14 +1161,28 @@ impl FileScanConfig {
     ) -> Result<Arc<dyn DataSource>> {
         let mut new_config = self.clone();
 
-        // Reverse file groups (FileScanConfig's responsibility) if doing so helps satisfy the
+        // Reverse file order (within each group) if the caller is requesting a reversal of this
+        // scan's declared output ordering.
+        //
+        // Historically this function always reversed `file_groups` because it was only reached
+        // via `FileSource::try_reverse_output` (where a reversal was the only supported
+        // optimization).
+        //
+        // Now that `FileSource::try_pushdown_sort` is generic, we must not assume reversal: other
+        // optimizations may become possible (e.g. already-sorted data, statistics-based file
+        // reordering). Therefore we only reverse files when it is known to help satisfy the
         // requested ordering.
-        let reverse_file_groups =
-            LexOrdering::new(order.iter().cloned()).is_some_and(|requested| {
-                self.output_ordering
-                    .iter()
-                    .any(|ordering| ordering.is_reverse(&requested))
-            });
+        let reverse_file_groups = if self.output_ordering.is_empty() {
+            false
+        } else if let Some(requested) = LexOrdering::new(order.iter().cloned()) {
+            let projected_schema = self.projected_schema()?;
+            let orderings = project_orderings(&self.output_ordering, &projected_schema);
+            orderings
+                .iter()
+                .any(|ordering| ordering.is_reverse(&requested))
+        } else {
+            false
+        };
 
         if reverse_file_groups {
             new_config.file_groups = new_config
