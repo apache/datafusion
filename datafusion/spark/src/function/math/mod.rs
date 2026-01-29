@@ -20,6 +20,7 @@ pub mod expm1;
 pub mod factorial;
 pub mod hex;
 pub mod modulus;
+pub mod negative;
 pub mod rint;
 pub mod trigonometry;
 pub mod unhex;
@@ -40,6 +41,7 @@ make_udf_function!(unhex::SparkUnhex, unhex);
 make_udf_function!(width_bucket::SparkWidthBucket, width_bucket);
 make_udf_function!(trigonometry::SparkCsc, csc);
 make_udf_function!(trigonometry::SparkSec, sec);
+make_udf_function!(negative::SparkNegative, negative);
 
 pub mod expr_fn {
     use datafusion_functions::export_functions;
@@ -63,6 +65,11 @@ pub mod expr_fn {
     export_functions!((width_bucket, "Returns the bucket number into which the value of this expression would fall after being evaluated.", arg1 arg2 arg3 arg4));
     export_functions!((csc, "Returns the cosecant of expr.", arg1));
     export_functions!((sec, "Returns the secant of expr.", arg1));
+    export_functions!((
+        negative,
+        "Returns the negation of expr (unary minus).",
+        arg1
+    ));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
@@ -78,5 +85,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         width_bucket(),
         csc(),
         sec(),
+        negative(),
     ]
 }
