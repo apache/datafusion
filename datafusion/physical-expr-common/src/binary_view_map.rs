@@ -328,7 +328,8 @@ where
                         } else {
                             &in_progress[offset..offset + stored_len]
                         };
-                        let input_value = value.get_or_insert_with(|| values.value(i).as_ref());
+                        let input_value =
+                            value.get_or_insert_with(|| values.value(i).as_ref());
                         stored_value == *input_value
                     })
                     .map(|entry| entry.payload)
