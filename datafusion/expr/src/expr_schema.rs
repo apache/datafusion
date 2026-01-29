@@ -535,13 +535,32 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let new_fields = verify_function_arguments(func.as_ref(), &fields)?;
 
-                let arguments = args
+                let coerced_values: Vec<Option<ScalarValue>> = args
                     .iter()
-                    .map(|e| match e {
-                        Expr::Literal(sv, _) => Some(sv),
-                        _ => None,
+                    .zip(new_fields.iter())
+                    .map(|(expr, field)| {
+                        let mut current_expr = expr;
+
+                        // Loop to remove all casting layers
+                        loop {
+                            match current_expr {
+                                Expr::Cast(cast) => current_expr = &cast.expr,
+                                Expr::TryCast(cast) => current_expr = &cast.expr,
+                                _ => break,
+                            }
+                        }
+
+                        let literal = if let Expr::Literal(sv, _) = current_expr {
+                            Some(sv)
+                        } else {
+                            None
+                        };
+
+                        literal.map(|sv| sv.cast_to(field.data_type())).transpose()
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
+                let arguments: Vec<Option<&ScalarValue>> =
+                    coerced_values.iter().map(|opt| opt.as_ref()).collect();
                 let args = ReturnFieldArgs {
                     arg_fields: &new_fields,
                     scalar_arguments: &arguments,

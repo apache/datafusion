@@ -36,6 +36,7 @@ use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::types::{NativeType, logical_int16};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, assert_batches_eq,
@@ -44,9 +45,10 @@ use datafusion_common::{
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
-    OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility, lit_with_metadata,
+    Accumulator, Coercion, ColumnarValue, CreateFunction, CreateFunctionBody,
+    LogicalPlanBuilder, OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    lit_with_metadata,
 };
 use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
@@ -2214,5 +2216,91 @@ async fn test_extension_metadata_preserve_in_subquery() -> Result<()> {
         )
         .await?;
     assert!(!df.collect().await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_scalar_arg_types() -> Result<()> {
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestUdf {
+        signature: Signature,
+    }
+
+    impl Default for TestUdf {
+        fn default() -> Self {
+            Self {
+                signature: Signature::coercible(
+                    vec![Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int16()),
+                        vec![TypeSignatureClass::Numeric],
+                        NativeType::Int16,
+                    )],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl ScalarUDFImpl for TestUdf {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn name(&self) -> &str {
+            "test_udf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            unreachable!()
+        }
+
+        fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+            assert_eq!(args.arg_fields.len(), 1);
+            assert_eq!(args.scalar_arguments.len(), 1);
+            assert_eq!(
+                args.arg_fields[0].data_type(),
+                &args.scalar_arguments[0].unwrap().data_type()
+            );
+            Ok(
+                Field::new(self.name(), args.arg_fields[0].data_type().clone(), true)
+                    .into(),
+            )
+        }
+
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            assert!(matches!(
+                args.args[0],
+                ColumnarValue::Scalar(ScalarValue::Int16(Some(_)))
+            ));
+            Ok(args.args[0].clone())
+        }
+    }
+
+    let ctx = SessionContext::new();
+    ctx.register_udf(ScalarUDF::from(TestUdf::default()));
+
+    ctx.sql("SELECT test_udf(1)").await?.collect().await?;
+
+    ctx.sql("SELECT test_udf(CAST(1 AS INT))")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT test_udf(TRY_CAST(1 AS BIGINT))")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT test_udf(1::SMALLINT)")
+        .await?
+        .collect()
+        .await?;
+    ctx.sql("SELECT test_udf(CAST(CAST(1 AS INT) AS BIGINT))")
+        .await?
+        .collect()
+        .await?;
+
     Ok(())
 }
