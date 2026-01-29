@@ -22,8 +22,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::context::SessionContext;
-use datafusion_common::test_util::format_batches;
 use datafusion_common::Result;
+use datafusion_common::test_util::format_batches;
 use datafusion_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
