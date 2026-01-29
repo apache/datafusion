@@ -492,12 +492,8 @@ impl GroupedHashAggregateStream {
         )?;
 
         let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+            AggregateMode::Partial | AggregateMode::Single => agg_filter_expr,
+            AggregateMode::Final => vec![None; agg.aggr_expr.len()],
         };
 
         // Instantiate the accumulators
@@ -983,9 +979,7 @@ impl GroupedHashAggregateStream {
                 // Call the appropriate method on each aggregator with
                 // the entire input row and the relevant group indexes
                 match self.mode {
-                    AggregateMode::Partial
-                    | AggregateMode::Single
-                    | AggregateMode::SinglePartitioned
+                    AggregateMode::Partial | AggregateMode::Single
                         if !self.spill_state.is_stream_merging =>
                     {
                         acc.update_batch(
@@ -1099,10 +1093,9 @@ impl GroupedHashAggregateStream {
                     // merged and re-evaluated later.
                     output.extend(acc.state(emit_to)?)
                 }
-                AggregateMode::Final
-                | AggregateMode::FinalPartitioned
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => output.push(acc.evaluate(emit_to)?),
+                AggregateMode::Final | AggregateMode::Single => {
+                    output.push(acc.evaluate(emit_to)?)
+                }
             }
         }
         drop(timer);

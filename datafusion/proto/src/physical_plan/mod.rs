@@ -50,7 +50,8 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
 use datafusion_physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
+    AggregateExec, AggregateInputPartitioning, AggregateMode, LimitOptions,
+    PhysicalGroupBy,
 };
 use datafusion_physical_plan::analyze::AnalyzeExec;
 use datafusion_physical_plan::async_func::AsyncFuncExec;
@@ -1078,14 +1079,27 @@ impl protobuf::PhysicalPlanNode {
                 hash_agg.mode
             ))
         })?;
-        let agg_mode: AggregateMode = match mode {
-            protobuf::AggregateMode::Partial => AggregateMode::Partial,
-            protobuf::AggregateMode::Final => AggregateMode::Final,
-            protobuf::AggregateMode::FinalPartitioned => AggregateMode::FinalPartitioned,
-            protobuf::AggregateMode::Single => AggregateMode::Single,
-            protobuf::AggregateMode::SinglePartitioned => {
-                AggregateMode::SinglePartitioned
-            }
+        let (agg_mode, input_partitioning) = match mode {
+            protobuf::AggregateMode::Partial => (
+                AggregateMode::Partial,
+                AggregateInputPartitioning::Unspecified,
+            ),
+            protobuf::AggregateMode::Final => (
+                AggregateMode::Final,
+                AggregateInputPartitioning::SinglePartition,
+            ),
+            protobuf::AggregateMode::FinalPartitioned => (
+                AggregateMode::Final,
+                AggregateInputPartitioning::HashPartitioned,
+            ),
+            protobuf::AggregateMode::Single => (
+                AggregateMode::Single,
+                AggregateInputPartitioning::SinglePartition,
+            ),
+            protobuf::AggregateMode::SinglePartitioned => (
+                AggregateMode::Single,
+                AggregateInputPartitioning::HashPartitioned,
+            ),
         };
 
         let num_expr = hash_agg.group_expr.len();
@@ -1220,8 +1234,9 @@ impl protobuf::PhysicalPlanNode {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let agg = AggregateExec::try_new(
+        let agg = AggregateExec::try_new_with_partitioning(
             agg_mode,
+            input_partitioning,
             PhysicalGroupBy::new(group_expr, null_expr, groups, has_grouping_set),
             physical_aggr_expr,
             physical_filter_expr,
@@ -2669,14 +2684,16 @@ impl protobuf::PhysicalPlanNode {
             .map(|expr| expr.name().to_string())
             .collect::<Vec<_>>();
 
-        let agg_mode = match exec.mode() {
-            AggregateMode::Partial => protobuf::AggregateMode::Partial,
-            AggregateMode::Final => protobuf::AggregateMode::Final,
-            AggregateMode::FinalPartitioned => protobuf::AggregateMode::FinalPartitioned,
-            AggregateMode::Single => protobuf::AggregateMode::Single,
-            AggregateMode::SinglePartitioned => {
+        let agg_mode = match (exec.mode(), exec.input_partitioning()) {
+            (AggregateMode::Partial, _) => protobuf::AggregateMode::Partial,
+            (AggregateMode::Final, AggregateInputPartitioning::HashPartitioned) => {
+                protobuf::AggregateMode::FinalPartitioned
+            }
+            (AggregateMode::Final, _) => protobuf::AggregateMode::Final,
+            (AggregateMode::Single, AggregateInputPartitioning::HashPartitioned) => {
                 protobuf::AggregateMode::SinglePartitioned
             }
+            (AggregateMode::Single, _) => protobuf::AggregateMode::Single,
         };
         let input_schema = exec.input_schema();
         let input = protobuf::PhysicalPlanNode::try_from_physical_plan_with_converter(

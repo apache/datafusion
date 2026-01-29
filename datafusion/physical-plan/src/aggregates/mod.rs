@@ -95,21 +95,18 @@ const AGGREGATION_HASH_SEED: ahash::RandomState =
 /// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
-    /// One of multiple layers of aggregation, any input partitioning
+    /// One of multiple layers of aggregation, input values -> accumulator state.
     ///
     /// Partial aggregate that can be applied in parallel across input
     /// partitions.
     ///
     /// This is the first phase of a multi-phase aggregation.
     Partial,
-    /// *Final* of multiple layers of aggregation, in exactly one partition
+    /// *Final* of multiple layers of aggregation, accumulator state -> final value.
     ///
-    /// Final aggregate that produces a single partition of output by combining
-    /// the output of multiple partial aggregates.
+    /// Final aggregate that combines the output of multiple partial aggregates.
     ///
     /// This is the second phase of a multi-phase aggregation.
-    ///
-    /// This mode requires that the input is a single partition
     ///
     /// Note: Adjacent `Partial` and `Final` mode aggregation is equivalent to a `Single`
     /// mode aggregation node. The `Final` mode is required since this is used in an
@@ -118,32 +115,12 @@ pub enum AggregateMode {
     ///
     /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     Final,
-    /// *Final* of multiple layers of aggregation, input is *Partitioned*
-    ///
-    /// Final aggregate that works on pre-partitioned data.
-    ///
-    /// This mode requires that all rows with a particular grouping key are in
-    /// the same partitions, such as is the case with Hash repartitioning on the
-    /// group keys. If a group key is duplicated, duplicate groups would be
-    /// produced
-    FinalPartitioned,
-    /// *Single* layer of Aggregation, input is exactly one partition
+    /// *Single* layer of aggregation, input values -> final value.
     ///
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
-    ///
-    /// This mode requires that the input is a single partition (like Final)
     Single,
-    /// *Single* layer of Aggregation, input is *Partitioned*
-    ///
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation
-    /// using two operators.
-    ///
-    /// This mode requires that the input has more than one partition, and is
-    /// partitioned by group key (like FinalPartitioned).
-    SinglePartitioned,
 }
 
 impl AggregateMode {
@@ -152,10 +129,30 @@ impl AggregateMode {
     /// `merge_batch` method will not be called for these modes.
     pub fn is_first_stage(&self) -> bool {
         match self {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => true,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => false,
+            AggregateMode::Partial | AggregateMode::Single => true,
+            AggregateMode::Final => false,
+        }
+    }
+}
+
+/// Required input partitioning for an aggregate.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AggregateInputPartitioning {
+    /// No specific distribution requirement.
+    Unspecified,
+    /// Requires all rows to be in a single partition.
+    SinglePartition,
+    /// Requires input to be hash partitioned by group keys.
+    HashPartitioned,
+}
+
+impl AggregateInputPartitioning {
+    fn default_for_mode(mode: AggregateMode) -> Self {
+        match mode {
+            AggregateMode::Partial => AggregateInputPartitioning::Unspecified,
+            AggregateMode::Final | AggregateMode::Single => {
+                AggregateInputPartitioning::SinglePartition
+            }
         }
     }
 }
@@ -543,6 +540,8 @@ impl LimitOptions {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
+    /// Required input partitioning.
+    input_partitioning: AggregateInputPartitioning,
     /// Group by expressions
     group_by: PhysicalGroupBy,
     /// Aggregate expressions
@@ -592,6 +591,7 @@ impl AggregateExec {
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
             mode: self.mode,
+            input_partitioning: self.input_partitioning,
             group_by: self.group_by.clone(),
             filter_expr: self.filter_expr.clone(),
             limit_options: self.limit_options,
@@ -612,6 +612,7 @@ impl AggregateExec {
             input_order_mode: self.input_order_mode.clone(),
             cache: self.cache.clone(),
             mode: self.mode,
+            input_partitioning: self.input_partitioning,
             group_by: self.group_by.clone(),
             aggr_expr: self.aggr_expr.clone(),
             filter_expr: self.filter_expr.clone(),
@@ -635,11 +636,34 @@ impl AggregateExec {
         input: Arc<dyn ExecutionPlan>,
         input_schema: SchemaRef,
     ) -> Result<Self> {
+        let input_partitioning = AggregateInputPartitioning::default_for_mode(mode);
+        Self::try_new_with_partitioning(
+            mode,
+            input_partitioning,
+            group_by,
+            aggr_expr,
+            filter_expr,
+            input,
+            input_schema,
+        )
+    }
+
+    /// Create a new hash aggregate execution plan with explicit input partitioning.
+    pub fn try_new_with_partitioning(
+        mode: AggregateMode,
+        input_partitioning: AggregateInputPartitioning,
+        group_by: PhysicalGroupBy,
+        aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
+        filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        input: Arc<dyn ExecutionPlan>,
+        input_schema: SchemaRef,
+    ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &group_by, &aggr_expr, mode)?;
 
         let schema = Arc::new(schema);
         AggregateExec::try_new_with_schema(
             mode,
+            input_partitioning,
             group_by,
             aggr_expr,
             filter_expr,
@@ -659,6 +683,7 @@ impl AggregateExec {
     /// the schema in such cases.
     fn try_new_with_schema(
         mode: AggregateMode,
+        input_partitioning: AggregateInputPartitioning,
         group_by: PhysicalGroupBy,
         mut aggr_expr: Vec<Arc<AggregateFunctionExpr>>,
         filter_expr: Vec<Option<Arc<dyn PhysicalExpr>>>,
@@ -666,6 +691,7 @@ impl AggregateExec {
         input_schema: SchemaRef,
         schema: SchemaRef,
     ) -> Result<Self> {
+        validate_aggregate_partitioning(mode, input_partitioning)?;
         // Make sure arguments are consistent in size
         assert_eq_or_internal_err!(
             aggr_expr.len(),
@@ -737,6 +763,7 @@ impl AggregateExec {
 
         let mut exec = AggregateExec {
             mode,
+            input_partitioning,
             group_by,
             aggr_expr,
             filter_expr,
@@ -759,6 +786,26 @@ impl AggregateExec {
     /// Aggregation mode (full, partial)
     pub fn mode(&self) -> &AggregateMode {
         &self.mode
+    }
+
+    /// Display-friendly mode label that includes input partitioning.
+    fn mode_display(&self) -> &'static str {
+        match (self.mode, self.input_partitioning) {
+            (AggregateMode::Final, AggregateInputPartitioning::HashPartitioned) => {
+                "FinalPartitioned"
+            }
+            (AggregateMode::Single, AggregateInputPartitioning::HashPartitioned) => {
+                "SinglePartitioned"
+            }
+            (AggregateMode::Final, _) => "Final",
+            (AggregateMode::Single, _) => "Single",
+            (AggregateMode::Partial, _) => "Partial",
+        }
+    }
+
+    /// Required input partitioning.
+    pub fn input_partitioning(&self) -> AggregateInputPartitioning {
+        self.input_partitioning
     }
 
     /// Set the limit options for this AggExec
@@ -974,9 +1021,7 @@ impl AggregateExec {
             column_statistics
         };
         match self.mode {
-            AggregateMode::Final | AggregateMode::FinalPartitioned
-                if self.group_by.expr.is_empty() =>
-            {
+            AggregateMode::Final if self.group_by.expr.is_empty() => {
                 let total_byte_size =
                     Self::calculate_scaled_byte_size(child_statistics, 1);
 
@@ -1124,7 +1169,7 @@ impl DisplayAs for AggregateExec {
                         }
                     };
 
-                write!(f, "AggregateExec: mode={:?}", self.mode)?;
+                write!(f, "AggregateExec: mode={}", self.mode_display())?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
@@ -1216,7 +1261,7 @@ impl DisplayAs for AggregateExec {
                     .iter()
                     .map(|agg| agg.human_display().to_string())
                     .collect();
-                writeln!(f, "mode={:?}", self.mode)?;
+                writeln!(f, "mode={}", self.mode_display())?;
                 if !g.is_empty() {
                     writeln!(f, "group_by={}", g.join(", "))?;
                 }
@@ -1247,14 +1292,14 @@ impl ExecutionPlan for AggregateExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        match &self.mode {
-            AggregateMode::Partial => {
+        match self.input_partitioning {
+            AggregateInputPartitioning::Unspecified => {
                 vec![Distribution::UnspecifiedDistribution]
             }
-            AggregateMode::FinalPartitioned | AggregateMode::SinglePartitioned => {
+            AggregateInputPartitioning::HashPartitioned => {
                 vec![Distribution::HashPartitioned(self.group_by.input_exprs())]
             }
-            AggregateMode::Final | AggregateMode::Single => {
+            AggregateInputPartitioning::SinglePartition => {
                 vec![Distribution::SinglePartition]
             }
         }
@@ -1287,6 +1332,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut me = AggregateExec::try_new_with_schema(
             self.mode,
+            self.input_partitioning,
             self.group_by.clone(),
             self.aggr_expr.clone(),
             self.filter_expr.clone(),
@@ -1468,6 +1514,26 @@ impl ExecutionPlan for AggregateExec {
     }
 }
 
+fn validate_aggregate_partitioning(
+    mode: AggregateMode,
+    input_partitioning: AggregateInputPartitioning,
+) -> Result<()> {
+    match mode {
+        AggregateMode::Partial => match input_partitioning {
+            AggregateInputPartitioning::Unspecified => Ok(()),
+            _ => not_impl_err!(
+                "Partial aggregation requires unspecified input partitioning"
+            ),
+        },
+        AggregateMode::Final | AggregateMode::Single => match input_partitioning {
+            AggregateInputPartitioning::Unspecified => not_impl_err!(
+                "Final or single aggregation requires an explicit input partitioning"
+            ),
+            _ => Ok(()),
+        },
+    }
+}
+
 fn create_schema(
     input_schema: &Schema,
     group_by: &PhysicalGroupBy,
@@ -1484,10 +1550,7 @@ fn create_schema(
                 fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
+        AggregateMode::Final | AggregateMode::Single => {
             // in final mode, the field with the final result of the accumulator
             for expr in aggr_expr {
                 fields.push(expr.field())
@@ -1697,9 +1760,7 @@ pub fn aggregate_expressions(
     col_idx_base: usize,
 ) -> Result<Vec<Vec<Arc<dyn PhysicalExpr>>>> {
     match mode {
-        AggregateMode::Partial
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => Ok(aggr_expr
+        AggregateMode::Partial | AggregateMode::Single => Ok(aggr_expr
             .iter()
             .map(|agg| {
                 let mut result = agg.expressions();
@@ -1711,7 +1772,7 @@ pub fn aggregate_expressions(
             })
             .collect()),
         // In this mode, we build the merge expressions of the aggregation.
-        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+        AggregateMode::Final => {
             let mut col_idx_base = col_idx_base;
             aggr_expr
                 .iter()
@@ -1754,7 +1815,7 @@ pub fn create_accumulators(
 }
 
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
-/// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
+/// final value (mode = Final and Single) or states (mode = Partial)
 pub fn finalize_aggregation(
     accumulators: &mut [AccumulatorItem],
     mode: &AggregateMode,
@@ -1774,10 +1835,7 @@ pub fn finalize_aggregation(
                 .flatten_ok()
                 .collect()
         }
-        AggregateMode::Final
-        | AggregateMode::FinalPartitioned
-        | AggregateMode::Single
-        | AggregateMode::SinglePartitioned => {
+        AggregateMode::Final | AggregateMode::Single => {
             // Merge the state to the final value
             accumulators
                 .iter_mut()
@@ -3105,8 +3163,9 @@ mod tests {
             Arc::<Schema>::clone(&batch.schema()),
             None,
         )?;
-        let aggregate_exec = Arc::new(AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
+        let aggregate_exec = Arc::new(AggregateExec::try_new_with_partitioning(
+            AggregateMode::Final,
+            AggregateInputPartitioning::HashPartitioned,
             group_by,
             aggr_expr,
             vec![None],

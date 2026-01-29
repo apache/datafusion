@@ -36,7 +36,9 @@ use crate::logical_expr::{
     UserDefinedLogicalNode,
 };
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
-use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+use crate::physical_plan::aggregates::{
+    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
+};
 use crate::physical_plan::analyze::AnalyzeExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
@@ -942,19 +944,19 @@ impl DefaultPhysicalPlanner {
                 // `AggregateFunctionExpr`/`PhysicalSortExpr` objects.
                 let updated_aggregates = initial_aggr.aggr_expr().to_vec();
 
-                let next_partition_mode = if can_repartition {
-                    // construct a second aggregation with 'AggregateMode::FinalPartitioned'
-                    AggregateMode::FinalPartitioned
+                let next_partitioning = if can_repartition {
+                    // construct a second aggregation with hash-partitioned input
+                    AggregateInputPartitioning::HashPartitioned
                 } else {
-                    // construct a second aggregation, keeping the final column name equal to the
-                    // first aggregation and the expressions corresponding to the respective aggregate
-                    AggregateMode::Final
+                    // construct a second aggregation with single-partition input
+                    AggregateInputPartitioning::SinglePartition
                 };
 
                 let final_grouping_set = initial_aggr.group_expr().as_final();
 
-                Arc::new(AggregateExec::try_new(
-                    next_partition_mode,
+                Arc::new(AggregateExec::try_new_with_partitioning(
+                    AggregateMode::Final,
+                    next_partitioning,
                     final_grouping_set,
                     updated_aggregates,
                     filters,
@@ -3436,9 +3438,11 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // Make sure the plan uses hash-partitioned input for the final aggregate.
+        assert!(
+            formatted.contains("FinalPartitioned")
+                || formatted.contains("HashPartitioned")
+        );
 
         Ok(())
     }
@@ -3467,9 +3471,11 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // Make sure the plan uses hash-partitioned input for the final aggregate.
+        assert!(
+            formatted.contains("FinalPartitioned")
+                || formatted.contains("HashPartitioned")
+        );
         Ok(())
     }
 
@@ -3488,9 +3494,11 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let formatted = format!("{execution_plan:?}");
 
-        // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in Aggregate (which is slower)
-        assert!(formatted.contains("FinalPartitioned"));
+        // Make sure the plan uses hash-partitioned input for the final aggregate.
+        assert!(
+            formatted.contains("FinalPartitioned")
+                || formatted.contains("HashPartitioned")
+        );
 
         Ok(())
     }

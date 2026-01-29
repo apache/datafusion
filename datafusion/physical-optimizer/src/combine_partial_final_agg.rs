@@ -23,7 +23,7 @@ use std::sync::Arc;
 use datafusion_common::error::Result;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
 };
 
 use crate::PhysicalOptimizerRule;
@@ -58,10 +58,7 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 return Ok(Transformed::no(plan));
             };
 
-            if !matches!(
-                agg_exec.mode(),
-                AggregateMode::Final | AggregateMode::FinalPartitioned
-            ) {
+            if !matches!(agg_exec.mode(), AggregateMode::Final) {
                 return Ok(Transformed::no(plan));
             }
 
@@ -85,13 +82,15 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                         input_agg_exec.filter_expr(),
                     ),
                 ) {
-                let mode = if agg_exec.mode() == &AggregateMode::Final {
-                    AggregateMode::Single
-                } else {
-                    AggregateMode::SinglePartitioned
+                let input_partitioning = match agg_exec.input_partitioning() {
+                    AggregateInputPartitioning::HashPartitioned => {
+                        AggregateInputPartitioning::HashPartitioned
+                    }
+                    _ => AggregateInputPartitioning::SinglePartition,
                 };
-                AggregateExec::try_new(
-                    mode,
+                AggregateExec::try_new_with_partitioning(
+                    AggregateMode::Single,
+                    input_partitioning,
                     input_agg_exec.group_expr().clone(),
                     input_agg_exec.aggr_expr().to_vec(),
                     input_agg_exec.filter_expr().to_vec(),

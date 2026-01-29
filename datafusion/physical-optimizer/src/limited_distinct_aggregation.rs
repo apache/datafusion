@@ -54,8 +54,9 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = AggregateExec::try_new(
+        let new_aggr = AggregateExec::try_new_with_partitioning(
             *aggr.mode(),
+            aggr.input_partitioning(),
             aggr.group_expr().clone(),
             aggr.aggr_expr().to_vec(),
             aggr.filter_expr().to_vec(),

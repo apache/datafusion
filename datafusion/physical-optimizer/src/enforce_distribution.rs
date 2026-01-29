@@ -44,7 +44,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, PhysicalGroupBy,
+    AggregateExec, AggregateInputPartitioning, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
@@ -393,7 +393,10 @@ pub fn adjust_input_keys_ordering(
         .map(Transformed::yes);
     } else if let Some(aggregate_exec) = plan.as_any().downcast_ref::<AggregateExec>() {
         if !requirements.data.is_empty() {
-            if aggregate_exec.mode() == &AggregateMode::FinalPartitioned {
+            if aggregate_exec.mode() == &AggregateMode::Final
+                && aggregate_exec.input_partitioning()
+                    == AggregateInputPartitioning::HashPartitioned
+            {
                 return reorder_aggregate_keys(requirements, aggregate_exec)
                     .map(Transformed::yes);
             } else {
@@ -523,8 +526,9 @@ pub fn reorder_aggregate_keys(
                 .map(|(idx, expr)| (expr, group_exprs[idx].1.clone()))
                 .collect(),
         );
-        let new_final_agg = Arc::new(AggregateExec::try_new(
-            AggregateMode::FinalPartitioned,
+        let new_final_agg = Arc::new(AggregateExec::try_new_with_partitioning(
+            AggregateMode::Final,
+            AggregateInputPartitioning::HashPartitioned,
             new_group_by,
             agg_exec.aggr_expr().to_vec(),
             agg_exec.filter_expr().to_vec(),
