@@ -24,7 +24,15 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
 use chrono::{TimeZone, Utc};
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_expr::dml::InsertOp;
+use object_store::ObjectMeta;
+use object_store::path::Path;
+
+use arrow::util::display::DurationFormat;
+use datafusion_common::{
+    DataFusionError, OwnedCastOptions, OwnedFormatOptions, Result,
+    internal_datafusion_err, not_impl_err,
+};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -37,19 +45,16 @@ use datafusion_datasource_parquet::file_format::ParquetSink;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::WindowFunctionDefinition;
-use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::projection::{ProjectionExpr, ProjectionExprs};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr, LikeExpr, Literal,
-    NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
+    BinaryExpr, CaseExpr, CastColumnExpr, CastExpr, Column, IsNotNullExpr, IsNullExpr,
+    LikeExpr, Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn, in_list,
 };
 use datafusion_physical_plan::joins::{HashExpr, SeededRandomState};
 use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 
 use super::{
     DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
@@ -413,8 +418,37 @@ pub fn parse_physical_expr_with_converter(
                 proto_converter,
             )?,
             convert_required!(e.arrow_type)?,
-            None,
+            cast_options_from_proto(e.cast_options.as_ref(), false, None)?,
         )),
+        ExprType::CastColumn(e) => {
+            let input_field = e
+                .input_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column input_field"))?;
+            let target_field = e
+                .target_field
+                .as_ref()
+                .ok_or_else(|| proto_error("Missing cast_column target_field"))?;
+            let cast_options = cast_options_from_proto(
+                e.cast_options.as_ref(),
+                e.safe,
+                e.format_options.as_ref(),
+            )?;
+            Arc::new(CastColumnExpr::new_with_schema(
+                parse_required_physical_expr(
+                    e.expr.as_deref(),
+                    ctx,
+                    "expr",
+                    input_schema,
+                    codec,
+                    proto_converter,
+                )?,
+                Arc::new(Field::try_from(input_field)?),
+                Arc::new(Field::try_from(target_field)?),
+                cast_options,
+                Arc::new(input_schema.clone()),
+            )?)
+        }
         ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
             parse_required_physical_expr(
                 e.expr.as_deref(),
@@ -845,6 +879,81 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             file_output_mode,
         })
     }
+}
+
+// ============================================================================
+// Deserialization of Cast Options
+// ============================================================================
+//
+// OwnedCastOptions and OwnedFormatOptions resolve the lifetime
+// mismatch between Arrow's `CastOptions<'static>` and Protobuf's
+// owned `String` values
+//
+// 1. Protobuf provides owned `String` values (no lifetime constraints)
+// 2. OwnedCastOptions stores these as owned `String` values
+// 3. When executing, CastExpr/CastColumnExpr use ephemeral borrowing to convert
+//    to Arrow's `CastOptions<'a>` with borrowed `&str` references for compute kernels
+// 4. Strings are properly dropped when the expression is dropped - no leaks!
+
+/// Convert protobuf format options to owned format options.
+fn format_options_from_proto(
+    options: &protobuf::FormatOptions,
+) -> Result<OwnedFormatOptions> {
+    let duration_format = duration_format_from_proto(options.duration_format)?;
+    Ok(OwnedFormatOptions {
+        null: options.null.clone(),
+        date_format: options.date_format.clone(),
+        datetime_format: options.datetime_format.clone(),
+        timestamp_format: options.timestamp_format.clone(),
+        timestamp_tz_format: options.timestamp_tz_format.clone(),
+        time_format: options.time_format.clone(),
+        duration_format,
+        types_info: options.types_info,
+    })
+}
+
+/// Convert protobuf cast options to owned cast options.
+fn cast_options_from_proto(
+    cast_options: Option<&protobuf::PhysicalCastOptions>,
+    legacy_safe: bool,
+    legacy_format_options: Option<&protobuf::FormatOptions>,
+) -> Result<Option<OwnedCastOptions>> {
+    if let Some(cast_options) = cast_options {
+        let format_options = cast_options
+            .format_options
+            .as_ref()
+            .map(format_options_from_proto)
+            .transpose()?
+            .unwrap_or_default();
+        return Ok(Some(OwnedCastOptions {
+            safe: cast_options.safe,
+            format_options,
+        }));
+    }
+
+    // Handle legacy fields for backward compatibility with DataFusion < 43.0
+    if !legacy_safe && legacy_format_options.is_none() {
+        return Ok(None);
+    }
+
+    let format_options = legacy_format_options
+        .map(format_options_from_proto)
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(Some(OwnedCastOptions {
+        safe: legacy_safe,
+        format_options,
+    }))
+}
+
+fn duration_format_from_proto(value: i32) -> Result<DurationFormat> {
+    Ok(match protobuf::DurationFormat::try_from(value) {
+        Ok(protobuf::DurationFormat::Pretty) => DurationFormat::Pretty,
+        Ok(protobuf::DurationFormat::Iso8601)
+        | Ok(protobuf::DurationFormat::Unspecified)
+        | Err(_) => DurationFormat::ISO8601,
+    })
 }
 
 #[cfg(test)]

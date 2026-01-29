@@ -24,6 +24,213 @@ use arrow::util::display::{DurationFormat, FormatOptions};
 use crate::config::{ConfigField, Visit};
 use crate::error::{DataFusionError, Result};
 
+/// Owned version of Arrow's `FormatOptions` with `String` instead of `&'static str`.
+///
+/// Arrow's `FormatOptions<'a>` requires borrowed strings with lifetime bounds,
+/// and often requires `&'static str` for storage in long-lived types like `CastExpr`.
+/// This struct uses owned `String` values instead, allowing dynamic format options
+/// to be created from user queries, Protobuf deserialization, or IPC without
+/// memory leaks or string interning.
+///
+/// # Conversion to Arrow Types
+///
+/// Use the `as_arrow_options()` method to temporarily convert to `FormatOptions<'a>`
+/// with borrowed `&str` references for passing to Arrow compute kernels:
+///
+/// ```ignore
+/// let owned_options = OwnedFormatOptions { ... };
+/// let arrow_options = owned_options.as_arrow_options(); // borrows owned strings
+/// arrow::compute::cast(&array, &data_type, Some(&arrow_options))?;
+/// ```
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct OwnedFormatOptions {
+    /// String representation of null values
+    pub null: String,
+    /// Date format string
+    pub date_format: Option<String>,
+    /// Datetime format string
+    pub datetime_format: Option<String>,
+    /// Timestamp format string
+    pub timestamp_format: Option<String>,
+    /// Timestamp with timezone format string
+    pub timestamp_tz_format: Option<String>,
+    /// Time format string
+    pub time_format: Option<String>,
+    /// Duration format (owned, since DurationFormat is a simple enum)
+    pub duration_format: DurationFormat,
+    /// Include type information in formatted output
+    pub types_info: bool,
+}
+
+impl OwnedFormatOptions {
+    /// Create a new `OwnedFormatOptions` with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the null string.
+    pub fn with_null(mut self, null: String) -> Self {
+        self.null = null;
+        self
+    }
+
+    /// Set the date format.
+    pub fn with_date_format(mut self, date_format: Option<String>) -> Self {
+        self.date_format = date_format;
+        self
+    }
+
+    /// Set the datetime format.
+    pub fn with_datetime_format(mut self, datetime_format: Option<String>) -> Self {
+        self.datetime_format = datetime_format;
+        self
+    }
+
+    /// Set the timestamp format.
+    pub fn with_timestamp_format(mut self, timestamp_format: Option<String>) -> Self {
+        self.timestamp_format = timestamp_format;
+        self
+    }
+
+    /// Set the timestamp with timezone format.
+    pub fn with_timestamp_tz_format(
+        mut self,
+        timestamp_tz_format: Option<String>,
+    ) -> Self {
+        self.timestamp_tz_format = timestamp_tz_format;
+        self
+    }
+
+    /// Set the time format.
+    pub fn with_time_format(mut self, time_format: Option<String>) -> Self {
+        self.time_format = time_format;
+        self
+    }
+
+    /// Set the duration format.
+    pub fn with_duration_format(mut self, duration_format: DurationFormat) -> Self {
+        self.duration_format = duration_format;
+        self
+    }
+
+    /// Set whether to include type information in formatted output.
+    pub fn with_types_info(mut self, types_info: bool) -> Self {
+        self.types_info = types_info;
+        self
+    }
+
+    /// Convert to Arrow's `FormatOptions<'a>` with borrowed references.
+    ///
+    /// This creates a temporary `FormatOptions` with borrowed `&str` references
+    /// to the owned strings. The returned options can be passed to Arrow compute
+    /// kernels. The borrowed references are valid only as long as `self` is alive.
+    pub fn as_arrow_options<'a>(&'a self) -> FormatOptions<'a> {
+        FormatOptions::new()
+            .with_null(self.null.as_str())
+            .with_date_format(self.date_format.as_deref())
+            .with_datetime_format(self.datetime_format.as_deref())
+            .with_timestamp_format(self.timestamp_format.as_deref())
+            .with_timestamp_tz_format(self.timestamp_tz_format.as_deref())
+            .with_time_format(self.time_format.as_deref())
+            .with_duration_format(self.duration_format)
+            .with_display_error(false) // safe field is handled separately
+            .with_types_info(self.types_info)
+    }
+}
+
+impl Default for OwnedFormatOptions {
+    fn default() -> Self {
+        Self {
+            null: "NULL".to_string(),
+            date_format: None,
+            datetime_format: None,
+            timestamp_format: None,
+            timestamp_tz_format: None,
+            time_format: None,
+            duration_format: DurationFormat::Pretty,
+            types_info: false,
+        }
+    }
+}
+
+/// Owned version of Arrow's `CastOptions` with `OwnedFormatOptions` instead of `FormatOptions<'static>`.
+///
+/// Arrow's `CastOptions<'static>` requires `FormatOptions<'static>`, which mandates
+/// `&'static str` references. This struct uses `OwnedFormatOptions` with `String` values,
+/// allowing dynamic cast options to be created without memory leaks.
+///
+/// # Conversion to Arrow Types
+///
+/// Use the `as_arrow_options()` method to temporarily convert to `CastOptions<'a>`
+/// with borrowed references for passing to Arrow compute kernels:
+///
+/// ```ignore
+/// let owned_options = OwnedCastOptions { ... };
+/// let arrow_options = owned_options.as_arrow_options(); // borrows owned strings
+/// arrow::compute::cast(&array, &data_type, Some(&arrow_options))?;
+/// ```
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Default)]
+pub struct OwnedCastOptions {
+    /// Whether to use safe casting (return errors instead of overflowing)
+    pub safe: bool,
+    /// Format options for string output
+    pub format_options: OwnedFormatOptions,
+}
+
+impl OwnedCastOptions {
+    /// Create a new `OwnedCastOptions` with default values.
+    pub fn new(safe: bool) -> Self {
+        Self {
+            safe,
+            format_options: OwnedFormatOptions::default(),
+        }
+    }
+
+    /// Create a new `OwnedCastOptions` from an Arrow `CastOptions`.
+    pub fn from_arrow_options(options: &CastOptions<'_>) -> Self {
+        Self {
+            safe: options.safe,
+            format_options: OwnedFormatOptions {
+                null: options.format_options.null().to_string(),
+                date_format: options
+                    .format_options
+                    .date_format()
+                    .map(ToString::to_string),
+                datetime_format: options
+                    .format_options
+                    .datetime_format()
+                    .map(ToString::to_string),
+                timestamp_format: options
+                    .format_options
+                    .timestamp_format()
+                    .map(ToString::to_string),
+                timestamp_tz_format: options
+                    .format_options
+                    .timestamp_tz_format()
+                    .map(ToString::to_string),
+                time_format: options
+                    .format_options
+                    .time_format()
+                    .map(ToString::to_string),
+                duration_format: options.format_options.duration_format(),
+                types_info: options.format_options.types_info(),
+            },
+        }
+    }
+
+    /// Convert to Arrow's `CastOptions<'a>` with borrowed references.
+    ///
+    /// This creates a temporary `CastOptions` with borrowed `&str` references
+    /// to the owned strings. The returned options can be passed to Arrow compute
+    /// kernels. The borrowed references are valid only as long as `self` is alive.
+    pub fn as_arrow_options<'a>(&'a self) -> CastOptions<'a> {
+        CastOptions {
+            safe: self.safe,
+            format_options: self.format_options.as_arrow_options(),
+        }
+    }
+}
+
 /// The default [`FormatOptions`] to use within DataFusion
 /// Also see [`crate::config::FormatOptions`]
 pub const DEFAULT_FORMAT_OPTIONS: FormatOptions<'static> =

@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use crate::{
     PhysicalExpr,
-    expressions::{BinaryExpr, CastExpr, Column, Literal, NegativeExpr},
+    expressions::{BinaryExpr, CastColumnExpr, CastExpr, Column, Literal, NegativeExpr},
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
@@ -34,7 +34,8 @@ use datafusion_expr::interval_arithmetic::Interval;
 /// Currently, we do not support all [`PhysicalExpr`]s for interval calculations.
 /// We do not support every type of [`Operator`]s either. Over time, this check
 /// will relax as more types of `PhysicalExpr`s and `Operator`s are supported.
-/// Currently, [`CastExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and [`Literal`] are supported.
+/// Currently, [`CastExpr`], [`CastColumnExpr`], [`NegativeExpr`], [`BinaryExpr`], [`Column`] and
+/// [`Literal`] are supported.
 pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
     let expr_any = expr.as_any();
     if let Some(binary_expr) = expr_any.downcast_ref::<BinaryExpr>() {
@@ -55,6 +56,8 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
         }
     } else if let Some(cast) = expr_any.downcast_ref::<CastExpr>() {
         check_support(cast.expr(), schema)
+    } else if let Some(cast_column) = expr_any.downcast_ref::<CastColumnExpr>() {
+        check_support(cast_column.expr(), schema)
     } else if let Some(negative) = expr_any.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else {
@@ -189,5 +192,34 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{CastColumnExpr, col};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_check_support_with_cast_column_expr() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let input_field = Arc::new(schema.field(0).clone());
+        let target_field = Arc::new(Field::new("a", DataType::Int64, true));
+
+        let column_expr = col("a", &schema).unwrap();
+        let cast_expr = Arc::new(
+            CastColumnExpr::new_with_schema(
+                column_expr,
+                input_field,
+                target_field,
+                None,
+                Arc::clone(&schema),
+            )
+            .expect("cast column expr"),
+        ) as Arc<dyn PhysicalExpr>;
+
+        assert!(check_support(&cast_expr, &schema));
     }
 }

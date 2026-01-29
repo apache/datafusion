@@ -33,7 +33,7 @@ use self::dependency::{
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
-use crate::expressions::{CastExpr, Column, Literal, with_new_schema};
+use crate::expressions::{CastColumnExpr, CastExpr, Column, Literal, with_new_schema};
 use crate::{
     ConstExpr, LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr,
     PhysicalSortRequirement,
@@ -853,6 +853,15 @@ impl EquivalenceProperties {
                                     sort_expr.options,
                                 ));
                             }
+                        } else if let Some(cast_col) =
+                            r_expr.as_any().downcast_ref::<CastColumnExpr>()
+                            && cast_col.expr().eq(&sort_expr.expr)
+                            && CastExpr::check_bigger_cast(
+                                cast_col.target_field().data_type(),
+                                &expr_type,
+                            )
+                        {
+                            result.push(PhysicalSortExpr::new(r_expr, sort_expr.options));
                         }
                     }
                     result.push(sort_expr);
