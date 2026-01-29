@@ -26,7 +26,6 @@ use datafusion_expr_common::interval_arithmetic::Interval;
 /// range for which it is valid) and `x` is not `NULL`
 ///
 /// For details see [`datafusion_expr::ScalarUDFImpl::preimage`]
-///
 pub(super) fn rewrite_with_preimage(
     preimage_interval: Interval,
     op: Operator,
