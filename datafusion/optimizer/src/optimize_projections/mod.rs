@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, TableScanBuilder,
+    Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -262,14 +262,38 @@ fn optimize_projections(
                 projected_schema: _,
             } = table_scan;
 
-            // Get indices referred to in the original (schema with all fields)
-            // given projected indices.
-            let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
-                None => indices.into_inner(),
+            // Convert required indices into column expressions
+            let source_schema = source.schema();
+            let required_indices = indices.into_inner();
+
+            // Build new projection expressions based on required indices
+            let new_projection = match &projection {
+                Some(proj_exprs) => {
+                    // Select only the required expressions from the existing projection
+                    let new_exprs: Vec<Expr> = required_indices
+                        .iter()
+                        .filter_map(|&idx| proj_exprs.get(idx).cloned())
+                        .collect();
+                    Some(new_exprs)
+                }
+                None => {
+                    // No projection - create column expressions for required indices
+                    let new_exprs: Vec<Expr> = required_indices
+                        .iter()
+                        .map(|&idx| {
+                            let field = source_schema.field(idx);
+                            Expr::Column(Column::new_unqualified(field.name()))
+                        })
+                        .collect();
+                    Some(new_exprs)
+                }
             };
-            let new_scan =
-                TableScan::try_new(table_name, source, Some(projection), filters, fetch)?;
+
+            let new_scan = TableScanBuilder::new(table_name, source)
+                .with_projection(new_projection)
+                .with_filters(filters)
+                .with_fetch(fetch)
+                .build()?;
 
             return Ok(Transformed::yes(LogicalPlan::TableScan(new_scan)));
         }

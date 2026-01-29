@@ -218,8 +218,7 @@ EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 2;
 ----
 logical_plan
 01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
-02)--Filter: simple_struct.id > Int64(2)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+02)--TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as simple_struct.s[value]]
 02)--FilterExec: id@0 > 2
@@ -242,8 +241,7 @@ EXPLAIN SELECT id, s['value'] + 1 FROM simple_struct WHERE id > 2;
 ----
 logical_plan
 01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")) + Int64(1)
-02)--Filter: simple_struct.id > Int64(2)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+02)--TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, get_field(s@1, value) + 1 as simple_struct.s[value] + Int64(1)]
 02)--FilterExec: id@0 > 2
@@ -266,8 +264,7 @@ EXPLAIN SELECT id, s['label'] FROM simple_struct WHERE s['value'] > 150;
 ----
 logical_plan
 01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("label"))
-02)--Filter: get_field(simple_struct.s, Utf8("value")) > Int64(150)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(150)]
+02)--TableScan: simple_struct projection=[id, s], partial_filters=[get_field(simple_struct.s, Utf8("value")) > Int64(150)]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, get_field(s@1, label) as simple_struct.s[label]]
 02)--FilterExec: get_field(s@1, value) > 150
@@ -539,8 +536,7 @@ EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 1 ORDER BY s['value'
 logical_plan
 01)Sort: simple_struct.s[value] ASC NULLS LAST
 02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
-03)----Filter: simple_struct.id > Int64(1)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)SortExec: expr=[simple_struct.s[value]@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as simple_struct.s[value]]
@@ -566,8 +562,7 @@ EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 1 ORDER BY s['value'
 logical_plan
 01)Sort: simple_struct.s[value] ASC NULLS LAST, fetch=2
 02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
-03)----Filter: simple_struct.id > Int64(1)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[simple_struct.s[value]@1 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as simple_struct.s[value]]
@@ -591,8 +586,7 @@ EXPLAIN SELECT id, s['value'] + 1 FROM simple_struct WHERE id > 1 ORDER BY id LI
 logical_plan
 01)Sort: simple_struct.id ASC NULLS LAST, fetch=2
 02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")) + Int64(1)
-03)----Filter: simple_struct.id > Int64(1)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)SortExec: TopK(fetch=2), expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--ProjectionExec: expr=[id@0 as id, get_field(s@1, value) + 1 as simple_struct.s[value] + Int64(1)]
@@ -730,8 +724,7 @@ EXPLAIN SELECT id, s['value'] FROM multi_struct WHERE id > 2 ORDER BY id;
 logical_plan
 01)Sort: multi_struct.id ASC NULLS LAST
 02)--Projection: multi_struct.id, get_field(multi_struct.s, Utf8("value"))
-03)----Filter: multi_struct.id > Int64(2)
-04)------TableScan: multi_struct projection=[id, s], partial_filters=[multi_struct.id > Int64(2)]
+03)----TableScan: multi_struct projection=[id, s], partial_filters=[multi_struct.id > Int64(2)]
 physical_plan
 01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
 02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -814,8 +807,7 @@ EXPLAIN SELECT id, s['label'] FROM nullable_struct WHERE s['value'] IS NOT NULL;
 ----
 logical_plan
 01)Projection: nullable_struct.id, get_field(nullable_struct.s, Utf8("label"))
-02)--Filter: get_field(nullable_struct.s, Utf8("value")) IS NOT NULL
-03)----TableScan: nullable_struct projection=[id, s], partial_filters=[get_field(nullable_struct.s, Utf8("value")) IS NOT NULL]
+02)--TableScan: nullable_struct projection=[id, s], partial_filters=[get_field(nullable_struct.s, Utf8("value")) IS NOT NULL]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, get_field(s@1, label) as nullable_struct.s[label]]
 02)--FilterExec: get_field(s@1, value) IS NOT NULL
@@ -938,8 +930,7 @@ EXPLAIN SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 
 logical_plan
 01)Projection: __common_expr_1 + __common_expr_1 AS doubled
 02)--Projection: get_field(simple_struct.s, Utf8("value")) AS __common_expr_1
-03)----Filter: simple_struct.id > Int64(2)
-04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+03)----TableScan: simple_struct projection=[s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[__common_expr_1@0 + __common_expr_1@0 as doubled]
 02)--ProjectionExec: expr=[get_field(s@0, value) as __common_expr_1]
@@ -963,8 +954,7 @@ EXPLAIN SELECT s['value'], s['label'] FROM simple_struct WHERE id > 2;
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value")), get_field(simple_struct.s, Utf8("label"))
-02)--Filter: simple_struct.id > Int64(2)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(2)]
+02)--TableScan: simple_struct projection=[s], partial_filters=[simple_struct.id > Int64(2)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value], get_field(s@0, label) as simple_struct.s[label]]
 02)--FilterExec: id@0 > 2, projection=[s@1]
@@ -1012,8 +1002,7 @@ EXPLAIN SELECT s['value'] * 2 + length(s['label']) as score FROM simple_struct W
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value")) * Int64(2) + CAST(character_length(get_field(simple_struct.s, Utf8("label"))) AS length(get_field(simple_struct.s, Utf8("label"))) AS Int64) AS score
-02)--Filter: simple_struct.id > Int64(1)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+02)--TableScan: simple_struct projection=[s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) * 2 + CAST(character_length(get_field(s@0, label)) AS Int64) as score]
 02)--FilterExec: id@0 > 1, projection=[s@1]
@@ -1088,8 +1077,7 @@ EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 1;
 ----
 logical_plan
 01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
-02)--Filter: simple_struct.id > Int64(1)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+02)--TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as simple_struct.s[value]]
 02)--FilterExec: id@0 > 1
@@ -1107,8 +1095,7 @@ EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND (id < 4 OR id = 5)
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value"))
-02)--Filter: simple_struct.id > Int64(1) AND (simple_struct.id < Int64(4) OR simple_struct.id = Int64(5))
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(4) OR simple_struct.id = Int64(5)]
+02)--TableScan: simple_struct projection=[s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(4) OR simple_struct.id = Int64(5)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
 02)--FilterExec: id@0 > 1 AND (id@0 < 4 OR id@0 = 5), projection=[s@1]
@@ -1128,8 +1115,7 @@ EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND id < 5;
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value"))
-02)--Filter: simple_struct.id > Int64(1) AND simple_struct.id < Int64(5)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(5)]
+02)--TableScan: simple_struct projection=[s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(5)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
 02)--FilterExec: id@0 > 1 AND id@0 < 5, projection=[s@1]
@@ -1148,8 +1134,7 @@ EXPLAIN SELECT s['value'], s['label'], id FROM simple_struct WHERE id > 1;
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value")), get_field(simple_struct.s, Utf8("label")), simple_struct.id
-02)--Filter: simple_struct.id > Int64(1)
-03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+02)--TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@1, value) as simple_struct.s[value], get_field(s@1, label) as simple_struct.s[label], id@0 as id]
 02)--FilterExec: id@0 > 1
@@ -1168,8 +1153,7 @@ EXPLAIN SELECT s['value'] FROM simple_struct WHERE length(s['label']) > 4;
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("value"))
-02)--Filter: character_length(get_field(simple_struct.s, Utf8("label"))) > Int32(4)
-03)----TableScan: simple_struct projection=[s], partial_filters=[character_length(get_field(simple_struct.s, Utf8("label"))) > Int32(4)]
+02)--TableScan: simple_struct projection=[s], partial_filters=[character_length(get_field(simple_struct.s, Utf8("label"))) > Int32(4)]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
 02)--FilterExec: character_length(get_field(s@0, label)) > 4

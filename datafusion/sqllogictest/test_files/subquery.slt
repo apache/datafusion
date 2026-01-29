@@ -200,17 +200,15 @@ logical_plan
 06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@1 as t1_id, sum(t2.t2_int)@0 as t2_sum]
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[sum(t2.t2_int)@0, t1_id@2]
-03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
-10)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------DataSourceExec: partitions=1, partition_sizes=[2]
+01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int)@1 as t2_sum]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(t1_id@0, t2_id@1)], projection=[t1_id@0, sum(t2.t2_int)@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
+05)------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+06)--------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+07)----------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -233,17 +231,15 @@ logical_plan
 06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Float64)) AS sum(t2.t2_int * Float64(1))]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@1 as t1_id, sum(t2.t2_int * Float64(1)) + Int64(1)@0 as t2_sum]
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[sum(t2.t2_int * Float64(1)) + Int64(1)@0, t1_id@2]
-03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[sum(t2.t2_int * Float64(1))@1 + 1 as sum(t2.t2_int * Float64(1)) + Int64(1), t2_id@0 as t2_id]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
-10)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------DataSourceExec: partitions=1, partition_sizes=[2]
+01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int * Float64(1)) + Int64(1)@1 as t2_sum]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(t1_id@0, t2_id@1)], projection=[t1_id@0, sum(t2.t2_int * Float64(1)) + Int64(1)@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----ProjectionExec: expr=[sum(t2.t2_int * Float64(1))@1 + 1 as sum(t2.t2_int * Float64(1)) + Int64(1), t2_id@0 as t2_id]
+05)------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
+06)--------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+07)----------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query IR rowsort
 SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
@@ -266,17 +262,15 @@ logical_plan
 06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@1 as t1_id, sum(t2.t2_int)@0 as t2_sum]
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[sum(t2.t2_int)@0, t1_id@2]
-03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-06)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
-10)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)------DataSourceExec: partitions=1, partition_sizes=[2]
+01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int)@1 as t2_sum]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(t1_id@0, t2_id@1)], projection=[t1_id@0, sum(t2.t2_int)@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
+05)------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+06)--------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+07)----------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+08)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id group by t2_id, 'a') as t2_sum from t1
@@ -300,18 +294,16 @@ logical_plan
 07)----------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
 08)------------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@1 as t1_id, sum(t2.t2_int)@0 as t2_sum]
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[sum(t2.t2_int)@0, t1_id@2]
-03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
-05)--------FilterExec: sum(t2.t2_int)@1 < 3
-06)----------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-10)------------------DataSourceExec: partitions=1, partition_sizes=[2]
-11)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)------DataSourceExec: partitions=1, partition_sizes=[2]
+01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int)@1 as t2_sum]
+02)--HashJoinExec: mode=CollectLeft, join_type=Left, on=[(t1_id@0, t2_id@1)], projection=[t1_id@0, sum(t2.t2_int)@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[2]
+04)----ProjectionExec: expr=[sum(t2.t2_int)@1 as sum(t2.t2_int), t2_id@0 as t2_id]
+05)------FilterExec: sum(t2.t2_int)@1 < 3
+06)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+07)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
+08)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
+09)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)----------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 query II rowsort
 SELECT t1_id, (SELECT sum(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id having sum(t2_int) < 3) as t2_sum from t1
@@ -388,12 +380,10 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)
 ----
 logical_plan
-01)LeftSemi Join: 
-02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+01)LeftSemi Join:
+02)--TableScan: t1 projection=[t1_id, t1_name, t1_int], unsupported_filters=[Boolean(true)]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection:
-05)------Filter: t1.t1_int < t1.t1_id
-06)--------TableScan: t1 projection=[t1_id, t1_int]
+04)----TableScan: t1 projection=[], unsupported_filters=[t1.t1_int < t1.t1_id]
 
 
 #in_subquery_with_same_table
@@ -406,9 +396,7 @@ logical_plan
 01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t1_int
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: t1.t1_int
-05)------Filter: t1.t1_int < t1.t1_id
-06)--------TableScan: t1 projection=[t1_id, t1_int]
+04)----TableScan: t1 projection=[t1_int], unsupported_filters=[t1.t1_int < t1.t1_id]
 
 #in_subquery_nested_exist_subquery
 query TT
@@ -464,14 +452,41 @@ logical_plan
 02)--Subquery:
 03)----Projection: t2.t2_int
 04)------Limit: skip=0, fetch=1
-05)--------Filter: t2.t2_int = outer_ref(t1.t1_int)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id, t1_int]
+05)--------TableScan: t2, unsupported_filters=[t2.t2_int = outer_ref(t1.t1_int)], fetch=1
+06)--TableScan: t1 projection=[t1_id, t1_int]
 
 query TT
 explain SELECT t1_id from t1 where t1_int = (SELECT t2_int FROM t2 WHERE t2.t2_int = t1.t1_int limit 1)
 ----
-logical_plan
+initial_logical_plan
+01)Projection: t1.t1_id
+02)--Filter: t1.t1_int = (<subquery>)
+03)----Subquery:
+04)------Limit: skip=0, fetch=1
+05)--------Projection: t2.t2_int
+06)----------Filter: t2.t2_int = outer_ref(t1.t1_int)
+07)------------TableScan: t2
+08)----TableScan: t1
+logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
+logical_plan after type_coercion SAME TEXT AS ABOVE
+analyzed_logical_plan SAME TEXT AS ABOVE
+logical_plan after rewrite_set_comparison SAME TEXT AS ABOVE
+logical_plan after optimize_unions SAME TEXT AS ABOVE
+logical_plan after simplify_expressions SAME TEXT AS ABOVE
+logical_plan after replace_distinct_aggregate SAME TEXT AS ABOVE
+logical_plan after eliminate_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_predicate_subquery SAME TEXT AS ABOVE
+logical_plan after scalar_subquery_to_join SAME TEXT AS ABOVE
+logical_plan after decorrelate_lateral_join SAME TEXT AS ABOVE
+logical_plan after extract_equijoin_predicate SAME TEXT AS ABOVE
+logical_plan after eliminate_duplicated_expr SAME TEXT AS ABOVE
+logical_plan after eliminate_filter SAME TEXT AS ABOVE
+logical_plan after eliminate_cross_join SAME TEXT AS ABOVE
+logical_plan after eliminate_limit SAME TEXT AS ABOVE
+logical_plan after propagate_empty_relation SAME TEXT AS ABOVE
+logical_plan after filter_null_join_keys SAME TEXT AS ABOVE
+logical_plan after eliminate_outer_join SAME TEXT AS ABOVE
+logical_plan after push_down_limit
 01)Projection: t1.t1_id
 02)--Filter: t1.t1_int = (<subquery>)
 03)----Subquery:
@@ -479,7 +494,11 @@ logical_plan
 05)--------Limit: skip=0, fetch=1
 06)----------Filter: t2.t2_int = outer_ref(t1.t1_int)
 07)------------TableScan: t2
-08)----TableScan: t1 projection=[t1_id, t1_int]
+08)----TableScan: t1
+logical_plan after Optimizer rule 'push_down_filter' failed
+01)Invalid (non-executable) plan after Optimizer rule: push_down_filter
+02)caused by
+03)Error during planning: Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes
 
 query TT
 explain SELECT t1_id, (SELECT a FROM (select 1 as a) WHERE a = t1.t1_int) as t2_int from t1
@@ -510,9 +529,8 @@ logical_plan
 02)--Subquery:
 03)----Projection: sum(t2.t2_int)
 04)------Aggregate: groupBy=[[]], aggr=[[sum(CAST(t2.t2_int AS Int64))]]
-05)--------Filter: t2.t2_id < outer_ref(t1.t1_id)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id]
+05)--------TableScan: t2, unsupported_filters=[t2.t2_id < outer_ref(t1.t1_id)]
+06)--TableScan: t1 projection=[t1_id]
 
 #aggregated_correlated_scalar_subquery_with_extra_group_by_columns
 statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
@@ -523,42 +541,35 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT sum(t1.t1_int + t2.t2_id) FROM t2 WHERE t1.t1_name = t2.t2_name)
 ----
 logical_plan
-01)Projection: t1.t1_id, t1.t1_name
-02)--Filter: EXISTS (<subquery>)
-03)----Subquery:
-04)------Projection: sum(outer_ref(t1.t1_int) + t2.t2_id)
-05)--------Aggregate: groupBy=[[]], aggr=[[sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
-06)----------Filter: outer_ref(t1.t1_name) = t2.t2_name
-07)------------TableScan: t2
-08)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+01)TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[EXISTS (<subquery>)]
+02)--Subquery:
+03)----Projection: sum(outer_ref(t1.t1_int) + t2.t2_id)
+04)------Aggregate: groupBy=[[]], aggr=[[sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
+05)--------TableScan: t2, unsupported_filters=[outer_ref(t1.t1_name) = t2.t2_name]
 
 #support_agg_correlated_columns2
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE t1.t1_name = t2.t2_name having sum(t1_int + t2_id) >0)
 ----
 logical_plan
-01)Projection: t1.t1_id, t1.t1_name
-02)--Filter: EXISTS (<subquery>)
-03)----Subquery:
-04)------Projection: count(Int64(1)) AS count(*)
-05)--------Filter: sum(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
-06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
-07)------------Filter: outer_ref(t1.t1_name) = t2.t2_name
-08)--------------TableScan: t2
-09)----TableScan: t1 projection=[t1_id, t1_name, t1_int]
+01)TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[EXISTS (<subquery>)]
+02)--Subquery:
+03)----Projection: count(Int64(1)) AS count(*)
+04)------Filter: sum(outer_ref(t1.t1_int) + t2.t2_id) > Int64(0)
+05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), sum(CAST(outer_ref(t1.t1_int) + t2.t2_id AS Int64))]]
+06)----------TableScan: t2, unsupported_filters=[outer_ref(t1.t1_name) = t2.t2_name]
 
 #support_join_correlated_columns
 query TT
 explain SELECT t0_id, t0_name FROM t0 WHERE EXISTS (SELECT 1 FROM t1 INNER JOIN t2 ON(t1.t1_id = t2.t2_id and t1.t1_name = t0.t0_name))
 ----
 logical_plan
-01)LeftSemi Join: t0.t0_name = __correlated_sq_2.t1_name
-02)--TableScan: t0 projection=[t0_id, t0_name]
-03)--SubqueryAlias: __correlated_sq_2
-04)----Projection: t1.t1_name
-05)------Inner Join: t1.t1_id = t2.t2_id
-06)--------TableScan: t1 projection=[t1_id, t1_name]
-07)--------TableScan: t2 projection=[t2_id]
+01)TableScan: t0 projection=[t0_id, t0_name], unsupported_filters=[EXISTS (<subquery>)]
+02)--Subquery:
+03)----Projection: Int64(1)
+04)------Inner Join: t1.t1_id = t2.t2_id
+05)--------TableScan: t1, unsupported_filters=[t1.t1_name = outer_ref(t0.t0_name)]
+06)--------TableScan: t2
 
 #subquery_contains_join_contains_correlated_columns
 query TT
@@ -594,21 +605,19 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id >= t1_id order by t1_id)
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
+01)TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[EXISTS (<subquery>)]
 02)--Subquery:
 03)----Sort: outer_ref(t1.t1_id) ASC NULLS LAST
 04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
-05)--------Filter: t2.t2_id >= outer_ref(t1.t1_id)
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id, t1_name]
+05)--------TableScan: t2, unsupported_filters=[t2.t2_id >= outer_ref(t1.t1_id)]
 
 #exists_subquery_with_select_null
 query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT NULL)
 ----
 logical_plan
-01)LeftSemi Join: 
-02)--TableScan: t1 projection=[t1_id, t1_name]
+01)LeftSemi Join:
+02)--TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[Boolean(true)]
 03)--SubqueryAlias: __correlated_sq_1
 04)----EmptyRelation: rows=1
 
@@ -663,13 +672,11 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE t1_id in (SELECT t2_id FROM t2 where t1_name = t2_name limit 10)
 ----
 logical_plan
-01)Filter: t1.t1_id IN (<subquery>)
+01)TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[t1.t1_id IN (<subquery>)]
 02)--Subquery:
 03)----Projection: t2.t2_id
 04)------Limit: skip=0, fetch=10
-05)--------Filter: outer_ref(t1.t1_name) = t2.t2_name
-06)----------TableScan: t2
-07)--TableScan: t1 projection=[t1_id, t1_name]
+05)--------TableScan: t2, unsupported_filters=[outer_ref(t1.t1_name) = t2.t2_name], fetch=10
 
 #in_non_correlated_subquery_with_limit
 #de-correlated, limit is kept
@@ -707,16 +714,13 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id UNION ALL SELECT * FROM t2 WHERE upper(t2_name) = upper(t1.t1_name))
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
+01)TableScan: t1 projection=[t1_id, t1_name], unsupported_filters=[EXISTS (<subquery>)]
 02)--Subquery:
 03)----Union
 04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
-05)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
-06)----------TableScan: t2
-07)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
-08)--------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
-09)----------TableScan: t2
-10)--TableScan: t1 projection=[t1_id, t1_name]
+05)--------TableScan: t2, unsupported_filters=[t2.t2_id = outer_ref(t1.t1_id)]
+06)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+07)--------TableScan: t2, unsupported_filters=[upper(t2.t2_name) = upper(outer_ref(t1.t1_name))]
 
 #simple_uncorrelated_scalar_subquery
 query TT
@@ -735,14 +739,14 @@ explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
 01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Left Join: 
+02)--Left Join:
 03)----SubqueryAlias: __scalar_sq_1
 04)------Projection: count(Int64(1)) AS count(*)
 05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)----------TableScan: t1 projection=[]
 07)----SubqueryAlias: __scalar_sq_2
 08)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-09)--------TableScan: t2 projection=[]
+09)--------TableScan: t2 projection=[], unsupported_filters=[Boolean(true)]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
@@ -752,21 +756,24 @@ explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
 logical_plan
 01)Projection: __scalar_sq_1.count(*) AS b, __scalar_sq_2.count(Int64(1)) AS count(Int64(1))
-02)--Left Join: 
+02)--Left Join:
 03)----SubqueryAlias: __scalar_sq_1
 04)------Projection: count(Int64(1)) AS count(*)
 05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)----------TableScan: t1 projection=[]
 07)----SubqueryAlias: __scalar_sq_2
 08)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-09)--------TableScan: t2 projection=[]
+09)--------TableScan: t2 projection=[], unsupported_filters=[Boolean(true)]
 physical_plan
 01)ProjectionExec: expr=[count(*)@0 as b, count(Int64(1))@1 as count(Int64(1))]
 02)--NestedLoopJoinExec: join_type=Left
 03)----ProjectionExec: expr=[4 as count(*)]
 04)------PlaceholderRowExec
-05)----ProjectionExec: expr=[4 as count(Int64(1))]
-06)------PlaceholderRowExec
+05)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+06)------CoalescePartitionsExec
+07)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+08)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)------------DataSourceExec: partitions=1, partition_sizes=[2]
 
 statement ok
 set datafusion.explain.logical_plan_only = true;
@@ -1439,8 +1446,8 @@ query TT
 explain SELECT a FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)
 ----
 logical_plan
-01)LeftSemi Join: 
-02)--TableScan: t1 projection=[a]
+01)LeftSemi Join:
+02)--TableScan: t1 projection=[a], unsupported_filters=[Boolean(true)]
 03)--SubqueryAlias: __correlated_sq_1
 04)----EmptyRelation: rows=1
 

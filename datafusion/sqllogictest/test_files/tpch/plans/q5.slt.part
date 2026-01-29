@@ -57,15 +57,11 @@ logical_plan
 12)----------------------Projection: customer.c_nationkey, orders.o_orderkey
 13)------------------------Inner Join: customer.c_custkey = orders.o_custkey
 14)--------------------------TableScan: customer projection=[c_custkey, c_nationkey]
-15)--------------------------Projection: orders.o_orderkey, orders.o_custkey
-16)----------------------------Filter: orders.o_orderdate >= Date32("1994-01-01") AND orders.o_orderdate < Date32("1995-01-01")
-17)------------------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1994-01-01"), orders.o_orderdate < Date32("1995-01-01")]
-18)----------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount]
-19)------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
-20)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
-21)----------Projection: region.r_regionkey
-22)------------Filter: region.r_name = Utf8View("ASIA")
-23)--------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("ASIA")]
+15)--------------------------TableScan: orders projection=[o_orderkey, o_custkey], partial_filters=[orders.o_orderdate >= Date32("1994-01-01"), orders.o_orderdate < Date32("1995-01-01")]
+16)----------------------TableScan: lineitem projection=[l_orderkey, l_suppkey, l_extendedprice, l_discount]
+17)------------------TableScan: supplier projection=[s_suppkey, s_nationkey]
+18)--------------TableScan: nation projection=[n_nationkey, n_name, n_regionkey]
+19)----------TableScan: region projection=[r_regionkey], partial_filters=[region.r_name = Utf8View("ASIA")]
 physical_plan
 01)SortPreservingMergeExec: [revenue@1 DESC]
 02)--SortExec: expr=[revenue@1 DESC], preserve_partitioning=[true]

@@ -399,8 +399,7 @@ mod tests {
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Filter: abc.column2 = Int64(5)\
-        \n      TableScan: abc projection=[column1, column2, column3]";
+        \n    TableScan: abc projection=[column1, column2, column3], unsupported_filters=[abc.column2 = Int64(5)]";
         assert_eq!(expected, actual);
 
         let dataframe = session_ctx
@@ -411,8 +410,7 @@ mod tests {
         let expected = "\
         Explain\
         \n  CreateView: Bare { table: \"xyz\" }\
-        \n    Filter: abc.column2 = Int64(5)\
-        \n      TableScan: abc projection=[column1, column2]";
+        \n    TableScan: abc projection=[column1, column2], unsupported_filters=[abc.column2 = Int64(5)]";
         assert_eq!(expected, actual);
 
         Ok(())

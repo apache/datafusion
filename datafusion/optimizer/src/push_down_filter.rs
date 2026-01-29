@@ -28,8 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_err, qualified_name,
+    Column, DFSchema, Result, assert_or_internal_err, internal_err, plan_err,
+    qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -37,9 +37,7 @@ use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Unio
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
-use datafusion_expr::{
-    BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown, and, or,
-};
+use datafusion_expr::{BinaryExpr, Expr, Filter, Operator, Projection, and, or};
 
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::simplify_predicates;
@@ -1126,47 +1124,16 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
             LogicalPlan::TableScan(scan) => {
+                // Move ALL filters to the TableScan - the physical planner will
+                // decide which filters to push down based on supports_filters_pushdown
                 let filter_predicates = split_conjunction(&filter.predicate);
 
-                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
-                    filter_predicates
-                        .into_iter()
-                        .partition(|pred| pred.is_volatile());
-
-                // Check which non-volatile filters are supported by source
-                let supported_filters = scan
-                    .source
-                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                assert_eq_or_internal_err!(
-                    non_volatile_filters.len(),
-                    supported_filters.len(),
-                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                    supported_filters.len(),
-                    non_volatile_filters.len()
-                );
-
-                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
-                let zip = non_volatile_filters.into_iter().zip(supported_filters);
-
-                let new_scan_filters = zip
-                    .clone()
-                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Unsupported)
-                    .map(|(pred, _)| pred);
-
-                // Add new scan filters
+                // Combine existing scan filters with new filter predicates
                 let new_scan_filters: Vec<Expr> = scan
                     .filters
                     .iter()
-                    .chain(new_scan_filters)
+                    .chain(filter_predicates)
                     .unique()
-                    .cloned()
-                    .collect();
-
-                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type, and also include volatile filters
-                let new_predicate: Vec<Expr> = zip
-                    .filter(|(_, res)| res != &TableProviderFilterPushDown::Exact)
-                    .map(|(pred, _)| pred)
-                    .chain(volatile_filters)
                     .cloned()
                     .collect();
 
@@ -1175,13 +1142,9 @@ impl OptimizerRule for PushDownFilter {
                     ..scan
                 });
 
-                Transformed::yes(new_scan).transform_data(|new_scan| {
-                    if let Some(predicate) = conjunction(new_predicate) {
-                        make_filter(predicate, Arc::new(new_scan)).map(Transformed::yes)
-                    } else {
-                        Ok(Transformed::no(new_scan))
-                    }
-                })
+                // Don't create Filter node above - physical planner handles
+                // creating FilterExec for unsupported/inexact filters
+                Ok(Transformed::yes(new_scan))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -1437,9 +1400,9 @@ mod tests {
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
-        UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col, in_list,
-        in_subquery, lit,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        TableProviderFilterPushDown, TableSource, TableType, UserDefinedLogicalNodeCore,
+        Volatility, WindowFunctionDefinition, col, in_list, in_subquery, lit,
     };
 
     use crate::OptimizerContext;
@@ -3110,13 +3073,26 @@ mod tests {
         projection: Option<Vec<usize>>,
     ) -> Result<LogicalPlanBuilder> {
         let test_provider = PushDownProvider { filter_support };
+        let schema = test_provider.schema();
+        let source: Arc<dyn TableSource> = Arc::new(test_provider);
+
+        // Convert projection indices to expressions
+        let projection_exprs = projection.map(|indices| {
+            indices
+                .into_iter()
+                .map(|i| {
+                    let field = schema.field(i);
+                    Expr::Column(Column::new(Some("test"), field.name()))
+                })
+                .collect::<Vec<_>>()
+        });
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
-            projection,
-            source: Arc::new(test_provider),
+            projected_schema: Arc::new(DFSchema::try_from(schema)?),
+            projection: projection_exprs,
+            source,
             fetch: None,
         });
 
@@ -3148,10 +3124,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: a = Int64(1)
-          TableScan: test, partial_filters=[a = Int64(1)]
-        "
+            @"TableScan: test, partial_filters=[a = Int64(1)]"
         )
     }
 
@@ -3169,10 +3142,7 @@ mod tests {
         // each time.
         assert_optimized_plan_equal!(
             optimized_plan,
-            @r"
-        Filter: a = Int64(1)
-          TableScan: test, partial_filters=[a = Int64(1)]
-        "
+            @"TableScan: test, partial_filters=[a = Int64(1)]"
         )
     }
 
@@ -3183,10 +3153,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: a = Int64(1)
-          TableScan: test
-        "
+            @"TableScan: test, unsupported_filters=[a = Int64(1)]"
         )
     }
 
@@ -3205,8 +3172,7 @@ mod tests {
             plan,
             @r"
         Projection: a, b
-          Filter: a = Int64(10) AND b > Int64(11)
-            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+          TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
         "
         )
     }
@@ -4059,8 +4025,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test.b
-          Filter: TestScalarUDF() > Float64(0.1)
-            TableScan: test
+          TableScan: test, full_filters=[TestScalarUDF() > Float64(0.1)]
         "
         )
     }
@@ -4093,8 +4058,7 @@ mod tests {
             plan,
             @r"
         Projection: test.a, test.b
-          Filter: TestScalarUDF() > Float64(0.1)
-            TableScan: test, full_filters=[t.a > Int32(5), t.b > Int32(10)]
+          TableScan: test, full_filters=[TestScalarUDF() > Float64(0.1), t.a > Int32(5), t.b > Int32(10)]
         "
         )
     }
@@ -4130,8 +4094,7 @@ mod tests {
             plan,
             @r"
         Projection: a, b
-          Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)
-            TableScan: test
+          TableScan: test, unsupported_filters=[TestScalarUDF() > Float64(0.1), t.a > Int32(5), t.b > Int32(10)]
         "
         )
     }

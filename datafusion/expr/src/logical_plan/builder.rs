@@ -520,15 +520,20 @@ impl LogicalPlanBuilder {
         {
             let sub_plan = p.into_owned();
 
-            if let Some(proj) = table_scan.projection {
-                let projection_exprs = proj
+            if let Some(proj_exprs) = table_scan.projection {
+                // Strip qualifiers from projection expressions since the sub_plan
+                // may have unqualified column names
+                let unqualified_exprs: Vec<Expr> = proj_exprs
                     .into_iter()
-                    .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                    .map(|e| match e {
+                        Expr::Column(col) => {
+                            Expr::Column(Column::new_unqualified(col.name))
+                        }
+                        other => other,
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
                 return Self::new(sub_plan)
-                    .project(projection_exprs)?
+                    .project(unqualified_exprs)?
                     .alias(table_scan.table_name);
             }
 

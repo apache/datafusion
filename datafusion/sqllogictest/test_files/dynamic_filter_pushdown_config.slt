@@ -278,9 +278,7 @@ EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
 ----
 logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
-02)--Projection: agg_parquet.score
-03)----Filter: agg_parquet.category = Utf8View("alpha")
-04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
+02)--TableScan: agg_parquet projection=[score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
 physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
 02)--CoalescePartitionsExec
@@ -298,9 +296,7 @@ EXPLAIN SELECT MAX(score) FROM agg_parquet WHERE category = 'alpha'
 ----
 logical_plan
 01)Aggregate: groupBy=[[]], aggr=[[max(agg_parquet.score)]]
-02)--Projection: agg_parquet.score
-03)----Filter: agg_parquet.category = Utf8View("alpha")
-04)------TableScan: agg_parquet projection=[category, score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
+02)--TableScan: agg_parquet projection=[score], partial_filters=[agg_parquet.category = Utf8View("alpha")]
 physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[max(agg_parquet.score)]
 02)--CoalescePartitionsExec

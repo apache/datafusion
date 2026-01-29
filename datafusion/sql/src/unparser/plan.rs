@@ -41,7 +41,7 @@ use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
     Column, DataFusionError, Result, ScalarValue, TableReference, assert_or_internal_err,
     internal_err, not_impl_err,
-    tree_node::{TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
@@ -1088,26 +1088,45 @@ impl Unparser<'_> {
                 // Avoid creating a duplicate Projection node, which would result in an additional subquery if a projection already exists.
                 // For example, if the `optimize_projection` rule is applied, there will be a Projection node, and duplicate projection
                 // information included in the TableScan node.
-                if !already_projected && let Some(project_vec) = &table_scan.projection {
-                    if project_vec.is_empty() {
+                if !already_projected && let Some(project_exprs) = &table_scan.projection
+                {
+                    if project_exprs.is_empty() {
                         builder = builder.project(self.empty_projection_fallback())?;
                     } else {
-                        let project_columns = project_vec
-                            .iter()
-                            .cloned()
-                            .map(|i| {
-                                let schema = table_scan.source.schema();
-                                let field = schema.field(i);
-                                if alias.is_some() {
-                                    Column::new(alias.clone(), field.name().clone())
-                                } else {
-                                    Column::new(
-                                        Some(table_scan.table_name.clone()),
-                                        field.name().clone(),
-                                    )
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                        // Rewrite column qualifiers if an alias is provided
+                        let project_columns: Vec<Expr> = if alias.is_some() {
+                            project_exprs
+                                .iter()
+                                .map(|expr| {
+                                    // Rewrite any column references to use the alias
+                                    expr.clone()
+                                        .transform(|e| {
+                                            if let Expr::Column(col) = &e {
+                                                if let Some(relation) = &col.relation {
+                                                    // Only rewrite columns that match the original table name
+                                                    if relation != &table_scan.table_name
+                                                    {
+                                                        return Ok(Transformed::no(e));
+                                                    }
+                                                    Ok(Transformed::yes(Expr::Column(
+                                                        Column::new(
+                                                            alias.clone(),
+                                                            col.name().to_string(),
+                                                        ),
+                                                    )))
+                                                } else {
+                                                    Ok(Transformed::no(e))
+                                                }
+                                            } else {
+                                                Ok(Transformed::no(e))
+                                            }
+                                        })
+                                        .map(|t| t.data)
+                                })
+                                .collect::<Result<Vec<_>>>()?
+                        } else {
+                            project_exprs.clone()
+                        };
                         builder = builder.project(project_columns)?;
                     };
                 }

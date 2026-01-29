@@ -154,8 +154,7 @@ logical_plan
 03)----Projection: Int64(1) AS id
 04)------EmptyRelation: rows=1
 05)----Projection: nodes.id + Int64(1) AS id
-06)------Filter: nodes.id < Int64(10)
-07)--------TableScan: nodes projection=[id]
+06)------TableScan: nodes projection=[id], unsupported_filters=[nodes.id < Int64(10)]
 physical_plan
 01)RecursiveQueryExec: name=nodes, is_distinct=false
 02)--ProjectionExec: expr=[1 as id]
@@ -233,8 +232,7 @@ logical_plan
 03)----RecursiveQuery: is_distinct=false
 04)------TableScan: balance projection=[time, name, account_balance]
 05)------Projection: balances.time + Int64(1) AS time, balances.name, balances.account_balance + Int64(10) AS account_balance
-06)--------Filter: balances.time < Int64(10)
-07)----------TableScan: balances projection=[time, name, account_balance]
+06)--------TableScan: balances projection=[time, name, account_balance], unsupported_filters=[balances.time < Int64(10)]
 physical_plan
 01)SortExec: expr=[time@0 ASC NULLS LAST, name@1 ASC NULLS LAST, account_balance@2 ASC NULLS LAST], preserve_partitioning=[false]
 02)--RecursiveQueryExec: name=balances, is_distinct=false
@@ -829,12 +827,11 @@ logical_plan
 03)----Projection: Int64(1) AS val
 04)------EmptyRelation: rows=1
 05)----Projection: Int64(2) AS val
-06)------Cross Join: 
-07)--------Filter: recursive_cte.val < Int64(2)
-08)----------TableScan: recursive_cte
-09)--------SubqueryAlias: sub_cte
-10)----------Projection: Int64(2) AS val
-11)------------EmptyRelation: rows=1
+06)------Cross Join:
+07)--------TableScan: recursive_cte, unsupported_filters=[recursive_cte.val < Int64(2)]
+08)--------SubqueryAlias: sub_cte
+09)----------Projection: Int64(2) AS val
+10)------------EmptyRelation: rows=1
 physical_plan
 01)RecursiveQueryExec: name=recursive_cte, is_distinct=false
 02)--ProjectionExec: expr=[1 as val]
@@ -1062,8 +1059,7 @@ logical_plan
 03)----Projection: Int64(1) AS n
 04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
-06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers projection=[n]
+06)------TableScan: numbers projection=[n], unsupported_filters=[numbers.n < Int64(10)]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]
@@ -1087,8 +1083,7 @@ logical_plan
 03)----Projection: Int64(1) AS n
 04)------EmptyRelation: rows=1
 05)----Projection: numbers.n + Int64(1)
-06)------Filter: numbers.n < Int64(10)
-07)--------TableScan: numbers projection=[n]
+06)------TableScan: numbers projection=[n], unsupported_filters=[numbers.n < Int64(10)]
 physical_plan
 01)RecursiveQueryExec: name=numbers, is_distinct=false
 02)--ProjectionExec: expr=[1 as n]

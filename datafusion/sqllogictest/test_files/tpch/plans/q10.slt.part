@@ -61,13 +61,9 @@ logical_plan
 08)--------------Projection: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_comment, orders.o_orderkey
 09)----------------Inner Join: customer.c_custkey = orders.o_custkey
 10)------------------TableScan: customer projection=[c_custkey, c_name, c_address, c_nationkey, c_phone, c_acctbal, c_comment]
-11)------------------Projection: orders.o_orderkey, orders.o_custkey
-12)--------------------Filter: orders.o_orderdate >= Date32("1993-10-01") AND orders.o_orderdate < Date32("1994-01-01")
-13)----------------------TableScan: orders projection=[o_orderkey, o_custkey, o_orderdate], partial_filters=[orders.o_orderdate >= Date32("1993-10-01"), orders.o_orderdate < Date32("1994-01-01")]
-14)--------------Projection: lineitem.l_orderkey, lineitem.l_extendedprice, lineitem.l_discount
-15)----------------Filter: lineitem.l_returnflag = Utf8View("R")
-16)------------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount, l_returnflag], partial_filters=[lineitem.l_returnflag = Utf8View("R")]
-17)----------TableScan: nation projection=[n_nationkey, n_name]
+11)------------------TableScan: orders projection=[o_orderkey, o_custkey], partial_filters=[orders.o_orderdate >= Date32("1993-10-01"), orders.o_orderdate < Date32("1994-01-01")]
+12)--------------TableScan: lineitem projection=[l_orderkey, l_extendedprice, l_discount], partial_filters=[lineitem.l_returnflag = Utf8View("R")]
+13)----------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 01)SortPreservingMergeExec: [revenue@2 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[revenue@2 DESC], preserve_partitioning=[true]

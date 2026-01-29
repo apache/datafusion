@@ -635,9 +635,7 @@ async fn roundtrip_inlist_5() -> Result<()> {
       Filter: data.f = Utf8("a") OR data.f = Utf8("b") OR data.f = Utf8("c") OR data2.mark
         LeftMark Join: data.a = data2.a
           TableScan: data projection=[a, f]
-          Projection: data2.a
-            Filter: data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")
-              TableScan: data2 projection=[a, f], partial_filters=[data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")]
+          TableScan: data2 projection=[a], partial_filters=[data2.f = Utf8("b") OR data2.f = Utf8("c") OR data2.f = Utf8("d")]
     "#
             );
     Ok(())
@@ -1203,11 +1201,9 @@ async fn self_referential_intersect() -> Result<()> {
         "LeftSemi Join: left.a = right.a\
         \n  SubqueryAlias: left\
         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-        \n      Filter: data.a > Int64(0)\
-        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
         \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        \n    TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await
@@ -1228,11 +1224,9 @@ async fn self_referential_except() -> Result<()> {
         "LeftAnti Join: left.a = right.a\
         \n  SubqueryAlias: left\
         \n    Aggregate: groupBy=[[data.a]], aggr=[[]]\
-        \n      Filter: data.a > Int64(0)\
-        \n        TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
         \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        \n    TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await
@@ -1248,11 +1242,9 @@ async fn self_referential_intersect_all() -> Result<()> {
         "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
         "LeftSemi Join: left.a = right.a\
         \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n    TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
         \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        \n    TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await
@@ -1268,11 +1260,9 @@ async fn self_referential_except_all() -> Result<()> {
         "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
         "LeftAnti Join: left.a = right.a\
         \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n    TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
         \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        \n    TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await

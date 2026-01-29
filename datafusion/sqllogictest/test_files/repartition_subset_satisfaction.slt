@@ -361,11 +361,9 @@ logical_plan
 08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value
 09)----------------Inner Join: d.d_dkey = f.f_dkey
 10)------------------SubqueryAlias: d
-11)--------------------Projection: dimension_table.env, dimension_table.d_dkey
-12)----------------------Filter: dimension_table.service = Utf8View("log")
-13)------------------------TableScan: dimension_table projection=[env, service, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
-14)------------------SubqueryAlias: f
-15)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
+11)--------------------TableScan: dimension_table projection=[env, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
+12)------------------SubqueryAlias: f
+13)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]
@@ -460,11 +458,9 @@ logical_plan
 08)--------------Projection: f.f_dkey, d.env, f.timestamp, f.value
 09)----------------Inner Join: d.d_dkey = f.f_dkey
 10)------------------SubqueryAlias: d
-11)--------------------Projection: dimension_table.env, dimension_table.d_dkey
-12)----------------------Filter: dimension_table.service = Utf8View("log")
-13)------------------------TableScan: dimension_table projection=[env, service, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
-14)------------------SubqueryAlias: f
-15)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
+11)--------------------TableScan: dimension_table projection=[env, d_dkey], partial_filters=[dimension_table.service = Utf8View("log")]
+12)------------------SubqueryAlias: f
+13)--------------------TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
 01)SortPreservingMergeExec: [env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST]
 02)--SortExec: expr=[env@0 ASC NULLS LAST, time_bin@1 ASC NULLS LAST], preserve_partitioning=[true]

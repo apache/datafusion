@@ -1563,7 +1563,11 @@ async fn join_on_filter_datatype() -> Result<()> {
         JoinType::Inner,
         Some(Expr::Literal(ScalarValue::Null, None)),
     )?;
-    assert_snapshot!(join.into_optimized_plan().unwrap(), @"EmptyRelation: rows=0");
+    assert_snapshot!(join.into_optimized_plan().unwrap(), @r"
+    Cross Join:
+      TableScan: a projection=[c1], partial_filters=[Boolean(NULL)]
+      TableScan: b projection=[c1]
+    ");
 
     // JOIN ON expression must be boolean type
     let join = left.join_on(right, JoinType::Inner, Some(lit("TRUE")))?;
@@ -3137,18 +3141,18 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
         @r"
-    +---------------+-----------------------------------------------------+
-    | plan_type     | plan                                                |
-    +---------------+-----------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                      |
-    |               |   TableScan: t1 projection=[a, b]                   |
-    |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     EmptyRelation: rows=1                           |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
-    |               |   PlaceholderRowExec                                |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
-    |               |                                                     |
-    +---------------+-----------------------------------------------------+
+    +---------------+------------------------------------------------------------------------+
+    | plan_type     | plan                                                                   |
+    +---------------+------------------------------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                                         |
+    |               |   TableScan: t1 projection=[a, b], unsupported_filters=[Boolean(true)] |
+    |               |   SubqueryAlias: __correlated_sq_1                                     |
+    |               |     EmptyRelation: rows=1                                              |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                                |
+    |               |   PlaceholderRowExec                                                   |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1]                    |
+    |               |                                                                        |
+    +---------------+------------------------------------------------------------------------+
     "
     );
 
@@ -3173,18 +3177,18 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
         @r"
-    +---------------+-----------------------------------------------------+
-    | plan_type     | plan                                                |
-    +---------------+-----------------------------------------------------+
-    | logical_plan  | LeftSemi Join:                                      |
-    |               |   TableScan: t1 projection=[a, b]                   |
-    |               |   SubqueryAlias: __correlated_sq_1                  |
-    |               |     EmptyRelation: rows=1                           |
-    | physical_plan | NestedLoopJoinExec: join_type=RightSemi             |
-    |               |   PlaceholderRowExec                                |
-    |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
-    |               |                                                     |
-    +---------------+-----------------------------------------------------+
+    +---------------+------------------------------------------------------------------------+
+    | plan_type     | plan                                                                   |
+    +---------------+------------------------------------------------------------------------+
+    | logical_plan  | LeftSemi Join:                                                         |
+    |               |   TableScan: t1 projection=[a, b], unsupported_filters=[Boolean(true)] |
+    |               |   SubqueryAlias: __correlated_sq_1                                     |
+    |               |     EmptyRelation: rows=1                                              |
+    | physical_plan | NestedLoopJoinExec: join_type=RightSemi                                |
+    |               |   PlaceholderRowExec                                                   |
+    |               |   DataSourceExec: partitions=1, partition_sizes=[1]                    |
+    |               |                                                                        |
+    +---------------+------------------------------------------------------------------------+
     "
     );
 
@@ -4070,11 +4074,8 @@ async fn right_semi_with_alias_filter() -> Result<()> {
         actual,
         @r"
     RightSemi Join: t1.a = t2.a [a:UInt32, b:Utf8, c:Int32]
-      Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
-          TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
-      Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
-        TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
+      TableScan: t1 projection=[a], unsupported_filters=[t1.c > Int32(1)] [a:UInt32]
+      TableScan: t2 projection=[a, b, c], unsupported_filters=[t2.c > Int32(1)] [a:UInt32, b:Utf8, c:Int32]
     "
     );
 
@@ -4117,9 +4118,7 @@ async fn right_anti_filter_push_down() -> Result<()> {
         actual,
         @r"
     RightAnti Join: t1.a = t2.a Filter: t2.c > Int32(1) [a:UInt32, b:Utf8, c:Int32]
-      Projection: t1.a [a:UInt32]
-        Filter: t1.c > Int32(1) [a:UInt32, c:Int32]
-          TableScan: t1 projection=[a, c] [a:UInt32, c:Int32]
+      TableScan: t1 projection=[a], unsupported_filters=[t1.c > Int32(1)] [a:UInt32]
       TableScan: t2 projection=[a, b, c] [a:UInt32, b:Utf8, c:Int32]
     "
     );

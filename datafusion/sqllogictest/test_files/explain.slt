@@ -38,10 +38,7 @@ OPTIONS ('format.has_header' 'true');
 query TT
 explain SELECT c1 FROM aggregate_test_100 where c2 > 10
 ----
-logical_plan
-01)Projection: aggregate_test_100.c1
-02)--Filter: aggregate_test_100.c2 > Int8(10)
-03)----TableScan: aggregate_test_100 projection=[c1, c2], partial_filters=[aggregate_test_100.c2 > Int8(10)]
+logical_plan TableScan: aggregate_test_100 projection=[c1], partial_filters=[aggregate_test_100.c2 > Int8(10)]
 physical_plan
 01)FilterExec: c2@1 > 10, projection=[c1@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -425,8 +422,8 @@ query TT
 explain select a from t1 where exists (select count(*) from t2);
 ----
 logical_plan
-01)LeftSemi Join: 
-02)--TableScan: t1 projection=[a]
+01)LeftSemi Join:
+02)--TableScan: t1 projection=[a], unsupported_filters=[Boolean(true)]
 03)--SubqueryAlias: __correlated_sq_1
 04)----EmptyRelation: rows=1
 physical_plan

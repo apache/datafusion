@@ -19,9 +19,12 @@ use crate::logical_plan::producer::{
     SubstraitProducer, to_substrait_literal, to_substrait_named_struct,
 };
 use datafusion::common::{DFSchema, ToDFSchema, substrait_datafusion_err};
-use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::utils::{
+    conjunction, expr_to_columns, projection_indices_from_exprs,
+};
 use datafusion::logical_expr::{EmptyRelation, Expr, TableScan, Values};
 use datafusion::scalar::ScalarValue;
+use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::expression::literal::Struct as LiteralStruct;
@@ -29,7 +32,8 @@ use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::nested::Struct as NestedStruct;
 use substrait::proto::read_rel::{NamedTable, ReadType, VirtualTable};
 use substrait::proto::rel::RelType;
-use substrait::proto::{ReadRel, Rel};
+use substrait::proto::rel_common::EmitKind::Emit;
+use substrait::proto::{ProjectRel, ReadRel, Rel, RelCommon, rel_common};
 
 /// Converts rows of literal expressions into Substrait literal structs.
 ///
@@ -97,47 +101,151 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
-    let projection = scan.projection.as_ref().map(|p| {
-        p.iter()
-            .map(|i| StructItem {
-                field: *i as i32,
-                child: None,
-            })
-            .collect()
-    });
+    let table_schema = scan.source.schema();
+    let table_schema_qualified = Arc::new(DFSchema::try_from_qualified_schema(
+        scan.table_name.clone(),
+        &table_schema,
+    )?);
 
-    let projection = projection.map(|struct_items| MaskExpression {
-        select: Some(StructSelect { struct_items }),
-        maintain_singular_struct: false,
-    });
+    // Check if projection contains only simple column references
+    let simple_projection_indices = scan
+        .projection
+        .as_ref()
+        .and_then(|exprs| projection_indices_from_exprs(exprs, &scan.source.schema()));
 
-    let table_schema = scan.source.schema().to_dfschema_ref()?;
-    let base_schema = to_substrait_named_struct(producer, &table_schema)?;
-
+    // Build the filter expression if any
     let filter_option = if scan.filters.is_empty() {
         None
     } else {
-        let table_schema_qualified = Arc::new(
-            DFSchema::try_from_qualified_schema(
-                scan.table_name.clone(),
-                &(scan.source.schema()),
-            )
-            .unwrap(),
-        );
-
         let combined_expr = conjunction(scan.filters.clone()).unwrap();
         let filter_expr =
             producer.handle_expr(&combined_expr, &table_schema_qualified)?;
         Some(Box::new(filter_expr))
     };
 
+    let base_schema = to_substrait_named_struct(
+        producer,
+        &Arc::clone(&table_schema).to_dfschema_ref()?,
+    )?;
+
+    // If projection is simple column references, use a mask on the ReadRel
+    if let Some(indices) = simple_projection_indices {
+        let projection = Some(MaskExpression {
+            select: Some(StructSelect {
+                struct_items: indices
+                    .iter()
+                    .map(|&i| StructItem {
+                        field: i as i32,
+                        child: None,
+                    })
+                    .collect(),
+            }),
+            maintain_singular_struct: false,
+        });
+
+        return Ok(Box::new(Rel {
+            rel_type: Some(RelType::Read(Box::new(ReadRel {
+                common: None,
+                base_schema: Some(base_schema),
+                filter: filter_option,
+                best_effort_filter: None,
+                projection,
+                advanced_extension: None,
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    names: scan.table_name.to_vec(),
+                    advanced_extension: None,
+                })),
+            }))),
+        }));
+    }
+
+    // Complex projection expressions - need to wrap ReadRel in ProjectRel
+    if let Some(proj_exprs) = &scan.projection {
+        // Find all columns needed by the projection expressions
+        let mut required_columns = HashSet::new();
+        for expr in proj_exprs {
+            expr_to_columns(expr, &mut required_columns)?;
+        }
+
+        // Convert column names to indices
+        let mut column_indices: Vec<usize> = required_columns
+            .iter()
+            .filter_map(|col| table_schema.index_of(col.name()).ok())
+            .collect();
+        column_indices.sort();
+        column_indices.dedup();
+
+        // Create the projection mask for the ReadRel
+        let projection = if column_indices.is_empty() {
+            None
+        } else {
+            Some(MaskExpression {
+                select: Some(StructSelect {
+                    struct_items: column_indices
+                        .iter()
+                        .map(|&i| StructItem {
+                            field: i as i32,
+                            child: None,
+                        })
+                        .collect(),
+                }),
+                maintain_singular_struct: false,
+            })
+        };
+
+        // Create the ReadRel
+        let read_rel = Box::new(Rel {
+            rel_type: Some(RelType::Read(Box::new(ReadRel {
+                common: None,
+                base_schema: Some(base_schema),
+                filter: filter_option,
+                best_effort_filter: None,
+                projection,
+                advanced_extension: None,
+                read_type: Some(ReadType::NamedTable(NamedTable {
+                    names: scan.table_name.to_vec(),
+                    advanced_extension: None,
+                })),
+            }))),
+        });
+
+        // Create the ProjectRel with the complex expressions
+        let expressions = proj_exprs
+            .iter()
+            .map(|e| producer.handle_expr(e, &table_schema_qualified))
+            .collect::<datafusion::common::Result<Vec<_>>>()?;
+
+        // Calculate emit mapping: skip input fields, only emit expression results
+        let input_field_count = column_indices.len();
+        let expr_count = expressions.len();
+        let output_mapping = (input_field_count..(input_field_count + expr_count))
+            .map(|i| i as i32)
+            .collect();
+
+        let common = RelCommon {
+            emit_kind: Some(Emit(rel_common::Emit { output_mapping })),
+            hint: None,
+            advanced_extension: None,
+        };
+
+        return Ok(Box::new(Rel {
+            rel_type: Some(RelType::Project(Box::new(ProjectRel {
+                common: Some(common),
+                input: Some(read_rel),
+                expressions,
+                advanced_extension: None,
+            }))),
+        }));
+    }
+
+    // No projection - read all columns
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
             filter: filter_option,
             best_effort_filter: None,
-            projection,
+            projection: None,
             advanced_extension: None,
             read_type: Some(ReadType::NamedTable(NamedTable {
                 names: scan.table_name.to_vec(),

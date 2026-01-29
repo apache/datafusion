@@ -36,10 +36,8 @@ logical_plan
 02)--Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN part.p_type LIKE Utf8View("PROMO%") THEN __common_expr_1 ELSE Decimal128(Some(0),38,4) END) AS sum(CASE WHEN part.p_type LIKE Utf8("PROMO%") THEN lineitem.l_extendedprice * Int64(1) - lineitem.l_discount ELSE Int64(0) END), sum(__common_expr_1) AS sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]]
 03)----Projection: lineitem.l_extendedprice * (Decimal128(Some(1),20,0) - lineitem.l_discount) AS __common_expr_1, part.p_type
 04)------Inner Join: lineitem.l_partkey = part.p_partkey
-05)--------Projection: lineitem.l_partkey, lineitem.l_extendedprice, lineitem.l_discount
-06)----------Filter: lineitem.l_shipdate >= Date32("1995-09-01") AND lineitem.l_shipdate < Date32("1995-10-01")
-07)------------TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount, l_shipdate], partial_filters=[lineitem.l_shipdate >= Date32("1995-09-01"), lineitem.l_shipdate < Date32("1995-10-01")]
-08)--------TableScan: part projection=[p_partkey, p_type]
+05)--------TableScan: lineitem projection=[l_partkey, l_extendedprice, l_discount], partial_filters=[lineitem.l_shipdate >= Date32("1995-09-01"), lineitem.l_shipdate < Date32("1995-10-01")]
+06)--------TableScan: part projection=[p_partkey, p_type]
 physical_plan
 01)ProjectionExec: expr=[100 * CAST(sum(CASE WHEN part.p_type LIKE Utf8("PROMO%") THEN lineitem.l_extendedprice * Int64(1) - lineitem.l_discount ELSE Int64(0) END)@0 AS Float64) / CAST(sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)@1 AS Float64) as promo_revenue]
 02)--AggregateExec: mode=Final, gby=[], aggr=[sum(CASE WHEN part.p_type LIKE Utf8("PROMO%") THEN lineitem.l_extendedprice * Int64(1) - lineitem.l_discount ELSE Int64(0) END), sum(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount)]

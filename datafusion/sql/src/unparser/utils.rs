@@ -27,8 +27,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
-    Window, expr, utils::grouping_set_to_exprlist,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr,
+    TableScanBuilder, Unnest, Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use indexmap::IndexSet;
@@ -385,17 +385,24 @@ pub(crate) fn try_transform_to_simple_table_scan_with_filters(
                     }
                 }
 
-                let mut builder = LogicalPlanBuilder::scan(
+                // Use TableScanBuilder to preserve full projection expressions
+                let mut scan_builder = TableScanBuilder::new(
                     table_scan.table_name.clone(),
                     Arc::clone(&table_scan.source),
-                    table_scan.projection.clone(),
-                )?;
-
-                if let Some(alias) = table_alias.take() {
-                    builder = builder.alias(alias)?;
+                );
+                if let Some(proj) = &table_scan.projection {
+                    scan_builder = scan_builder.with_projection(Some(proj.clone()));
                 }
+                // Don't include filters - they're returned separately
+                let new_scan = scan_builder.build()?;
 
-                let plan = builder.build()?;
+                let plan = if let Some(alias) = table_alias.take() {
+                    LogicalPlanBuilder::new(LogicalPlan::TableScan(new_scan))
+                        .alias(alias)?
+                        .build()?
+                } else {
+                    LogicalPlan::TableScan(new_scan)
+                };
                 let filters = filters.into_iter().collect();
 
                 return Ok(Some((plan, filters)));
