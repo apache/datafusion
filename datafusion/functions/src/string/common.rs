@@ -101,17 +101,32 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
         1 => {
             // Default whitespace trim - pattern is just space
             let pattern = [' '];
-            for (src_str_opt, raw_view) in string_view_array
-                .iter()
-                .zip(string_view_array.views().iter())
-            {
-                trim_and_append_view::<Tr>(
-                    src_str_opt,
-                    &pattern,
-                    &mut views_buf,
-                    &mut null_builder,
-                    raw_view,
-                );
+
+            if string_view_array.null_count() == 0 {
+                for (i, raw_view) in string_view_array.views().iter().enumerate() {
+                    let src_str = string_view_array.value(i);
+                    let (trimmed, offset) = Tr::trim(src_str, &pattern);
+                    make_and_append_view(
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                        trimmed,
+                        offset,
+                    );
+                }
+            } else {
+                for (src_str_opt, raw_view) in string_view_array
+                    .iter()
+                    .zip(string_view_array.views().iter())
+                {
+                    trim_and_append_view::<Tr>(
+                        src_str_opt,
+                        &pattern,
+                        &mut views_buf,
+                        &mut null_builder,
+                        raw_view,
+                    );
+                }
             }
         }
         2 => {
@@ -127,29 +142,10 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
 
                 let pattern: Vec<char> = characters_array.value(0).chars().collect();
-                for (src_str_opt, raw_view) in string_view_array
-                    .iter()
-                    .zip(string_view_array.views().iter())
-                {
-                    trim_and_append_view::<Tr>(
-                        src_str_opt,
-                        &pattern,
-                        &mut views_buf,
-                        &mut null_builder,
-                        raw_view,
-                    );
-                }
-            } else {
-                // Per-row pattern - must compute pattern chars for each row
-                for ((src_str_opt, raw_view), characters_opt) in string_view_array
-                    .iter()
-                    .zip(string_view_array.views().iter())
-                    .zip(characters_array.iter())
-                {
-                    if let (Some(src_str), Some(characters)) =
-                        (src_str_opt, characters_opt)
-                    {
-                        let pattern: Vec<char> = characters.chars().collect();
+
+                if string_view_array.null_count() == 0 {
+                    for (i, raw_view) in string_view_array.views().iter().enumerate() {
+                        let src_str = string_view_array.value(i);
                         let (trimmed, offset) = Tr::trim(src_str, &pattern);
                         make_and_append_view(
                             &mut views_buf,
@@ -158,9 +154,61 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
                             trimmed,
                             offset,
                         );
-                    } else {
-                        null_builder.append_null();
-                        views_buf.push(0);
+                    }
+                } else {
+                    for (src_str_opt, raw_view) in string_view_array
+                        .iter()
+                        .zip(string_view_array.views().iter())
+                    {
+                        trim_and_append_view::<Tr>(
+                            src_str_opt,
+                            &pattern,
+                            &mut views_buf,
+                            &mut null_builder,
+                            raw_view,
+                        );
+                    }
+                }
+            } else {
+                // Per-row pattern - must compute pattern chars for each row
+                if string_view_array.null_count() == 0
+                    && characters_array.null_count() == 0
+                {
+                    for i in 0..string_view_array.len() {
+                        let pattern: Vec<char> =
+                            characters_array.value(i).chars().collect();
+                        let src_str = string_view_array.value(i);
+                        let (trimmed, offset) = Tr::trim(src_str, &pattern);
+                        make_and_append_view(
+                            &mut views_buf,
+                            &mut null_builder,
+                            &string_view_array.views()[i],
+                            trimmed,
+                            offset,
+                        );
+                    }
+                } else {
+                    for ((src_str_opt, raw_view), characters_opt) in string_view_array
+                        .iter()
+                        .zip(string_view_array.views().iter())
+                        .zip(characters_array.iter())
+                    {
+                        if let (Some(src_str), Some(characters)) =
+                            (src_str_opt, characters_opt)
+                        {
+                            let pattern: Vec<char> = characters.chars().collect();
+                            let (trimmed, offset) = Tr::trim(src_str, &pattern);
+                            make_and_append_view(
+                                &mut views_buf,
+                                &mut null_builder,
+                                raw_view,
+                                trimmed,
+                                offset,
+                            );
+                        } else {
+                            null_builder.append_null();
+                            views_buf.push(0);
+                        }
                     }
                 }
             }
@@ -227,12 +275,19 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
         1 => {
             // Default whitespace trim - pattern is just space
             let pattern = [' '];
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|s| Tr::trim(s, &pattern).0))
-                .collect::<GenericStringArray<T>>();
 
-            Ok(Arc::new(result) as ArrayRef)
+            if string_array.null_count() == 0 {
+                let result = (0..string_array.len())
+                    .map(|i| Some(Tr::trim(string_array.value(i), &pattern).0))
+                    .collect::<GenericStringArray<T>>();
+                Ok(Arc::new(result) as ArrayRef)
+            } else {
+                let result = string_array
+                    .iter()
+                    .map(|string| string.map(|s| Tr::trim(s, &pattern).0))
+                    .collect::<GenericStringArray<T>>();
+                Ok(Arc::new(result) as ArrayRef)
+            }
         }
         2 => {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
@@ -247,6 +302,14 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
                 }
 
                 let pattern: Vec<char> = characters_array.value(0).chars().collect();
+
+                if string_array.null_count() == 0 {
+                    let result = (0..string_array.len())
+                        .map(|i| Some(Tr::trim(string_array.value(i), &pattern).0))
+                        .collect::<GenericStringArray<T>>();
+                    return Ok(Arc::new(result) as ArrayRef);
+                }
+
                 let result = string_array
                     .iter()
                     .map(|item| item.map(|s| Tr::trim(s, &pattern).0))
@@ -255,6 +318,17 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
             }
 
             // Per-row pattern - must compute pattern chars for each row
+            if string_array.null_count() == 0 && characters_array.null_count() == 0 {
+                let result = (0..string_array.len())
+                    .map(|i| {
+                        let pattern: Vec<char> =
+                            characters_array.value(i).chars().collect();
+                        Some(Tr::trim(string_array.value(i), &pattern).0)
+                    })
+                    .collect::<GenericStringArray<T>>();
+                return Ok(Arc::new(result) as ArrayRef);
+            }
+
             let result = string_array
                 .iter()
                 .zip(characters_array.iter())
