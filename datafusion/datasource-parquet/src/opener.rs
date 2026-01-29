@@ -71,55 +71,55 @@ pub(super) struct ParquetOpener {
     /// Execution partition index
     pub(crate) partition_index: usize,
     /// Projection to apply on top of the table schema (i.e. can reference partition columns).
-    pub projection: ProjectionExprs,
+    pub(crate) projection: ProjectionExprs,
     /// Target number of rows in each output RecordBatch
-    pub batch_size: usize,
+    pub(crate) batch_size: usize,
     /// Optional limit on the number of rows to read
     pub(crate) limit: Option<usize>,
     /// If should keep the output rows in order
-    pub preserve_order: bool,
+    pub(crate) preserve_order: bool,
     /// Optional predicate to apply during the scan
-    pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Table schema, including partition columns.
-    pub table_schema: TableSchema,
+    pub(crate) table_schema: TableSchema,
     /// Optional hint for how large the initial request to read parquet metadata
     /// should be
-    pub metadata_size_hint: Option<usize>,
+    pub(crate) metadata_size_hint: Option<usize>,
     /// Metrics for reporting
-    pub metrics: ExecutionPlanMetricsSet,
+    pub(crate) metrics: ExecutionPlanMetricsSet,
     /// Factory for instantiating parquet reader
-    pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    pub(crate) parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     /// Should the filters be evaluated during the parquet scan using
     /// [`DataFusionArrowPredicate`](row_filter::DatafusionArrowPredicate)?
-    pub pushdown_filters: bool,
+    pub(crate) pushdown_filters: bool,
     /// Should the filters be reordered to optimize the scan?
-    pub reorder_filters: bool,
+    pub(crate) reorder_filters: bool,
     /// Should we force the reader to use RowSelections for filtering
-    pub force_filter_selections: bool,
+    pub(crate) force_filter_selections: bool,
     /// Should the page index be read from parquet files, if present, to skip
     /// data pages
-    pub enable_page_index: bool,
+    pub(crate) enable_page_index: bool,
     /// Should the bloom filter be read from parquet, if present, to skip row
     /// groups
-    pub enable_bloom_filter: bool,
+    pub(crate) enable_bloom_filter: bool,
     /// Should row group pruning be applied
-    pub enable_row_group_stats_pruning: bool,
+    pub(crate) enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
-    pub coerce_int96: Option<TimeUnit>,
+    pub(crate) coerce_int96: Option<TimeUnit>,
     /// Optional parquet FileDecryptionProperties
     #[cfg(feature = "parquet_encryption")]
-    pub file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Rewrite expressions in the context of the file schema
     pub(crate) expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     /// Optional factory to create file decryption properties dynamically
     #[cfg(feature = "parquet_encryption")]
-    pub encryption_factory:
+    pub(crate) encryption_factory:
         Option<(Arc<dyn EncryptionFactory>, EncryptionFactoryOptions)>,
     /// Maximum size of the predicate cache, in bytes. If none, uses
     /// the arrow-rs default.
-    pub max_predicate_cache_size: Option<usize>,
+    pub(crate) max_predicate_cache_size: Option<usize>,
     /// Whether to read row groups in reverse order
-    pub reverse_row_groups: bool,
+    pub(crate) reverse_row_groups: bool,
 }
 
 /// Represents a prepared access plan with optional row selection
