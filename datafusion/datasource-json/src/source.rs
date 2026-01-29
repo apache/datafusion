@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution plan for reading line-delimited JSON files
+//! Execution plan for reading JSON files (line-delimited and array formats)
 
 use std::any::Any;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -23,9 +23,10 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::file_format::JsonDecoder;
+use crate::utils::JsonArrayToNdjsonReader;
 
 use datafusion_common::error::{DataFusionError, Result};
-use datafusion_common_runtime::JoinSet;
+use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
@@ -47,6 +48,12 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::io::{StreamReader, SyncIoBridge};
+
+// ============================================================================
+// JsonOpener and JsonSource
+// ============================================================================
 
 /// A [`FileOpener`] that opens a JSON file and yields a [`FileOpenFuture`]
 pub struct JsonOpener {
@@ -54,21 +61,26 @@ pub struct JsonOpener {
     projected_schema: SchemaRef,
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
+    /// When `true` (default), expects newline-delimited JSON (NDJSON).
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    newline_delimited: bool,
 }
 
 impl JsonOpener {
-    /// Returns a  [`JsonOpener`]
+    /// Returns a [`JsonOpener`]
     pub fn new(
         batch_size: usize,
         projected_schema: SchemaRef,
         file_compression_type: FileCompressionType,
         object_store: Arc<dyn ObjectStore>,
+        newline_delimited: bool,
     ) -> Self {
         Self {
             batch_size,
             projected_schema,
             file_compression_type,
             object_store,
+            newline_delimited,
         }
     }
 }
@@ -80,6 +92,9 @@ pub struct JsonSource {
     batch_size: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     projection: SplitProjection,
+    /// When `true` (default), expects newline-delimited JSON (NDJSON).
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    newline_delimited: bool,
 }
 
 impl JsonSource {
@@ -91,7 +106,17 @@ impl JsonSource {
             table_schema,
             batch_size: None,
             metrics: ExecutionPlanMetricsSet::new(),
+            newline_delimited: true,
         }
+    }
+
+    /// Set whether to read as newline-delimited JSON.
+    ///
+    /// When `true` (default), expects newline-delimited format.
+    /// When `false`, expects JSON array format `[{...}, {...}]`.
+    pub fn with_newline_delimited(mut self, newline_delimited: bool) -> Self {
+        self.newline_delimited = newline_delimited;
+        self
     }
 }
 
@@ -120,6 +145,7 @@ impl FileSource for JsonSource {
             projected_schema,
             file_compression_type: base_config.file_compression_type,
             object_store,
+            newline_delimited: self.newline_delimited,
         }) as Arc<dyn FileOpener>;
 
         // Wrap with ProjectionOpener
@@ -172,7 +198,7 @@ impl FileSource for JsonSource {
 }
 
 impl FileOpener for JsonOpener {
-    /// Open a partitioned NDJSON file.
+    /// Open a partitioned JSON file.
     ///
     /// If `file_meta.range` is `None`, the entire file is opened.
     /// Else `file_meta.range` is `Some(FileRange{start, end})`, which corresponds to the byte range [start, end) within the file.
@@ -181,11 +207,23 @@ impl FileOpener for JsonOpener {
     /// are applied to determine which lines to read:
     /// 1. The first line of the partition is the line in which the index of the first character >= `start`.
     /// 2. The last line of the partition is the line in which the byte at position `end - 1` resides.
+    ///
+    /// Note: JSON array format does not support range-based scanning.
     fn open(&self, partitioned_file: PartitionedFile) -> Result<FileOpenFuture> {
         let store = Arc::clone(&self.object_store);
         let schema = Arc::clone(&self.projected_schema);
         let batch_size = self.batch_size;
         let file_compression_type = self.file_compression_type.to_owned();
+        let newline_delimited = self.newline_delimited;
+
+        // JSON array format requires reading the complete file
+        if !newline_delimited && partitioned_file.range.is_some() {
+            return Err(DataFusionError::NotImplemented(
+                "JSON array format does not support range-based file scanning. \
+                 Disable repartition_file_scans or use newline-delimited JSON format."
+                    .to_string(),
+            ));
+        }
 
         Ok(Box::pin(async move {
             let calculated_range =
@@ -222,27 +260,76 @@ impl FileOpener for JsonOpener {
                         }
                     };
 
-                    let reader = ReaderBuilder::new(schema)
-                        .with_batch_size(batch_size)
-                        .build(BufReader::new(bytes))?;
+                    if newline_delimited {
+                        // NDJSON: use BufReader directly
+                        let reader = BufReader::new(bytes);
+                        let arrow_reader = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build(reader)?;
 
-                    Ok(futures::stream::iter(reader)
-                        .map(|r| r.map_err(Into::into))
-                        .boxed())
+                        Ok(futures::stream::iter(arrow_reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
+                    } else {
+                        // JSON array format: wrap with streaming converter
+                        // JsonArrayToNdjsonReader implements BufRead
+                        let ndjson_reader = JsonArrayToNdjsonReader::new(bytes);
+                        let arrow_reader = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build(ndjson_reader)?;
+
+                        Ok(futures::stream::iter(arrow_reader)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
+                    }
                 }
                 GetResultPayload::Stream(s) => {
-                    let s = s.map_err(DataFusionError::from);
+                    if newline_delimited {
+                        // Newline-delimited JSON (NDJSON) streaming reader
+                        let s = s.map_err(DataFusionError::from);
+                        let decoder = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build_decoder()?;
+                        let input =
+                            file_compression_type.convert_stream(s.boxed())?.fuse();
+                        let stream = deserialize_stream(
+                            input,
+                            DecoderDeserializer::new(JsonDecoder::new(decoder)),
+                        );
+                        Ok(stream.map_err(Into::into).boxed())
+                    } else {
+                        // JSON array format: streaming conversion without loading entire file
+                        let s = s.map_err(DataFusionError::from);
+                        let decompressed_stream =
+                            file_compression_type.convert_stream(s.boxed())?;
 
-                    let decoder = ReaderBuilder::new(schema)
-                        .with_batch_size(batch_size)
-                        .build_decoder()?;
-                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
+                        // Convert async stream to sync reader for JsonArrayToNdjsonReader
+                        let stream_reader = StreamReader::new(
+                            decompressed_stream.map_err(DataFusionError::from),
+                        );
+                        let sync_reader = SyncIoBridge::new(stream_reader);
 
-                    let stream = deserialize_stream(
-                        input,
-                        DecoderDeserializer::new(JsonDecoder::new(decoder)),
-                    );
-                    Ok(stream.map_err(Into::into).boxed())
+                        // Use streaming converter - processes data in chunks without loading entire file
+                        let ndjson_reader = JsonArrayToNdjsonReader::new(sync_reader);
+
+                        let arrow_reader = ReaderBuilder::new(schema)
+                            .with_batch_size(batch_size)
+                            .build(ndjson_reader)?;
+
+                        // Process arrow reader in blocking task to avoid blocking async executor
+                        let (tx, rx) = tokio::sync::mpsc::channel(2);
+                        SpawnedTask::spawn_blocking(move || {
+                            for batch_result in arrow_reader {
+                                if tx.blocking_send(batch_result).is_err() {
+                                    break; // Receiver dropped
+                                }
+                            }
+                        });
+
+                        Ok(ReceiverStream::new(rx)
+                            .map(|r| r.map_err(Into::into))
+                            .boxed())
+                    }
                 }
             }
         }))

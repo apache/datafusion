@@ -146,3 +146,31 @@ EXPLAIN SELECT id FROM json_partitioned_test WHERE part = 2
 ----
 logical_plan TableScan: json_partitioned_test projection=[id], full_filters=[json_partitioned_test.part = Int32(2)]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/partitioned_table_json/part=2/data.json]]}, projection=[id], file_type=json
+
+##########
+## JSON Array Format Tests
+##########
+
+# Test reading JSON array format file with newline_delimited=false
+statement ok
+CREATE EXTERNAL TABLE json_array_test
+STORED AS JSON
+OPTIONS ('format.newline_delimited' 'false')
+LOCATION '../core/tests/data/json_array.json';
+
+query IT rowsort
+SELECT a, b FROM json_array_test
+----
+1 hello
+2 world
+3 test
+
+statement ok
+DROP TABLE json_array_test;
+
+# Test that reading JSON array format WITHOUT newline_delimited option fails
+# (default is newline_delimited=true which can't parse array format correctly)
+statement error Not valid JSON
+CREATE EXTERNAL TABLE json_array_as_ndjson
+STORED AS JSON
+LOCATION '../core/tests/data/json_array.json';
