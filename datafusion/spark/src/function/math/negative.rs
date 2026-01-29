@@ -17,12 +17,13 @@
 
 use arrow::array::types::*;
 use arrow::array::*;
-use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano};
+use arrow::datatypes::{DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit};
 use bigdecimal::num_traits::WrappingNeg;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -56,7 +57,23 @@ impl Default for SparkNegative {
 impl SparkNegative {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(1, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::OneOf(vec![
+                    // Numeric types: signed/unsigned integers, float, decimals
+                    TypeSignature::Numeric(1),
+                    // Interval types: YearMonth, DayTime, MonthDayNano
+                    TypeSignature::Uniform(
+                        1,
+                        vec![
+                            DataType::Interval(IntervalUnit::YearMonth),
+                            DataType::Interval(IntervalUnit::DayTime),
+                            DataType::Interval(IntervalUnit::MonthDayNano),
+                        ],
+                    ),
+                ]),
+                volatility: Volatility::Immutable,
+                parameter_names: None,
+            },
         }
     }
 }
@@ -161,13 +178,13 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             }
 
             // interval type
-            DataType::Interval(arrow::datatypes::IntervalUnit::YearMonth) => {
+            DataType::Interval(IntervalUnit::YearMonth) => {
                 let array = array.as_primitive::<IntervalYearMonthType>();
                 let result: PrimitiveArray<IntervalYearMonthType> =
                     array.unary(|x| x.wrapping_neg());
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
-            DataType::Interval(arrow::datatypes::IntervalUnit::DayTime) => {
+            DataType::Interval(IntervalUnit::DayTime) => {
                 let array = array.as_primitive::<IntervalDayTimeType>();
                 let result: PrimitiveArray<IntervalDayTimeType> =
                     array.unary(|x| IntervalDayTime {
@@ -176,7 +193,7 @@ fn spark_negative(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     });
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
-            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano) => {
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
                 let array = array.as_primitive::<IntervalMonthDayNanoType>();
                 let result: PrimitiveArray<IntervalMonthDayNanoType> =
                     array.unary(|x| IntervalMonthDayNano {
