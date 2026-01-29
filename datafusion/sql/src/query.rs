@@ -94,7 +94,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     true,
                     None,
                 )?;
-                let plan = self.order_by(plan, order_by_rex)?;
+                // Pass false to skip_add_missing_columns because for non-SELECT set expressions
+                // (like UNION), we still need to use add_missing_columns in sort_with_limit
+                let plan = self.order_by(plan, order_by_rex, false)?;
                 self.limit(plan, limit_clause, planner_context)
             }
         }?;
@@ -134,7 +136,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     true,
                     None,
                 )?;
-                self.order_by(plan, sort_exprs)
+                // For pipe operator ORDER BY, use add_missing_columns behavior
+                self.order_by(plan, sort_exprs, false)
             }
             PipeOperator::Limit { expr, offset } => self.limit(
                 plan,
@@ -299,10 +302,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     /// Wrap the logical in a sort
+    ///
+    /// If `skip_add_missing_columns` is true, the method will not try to add
+    /// missing columns to the input plan. This is used by SELECT statements
+    /// where missing ORDER BY columns are already added by `add_missing_order_by_exprs`.
     pub(super) fn order_by(
         &self,
         plan: LogicalPlan,
         order_by: Vec<Sort>,
+        skip_add_missing_columns: bool,
     ) -> Result<LogicalPlan> {
         if order_by.is_empty() {
             return Ok(plan);
@@ -313,6 +321,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // optimization we're effectively doing a `first_value` aggregation according to them.
             let distinct_on = distinct_on.clone().with_sort_expr(order_by)?;
             Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
+        } else if skip_add_missing_columns {
+            LogicalPlanBuilder::from(plan)
+                .sort_with_limit_skip_missing(order_by, None)?
+                .build()
         } else {
             LogicalPlanBuilder::from(plan).sort(order_by)?.build()
         }
