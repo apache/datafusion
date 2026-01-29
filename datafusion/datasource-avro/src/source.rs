@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::avro_to_arrow::Reader as AvroReader;
 
+use datafusion_common::assert_or_internal_err;
 use datafusion_common::error::Result;
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
@@ -32,6 +33,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::ProjectionExprs;
 
+use datafusion_physical_plan::PhysicalExpr;
 use object_store::ObjectStore;
 
 /// AvroSource holds the extra configuration that is necessary for opening avro files
@@ -120,6 +122,20 @@ impl FileSource for AvroSource {
 
     fn projection(&self) -> Option<&ProjectionExprs> {
         Some(&self.projection.source)
+    }
+
+    fn with_filter_and_projection(
+        &self,
+        filter: Option<Arc<dyn PhysicalExpr>>,
+        projection: ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        assert_or_internal_err!(filter.is_none(), "filter should not be defined");
+
+        let mut conf = self.clone();
+        conf.projection =
+            SplitProjection::new(self.table_schema.file_schema(), &projection);
+
+        Ok(Some(Arc::new(conf)))
     }
 
     fn metrics(&self) -> &ExecutionPlanMetricsSet {
