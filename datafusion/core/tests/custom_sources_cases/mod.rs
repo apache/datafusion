@@ -86,7 +86,7 @@ impl CustomExecutionPlan {
     fn new(projection: Option<Vec<usize>>) -> Self {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
         let schema =
-            project_schema(&schema, projection.as_ref()).expect("projected schema");
+            project_schema(&schema, projection.as_deref()).expect("projected schema");
         let cache = Self::compute_properties(schema);
         Self { projection, cache }
     }

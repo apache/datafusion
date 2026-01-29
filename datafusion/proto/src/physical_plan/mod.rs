@@ -3141,7 +3141,7 @@ impl protobuf::PhysicalPlanNode {
                     right: Some(Box::new(right)),
                     join_type: join_type.into(),
                     filter,
-                    projection: exec.projection().map_or_else(Vec::new, |v| {
+                    projection: exec.projection().as_ref().map_or_else(Vec::new, |v| {
                         v.iter().map(|x| *x as u32).collect::<Vec<u32>>()
                     }),
                 },

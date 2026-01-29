@@ -61,7 +61,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     // ==== Runtime States/Buffers ====
     accumulators: Vec<AccumulatorItem>,
@@ -276,7 +276,7 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -287,7 +287,7 @@ impl AggregateStream {
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
+                vec![None; agg.aggr_expr.len()].into()
             }
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;

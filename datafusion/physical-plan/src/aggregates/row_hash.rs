@@ -377,10 +377,10 @@ pub(crate) struct GroupedHashAggregateStream {
     ///
     /// For example, for an aggregate like `SUM(x) FILTER (WHERE x >= 100)`,
     /// the filter expression is  `x > 100`.
-    filter_expressions: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
 
     /// GROUP BY expressions
-    group_by: PhysicalGroupBy,
+    group_by: Arc<PhysicalGroupBy>,
 
     /// max rows in output RecordBatches
     batch_size: usize,
@@ -465,8 +465,8 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = agg.group_by.clone();
-        let agg_filter_expr = agg.filter_expr.clone();
+        let agg_group_by = Arc::clone(&agg.group_by);
+        let agg_filter_expr = Arc::clone(&agg.filter_expr);
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -475,7 +475,7 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = agg.aggr_expr.clone();
+        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
@@ -496,7 +496,7 @@ impl GroupedHashAggregateStream {
             | AggregateMode::Single
             | AggregateMode::SinglePartitioned => agg_filter_expr,
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
+                vec![None; agg.aggr_expr.len()].into()
             }
         };
 

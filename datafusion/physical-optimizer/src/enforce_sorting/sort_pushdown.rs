@@ -723,7 +723,7 @@ fn handle_hash_join(
         .collect();
 
     let column_indices = build_join_column_index(plan);
-    let projected_indices: Vec<_> = if let Some(projection) = &plan.projection {
+    let projected_indices: Vec<_> = if let Some(projection) = plan.projection.as_ref() {
         projection.iter().map(|&i| &column_indices[i]).collect()
     } else {
         column_indices.iter().collect()

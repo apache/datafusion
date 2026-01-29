@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
+use datafusion_physical_expr::projection::OptionProjectionRef;
 use itertools::Itertools;
 
 use super::{
@@ -85,7 +86,7 @@ pub struct FilterExec {
     /// Properties equivalence properties, partitioning, etc.
     cache: PlanProperties,
     /// The projection indices of the columns in the output schema of join
-    projection: Option<Vec<usize>>,
+    projection: OptionProjectionRef,
     /// Target batch size for output batches
     batch_size: usize,
     /// Number of rows to fetch
@@ -96,7 +97,7 @@ pub struct FilterExec {
 pub struct FilterExecBuilder {
     predicate: Arc<dyn PhysicalExpr>,
     input: Arc<dyn ExecutionPlan>,
-    projection: Option<Vec<usize>>,
+    projection: OptionProjectionRef,
     default_selectivity: u8,
     batch_size: usize,
     fetch: Option<usize>,
@@ -108,7 +109,7 @@ impl FilterExecBuilder {
         Self {
             predicate,
             input,
-            projection: None,
+            projection: None.into(),
             default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
             batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
             fetch: None,
@@ -136,18 +137,14 @@ impl FilterExecBuilder {
     ///
     /// If no projection is currently set, the new projection is used directly.
     /// If `None` is passed, the projection is cleared.
-    pub fn apply_projection(mut self, projection: Option<Vec<usize>>) -> Result<Self> {
+    pub fn apply_projection(
+        mut self,
+        projection: impl Into<OptionProjectionRef>,
+    ) -> Result<Self> {
         // Check if the projection is valid against current output schema
+        let projection = projection.into();
         can_project(&self.input.schema(), projection.as_ref())?;
-        self.projection = match projection {
-            Some(new_proj) => match &self.projection {
-                Some(existing_proj) => {
-                    Some(new_proj.iter().map(|i| existing_proj[*i]).collect())
-                }
-                None => Some(new_proj),
-            },
-            None => None,
-        };
+        self.projection = projection.apply_projection(&self.projection)?;
         Ok(self)
     }
 
@@ -189,9 +186,7 @@ impl FilterExecBuilder {
         }
 
         // Validate projection if provided
-        if let Some(ref proj) = self.projection {
-            can_project(&self.input.schema(), Some(proj))?;
-        }
+        can_project(&self.input.schema(), self.projection.as_ref())?;
 
         // Compute properties once with all parameters
         let cache = FilterExec::compute_properties(
@@ -302,8 +297,8 @@ impl FilterExec {
     }
 
     /// Projection
-    pub fn projection(&self) -> Option<&Vec<usize>> {
-        self.projection.as_ref()
+    pub fn projection(&self) -> &OptionProjectionRef {
+        &self.projection
     }
 
     /// Calculates `Statistics` for `FilterExec`, by applying selectivity (either default, or estimated) to input statistics.
@@ -380,7 +375,7 @@ impl FilterExec {
         input: &Arc<dyn ExecutionPlan>,
         predicate: &Arc<dyn PhysicalExpr>,
         default_selectivity: u8,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
     ) -> Result<PlanProperties> {
         // Combine the equal predicates with the input equivalence properties
         // to construct the equivalence properties:
@@ -554,7 +549,7 @@ impl ExecutionPlan for FilterExec {
             self.predicate(),
             self.default_selectivity,
         )?;
-        Ok(stats.project(self.projection.as_ref()))
+        Ok(self.projection.project_statistics(stats))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -648,7 +643,7 @@ impl ExecutionPlan for FilterExec {
         let new_predicate = conjunction(unhandled_filters);
         let updated_node = if new_predicate.eq(&lit(true)) {
             // FilterExec is no longer needed, but we may need to leave a projection in place
-            match self.projection() {
+            match self.projection().as_ref() {
                 Some(projection_indices) => {
                     let filter_child_schema = filter_input.schema();
                     let proj_exprs = projection_indices
@@ -686,7 +681,7 @@ impl ExecutionPlan for FilterExec {
                     self.default_selectivity,
                     self.projection.as_ref(),
                 )?,
-                projection: None,
+                projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
             };
@@ -796,7 +791,7 @@ struct FilterExecStream {
     /// Runtime metrics recording
     metrics: FilterExecMetrics,
     /// The projection indices of the columns in the input schema
-    projection: Option<Vec<usize>>,
+    projection: OptionProjectionRef,
     /// Batch coalescer to combine small batches
     batch_coalescer: LimitedBatchCoalescer,
 }
@@ -887,8 +882,8 @@ impl Stream for FilterExecStream {
                         .evaluate(&batch)
                         .and_then(|v| v.into_array(batch.num_rows()))
                         .and_then(|array| {
-                            Ok(match self.projection {
-                                Some(ref projection) => {
+                            Ok(match self.projection.as_ref()  {
+                                Some(projection) => {
                                     let projected_batch = batch.project(projection)?;
                                     (array, projected_batch)
                                 },
@@ -1739,7 +1734,7 @@ mod tests {
         let filter = FilterExecBuilder::new(predicate, input).build()?;
 
         // Verify no projection is set
-        assert_eq!(filter.projection(), None);
+        assert!(filter.projection().is_none());
 
         // Verify schema contains all columns
         let output_schema = filter.schema();
@@ -1953,7 +1948,7 @@ mod tests {
             .build()?;
 
         // Verify composed projection is [0, 3]
-        assert_eq!(filter.projection(), Some(&vec![0, 3]));
+        assert_eq!(filter.projection(), Some(&[0, 3]));
 
         // Verify schema contains only columns a and d
         let output_schema = filter.schema();
@@ -1987,7 +1982,7 @@ mod tests {
             .build()?;
 
         // Projection should be cleared
-        assert_eq!(filter.projection(), None);
+        assert_eq!(filter.projection(), None::<&[usize]>);
 
         // Schema should have all columns
         let output_schema = filter.schema();

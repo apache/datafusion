@@ -291,7 +291,7 @@ impl CustomExec {
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
-        let projected_schema = project_schema(&schema, projections).unwrap();
+        let projected_schema = project_schema(&schema, projections.map(|v| v.as_ref())).unwrap();
         Self {
             db,
             projected_schema,
@@ -483,7 +483,7 @@ This will allow you to use the custom table provider in DataFusion. For example,
 #         schema: SchemaRef,
 #         db: CustomDataSource,
 #     ) -> Self {
-#         let projected_schema = project_schema(&schema, projections).unwrap();
+#         let projected_schema = project_schema(&schema, projections.map(|v| v.as_ref())).unwrap();
 #         Self {
 #             db,
 #             projected_schema,

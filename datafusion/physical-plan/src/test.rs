@@ -235,7 +235,7 @@ impl TestMemoryExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let projected_schema = project_schema(&schema, projection.as_ref())?;
+        let projected_schema = project_schema(&schema, projection.as_deref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,

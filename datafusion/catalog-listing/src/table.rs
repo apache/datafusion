@@ -522,7 +522,7 @@ impl TableProvider for ListingTable {
 
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
-            let projected_schema = project_schema(&self.schema(), projection.as_ref())?;
+            let projected_schema = project_schema(&self.schema(), projection.as_deref())?;
             return Ok(ScanResult::new(Arc::new(EmptyExec::new(projected_schema))));
         }
 

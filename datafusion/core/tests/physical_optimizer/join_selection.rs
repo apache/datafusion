@@ -762,7 +762,7 @@ async fn test_hash_join_swap_on_joins_with_projections(
             "ProjectionExec won't be added above if HashJoinExec contains embedded projection",
         );
 
-    assert_eq!(swapped_join.projection, Some(vec![0_usize]));
+    assert_eq!(swapped_join.projection.as_ref().unwrap(), [0_usize]);
     assert_eq!(swapped.schema().fields.len(), 1);
     assert_eq!(swapped.schema().fields[0].name(), "small_col");
     Ok(())

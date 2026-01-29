@@ -61,6 +61,19 @@ FileSinkConfig {
 }
 ```
 
+### Schema, statistics project fn take an option slice instead of Vec ref
+
+`project_schema` and `Statistics::project` now take `Option<&[usize]>` instead of `Option<&Vec<usize>>`.
+
+To convert `Option<&Vec<usize>>` into `Option<&[usize]>` you can use `map(|v| v.as_ref())` call,
+for example:
+
+```diff
+-        let projected_schema = project_schema(&schema, projections)?;
++        let projected_schema =
++            project_schema(&schema, projections.map(|v| v.as_ref()))?;
+```
+
 ### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
 
 The `SimplifyInfo` trait has been removed and replaced with the concrete `SimplifyContext` struct. This simplifies the expression simplification API and removes the need for trait objects.

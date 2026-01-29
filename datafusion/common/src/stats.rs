@@ -391,8 +391,8 @@ impl Statistics {
     /// For example, if we had statistics for columns `{"a", "b", "c"}`,
     /// projecting to `vec![2, 1]` would return statistics for columns `{"c",
     /// "b"}`.
-    pub fn project(mut self, projection: Option<&Vec<usize>>) -> Self {
-        let Some(projection) = projection else {
+    pub fn project(mut self, projection: Option<&[usize]>) -> Self {
+        let Some(projection) = projection.map(AsRef::as_ref) else {
             return self;
         };
 
@@ -410,7 +410,7 @@ impl Statistics {
             .map(Slot::Present)
             .collect();
 
-        for idx in projection {
+        for idx in projection.iter() {
             let next_idx = self.column_statistics.len();
             let slot = std::mem::replace(
                 columns.get_mut(*idx).expect("projection out of bounds"),
@@ -1066,29 +1066,29 @@ mod tests {
 
     #[test]
     fn test_project_none() {
-        let projection = None;
-        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        let projection: Option<&[usize]> = None;
+        let stats = make_stats(vec![10, 20, 30]).project(projection);
         assert_eq!(stats, make_stats(vec![10, 20, 30]));
     }
 
     #[test]
     fn test_project_empty() {
         let projection = Some(vec![]);
-        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_deref());
         assert_eq!(stats, make_stats(vec![]));
     }
 
     #[test]
     fn test_project_swap() {
         let projection = Some(vec![2, 1]);
-        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_deref());
         assert_eq!(stats, make_stats(vec![30, 20]));
     }
 
     #[test]
     fn test_project_repeated() {
         let projection = Some(vec![1, 2, 1, 1, 0, 2]);
-        let stats = make_stats(vec![10, 20, 30]).project(projection.as_ref());
+        let stats = make_stats(vec![10, 20, 30]).project(projection.as_deref());
         assert_eq!(stats, make_stats(vec![20, 30, 20, 20, 10, 30]));
     }
 
