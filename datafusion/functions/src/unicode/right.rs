@@ -169,8 +169,8 @@ fn right_impl<'a, T: OffsetSizeTrait, V: ArrayAccessor<Item = &'a str>>(
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, StringArray};
-    use arrow::datatypes::DataType::Utf8;
+    use arrow::array::{Array, StringArray, StringViewArray};
+    use arrow::datatypes::DataType::{Utf8, Utf8View};
 
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
@@ -209,6 +209,17 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
             Ok(Some("cde")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::from("abcde")),
+                ColumnarValue::Scalar(ScalarValue::from(i64::MIN)),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
@@ -293,6 +304,71 @@ mod tests {
             Utf8,
             StringArray
         );
+
+        // StringView cases
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(2i64)),
+            ],
+            Ok(Some("de")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("abcde".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("abcde")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some("".to_string()))),
+                ColumnarValue::Scalar(ScalarValue::from(200i64)),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+        test_function!(
+            RightFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8View(Some(
+                    "joséésoj".to_string()
+                ))),
+                ColumnarValue::Scalar(ScalarValue::from(-3i64)),
+            ],
+            Ok(Some("éésoj")),
+            &str,
+            Utf8View,
+            StringViewArray
+        );
+
+        // Unicode indexing case
+        let input = "joé楽s𐀀so↓j";
+        for n in 1..=input.chars().count() {
+            let expected = input.chars().skip(n).collect::<String>();
+            test_function!(
+                RightFunc::new(),
+                vec![
+                    ColumnarValue::Scalar(ScalarValue::from(input)),
+                    ColumnarValue::Scalar(ScalarValue::from(-(n as i64))),
+                ],
+                Ok(Some(expected.as_str())),
+                &str,
+                Utf8,
+                StringArray
+            );
+        }
 
         Ok(())
     }
