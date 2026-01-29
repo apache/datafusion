@@ -97,6 +97,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("window order by and range offsets, aggregate functions", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                &rt,
+                "SELECT \
+                    MAX(f64) OVER (ORDER BY u64_narrow RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                    MIN(f32) OVER (ORDER BY u64_narrow DESC RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                    SUM(u64_narrow) OVER (ORDER BY u64_narrow ASC RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) \
+                FROM t",
+            )
+        })
+    });
+
     c.bench_function("window order by, built-in functions", |b| {
         b.iter(|| {
             query(
@@ -188,6 +202,23 @@ fn criterion_benchmark(c: &mut Criterion) {
     );
 
     c.bench_function(
+        "window partition and order by and range offsets, u64_wide, aggregate functions",
+        |b| {
+            b.iter(|| {
+                query(
+                    ctx.clone(),
+                    &rt,
+                    "SELECT \
+                        MAX(f64) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        MIN(f32) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        SUM(u64_narrow) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) \
+                    FROM t",
+                )
+            })
+        },
+    );
+
+    c.bench_function(
         "window partition and order by, u64_narrow, aggregate functions",
         |b| {
             b.iter(|| {
@@ -198,6 +229,23 @@ fn criterion_benchmark(c: &mut Criterion) {
                         MAX(f64) OVER (PARTITION BY u64_narrow ORDER by f64), \
                         MIN(f32) OVER (PARTITION BY u64_narrow ORDER by f64), \
                         SUM(u64_narrow) OVER (PARTITION BY u64_narrow ORDER by f64) \
+                    FROM t",
+                )
+            })
+        },
+    );
+
+    c.bench_function(
+        "window partition and order by and range offsets, u64_narrow, aggregate functions",
+        |b| {
+            b.iter(|| {
+                query(
+                    ctx.clone(),
+                    &rt,
+                    "SELECT \
+                        MAX(f64) OVER (PARTITION BY u64_narrow ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        MIN(f32) OVER (PARTITION BY u64_narrow ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        SUM(u64_narrow) OVER (PARTITION BY u64_narrow ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) \
                     FROM t",
                 )
             })
@@ -232,6 +280,23 @@ fn criterion_benchmark(c: &mut Criterion) {
                         FIRST_VALUE(f64) OVER (PARTITION BY u64_narrow ORDER by f64), \
                         LAST_VALUE(f32) OVER (PARTITION BY u64_narrow ORDER by f64), \
                         NTH_VALUE(u64_narrow, 50) OVER (PARTITION BY u64_narrow ORDER by f64) \
+                    FROM t",
+                )
+            })
+        },
+    );
+
+    c.bench_function(
+        "window partition and order by and range offsets, u64_wide, aggregate functions",
+        |b| {
+            b.iter(|| {
+                query(
+                    ctx.clone(),
+                    &rt,
+                    "SELECT \
+                        MAX(f64) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        MIN(f32) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING), \
+                        SUM(u64_narrow) OVER (PARTITION BY u64_wide ORDER by f64 RANGE BETWEEN 5 PRECEDING AND 5 FOLLOWING) \
                     FROM t",
                 )
             })
