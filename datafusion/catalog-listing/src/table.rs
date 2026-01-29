@@ -1423,7 +1423,7 @@ mod benchmark_tests {
         };
 
         let paths: Vec<ListingTableUrl> = (0..num_paths)
-            .map(|i| ListingTableUrl::parse(format!("test:///table/{}", i)).unwrap())
+            .map(|i| ListingTableUrl::parse(format!("test:///table/{i}")).unwrap())
             .collect();
 
         let options = ListingOptions::new(Arc::new(MockFormat));
@@ -1440,18 +1440,15 @@ mod benchmark_tests {
         let duration = start.elapsed();
 
         println!(
-            "Listing {} paths with {}ms delay took: {:?}",
-            num_paths,
+            "Listing {num_paths} paths with {}ms delay took: {duration:?}",
             delay.as_millis(),
-            duration
         );
 
         // If it was sequential, it would take >= num_paths * delay (1000ms).
         // With JoinSet/concurrent, it should be much closer to 100ms.
         assert!(
             duration < Duration::from_millis(500),
-            "Listing took too long: {:?}",
-            duration
+            "Listing took too long: {duration:?}"
         );
 
         Ok(())
