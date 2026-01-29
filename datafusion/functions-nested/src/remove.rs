@@ -20,8 +20,8 @@
 use crate::utils;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, cast::AsArray,
-    new_empty_array,
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait, cast::AsArray, make_array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
@@ -377,73 +377,84 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             );
         }
     };
-    let data_type = list_field.data_type();
-    let mut new_values = vec![];
+    let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
     let mut offsets = Vec::<OffsetSize>::with_capacity(arr_n.len() + 1);
     offsets.push(OffsetSize::zero());
 
-    // n is the number of elements to remove in this row
-    for (row_index, (list_array_row, n)) in
-        list_array.iter().zip(arr_n.iter()).enumerate()
-    {
-        match list_array_row {
-            Some(list_array_row) => {
-                let eq_array = utils::compare_element_to_list(
-                    &list_array_row,
-                    element_array,
-                    row_index,
-                    false,
-                )?;
+    let mut mutable = MutableArrayData::with_capacities(
+        vec![&original_data],
+        false,
+        Capacities::Array(original_data.len()),
+    );
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
-                // We need to keep at most first n elements as `false`, which represent the elements to remove.
-                let eq_array = if eq_array.false_count() < *n as usize {
-                    eq_array
-                } else {
-                    let mut count = 0;
-                    eq_array
-                        .iter()
-                        .map(|e| {
-                            // Keep first n `false` elements, and reverse other elements to `true`.
-                            if let Some(false) = e {
-                                if count < *n {
-                                    count += 1;
-                                    e
-                                } else {
-                                    Some(true)
-                                }
-                            } else {
-                                e
-                            }
-                        })
-                        .collect::<BooleanArray>()
-                };
+    for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
+        if list_array.is_null(row_index) {
+            offsets.push(offsets[row_index]);
+            valid.append_null();
+            continue;
+        }
 
-                let filtered_array = arrow::compute::filter(&list_array_row, &eq_array)?;
-                offsets.push(
-                    offsets[row_index] + OffsetSize::usize_as(filtered_array.len()),
-                );
-                new_values.push(filtered_array);
-            }
-            None => {
-                // Null element results in a null row (no new offsets)
-                offsets.push(offsets[row_index]);
+        let start = offset_window[0].to_usize().unwrap();
+        let end = offset_window[1].to_usize().unwrap();
+        // n is the number of elements to remove in this row
+        let n = arr_n[row_index];
+
+        // compare each element in the list, `false` means the element matches and should be removed
+        let eq_array = utils::compare_element_to_list(
+            &list_array.value(row_index),
+            element_array,
+            row_index,
+            false,
+        )?;
+
+        let num_to_remove = eq_array.false_count();
+
+        // Fast path: no elements to remove, copy entire row
+        if num_to_remove == 0 {
+            mutable.extend(0, start, end);
+            offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
+            valid.append_non_null();
+            continue;
+        }
+
+        // Remove at most `n` matching elements
+        let max_removals = n.min(num_to_remove as i64);
+        let mut removed = 0i64;
+        let mut copied = 0usize;
+        // marks the beginning of a range of elements pending to be copied.
+        let mut pending_batch_to_retain: Option<usize> = None;
+        for (i, keep) in eq_array.iter().enumerate() {
+            if keep == Some(false) && removed < max_removals {
+                // Flush pending batch before skipping this element
+                if let Some(bs) = pending_batch_to_retain {
+                    mutable.extend(0, start + bs, start + i);
+                    copied += i - bs;
+                    pending_batch_to_retain = None;
+                }
+                removed += 1;
+            } else if pending_batch_to_retain.is_none() {
+                pending_batch_to_retain = Some(i);
             }
         }
+
+        // Flush remaining batch
+        if let Some(bs) = pending_batch_to_retain {
+            mutable.extend(0, start + bs, start + eq_array.len());
+            copied += eq_array.len() - bs;
+        }
+
+        offsets.push(offsets[row_index] + OffsetSize::usize_as(copied));
+        valid.append_non_null();
     }
 
-    let values = if new_values.is_empty() {
-        new_empty_array(data_type)
-    } else {
-        let new_values = new_values.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-        arrow::compute::concat(&new_values)?
-    };
-
+    let new_values = make_array(mutable.freeze());
     Ok(Arc::new(GenericListArray::<OffsetSize>::try_new(
         Arc::clone(list_field),
         OffsetBuffer::new(offsets.into()),
-        values,
-        list_array.nulls().cloned(),
+        new_values,
+        valid.finish(),
     )?))
 }
 

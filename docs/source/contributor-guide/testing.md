@@ -104,6 +104,7 @@ locally by following the [instructions in the documentation].
 
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
+[extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
 ## Rust Integration Tests
 

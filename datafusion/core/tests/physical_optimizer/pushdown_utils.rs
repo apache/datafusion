@@ -24,6 +24,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, source::DataSourceExec,
 };
+use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::filter::batch_filter;
@@ -50,7 +51,7 @@ use std::{
 pub struct TestOpener {
     batches: Vec<RecordBatch>,
     batch_size: Option<usize>,
-    projection: Option<Vec<usize>>,
+    projection: Option<ProjectionExprs>,
     predicate: Option<Arc<dyn PhysicalExpr>>,
 }
 
@@ -60,6 +61,7 @@ impl FileOpener for TestOpener {
         if self.batches.is_empty() {
             return Ok((async { Ok(TestStream::new(vec![]).boxed()) }).boxed());
         }
+        let schema = self.batches[0].schema();
         if let Some(batch_size) = self.batch_size {
             let batch = concat_batches(&batches[0].schema(), &batches)?;
             let mut new_batches = Vec::new();
@@ -83,9 +85,10 @@ impl FileOpener for TestOpener {
         batches = new_batches;
 
         if let Some(projection) = &self.projection {
+            let projector = projection.make_projector(&schema)?;
             batches = batches
                 .into_iter()
-                .map(|batch| batch.project(projection).unwrap())
+                .map(|batch| projector.project_batch(&batch).unwrap())
                 .collect();
         }
 
@@ -103,14 +106,13 @@ pub struct TestSource {
     batch_size: Option<usize>,
     batches: Vec<RecordBatch>,
     metrics: ExecutionPlanMetricsSet,
-    projection: Option<Vec<usize>>,
+    projection: Option<ProjectionExprs>,
     table_schema: datafusion_datasource::TableSchema,
 }
 
 impl TestSource {
     pub fn new(schema: SchemaRef, support: bool, batches: Vec<RecordBatch>) -> Self {
-        let table_schema =
-            datafusion_datasource::TableSchema::new(Arc::clone(&schema), vec![]);
+        let table_schema = datafusion_datasource::TableSchema::new(schema, vec![]);
         Self {
             support,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -208,6 +210,30 @@ impl FileSource for TestSource {
                 vec![PushedDown::No; filters.len()],
             ))
         }
+    }
+
+    fn try_pushdown_projection(
+        &self,
+        projection: &ProjectionExprs,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        if let Some(existing_projection) = &self.projection {
+            // Combine existing projection with new projection
+            let combined_projection = existing_projection.try_merge(projection)?;
+            Ok(Some(Arc::new(TestSource {
+                projection: Some(combined_projection),
+                table_schema: self.table_schema.clone(),
+                ..self.clone()
+            })))
+        } else {
+            Ok(Some(Arc::new(TestSource {
+                projection: Some(projection.clone()),
+                ..self.clone()
+            })))
+        }
+    }
+
+    fn projection(&self) -> Option<&ProjectionExprs> {
+        self.projection.as_ref()
     }
 
     fn table_schema(&self) -> &datafusion_datasource::TableSchema {
@@ -332,6 +358,7 @@ pub struct OptimizationTest {
 }
 
 impl OptimizationTest {
+    #[expect(clippy::needless_pass_by_value)]
     pub fn new<O>(
         input_plan: Arc<dyn ExecutionPlan>,
         opt: O,

@@ -21,7 +21,45 @@
 
 ## DataFusion `53.0.0`
 
-**Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+**Note:** DataFusion `53.0.0` has not been released yet. The information provided
+*in this section pertains to features and changes that have already been merged
+*to the main branch and are awaiting release in this version. See [#19692] for
+\*more details.
+
+[#19692]: https://github.com/apache/datafusion/issues/19692
+
+### `FileSinkConfig` adds `file_output_mode`
+
+`FileSinkConfig` now includes a `file_output_mode: FileOutputMode` field to control
+single-file vs directory output behavior. Any code constructing `FileSinkConfig` via struct
+literals must initialize this field.
+
+The `FileOutputMode` enum has three variants:
+
+- `Automatic` (default): Infer output mode from the URL (extension/trailing `/` heuristic)
+- `SingleFile`: Write to a single file at the exact output path
+- `Directory`: Write to a directory with generated filenames
+
+**Before:**
+
+```rust,ignore
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+}
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_datasource::file_sink_config::FileOutputMode;
+
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+    file_output_mode: FileOutputMode::Automatic,
+}
+```
 
 ### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
 
@@ -153,6 +191,99 @@ let filter = FilterExecBuilder::new(predicate, input)
 The builder pattern is more efficient as it computes properties once during `build()` rather than recomputing them for each method call.
 
 Note: `with_default_selectivity()` is not deprecated as it simply updates a field value and does not require the overhead of the builder pattern.
+
+### Protobuf conversion trait added
+
+A new trait, `PhysicalProtoConverterExtension`, has been added to the `datafusion-proto`
+crate. This is used for controlling the process of conversion of physical plans and
+expressions to and from their protobuf equivalents. The methods for conversion now
+require an additional parameter.
+
+The primary APIs for interacting with this crate have not been modified, so most users
+should not need to make any changes. If you do require this trait, you can use the
+`DefaultPhysicalProtoConverter` implementation.
+
+For example, to convert a sort expression protobuf node you can make the following
+updates:
+
+**Before:**
+
+```rust,ignore
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+);
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let sort_expr = parse_physical_sort_expr(
+    sort_proto,
+    ctx,
+    input_schema,
+    codec,
+    &converter
+);
+```
+
+Similarly to convert from a physical sort expression into a protobuf node:
+
+**Before:**
+
+```rust,ignore
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+);
+```
+
+**After:**
+
+```rust,ignore
+let converter = DefaultPhysicalProtoConverter {};
+let sort_proto = serialize_physical_sort_expr(
+    sort_expr,
+    codec,
+    &converter,
+);
+```
+
+### `generate_series` and `range` table functions changed
+
+The `generate_series` and `range` table functions now return an empty set when the interval is invalid, instead of an error.
+This behavior is consistent with systems like PostgreSQL.
+
+Before:
+
+```sql
+> select * from generate_series(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+
+> select * from range(0, -1);
+Error during planning: Start is bigger than end, but increment is positive: Cannot generate infinite series
+```
+
+Now:
+
+```sql
+> select * from generate_series(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+
+> select * from range(0, -1);
++-------+
+| value |
++-------+
++-------+
+0 row(s) fetched.
+```
 
 ## DataFusion `52.0.0`
 

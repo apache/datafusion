@@ -97,7 +97,7 @@ LOCATION 'test_files/scratch/projection_pushdown/nullable.parquet';
 #####################
 
 ###
-# Test 2.1: Simple s['value'] - pushed into DataSourceExec
+# Test 2.1: Simple s['value']
 ###
 
 query TT
@@ -119,7 +119,7 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id;
 5 250
 
 ###
-# Test 2.2: Multiple get_field expressions - all pushed
+# Test 2.2: Multiple get_field expressions
 ###
 
 query TT
@@ -141,7 +141,7 @@ SELECT id, s['value'], s['label'] FROM simple_struct ORDER BY id;
 5 250 epsilon
 
 ###
-# Test 2.3: Nested s['outer']['inner'] - pushed
+# Test 2.3: Nested s['outer']['inner']
 ###
 
 query TT
@@ -161,7 +161,7 @@ SELECT id, nested['outer']['inner'] FROM nested_struct ORDER BY id;
 3 30
 
 ###
-# Test 2.4: s['value'] + 1 - entire expression pushed (directly above scan)
+# Test 2.4: s['value'] + 1
 ###
 
 query TT
@@ -183,7 +183,7 @@ SELECT id, s['value'] + 1 FROM simple_struct ORDER BY id;
 5 251
 
 ###
-# Test 2.5: s['label'] || '_suffix' - pushed (directly above scan)
+# Test 2.5: s['label'] || '_suffix'
 ###
 
 query TT
@@ -206,11 +206,11 @@ SELECT id, s['label'] || '_suffix' FROM simple_struct ORDER BY id;
 
 
 #####################
-# Section 3: Projection Through Filter
+# Section 3: Projection Pushdown Through FilterExec
 #####################
 
 ###
-# Test 3.1: Simple get_field through Filter - pushed
+# Test 3.1: Simple get_field through Filter
 ###
 
 query TT
@@ -234,7 +234,7 @@ SELECT id, s['value'] FROM simple_struct WHERE id > 2 ORDER BY id;
 5 250
 
 ###
-# Test 3.2: s['value'] + 1 through Filter - get_field extracted and pushed
+# Test 3.2: s['value'] + 1 through Filter
 ###
 
 query TT
@@ -283,11 +283,11 @@ SELECT id, s['label'] FROM simple_struct WHERE s['value'] > 150 ORDER BY id;
 
 
 #####################
-# Section 4: Projection Through Sort (no LIMIT)
+# Section 4: Projection Pushdown Through SortExec (no LIMIT)
 #####################
 
 ###
-# Test 4.1: Simple get_field through Sort - pushed
+# Test 4.1: Simple get_field through Sort
 ###
 
 query TT
@@ -361,13 +361,57 @@ SELECT id, s['value'] FROM simple_struct ORDER BY s['value'];
 5 250
 4 300
 
+###
+# Test 4.4: Projection with duplicate column through Sort
+# The projection expands the number of columns from 3 to 4 by introducing `col_b_dup`
+###
+
+statement ok
+COPY (
+    SELECT
+        column1 as col_a,
+        column2 as col_b,
+        column3 as col_c
+    FROM VALUES
+        (1, 2, 3),
+        (4, 5, 6),
+        (7, 8, 9)
+) TO 'test_files/scratch/projection_pushdown/three_cols.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE three_cols STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/three_cols.parquet';
+
+query TT
+EXPLAIN SELECT col_a, col_b, col_c, col_b as col_b_dup FROM three_cols ORDER BY col_a;
+----
+logical_plan
+01)Sort: three_cols.col_a ASC NULLS LAST
+02)--Projection: three_cols.col_a, three_cols.col_b, three_cols.col_c, three_cols.col_b AS col_b_dup
+03)----TableScan: three_cols projection=[col_a, col_b, col_c]
+physical_plan
+01)SortExec: expr=[col_a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/three_cols.parquet]]}, projection=[col_a, col_b, col_c, col_b@1 as col_b_dup], file_type=parquet
+
+# Verify correctness
+query IIII
+SELECT col_a, col_b, col_c, col_b as col_b_dup FROM three_cols ORDER BY col_a DESC;
+----
+7 8 9 8
+4 5 6 5
+1 2 3 2
+
+statement ok
+DROP TABLE three_cols;
+
 
 #####################
-# Section 5: Projection Through TopK (ORDER BY + LIMIT)
+# Section 5: Projection Pushdown Through TopK (ORDER BY + LIMIT)
 #####################
 
 ###
-# Test 5.1: Simple get_field through TopK - pushed (trivial)
+# Test 5.1: Simple get_field through TopK
 ###
 
 query TT
@@ -390,7 +434,7 @@ SELECT id, s['value'] FROM simple_struct ORDER BY id LIMIT 3;
 3 150
 
 ###
-# Test 5.2: s['value'] + 1 through TopK - pushed (narrows schema from 2 to 2 cols)
+# Test 5.2: s['value'] + 1 through TopK
 ###
 
 query TT
@@ -413,7 +457,7 @@ SELECT id, s['value'] + 1 FROM simple_struct ORDER BY id LIMIT 3;
 3 151
 
 ###
-# Test 5.3: Multiple get_field through TopK - all pushed
+# Test 5.3: Multiple get_field through TopK
 ###
 
 query TT
@@ -436,7 +480,7 @@ SELECT id, s['value'], s['label'] FROM simple_struct ORDER BY id LIMIT 3;
 3 150 gamma
 
 ###
-# Test 5.4: Nested get_field through TopK - pushed
+# Test 5.4: Nested get_field through TopK
 ###
 
 query TT
@@ -458,7 +502,7 @@ SELECT id, nested['outer']['inner'] FROM nested_struct ORDER BY id LIMIT 2;
 2 20
 
 ###
-# Test 5.5: String concat through TopK - pushed (narrows schema)
+# Test 5.5: String concat through TopK
 ###
 
 query TT
@@ -482,7 +526,7 @@ SELECT id, s['label'] || '_suffix' FROM simple_struct ORDER BY id LIMIT 3;
 
 
 #####################
-# Section 6: Combined Operators
+# Section 6: Combined Operators (Filter + Sort/TopK)
 #####################
 
 ###
@@ -810,7 +854,7 @@ SELECT id, s['value'], s['value'] + 10, s['label'] FROM simple_struct ORDER BY i
 3 150 160 gamma
 
 ###
-# Test 8.4: Literal projection through TopK - pushed (narrows schema)
+# Test 8.4: Literal projection through TopK
 ###
 
 query TT
@@ -860,8 +904,7 @@ SELECT id FROM simple_struct ORDER BY id LIMIT 3;
 #####################
 
 ###
-# Test 9.1: TopK with computed projection - pushed (narrows schema)
-# The projection outputs fewer columns than the source, so it narrows the schema
+# Test 9.1: TopK with computed projection
 ###
 
 query TT
@@ -913,7 +956,6 @@ SELECT s['value'] + s['value'] as doubled FROM simple_struct WHERE id > 2 ORDER 
 
 ###
 # Test 9.3: Projection with only get_field expressions through Filter
-# All TrivialExpr projection that can be pushed through filter
 ###
 
 query TT
@@ -1038,7 +1080,252 @@ SELECT id, s['value'] + 100, s['label'] || '_test' FROM simple_struct ORDER BY i
 2 300 beta_test
 
 #####################
-# Section 11: Cleanup
+# Section 11: FilterExec Projection Pushdown - Handling Predicate Column Requirements
+#####################
+
+query TT
+EXPLAIN SELECT id, s['value'] FROM simple_struct WHERE id > 1;
+----
+logical_plan
+01)Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
+02)--Filter: simple_struct.id > Int64(1)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, get_field(s@1, value) as simple_struct.s[value]]
+02)--FilterExec: id@0 > 1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 1, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+
+# Verify correctness
+query II
+SELECT id, s['value'] FROM simple_struct WHERE id > 1 ORDER BY id LIMIT 2;
+----
+2 200
+3 150
+
+query TT
+EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND (id < 4 OR id = 5);
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value"))
+02)--Filter: simple_struct.id > Int64(1) AND (simple_struct.id < Int64(4) OR simple_struct.id = Int64(5))
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(4) OR simple_struct.id = Int64(5)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
+02)--FilterExec: id@0 > 1 AND (id@0 < 4 OR id@0 = 5), projection=[s@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 1 AND (id@0 < 4 OR id@0 = 5), pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1 AND (id_null_count@1 != row_count@2 AND id_min@3 < 4 OR id_null_count@1 != row_count@2 AND id_min@3 <= 5 AND 5 <= id_max@0), required_guarantees=[]
+
+# Verify correctness - should return rows where (id > 1) AND ((id < 4) OR (id = 5))
+# That's: id=2,3 (1<id<4) and id=5 (id=5 from second branch)
+query I
+SELECT s['value'] FROM simple_struct WHERE id > 1 AND (id < 4 OR id = 5) ORDER BY s['value'];
+----
+150
+200
+250
+
+query TT
+EXPLAIN SELECT s['value'] FROM simple_struct WHERE id > 1 AND id < 5;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value"))
+02)--Filter: simple_struct.id > Int64(1) AND simple_struct.id < Int64(5)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1), simple_struct.id < Int64(5)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
+02)--FilterExec: id@0 > 1 AND id@0 < 5, projection=[s@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 1 AND id@0 < 5, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1 AND id_null_count@1 != row_count@2 AND id_min@3 < 5, required_guarantees=[]
+
+# Verify correctness - should return rows where 1 < id < 5 (id=2,3,4)
+query I
+SELECT s['value'] FROM simple_struct WHERE id > 1 AND id < 5 ORDER BY s['value'];
+----
+150
+200
+300
+
+query TT
+EXPLAIN SELECT s['value'], s['label'], id FROM simple_struct WHERE id > 1;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value")), get_field(simple_struct.s, Utf8("label")), simple_struct.id
+02)--Filter: simple_struct.id > Int64(1)
+03)----TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@1, value) as simple_struct.s[value], get_field(s@1, label) as simple_struct.s[label], id@0 as id]
+02)--FilterExec: id@0 > 1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet, predicate=id@0 > 1, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 1, required_guarantees=[]
+
+# Verify correctness - note that id is now at index 2 in the augmented projection
+query ITI
+SELECT s['value'], s['label'], id FROM simple_struct WHERE id > 1 ORDER BY id LIMIT 3;
+----
+200 beta 2
+150 gamma 3
+300 delta 4
+
+query TT
+EXPLAIN SELECT s['value'] FROM simple_struct WHERE length(s['label']) > 4;
+----
+logical_plan
+01)Projection: get_field(simple_struct.s, Utf8("value"))
+02)--Filter: character_length(get_field(simple_struct.s, Utf8("label"))) > Int32(4)
+03)----TableScan: simple_struct projection=[s], partial_filters=[character_length(get_field(simple_struct.s, Utf8("label"))) > Int32(4)]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@0, value) as simple_struct.s[value]]
+02)--FilterExec: character_length(get_field(s@0, label)) > 4
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[s], file_type=parquet
+
+# Verify correctness - filter on rows where label length > 4 (all have length 5, except 'one' has 3)
+# Wait, from the data: alpha(5), beta(4), gamma(5), delta(5), epsilon(7)
+# So: alpha, gamma, delta, epsilon (not beta which has 4 characters)
+query I
+SELECT s['value'] FROM simple_struct WHERE length(s['label']) > 4 ORDER BY s['value'];
+----
+100
+150
+250
+300
+
+#####################
+# Section 11a: ProjectionExec on top of a SortExec with missing Sort Columns
+#####################
+
+###
+# Test 11a.1: Sort by dropped column
+# Selects only id, drops s entirely, but sorts by s['value']
+###
+
+query TT
+EXPLAIN SELECT id FROM simple_struct ORDER BY s['value'];
+----
+logical_plan
+01)Projection: simple_struct.id
+02)--Sort: get_field(simple_struct.s, Utf8("value")) ASC NULLS LAST
+03)----TableScan: simple_struct projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--SortExec: expr=[get_field(s@1, value) ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+
+# Verify correctness
+query I
+SELECT id FROM simple_struct ORDER BY s['value'];
+----
+1
+3
+2
+5
+4
+
+###
+# Test 11a.2: Multiple sort columns with partial selection
+# Selects only id and s['value'], but sorts by id and s['label']
+# One sort column (s['label']) is not selected but needed for ordering
+###
+
+query TT
+EXPLAIN SELECT id, s['value'] FROM simple_struct ORDER BY id, s['label'];
+----
+logical_plan
+01)Projection: simple_struct.id, simple_struct.s[value]
+02)--Sort: simple_struct.id ASC NULLS LAST, get_field(simple_struct.s, Utf8("label")) ASC NULLS LAST
+03)----Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value")), simple_struct.s
+04)------TableScan: simple_struct projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, simple_struct.s[value]@1 as simple_struct.s[value]]
+02)--SortExec: expr=[id@0 ASC NULLS LAST, get_field(s@2, label) ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, get_field(s@1, value) as simple_struct.s[value], s], file_type=parquet
+
+# Verify correctness
+query II
+SELECT id, s['value'] FROM simple_struct ORDER BY id, s['label'];
+----
+1 100
+2 200
+3 150
+4 300
+5 250
+
+###
+# Test 11a.3: TopK with dropped sort column
+# Same as test 11a.1 but with LIMIT
+###
+
+query TT
+EXPLAIN SELECT id FROM simple_struct ORDER BY s['value'] LIMIT 2;
+----
+logical_plan
+01)Projection: simple_struct.id
+02)--Sort: get_field(simple_struct.s, Utf8("value")) ASC NULLS LAST, fetch=2
+03)----TableScan: simple_struct projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--SortExec: TopK(fetch=2), expr=[get_field(s@1, value) ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+
+# Verify correctness
+query I
+SELECT id FROM simple_struct ORDER BY s['value'] LIMIT 2;
+----
+1
+3
+
+###
+# Test 11a.4: Sort by derived expression with dropped column
+# Projects only id, sorts by s['value'] * 2 (derived expression)
+# Sort column is computed but requires base columns not in projection
+###
+
+query TT
+EXPLAIN SELECT id FROM simple_struct ORDER BY s['value'] * 2;
+----
+logical_plan
+01)Projection: simple_struct.id
+02)--Sort: get_field(simple_struct.s, Utf8("value")) * Int64(2) ASC NULLS LAST
+03)----TableScan: simple_struct projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--SortExec: expr=[get_field(s@1, value) * 2 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, s], file_type=parquet
+
+# Verify correctness
+query I
+SELECT id FROM simple_struct ORDER BY s['value'] * 2;
+----
+1
+3
+2
+5
+4
+
+###
+# Test 11a.5: All sort columns selected
+# All columns needed for sorting are included in projection
+###
+
+query TT
+EXPLAIN SELECT id, s['value'] FROM simple_struct ORDER BY id, s['value'];
+----
+logical_plan
+01)Sort: simple_struct.id ASC NULLS LAST, simple_struct.s[value] ASC NULLS LAST
+02)--Projection: simple_struct.id, get_field(simple_struct.s, Utf8("value"))
+03)----TableScan: simple_struct projection=[id, s]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST, simple_struct.s[value]@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[id, get_field(s@1, value) as simple_struct.s[value]], file_type=parquet
+
+# Verify correctness
+query II
+SELECT id, s['value'] FROM simple_struct ORDER BY id, s['value'];
+----
+1 100
+2 200
+3 150
+4 300
+5 250
+
+#####################
+# Section 12: Cleanup
 #####################
 
 statement ok

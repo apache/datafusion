@@ -140,7 +140,6 @@ struct DirSchemaOpts<'a> {
 /// Schema where every file with extension `ext` in a given `dir` is a table.
 #[derive(Debug)]
 struct DirSchema {
-    ext: String,
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
 }
 
@@ -173,13 +172,7 @@ impl DirSchema {
         }
         Ok(Arc::new(Self {
             tables: RwLock::new(tables),
-            ext: ext.to_string(),
         }))
-    }
-
-    #[allow(unused)]
-    fn name(&self) -> &str {
-        &self.ext
     }
 }
 
@@ -217,7 +210,6 @@ impl SchemaProvider for DirSchema {
 
     /// If supported by the implementation, removes an existing table from this schema and returns it.
     /// If no table of that name exists, returns Ok(None).
-    #[allow(unused_variables)]
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let mut tables = self.tables.write().unwrap();
         log::info!("dropping table {name}");

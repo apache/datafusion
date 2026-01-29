@@ -95,7 +95,7 @@ impl TableProvider for CaptureDeleteProvider {
 }
 
 /// A TableProvider that captures filters and assignments passed to update().
-#[allow(clippy::type_complexity)]
+#[expect(clippy::type_complexity)]
 struct CaptureUpdateProvider {
     schema: SchemaRef,
     received_filters: Arc<Mutex<Option<Vec<Expr>>>>,

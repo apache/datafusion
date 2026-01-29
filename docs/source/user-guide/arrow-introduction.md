@@ -220,6 +220,7 @@ When working with Arrow and RecordBatches, watch out for these common issues:
 - [Schema](https://docs.rs/arrow-schema/latest/arrow_schema/struct.Schema.html) - Describes the structure of a RecordBatch (column names and types)
 
 [apache arrow]: https://arrow.apache.org/docs/index.html
+[arrow-rs]: https://github.com/apache/arrow-rs
 [`arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 [`arrayref`]: https://docs.rs/arrow-array/latest/arrow_array/array/type.ArrayRef.html
 [`cast`]: https://docs.rs/arrow/latest/arrow/compute/fn.cast.html

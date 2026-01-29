@@ -24,6 +24,7 @@ your Rust project. The [Configuration Settings] section lists options that
 control additional aspects DataFusion's runtime behavior.
 
 [configuration settings]: configs.md
+[support for adding dependencies]: https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies
 
 ## Using the nightly DataFusion builds
 
@@ -155,7 +156,7 @@ By default, Datafusion returns errors as a plain text message. You can enable mo
 such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
-datafusion = { version = "31.0.0", features = ["backtrace"]}
+datafusion = { version = "52.0.0", features = ["backtrace"]}
 ```
 
 Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)

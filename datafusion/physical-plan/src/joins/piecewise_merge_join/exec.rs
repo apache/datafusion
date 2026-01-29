@@ -620,7 +620,7 @@ async fn build_buffered_data(
 
     // Combine batches and record number of rows
     let initial = (Vec::new(), 0, metrics, reservation);
-    let (batches, num_rows, metrics, mut reservation) = buffered
+    let (batches, num_rows, metrics, reservation) = buffered
         .try_fold(initial, |mut acc, batch| async {
             let batch_size = get_record_batch_memory_size(&batch);
             acc.3.try_grow(batch_size)?;

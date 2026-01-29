@@ -26,10 +26,28 @@
 # COPY (SELECT * FROM 'hits.parquet' LIMIT 10) TO 'clickbench_hits_10.parquet' (FORMAT PARQUET);
 
 statement ok
-CREATE EXTERNAL TABLE hits
+CREATE EXTERNAL TABLE hits_raw
 STORED AS PARQUET
 LOCATION '../core/tests/data/clickbench_hits_10.parquet';
 
+# ClickBench encodes EventDate as UInt16 days since epoch.
+statement ok
+CREATE VIEW hits AS
+SELECT * EXCEPT ("EventDate"),
+       CAST(CAST("EventDate" AS INTEGER) AS DATE) AS "EventDate"
+FROM hits_raw;
+
+# Verify EventDate transformation from UInt16 to DATE
+query D
+SELECT "EventDate" FROM hits LIMIT 1;
+----
+2013-07-15
+
+# Verify the raw value is still UInt16 in hits_raw
+query I
+SELECT "EventDate" FROM hits_raw LIMIT 1;
+----
+15901
 
 # queries.sql came from
 # https://github.com/ClickHouse/ClickBench/blob/8b9e3aa05ea18afa427f14909ddc678b8ef0d5e6/datafusion/queries.sql
@@ -64,10 +82,10 @@ SELECT COUNT(DISTINCT "SearchPhrase") FROM hits;
 ----
 1
 
-query II
+query DD
 SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
 ----
-15901 15901
+2013-07-15 2013-07-15
 
 query II
 SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
@@ -167,7 +185,8 @@ query TTTII
 SELECT "SearchPhrase", MIN("URL"), MIN("Title"), COUNT(*) AS c, COUNT(DISTINCT "UserID") FROM hits WHERE "Title" LIKE '%Google%' AND "URL" NOT LIKE '%.google.%' AND "SearchPhrase" <> '' GROUP BY "SearchPhrase" ORDER BY c DESC LIMIT 10;
 ----
 
-query IITIIIIIIIIIITTIIIIIIIIIITIIITIIIITTIIITIIIIIIIIIITIIIIITIIIIIITIIIIIIIIIITTTTIIIIIIIITITTITTTTTTTTTTIIII
+query IITIIIIIIIIITTIIIIIIIIIITIIITIIIITTIIITIIIIIIIIIITIIIIITIIIIIITIIIIIIIIIITTTTIIIIIIIITITTITTTTTTTTTTIIIID
+
 SELECT * FROM hits WHERE "URL" LIKE '%google%' ORDER BY "EventTime" LIMIT 10;
 ----
 
@@ -262,7 +281,7 @@ query IIITTI
 SELECT "TraficSourceID", "SearchEngineID", "AdvEngineID", CASE WHEN ("SearchEngineID" = 0 AND "AdvEngineID" = 0) THEN "Referer" ELSE '' END AS Src, "URL" AS Dst, COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 GROUP BY "TraficSourceID", "SearchEngineID", "AdvEngineID", Src, Dst ORDER BY PageViews DESC LIMIT 10 OFFSET 1000;
 ----
 
-query III
+query IDI
 SELECT "URLHash", "EventDate", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "IsRefresh" = 0 AND "TraficSourceID" IN (-1, 6) AND "RefererHash" = 3594120000172545465 GROUP BY "URLHash", "EventDate" ORDER BY PageViews DESC LIMIT 10 OFFSET 100;
 ----
 
@@ -293,4 +312,7 @@ SELECT "BrowserCountry",  COUNT(DISTINCT "SocialNetwork"), COUNT(DISTINCT "HitCo
 
 
 statement ok
-drop table hits;
+drop view hits;
+
+statement ok
+drop table hits_raw;

@@ -739,6 +739,7 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
         let expr = DefaultPhysicalExprAdapterFactory {}
             .create(Arc::new(table_schema.clone()), Arc::clone(&file_schema))
+            .expect("creating expr adapter")
             .rewrite(expr)
             .expect("rewriting expression");
         let candidate = FilterCandidateBuilder::new(expr, file_schema.clone())
@@ -778,6 +779,7 @@ mod test {
         // Rewrite the expression to add CastExpr for type coercion
         let expr = DefaultPhysicalExprAdapterFactory {}
             .create(Arc::new(table_schema), Arc::clone(&file_schema))
+            .expect("creating expr adapter")
             .rewrite(expr)
             .expect("rewriting expression");
         let candidate = FilterCandidateBuilder::new(expr, file_schema)

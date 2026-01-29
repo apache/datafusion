@@ -78,9 +78,11 @@ pub struct DataFrameWriteOptions {
     /// Controls how new data should be written to the table, determining whether
     /// to append, overwrite, or replace existing data.
     insert_op: InsertOp,
-    /// Controls if all partitions should be coalesced into a single output file
-    /// Generally will have slower performance when set to true.
-    single_file_output: bool,
+    /// Controls if all partitions should be coalesced into a single output file.
+    /// - `None`: Use automatic mode (extension-based heuristic)
+    /// - `Some(true)`: Force single file output at exact path
+    /// - `Some(false)`: Force directory output with generated filenames
+    single_file_output: Option<bool>,
     /// Sets which columns should be used for hive-style partitioned writes by name.
     /// Can be set to empty vec![] for non-partitioned writes.
     partition_by: Vec<String>,
@@ -94,7 +96,7 @@ impl DataFrameWriteOptions {
     pub fn new() -> Self {
         DataFrameWriteOptions {
             insert_op: InsertOp::Append,
-            single_file_output: false,
+            single_file_output: None,
             partition_by: vec![],
             sort_by: vec![],
         }
@@ -108,9 +110,13 @@ impl DataFrameWriteOptions {
 
     /// Set the single_file_output value to true or false
     ///
-    /// When set to true, an output file will always be created even if the DataFrame is empty
+    /// - `true`: Force single file output at the exact path specified
+    /// - `false`: Force directory output with generated filenames
+    ///
+    /// When not called, automatic mode is used (extension-based heuristic).
+    /// When set to true, an output file will always be created even if the DataFrame is empty.
     pub fn with_single_file_output(mut self, single_file_output: bool) -> Self {
-        self.single_file_output = single_file_output;
+        self.single_file_output = Some(single_file_output);
         self
     }
 
@@ -124,6 +130,15 @@ impl DataFrameWriteOptions {
     pub fn with_sort_by(mut self, sort_by: Vec<SortExpr>) -> Self {
         self.sort_by = sort_by;
         self
+    }
+
+    /// Build the options HashMap to pass to CopyTo for sink configuration.
+    fn build_sink_options(&self) -> HashMap<String, String> {
+        let mut options = HashMap::new();
+        if let Some(single_file) = self.single_file_output {
+            options.insert("single_file_output".to_string(), single_file.to_string());
+        }
+        options
     }
 }
 
@@ -2040,6 +2055,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2052,7 +2069,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            HashMap::new(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;
@@ -2108,6 +2125,8 @@ impl DataFrame {
 
         let file_type = format_as_file_type(format);
 
+        let copy_options = options.build_sink_options();
+
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
@@ -2120,7 +2139,7 @@ impl DataFrame {
             plan,
             path.into(),
             file_type,
-            Default::default(),
+            copy_options,
             options.partition_by,
         )?
         .build()?;

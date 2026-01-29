@@ -15,18 +15,101 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# This file was originally created by a porting script from:
-#   https://github.com/lakehq/sail/tree/43b6ed8221de5c4c4adbedbb267ae1351158b43c/crates/sail-spark-connect/tests/gold_data/function
-# This file is part of the implementation of the datafusion-spark function library.
-# For more information, please see:
-#   https://github.com/apache/datafusion/issues/15914
+query T
+SELECT base64('Spark SQL'::string);
+----
+U3BhcmsgU1FM
 
-## Original Query: SELECT base64('Spark SQL');
-## PySpark 3.5.5 Result: {'base64(Spark SQL)': 'U3BhcmsgU1FM', 'typeof(base64(Spark SQL))': 'string', 'typeof(Spark SQL)': 'string'}
-#query
-#SELECT base64('Spark SQL'::string);
+query T
+SELECT base64('Spark SQ'::string);
+----
+U3BhcmsgU1E=
 
-## Original Query: SELECT base64(x'537061726b2053514c');
-## PySpark 3.5.5 Result: {"base64(X'537061726B2053514C')": 'U3BhcmsgU1FM', "typeof(base64(X'537061726B2053514C'))": 'string', "typeof(X'537061726B2053514C')": 'binary'}
-#query
-#SELECT base64(X'537061726B2053514C'::binary);
+query T
+SELECT base64('Spark S'::string);
+----
+U3BhcmsgUw==
+
+query T
+SELECT base64('Spark SQL'::bytea);
+----
+U3BhcmsgU1FM
+
+query T
+SELECT base64(NULL::string);
+----
+NULL
+
+query T
+SELECT base64(NULL::bytea);
+----
+NULL
+
+query T
+SELECT base64(column1)
+FROM VALUES
+('Spark SQL'::bytea),
+('Spark SQ'::bytea),
+('Spark S'::bytea),
+(NULL::bytea);
+----
+U3BhcmsgU1FM
+U3BhcmsgU1E=
+U3BhcmsgUw==
+NULL
+
+query error Function 'base64' requires TypeSignatureClass::Binary, but received Int32 \(DataType: Int32\)
+SELECT base64(12::integer);
+
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1FM'::string), 'Utf8');
+----
+Spark SQL
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1E='::string), 'Utf8');
+----
+Spark SQ
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgUw=='::string), 'Utf8');
+----
+Spark S
+
+query T
+SELECT arrow_cast(unbase64('U3BhcmsgU1FM'::bytea), 'Utf8');
+----
+Spark SQL
+
+query ?
+SELECT unbase64(NULL::string);
+----
+NULL
+
+query ?
+SELECT unbase64(NULL::bytea);
+----
+NULL
+
+query T
+SELECT arrow_cast(unbase64(column1), 'Utf8')
+FROM VALUES
+('U3BhcmsgU1FM'::string),
+('U3BhcmsgU1E='::string),
+('U3BhcmsgUw=='::string),
+(NULL::string);
+----
+Spark SQL
+Spark SQ
+Spark S
+NULL
+
+query error Failed to decode value using base64
+SELECT unbase64('123'::string);
+
+query error Failed to decode value using base64
+SELECT unbase64('123'::bytea);
+
+query error Function 'unbase64' requires TypeSignatureClass::Binary, but received Int32 \(DataType: Int32\)
+SELECT unbase64(12::integer);

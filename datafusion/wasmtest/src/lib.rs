@@ -79,7 +79,6 @@ pub fn basic_parse() {
 mod test {
     use std::sync::Arc;
 
-    use super::*;
     use bytes::Bytes;
     use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
     use datafusion::{
@@ -106,11 +105,11 @@ mod test {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    #[cfg(target_arch = "wasm32")]
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     fn datafusion_test() {
-        basic_exprs();
-        basic_parse();
+        super::basic_exprs();
+        super::basic_parse();
     }
 
     fn get_ctx() -> Arc<SessionContext> {
