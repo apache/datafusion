@@ -164,7 +164,7 @@ itertools = "0.14"
 liblzma = { version = "0.4.4", features = ["static"] }
 log = "^0.4"
 num-traits = { version = "0.2" }
-object_store = { version = "0.12.4", default-features = false }
+object_store = { version = "0.13.1", default-features = false }
 parking_lot = "0.12"
 parquet = { version = "57.2.0", default-features = false, features = [
     "arrow",

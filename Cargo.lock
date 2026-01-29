@@ -1760,7 +1760,7 @@ dependencies = [
  "liblzma",
  "log",
  "nix 0.31.1",
- "object_store",
+ "object_store 0.13.1",
  "parking_lot",
  "parquet",
  "paste",
@@ -1796,7 +1796,7 @@ dependencies = [
  "libmimalloc-sys",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.13.1",
  "parquet",
  "rand 0.9.2",
  "regex",
@@ -1825,7 +1825,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "parking_lot",
  "tokio",
 ]
@@ -1849,7 +1849,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.1",
 ]
 
 [[package]]
@@ -1872,7 +1872,7 @@ dependencies = [
  "insta-cmd",
  "log",
  "mimalloc",
- "object_store",
+ "object_store 0.13.1",
  "parking_lot",
  "parquet",
  "regex",
@@ -1901,7 +1901,7 @@ dependencies = [
  "itertools 0.14.0",
  "libc",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "parquet",
  "paste",
  "rand 0.9.2",
@@ -1946,7 +1946,7 @@ dependencies = [
  "itertools 0.14.0",
  "liblzma",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "rand 0.9.2",
  "tempfile",
  "tokio",
@@ -1974,7 +1974,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.13.1",
  "tokio",
 ]
 
@@ -1993,7 +1993,7 @@ dependencies = [
  "datafusion-session",
  "futures",
  "num-traits",
- "object_store",
+ "object_store 0.13.1",
  "serde_json",
 ]
 
@@ -2013,7 +2013,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.13.1",
  "regex",
  "tokio",
 ]
@@ -2034,7 +2034,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-session",
  "futures",
- "object_store",
+ "object_store 0.13.1",
  "tokio",
 ]
 
@@ -2063,7 +2063,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "parking_lot",
  "parquet",
  "tempfile",
@@ -2097,7 +2097,7 @@ dependencies = [
  "log",
  "mimalloc",
  "nix 0.31.1",
- "object_store",
+ "object_store 0.13.1",
  "prost",
  "rand 0.9.2",
  "serde",
@@ -2128,7 +2128,7 @@ dependencies = [
  "futures",
  "insta",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "parking_lot",
  "parquet",
  "rand 0.9.2",
@@ -2510,7 +2510,7 @@ dependencies = [
  "datafusion-physical-plan",
  "datafusion-proto-common",
  "doc-comment",
- "object_store",
+ "object_store 0.13.1",
  "pbjson 0.9.0",
  "pretty_assertions",
  "prost",
@@ -2631,7 +2631,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "log",
- "object_store",
+ "object_store 0.13.1",
  "postgres-types",
  "regex",
  "sqllogictest",
@@ -2655,7 +2655,7 @@ dependencies = [
  "half",
  "insta",
  "itertools 0.14.0",
- "object_store",
+ "object_store 0.13.1",
  "pbjson-types",
  "prost",
  "serde_json",
@@ -2681,7 +2681,7 @@ dependencies = [
  "datafusion-sql",
  "futures",
  "getrandom 0.3.4",
- "object_store",
+ "object_store 0.13.1",
  "tokio",
  "url",
  "wasm-bindgen",
@@ -4216,9 +4216,32 @@ dependencies = [
 
 [[package]]
 name = "object_store"
-version = "0.12.4"
+version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c1be0c6c22ec0817cdc77d3842f721a17fd30ab6965001415b5402a74e6b740"
+checksum = "fbfbfff40aeccab00ec8a910b57ca8ecf4319b335c542f2edcd19dd25a1e2a00"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "http 1.4.0",
+ "humantime",
+ "itertools 0.14.0",
+ "parking_lot",
+ "percent-encoding",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+ "wasm-bindgen-futures",
+ "web-time",
+]
+
+[[package]]
+name = "object_store"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2858065e55c148d294a9f3aae3b0fa9458edadb41a108397094566f4e3c0dfb"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -4238,7 +4261,7 @@ dependencies = [
  "rand 0.9.2",
  "reqwest",
  "ring",
- "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -4361,7 +4384,7 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "object_store",
+ "object_store 0.12.5",
  "paste",
  "ring",
  "seq-macro",
