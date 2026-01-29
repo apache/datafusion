@@ -21,7 +21,6 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 //! Spark Expression packages for [DataFusion].
