@@ -24,6 +24,7 @@ use crate::simplify::{ExprSimplifyResult, SimplifyContext};
 use crate::sort_properties::{ExprProperties, SortProperties};
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, Signature};
+use datafusion_expr_common::placement::ExpressionPlacement;
 use arrow::datatypes::{DataType, Field, FieldRef};
 #[cfg(debug_assertions)]
 use datafusion_common::assert_or_internal_err;
@@ -360,6 +361,13 @@ impl ScalarUDF {
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
         self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
+    }
+
+    /// Returns placement information for this function.
+    ///
+    /// See [`ScalarUDFImpl::placement`] for more details.
+    pub fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 
@@ -964,6 +972,20 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Returns placement information for this function.
+    ///
+    /// This is used by optimizers to make decisions about expression placement,
+    /// such as whether to push expressions down through projections.
+    ///
+    /// The default implementation returns [`ExpressionPlacement::PlaceAtRoot`],
+    /// meaning the expression should stay at the root of the plan.
+    ///
+    /// Override this method to indicate that the function can be pushed down
+    /// closer to the data source.
+    fn placement(&self, _args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        ExpressionPlacement::PlaceAtRoot
+    }
 }
 
 /// ScalarUDF that adds an alias to the underlying function. It is better to
@@ -1090,6 +1112,10 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        self.inner.placement(args)
     }
 }
 

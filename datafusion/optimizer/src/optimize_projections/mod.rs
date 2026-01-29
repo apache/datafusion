@@ -30,8 +30,8 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScan, Unnest, Window,
-    logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, ExpressionPlacement, Projection, TableScan,
+    Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -525,14 +525,15 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     expr.iter()
         .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
 
-    // If an expression is non-trivial and appears more than once, do not merge
+    // If an expression is non-trivial (PlaceAtRoot) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
     // For details, see: https://github.com/apache/datafusion/issues/8296
     if column_referral_map.into_iter().any(|(col, usage)| {
         usage > 1
-            && !is_expr_trivial(
-                &prev_projection.expr
-                    [prev_projection.schema.index_of_column(col).unwrap()],
+            && matches!(
+                prev_projection.expr[prev_projection.schema.index_of_column(col).unwrap()]
+                    .placement(),
+                ExpressionPlacement::PlaceAtRoot
             )
     }) {
         // no change
@@ -584,11 +585,6 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
         Projection::try_new_with_schema(new_exprs.data, input, schema)
             .map(Transformed::no)
     }
-}
-
-// Check whether `expr` is trivial; i.e. it doesn't imply any computation.
-fn is_expr_trivial(expr: &Expr) -> bool {
-    matches!(expr, Expr::Column(_) | Expr::Literal(_, _))
 }
 
 /// Rewrites a projection expression using the projection before it (i.e. its input)

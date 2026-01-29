@@ -33,8 +33,8 @@ use datafusion_common::{
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ExpressionPlacement, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -498,6 +498,32 @@ impl ScalarUDFImpl for GetFieldFunc {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        // get_field can be pushed to leaves if:
+        // 1. The base (first arg) is a column or already placeable at leaves
+        // 2. All field keys (remaining args) are literals
+        if args.is_empty() {
+            return ExpressionPlacement::PlaceAtRoot;
+        }
+
+        let base_placement = args[0];
+        let base_is_pushable = matches!(
+            base_placement,
+            ExpressionPlacement::Column | ExpressionPlacement::PlaceAtLeaves
+        );
+
+        let all_keys_are_literals = args
+            .iter()
+            .skip(1)
+            .all(|p| matches!(p, ExpressionPlacement::Literal));
+
+        if base_is_pushable && all_keys_are_literals {
+            ExpressionPlacement::PlaceAtLeaves
+        } else {
+            ExpressionPlacement::PlaceAtRoot
+        }
     }
 }
 
