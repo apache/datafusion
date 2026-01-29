@@ -120,72 +120,59 @@ impl ScalarUDFImpl for LtrimFunc {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let return_type = args.return_field.data_type();
-        let number_rows = args.number_rows;
         let args = args.args;
 
-        // If any argument is a scalar NULL, the output is NULL for all rows
-        if args
-            .iter()
-            .any(|v| matches!(v, ColumnarValue::Scalar(s) if s.is_null()))
-        {
-            if args.iter().any(|v| matches!(v, ColumnarValue::Array(_))) {
-                return Ok(ColumnarValue::Array(arrow::array::new_null_array(
-                    return_type,
-                    number_rows,
-                )));
+        match (&args[0], args.get(1)) {
+            (ColumnarValue::Scalar(s0), None)
+            | (ColumnarValue::Scalar(s0), Some(ColumnarValue::Scalar(_))) => {
+                if s0.is_null()
+                    || matches!(args.get(1), Some(ColumnarValue::Scalar(s)) if s.is_null())
+                {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::try_from(
+                        return_type,
+                    )?));
+                }
+
+                let (value, pattern) = match args.get(1) {
+                    None => (s0, None),
+                    Some(ColumnarValue::Scalar(s1)) => (s0, Some(s1)),
+                    _ => unreachable!(),
+                };
+
+                let trim_chars: Vec<char> = match pattern {
+                    None => vec![' '],
+                    Some(ScalarValue::Utf8(Some(p)))
+                    | Some(ScalarValue::LargeUtf8(Some(p)))
+                    | Some(ScalarValue::Utf8View(Some(p))) => p.chars().collect(),
+                    Some(other) => {
+                        return internal_err!(
+                            "Unexpected data type {:?} for ltrim pattern",
+                            other.data_type()
+                        );
+                    }
+                };
+
+                let trimmed = match value {
+                    ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
+                        s.trim_start_matches(&trim_chars[..]).to_string(),
+                    )),
+                    ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
+                        s.trim_start_matches(&trim_chars[..]).to_string(),
+                    )),
+                    ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
+                        s.trim_start_matches(&trim_chars[..]).to_string(),
+                    )),
+                    other => {
+                        return internal_err!(
+                            "Unexpected data type {:?} for function ltrim",
+                            other.data_type()
+                        );
+                    }
+                };
+
+                return Ok(ColumnarValue::Scalar(trimmed));
             }
-            return Ok(ColumnarValue::Scalar(ScalarValue::try_from(return_type)?));
-        }
-
-        // Scalar fast path
-        if args.iter().all(|v| matches!(v, ColumnarValue::Scalar(_))) {
-            let arg0 = &args[0];
-            let arg1 = args.get(1);
-
-            let (value, pattern) = match (arg0, arg1) {
-                (ColumnarValue::Scalar(s0), None) => (s0, None),
-                (ColumnarValue::Scalar(s0), Some(ColumnarValue::Scalar(s1))) => {
-                    (s0, Some(s1))
-                }
-                _ => {
-                    return internal_err!(
-                        "Unexpected argument combination in ltrim scalar fast path"
-                    );
-                }
-            };
-
-            let trim_chars: Vec<char> = match pattern {
-                None => vec![' '],
-                Some(ScalarValue::Utf8(Some(p)))
-                | Some(ScalarValue::LargeUtf8(Some(p)))
-                | Some(ScalarValue::Utf8View(Some(p))) => p.chars().collect(),
-                Some(other) => {
-                    return internal_err!(
-                        "Unexpected data type {:?} for ltrim pattern",
-                        other.data_type()
-                    );
-                }
-            };
-
-            let trimmed = match value {
-                ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
-                    s.trim_start_matches(&trim_chars[..]).to_string(),
-                )),
-                ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
-                    s.trim_start_matches(&trim_chars[..]).to_string(),
-                )),
-                ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
-                    s.trim_start_matches(&trim_chars[..]).to_string(),
-                )),
-                other => {
-                    return internal_err!(
-                        "Unexpected data type {:?} for function ltrim",
-                        other.data_type()
-                    );
-                }
-            };
-
-            return Ok(ColumnarValue::Scalar(trimmed));
+            _ => {}
         }
 
         // Array path
