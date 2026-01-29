@@ -850,6 +850,14 @@ message PhysicalExprNode {
   // Was date_time_interval_expr
   reserved 17;
 
+  // Unique identifier for this expression to do deduplication during deserialization.
+  // When serializing, this is set to a unique identifier for each combination of
+  // expression, process and serialization run.
+  // When deserializing, if this ID has been seen before, the cached Arc is returned
+  // instead of creating a new one, enabling reconstruction of referential integrity
+  // across serde roundtrips.
+  optional uint64 expr_id = 30;
+
   oneof ExprType {
     // column references
     PhysicalColumn column = 1;

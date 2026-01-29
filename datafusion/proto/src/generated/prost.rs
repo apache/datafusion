@@ -1280,6 +1280,14 @@ pub struct PhysicalExtensionNode {
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
+    /// Unique identifier for this expression to do deduplication during deserialization.
+    /// When serializing, this is set to a unique identifier for each combination of
+    /// expression, process and serialization run.
+    /// When deserializing, if this ID has been seen before, the cached Arc is returned
+    /// instead of creating a new one, enabling reconstruction of referential integrity
+    /// across serde roundtrips.
+    #[prost(uint64, optional, tag = "30")]
+    pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
         tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21"
