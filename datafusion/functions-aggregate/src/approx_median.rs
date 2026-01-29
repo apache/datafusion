@@ -110,7 +110,7 @@ impl AggregateUDFImpl for ApproxMedian {
             Ok(vec![
                 Field::new(format_state_name(args.name, "max_size"), UInt64, false),
                 Field::new(format_state_name(args.name, "sum"), Float64, false),
-                Field::new(format_state_name(args.name, "count"), UInt64, false),
+                Field::new(format_state_name(args.name, "count"), Float64, false),
                 Field::new(format_state_name(args.name, "max"), Float64, false),
                 Field::new(format_state_name(args.name, "min"), Float64, false),
                 Field::new_list(
