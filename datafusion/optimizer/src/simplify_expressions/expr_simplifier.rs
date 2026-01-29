@@ -2053,6 +2053,9 @@ impl TreeNodeRewriter for Simplifier<'_> {
                     })));
                 }
 
+                let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) =
+                    if negated { (NotEq, and) } else { (Eq, or) };
+
                 let mut rewritten: Option<Expr> = None;
                 for item in &list {
                     let PreimageResult::Range { interval, expr } =
@@ -2064,9 +2067,6 @@ impl TreeNodeRewriter for Simplifier<'_> {
                             negated,
                         })));
                     };
-
-                    let (op, combiner): (Operator, fn(Expr, Expr) -> Expr) =
-                        if negated { (NotEq, and) } else { (Eq, or) };
 
                     let range_expr = rewrite_with_preimage(*interval, op, expr)?.data;
                     rewritten = Some(match rewritten {
