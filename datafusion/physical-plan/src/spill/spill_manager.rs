@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
-use crate::{common::spawn_buffered, metrics::SpillMetrics};
+use crate::metrics::SpillMetrics;
 
 /// The `SpillManager` is responsible for the following tasks:
 /// - Reading and writing `RecordBatch`es to raw files based on the provided configurations.
@@ -186,7 +186,7 @@ impl SpillManager {
             max_record_batch_memory,
         )));
 
-        Ok(spawn_buffered(stream, self.batch_read_buffer_capacity))
+        Ok(stream)
     }
 }
 
