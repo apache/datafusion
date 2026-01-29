@@ -28,9 +28,9 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
-    DataType, Field, FieldRef, IntervalUnit as ArrowIntervalUnit, TimeUnit,
+    DataType, Date32Type, Date64Type, Field, FieldRef, IntervalUnit as ArrowIntervalUnit,
+    TimeUnit,
 };
-use arrow::temporal_conversions::MILLISECONDS_IN_DAY;
 use chrono::{Datelike, NaiveDate, TimeZone, Utc};
 use datafusion_common::types::{NativeType, logical_date};
 
@@ -322,13 +322,9 @@ fn is_epoch(part: &str) -> bool {
 }
 
 fn date_to_scalar(date: NaiveDate, target_type: &DataType) -> Option<ScalarValue> {
-    let days = date
-        .signed_duration_since(NaiveDate::from_epoch_days(0)?)
-        .num_days();
-
     Some(match target_type {
-        Date32 => ScalarValue::Date32(Some(days as i32)),
-        Date64 => ScalarValue::Date64(Some(days * MILLISECONDS_IN_DAY)),
+        Date32 => ScalarValue::Date32(Some(Date32Type::from_naive_date(date))),
+        Date64 => ScalarValue::Date64(Some(Date64Type::from_naive_date(date))),
 
         Timestamp(unit, tz_opt) => {
             let naive_midnight = date.and_hms_opt(0, 0, 0)?;
