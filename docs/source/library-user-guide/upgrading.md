@@ -21,7 +21,45 @@
 
 ## DataFusion `53.0.0`
 
-**Note:** DataFusion `53.0.0` has not been released yet. The information provided in this section pertains to features and changes that have already been merged to the main branch and are awaiting release in this version.
+**Note:** DataFusion `53.0.0` has not been released yet. The information provided
+*in this section pertains to features and changes that have already been merged
+*to the main branch and are awaiting release in this version. See [#19692] for
+\*more details.
+
+[#19692]: https://github.com/apache/datafusion/issues/19692
+
+### `FileSinkConfig` adds `file_output_mode`
+
+`FileSinkConfig` now includes a `file_output_mode: FileOutputMode` field to control
+single-file vs directory output behavior. Any code constructing `FileSinkConfig` via struct
+literals must initialize this field.
+
+The `FileOutputMode` enum has three variants:
+
+- `Automatic` (default): Infer output mode from the URL (extension/trailing `/` heuristic)
+- `SingleFile`: Write to a single file at the exact output path
+- `Directory`: Write to a directory with generated filenames
+
+**Before:**
+
+```rust,ignore
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+}
+```
+
+**After:**
+
+```rust,ignore
+use datafusion_datasource::file_sink_config::FileOutputMode;
+
+FileSinkConfig {
+    // ...
+    file_extension: "parquet".into(),
+    file_output_mode: FileOutputMode::Automatic,
+}
+```
 
 ### `SimplifyInfo` trait removed, `SimplifyContext` now uses builder-style API
 
