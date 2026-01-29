@@ -53,7 +53,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
         while count < MAX_LOOP_COUNT {
             count += 1;
             let result = current_expr.transform(|node| {
-                #[cfg(test)]
+                #[cfg(debug_assertions)]
                 let original_type = node.data_type(schema).unwrap();
 
                 // Apply NOT expression simplification first, then unwrap cast optimization,
@@ -64,8 +64,7 @@ impl<'a> PhysicalExprSimplifier<'a> {
                     })?
                     .transform_data(|node| const_evaluator::simplify_const_expr(&node))?;
 
-                #[cfg(test)]
-                assert_eq!(
+                debug_assert_eq!(
                     rewritten.data.data_type(schema).unwrap(),
                     original_type,
                     "Simplified expression should have the same data type as the original"
