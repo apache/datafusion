@@ -282,13 +282,10 @@ impl AggregateStream {
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
         let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
-        let filter_expressions = match agg.mode {
-            AggregateMode::Partial
-            | AggregateMode::Single
-            | AggregateMode::SinglePartitioned => agg_filter_expr,
-            AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                vec![None; agg.aggr_expr.len()]
-            }
+        let filter_expressions = if agg.mode.is_first_stage() {
+            agg_filter_expr
+        } else {
+            vec![None; agg.aggr_expr.len()]
         };
         let accumulators = create_accumulators(&agg.aggr_expr)?;
 
@@ -455,13 +452,10 @@ fn aggregate_batch(
 
             // 1.4
             let size_pre = accum.size();
-            let res = match mode {
-                AggregateMode::Partial
-                | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
-                AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(&values)
-                }
+            let res = if mode.is_first_stage() {
+                accum.update_batch(&values)
+            } else {
+                accum.merge_batch(&values)
             };
             let size_post = accum.size();
             allocated += size_post.saturating_sub(size_pre);
