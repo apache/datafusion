@@ -706,8 +706,8 @@ ON t1.b = t2.b
 ORDER BY t1.b desc, c desc, c2 desc
 OFFSET 3 LIMIT 2;
 ----
-3 99 82
-3 99 79
+3 98 79
+3 97 96
 
 statement ok
 drop table ordered_table;
