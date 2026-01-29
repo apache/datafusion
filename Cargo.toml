@@ -81,6 +81,11 @@ rust-version = "1.88.0"
 # Define DataFusion version
 version = "52.1.0"
 
+[workspace.lints.clippy]
+# Make sure fast / cheap clones on Arc are explicit:
+# https://github.com/apache/datafusion/issues/11143
+clone_on_ref_ptr = "deny"
+
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
 # selectively turn them on if needed, since we can override default-features = true (from false)
