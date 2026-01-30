@@ -91,7 +91,10 @@ By default, string types are mapped to `Utf8View`. This can be configured using 
 | `FLOAT`                              | `Float32`                      |
 | `REAL`                               | `Float32`                      |
 | `DOUBLE`                             | `Float64`                      |
-| `DECIMAL(precision, scale)`          | `Decimal128(precision, scale)` |
+| `DECIMAL(precision, scale)` where precision ≤ 38 | `Decimal128(precision, scale)` |
+| `DECIMAL(precision, scale)` where precision > 38 | `Decimal256(precision, scale)` |
+
+The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
