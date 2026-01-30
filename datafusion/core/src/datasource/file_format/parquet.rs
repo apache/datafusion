@@ -311,7 +311,7 @@ mod tests {
             _payload: PutPayload,
             _opts: PutOptions,
         ) -> object_store::Result<PutResult> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
         async fn put_multipart_opts(
@@ -319,7 +319,7 @@ mod tests {
             _location: &Path,
             _opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
         async fn get_opts(
@@ -335,24 +335,21 @@ mod tests {
             &self,
             locations: BoxStream<'static, object_store::Result<Path>>,
         ) -> BoxStream<'static, object_store::Result<Path>> {
-            futures::stream::once(async { Err(object_store::Error::NotImplemented) })
-                .boxed()
+            unimplemented!()
         }
 
         fn list(
             &self,
             _prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            Box::pin(futures::stream::once(async {
-                Err(object_store::Error::NotImplemented)
-            }))
+            unimplemented!()
         }
 
         async fn list_with_delimiter(
             &self,
             _prefix: Option<&Path>,
         ) -> object_store::Result<ListResult> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
 
         async fn copy_opts(
@@ -361,7 +358,7 @@ mod tests {
             _to: &Path,
             _options: CopyOptions,
         ) -> object_store::Result<()> {
-            Err(object_store::Error::NotImplemented)
+            unimplemented!()
         }
     }
 

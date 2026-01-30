@@ -19,8 +19,6 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -41,11 +39,12 @@ use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_execution::config::SessionConfig;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use futures::stream::{self, BoxStream};
 use insta::assert_snapshot;
-use object_store::{Attributes, MultipartUpload, PutMultipartOptions, PutPayload};
+use object_store::{
+    Attributes, CopyOptions, MultipartUpload, PutMultipartOptions, PutPayload,
+};
 use object_store::{
     GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore,
     PutOptions, PutResult, path::Path,
@@ -691,29 +690,6 @@ impl ObjectStore for MirroringObjectStore {
         })
     }
 
-    async fn get_range(
-        &self,
-        location: &Path,
-        range: Range<u64>,
-    ) -> object_store::Result<Bytes> {
-        self.files.iter().find(|x| *x == location).unwrap();
-        let path = std::path::PathBuf::from(&self.mirrored_file);
-        let mut file = File::open(path).unwrap();
-        file.seek(SeekFrom::Start(range.start)).unwrap();
-
-        let to_read = range.end - range.start;
-        let to_read: usize = to_read.try_into().unwrap();
-        let mut data = Vec::with_capacity(to_read);
-        let read = file.take(to_read as u64).read_to_end(&mut data).unwrap();
-        assert_eq!(read, to_read);
-
-        Ok(data.into())
-    }
-
-    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-        unimplemented!()
-    }
-
     fn list(
         &self,
         prefix: Option<&Path>,
@@ -783,14 +759,18 @@ impl ObjectStore for MirroringObjectStore {
         })
     }
 
-    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
         unimplemented!()
     }
 
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         _from: &Path,
         _to: &Path,
+        _options: CopyOptions,
     ) -> object_store::Result<()> {
         unimplemented!()
     }

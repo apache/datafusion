@@ -36,8 +36,9 @@ use insta::assert_snapshot;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult,
 };
 use parking_lot::Mutex;
 use std::fmt;
@@ -904,14 +905,6 @@ impl ObjectStore for RequestCountingObjectStore {
         Err(object_store::Error::NotImplemented)
     }
 
-    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        let result = self.inner.get(location).await?;
-        self.requests.lock().push(RequestDetails::Get {
-            path: location.to_owned(),
-        });
-        Ok(result)
-    }
-
     async fn get_opts(
         &self,
         location: &Path,
@@ -921,19 +914,6 @@ impl ObjectStore for RequestCountingObjectStore {
         self.requests.lock().push(RequestDetails::GetOpts {
             path: location.to_owned(),
             get_options: options,
-        });
-        Ok(result)
-    }
-
-    async fn get_range(
-        &self,
-        location: &Path,
-        range: Range<u64>,
-    ) -> object_store::Result<Bytes> {
-        let result = self.inner.get_range(location, range.clone()).await?;
-        self.requests.lock().push(RequestDetails::GetRange {
-            path: location.to_owned(),
-            range: range.clone(),
         });
         Ok(result)
     }
@@ -949,18 +929,6 @@ impl ObjectStore for RequestCountingObjectStore {
             ranges: ranges.to_vec(),
         });
         Ok(result)
-    }
-
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        let result = self.inner.head(location).await?;
-        self.requests.lock().push(RequestDetails::Head {
-            path: location.to_owned(),
-        });
-        Ok(result)
-    }
-
-    async fn delete(&self, _location: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
     }
 
     fn list(
@@ -998,15 +966,19 @@ impl ObjectStore for RequestCountingObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, _from: &Path, _to: &Path) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+    fn delete_stream(
+        &self,
+        _locations: BoxStream<'static, _object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        unimplemented!()
     }
 
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         _from: &Path,
         _to: &Path,
+        _options: CopyOptions,
     ) -> object_store::Result<()> {
-        Err(object_store::Error::NotImplemented)
+        unimplemented!()
     }
 }

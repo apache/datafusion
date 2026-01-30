@@ -37,9 +37,9 @@ use datafusion::{
 };
 use futures::stream::{BoxStream, Stream};
 use object_store::{
-    GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, path::Path,
+    CopyOptions, GetOptions, GetRange, GetResult, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, path::Path,
 };
 use parking_lot::{Mutex, RwLock};
 use url::Url;
@@ -247,25 +247,6 @@ impl InstrumentedObjectStore {
         Ok(ret)
     }
 
-    async fn instrumented_delete(&self, location: &Path) -> Result<()> {
-        let timestamp = Utc::now();
-        let start = Instant::now();
-        self.inner.delete(location).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Delete,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(())
-    }
-
     fn instrumented_list(
         &self,
         prefix: Option<&Path>,
@@ -361,25 +342,6 @@ impl InstrumentedObjectStore {
 
         Ok(())
     }
-
-    async fn instrumented_head(&self, location: &Path) -> Result<ObjectMeta> {
-        let timestamp = Utc::now();
-        let start = Instant::now();
-        let ret = self.inner.head(location).await?;
-        let elapsed = start.elapsed();
-
-        self.requests.lock().push(RequestDetails {
-            op: Operation::Head,
-            path: location.clone(),
-            timestamp,
-            duration: Some(elapsed),
-            size: None,
-            range: None,
-            extra_display: None,
-        });
-
-        Ok(ret)
-    }
 }
 
 impl fmt::Display for InstrumentedObjectStore {
@@ -425,16 +387,18 @@ impl ObjectStore for InstrumentedObjectStore {
         if self.enabled() {
             return self.instrumented_get_opts(location, options).await;
         }
-
         self.inner.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         if self.enabled() {
-            return self.instrumented_delete(location).await;
+            // TODO: Implement instrumented delete_stream
         }
 
-        self.inner.delete(location).await
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -453,28 +417,24 @@ impl ObjectStore for InstrumentedObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> Result<()> {
         if self.enabled() {
-            return self.instrumented_copy(from, to).await;
+            return match options.mode {
+                object_store::CopyMode::Create => {
+                    self.instrumented_copy_if_not_exists(from, to).await
+                }
+                object_store::CopyMode::Overwrite => {
+                    self.instrumented_copy(from, to).await
+                }
+            };
         }
 
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        if self.enabled() {
-            return self.instrumented_copy_if_not_exists(from, to).await;
-        }
-
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        if self.enabled() {
-            return self.instrumented_head(location).await;
-        }
-
-        self.inner.head(location).await
+        self.inner.copy_opts(from, to, options).await
     }
 }
 
