@@ -25,7 +25,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -664,118 +664,6 @@ impl LogicalPlanBuilder {
         subquery_alias(Arc::unwrap_or_clone(self.plan), alias).map(Self::new)
     }
 
-    /// Add missing sort columns to all downstream projection
-    ///
-    /// Thus, if you have a LogicalPlan that selects A and B and have
-    /// not requested a sort by C, this code will add C recursively to
-    /// all input projections.
-    ///
-    /// Adding a new column is not correct if there is a `Distinct`
-    /// node, which produces only distinct values of its
-    /// inputs. Adding a new column to its input will result in
-    /// potentially different results than with the original column.
-    ///
-    /// For example, if the input is like:
-    ///
-    /// Distinct(A, B)
-    ///
-    /// If the input looks like
-    ///
-    /// a | b | c
-    /// --+---+---
-    /// 1 | 2 | 3
-    /// 1 | 2 | 4
-    ///
-    /// Distinct (A, B) --> (1,2)
-    ///
-    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
-    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
-    ///
-    /// See <https://github.com/apache/datafusion/issues/5065> for more details
-    fn add_missing_columns(
-        curr_plan: LogicalPlan,
-        missing_cols: &IndexSet<Column>,
-        is_distinct: bool,
-    ) -> Result<LogicalPlan> {
-        match curr_plan {
-            LogicalPlan::Projection(Projection {
-                input,
-                mut expr,
-                schema: _,
-            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
-                let mut missing_exprs = missing_cols
-                    .iter()
-                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Do not let duplicate columns to be added, some of the
-                // missing_cols may be already present but without the new
-                // projected alias.
-                missing_exprs.retain(|e| !expr.contains(e));
-                if is_distinct {
-                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
-                }
-                expr.extend(missing_exprs);
-                project(Arc::unwrap_or_clone(input), expr)
-            }
-            _ => {
-                let is_distinct =
-                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
-                let new_inputs = curr_plan
-                    .inputs()
-                    .into_iter()
-                    .map(|input_plan| {
-                        Self::add_missing_columns(
-                            (*input_plan).clone(),
-                            missing_cols,
-                            is_distinct,
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                curr_plan.with_new_exprs(curr_plan.expressions(), new_inputs)
-            }
-        }
-    }
-
-    fn ambiguous_distinct_check(
-        missing_exprs: &[Expr],
-        missing_cols: &IndexSet<Column>,
-        projection_exprs: &[Expr],
-    ) -> Result<()> {
-        if missing_exprs.is_empty() {
-            return Ok(());
-        }
-
-        // if the missing columns are all only aliases for things in
-        // the existing select list, it is ok
-        //
-        // This handles the special case for
-        // SELECT col as <alias> ORDER BY <alias>
-        //
-        // As described in https://github.com/apache/datafusion/issues/5293
-        let all_aliases = missing_exprs.iter().all(|e| {
-            projection_exprs.iter().any(|proj_expr| {
-                if let Expr::Alias(Alias { expr, .. }) = proj_expr {
-                    e == expr.as_ref()
-                } else {
-                    false
-                }
-            })
-        });
-        if all_aliases {
-            return Ok(());
-        }
-
-        let missing_col_names = missing_cols
-            .iter()
-            .map(|col| col.flat_name())
-            .collect::<String>();
-
-        plan_err!(
-            "For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list"
-        )
-    }
-
     /// Apply a sort by provided expressions with default direction
     pub fn sort_by(
         self,
@@ -831,16 +719,9 @@ impl LogicalPlanBuilder {
         // remove pushed down sort columns
         let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
 
-        let is_distinct = false;
-        let plan = Self::add_missing_columns(
-            Arc::unwrap_or_clone(self.plan),
-            &missing_cols,
-            is_distinct,
-        )?;
-
         let sort_plan = LogicalPlan::Sort(Sort {
-            expr: normalize_sorts(sorts, &plan)?,
-            input: Arc::new(plan),
+            expr: normalize_sorts(sorts, &self.plan)?,
+            input: self.plan,
             fetch,
         });
 
