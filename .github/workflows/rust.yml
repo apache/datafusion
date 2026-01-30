@@ -25,26 +25,40 @@ on:
   push:
     branches-ignore:
       - 'gh-readonly-queue/**'
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
-      - ".github/pull_request_template.md"
   merge_group:
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
+  #
+  # Note, we use merge queue for this repo. If you'd like to add a new "required" check, that should be checked before
+  # the PR is merged, you should add your step to `rust-required-checks`
   workflow_dispatch:
 
 jobs:
+  # This job checks if heavy-weight jobs can be skipped, because only doc or non-code files were changed
+  # More on this: https://github.com/orgs/community/discussions/45899
+  check-files:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.filter.outputs.code == 'false' }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36  # v3.0.2
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!**.md'
+              - '!docs/**'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/pull_request_template.md'
+          predicate-quantifier: 'every'
+
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
+    needs: check-files
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -72,7 +86,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-common-features:
     name: cargo check datafusion-common features
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -97,7 +112,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -134,7 +150,8 @@ jobs:
   # subset of the features packages enabled.
   linux-datafusion-proto-features:
     name: cargo check datafusion-proto features
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -165,7 +182,8 @@ jobs:
   # subset of the features packages enabled.
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -230,7 +248,8 @@ jobs:
   # subset of the features packages enabled.
   linux-cargo-check-datafusion-functions:
     name: cargo check datafusion-functions features
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -265,7 +284,8 @@ jobs:
   # Library and integration tests
   linux-test:
     name: cargo test (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -283,8 +303,8 @@ jobs:
       - name: Rust Dependency Cache
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5  # v2.8.2
         with:
-         save-if: ${{ github.ref_name == 'main' }}
-         shared-key: "amd-ci"
+          save-if: ${{ github.ref_name == 'main' }}
+          shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
         env:
           RUST_BACKTRACE: 1
@@ -315,7 +335,8 @@ jobs:
   # datafusion-cli tests
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -344,7 +365,8 @@ jobs:
 
   linux-test-example:
     name: cargo examples (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -374,7 +396,8 @@ jobs:
   # Run `cargo test doc` (test documentation examples)
   linux-test-doc:
     name: cargo test doc (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -395,7 +418,8 @@ jobs:
   # Run `cargo doc` to ensure the rustdoc is clean
   linux-rustdoc:
     name: cargo doc
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -411,6 +435,8 @@ jobs:
   linux-wasm-pack:
     name: build and run with wasm-pack
     runs-on: ubuntu-24.04
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Setup for wasm32
@@ -435,7 +461,8 @@ jobs:
   # verify that the benchmark queries return the correct results
   verify-benchmark-results:
     name: verify benchmark results (amd64)
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -468,7 +495,8 @@ jobs:
 
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -506,7 +534,8 @@ jobs:
 
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -548,6 +577,8 @@ jobs:
   macos-aarch64:
     name: cargo test (macos-aarch64)
     runs-on: macos-14
+    needs: [ check-files ]
+    if: needs.check-files.outputs.should_skip != 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -561,6 +592,8 @@ jobs:
 
   vendor:
     name: Verify Vendored Code
+    needs: check-files
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -578,6 +611,8 @@ jobs:
 
   check-fmt:
     name: Check cargo fmt
+    needs: check-files
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -636,7 +671,8 @@ jobs:
 
   clippy:
     name: clippy
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -661,7 +697,8 @@ jobs:
 
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -682,7 +719,8 @@ jobs:
 
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
-    needs: linux-build-lib
+    needs: [linux-build-lib]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -711,7 +749,8 @@ jobs:
 
   examples-docs-check:
     name: check example README is up-to-date
-    needs: linux-build-lib
+    needs: [linux-build-lib, check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -733,6 +772,8 @@ jobs:
   # - datafusion-cli
   msrv:
     name: Verify MSRV (Min Supported Rust Version)
+    needs: [check-files]
+    if: needs.check-files.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -779,3 +820,35 @@ jobs:
       - name: Check datafusion-proto
         working-directory: datafusion/proto
         run: cargo msrv --output-format json --log-target stdout verify
+
+  rust-required-checks:
+    name: Validate Rust Required Checks
+    needs: [ linux-rustdoc,
+             linux-wasm-pack,
+             linux-build-lib,
+             macos-aarch64,
+             vendor,
+             check-fmt,
+             msrv,
+             linux-datafusion-common-features,
+             linux-datafusion-substrait-features,
+             linux-datafusion-proto-features,
+             linux-cargo-check-datafusion,
+             linux-cargo-check-datafusion-functions,
+             linux-test,
+             linux-test-example,
+             linux-test-doc,
+             verify-benchmark-results,
+             sqllogictest-postgres,
+             sqllogictest-substrait,
+             clippy,
+             cargo-toml-formatting-checks,
+             linux-test-datafusion-cli,
+             config-docs-check,
+             examples-docs-check
+    ]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - run: echo '${{ toJSON(needs) }}' | jq -e 'all(.[]; .result == "success" or .result == "skipped")'
